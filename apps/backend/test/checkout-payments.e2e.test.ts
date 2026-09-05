@@ -18,6 +18,7 @@ import {
   SandboxPaymentProviderAdapter,
   sandboxEventSignature,
 } from "../src/modules/payments/sandbox-payment-provider.adapter";
+import { PaymentsService } from "../src/modules/payments/payments.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
@@ -265,6 +266,21 @@ async function waitForDatabaseLock(applicationName: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("concurrent checkout event did not reach its lock wait");
+}
+
+async function waitForBlockedBy(blockingProcessId: number): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const waiting = await pool.query<{ waiting: boolean }>(
+      `SELECT count(*) >= 1 AS waiting
+       FROM pg_stat_activity activity
+       WHERE activity.state = 'active'
+         AND $1 = ANY(pg_blocking_pids(activity.pid))`,
+      [blockingProcessId],
+    );
+    if (waiting.rows[0]?.waiting) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("checkout event did not wait for the expected database lock");
 }
 
 const captureResourceInvalidations = [
@@ -673,10 +689,35 @@ describe("checkout payment capture protocol", () => {
         [foundation.phaseReservationSetId],
       );
 
-      const capture = await client.query<{ outcome: string }>(
+      const retrySignal = await client.query<{ outcome: string }>(
         `SELECT taven_apply_checkout_payment_event(
            'sandbox', 'capacity-compensation-capture', $1,
            'PAYMENT_CAPTURED', $2, $3, clock_timestamp(), '{}'::jsonb, true
+         ) AS outcome`,
+        [providerIntentId, evidence.amount_minor, evidence.currency],
+      );
+      expect(retrySignal.rows).toEqual([{ outcome: "REACQUIRE_REQUIRED" }]);
+      expect(
+        (
+          await client.query(
+            `SELECT payment.status::text AS payment_status,
+                    (SELECT count(*)::int FROM payment_provider_events
+                     WHERE payment_id = payment.id) AS event_count,
+                    (SELECT count(*)::int FROM refund_transactions
+                     WHERE payment_id = payment.id) AS refund_count
+             FROM payments payment WHERE payment.id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        { payment_status: "PENDING", event_count: 0, refund_count: 0 },
+      ]);
+
+      const capture = await client.query<{ outcome: string }>(
+        `SELECT taven_apply_checkout_payment_event(
+           'sandbox', 'capacity-compensation-capture', $1,
+           'PAYMENT_CAPTURED', $2, $3, clock_timestamp(), '{}'::jsonb,
+           true, NULL, true
          ) AS outcome`,
         [providerIntentId, evidence.amount_minor, evidence.currency],
       );
@@ -722,6 +763,360 @@ describe("checkout payment capture protocol", () => {
         },
       ]);
     });
+  });
+
+  it("requests reacquisition when a capture lock wait crosses reservation expiry", async () => {
+    const name = `capture-expiry-lock-${randomUUID().slice(0, 8)}`;
+    const setupClient = await pool.connect();
+    let foundation: PersistenceFoundation;
+    let providerIntentId: string;
+    let amountMinor: string;
+    let currency: string;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(setupClient, `${scope}:${name}`, {
+        publicTokenHash: createHash("sha256")
+          .update(`${scope}:${name}:checkout-token`)
+          .digest("hex"),
+      });
+      ({ foundation, providerIntentId } = await preparePayment(
+        setupClient,
+        fixtures,
+        name,
+      ));
+      ({ amount_minor: amountMinor, currency } = (
+        await setupClient.query<{
+          amount_minor: string;
+          currency: string;
+        }>(
+          `SELECT requested_amount_minor::text AS amount_minor, currency
+           FROM payments WHERE id = $1`,
+          [foundation.paymentId],
+        )
+      ).rows[0]!);
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query(`SET LOCAL session_replication_role = 'replica'`);
+      await ageReservationGraph(
+        setupClient,
+        foundation.phaseReservationSetId,
+        new Date(Date.now() + 500),
+      );
+      await setupClient.query(`SET LOCAL session_replication_role = 'origin'`);
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const orderLocker = await pool.connect();
+    const captureClient = await pool.connect();
+    try {
+      await orderLocker.query("BEGIN");
+      const blockingProcessId = (
+        await orderLocker.query<{ pid: number }>(
+          "SELECT pg_backend_pid() AS pid",
+        )
+      ).rows[0]!.pid;
+      await orderLocker.query(
+        `SELECT id FROM orders WHERE id = $1 FOR UPDATE`,
+        [foundation.orderId],
+      );
+      await captureClient.query(`SET statement_timeout = '5s'`);
+      const capturePromise = captureClient.query<{ outcome: string }>(
+        `SELECT taven_apply_checkout_payment_event(
+           'sandbox', $1, $2, 'PAYMENT_CAPTURED', $3, $4,
+           clock_timestamp(), '{"source":"expiry-lock-e2e"}'::jsonb, true
+         ) AS outcome`,
+        [`${name}-capture`, providerIntentId, amountMinor, currency],
+      );
+      await waitForBlockedBy(blockingProcessId);
+      await orderLocker.query(`SELECT pg_sleep(0.6)`);
+      await orderLocker.query("COMMIT");
+
+      await expect(capturePromise).resolves.toMatchObject({
+        rows: [{ outcome: "REACQUIRE_REQUIRED" }],
+      });
+      expect(
+        (
+          await captureClient.query(
+            `SELECT payment.status::text AS payment_status,
+                    (SELECT count(*)::int FROM payment_provider_events
+                     WHERE payment_id = payment.id) AS event_count,
+                    (SELECT count(*)::int FROM refund_transactions
+                     WHERE payment_id = payment.id) AS refund_count
+             FROM payments payment WHERE payment.id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        { payment_status: "PENDING", event_count: 0, refund_count: 0 },
+      ]);
+    } catch (error) {
+      await orderLocker.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      orderLocker.release();
+      captureClient.release();
+    }
+  });
+
+  it("reacquires once for concurrent service applies which cross expiry", async () => {
+    const name = `service-capture-expiry-${randomUUID().slice(0, 8)}`;
+    const setupClient = await pool.connect();
+    let foundation: PersistenceFoundation;
+    let providerIntentId: string;
+    let merchantReference: string;
+    let amountMinor: string;
+    let currency: string;
+    let destination: ResolvedDeliveryCapability;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(setupClient, `${scope}:${name}`, {
+        publicTokenHash: createHash("sha256")
+          .update(`${scope}:${name}:checkout-token`)
+          .digest("hex"),
+      });
+      ({ foundation, providerIntentId } = await preparePayment(
+        setupClient,
+        fixtures,
+        name,
+      ));
+      const checkoutCommandId = randomUUID();
+      await setupClient.query(
+        `INSERT INTO idempotency_records
+           (id, namespace, idempotency_key, request_fingerprint, status,
+            expires_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'PROCESSING',
+                 clock_timestamp() + interval '1 hour',
+                 clock_timestamp(), clock_timestamp())`,
+        [
+          checkoutCommandId,
+          `checkout-payment:${foundation.quoteSessionId}`,
+          `${name}-checkout`,
+          createHash("sha256").update(`${name}:request`).digest("hex"),
+        ],
+      );
+      await setupClient.query(`SET LOCAL session_replication_role = 'replica'`);
+      await setupClient.query(
+        `UPDATE payments
+         SET checkout_method = 'CARD', merchant_reference = id::text,
+             checkout_command_id = $2
+         WHERE id = $1`,
+        [foundation.paymentId, checkoutCommandId],
+      );
+      await setupClient.query(`SET LOCAL session_replication_role = 'origin'`);
+      ({
+        amount_minor: amountMinor,
+        currency,
+        merchant_reference: merchantReference,
+      } = (
+        await setupClient.query<{
+          amount_minor: string;
+          currency: string;
+          merchant_reference: string;
+        }>(
+          `SELECT requested_amount_minor::text AS amount_minor, currency,
+                  merchant_reference
+           FROM payments WHERE id = $1`,
+          [foundation.paymentId],
+        )
+      ).rows[0]!);
+      const destinationRow = (
+        await setupClient.query<{
+          provider_endpoint_id: string;
+          endpoint_type: string;
+          address_snapshot: Record<string, unknown>;
+          capability_snapshot: Record<string, unknown>;
+        }>(
+          `SELECT provider_endpoint_id, endpoint_type, address_snapshot,
+                  capability_snapshot
+           FROM delivery_destinations WHERE id = $1`,
+          [foundation.deliveryDestinationId],
+        )
+      ).rows[0]!;
+      destination = {
+        providerEndpointId: destinationRow.provider_endpoint_id,
+        endpointType: destinationRow.endpoint_type,
+        addressSnapshot:
+          destinationRow.address_snapshot as Prisma.InputJsonObject,
+        capabilitySnapshot:
+          destinationRow.capability_snapshot as Prisma.InputJsonObject,
+        supportedCategoryIds: ["standard"],
+      };
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const signingSecret = `capture-expiry-${randomUUID()}`;
+    const sandbox = new SandboxPaymentProviderAdapter({
+      provider: "sandbox",
+      publicBaseUrl: "http://sandbox.local",
+      webhookSigningSecret: signingSecret,
+    });
+    const moduleRef = await Test.createTestingModule({
+      imports: [PaymentsModule],
+    })
+      .overrideProvider(DELIVERY_CAPABILITY)
+      .useValue({
+        list: async () => [],
+        resolve: async () => destination,
+      })
+      .overrideProvider(PAYMENT_PROVIDER)
+      .useValue(sandbox)
+      .compile();
+    const app = moduleRef.createNestApplication();
+    const orderLocker = await pool.connect();
+    try {
+      await app.init();
+      const ageingClient = await pool.connect();
+      try {
+        await ageingClient.query("BEGIN");
+        await ageingClient.query(
+          `SET LOCAL session_replication_role = 'replica'`,
+        );
+        await ageReservationGraph(
+          ageingClient,
+          foundation.phaseReservationSetId,
+          new Date(Date.now() + 1_000),
+        );
+        await ageingClient.query(
+          `SET LOCAL session_replication_role = 'origin'`,
+        );
+        await ageingClient.query("COMMIT");
+      } catch (error) {
+        await ageingClient.query("ROLLBACK").catch(() => undefined);
+        throw error;
+      } finally {
+        ageingClient.release();
+      }
+
+      await orderLocker.query("BEGIN");
+      const blockingProcessId = (
+        await orderLocker.query<{ pid: number }>(
+          "SELECT pg_backend_pid() AS pid",
+        )
+      ).rows[0]!.pid;
+      await orderLocker.query(
+        `SELECT id FROM orders WHERE id = $1 FOR UPDATE`,
+        [foundation.orderId],
+      );
+      const eligibilityPlans = app.get(EligibilityPlanService);
+      const createCompletePlan =
+        eligibilityPlans.createCompletePlan.bind(eligibilityPlans);
+      let planCount = 0;
+      let markBothPlansEntered!: () => void;
+      const bothPlansEntered = new Promise<void>((resolve) => {
+        markBothPlansEntered = resolve;
+      });
+      let resumePlans!: () => void;
+      const plansResumed = new Promise<void>((resolve) => {
+        resumePlans = resolve;
+      });
+      const planSpy = vi
+        .spyOn(eligibilityPlans, "createCompletePlan")
+        .mockImplementation(async (input) => {
+          const plan = await createCompletePlan(input);
+          planCount += 1;
+          if (planCount === 2) markBothPlansEntered();
+          await plansResumed;
+          return plan;
+        });
+      const payments = app.get(PaymentsService);
+      const captureEvents = ["first", "second"].map((suffix) => ({
+        providerEventId: `${name}-${suffix}-capture`,
+        providerTransactionId: providerIntentId,
+        merchantReference,
+        status: "CAPTURED" as const,
+        amountMinor,
+        currency,
+        occurredAt: new Date().toISOString(),
+      }));
+      const capturesPromise = Promise.all(
+        captureEvents.map((event) =>
+          payments.consumeProviderEvent(
+            "sandbox",
+            {
+              "x-taven-sandbox-signature": sandboxEventSignature(
+                event,
+                signingSecret,
+              ),
+            },
+            event,
+          ),
+        ),
+      );
+      try {
+        await waitForBlockedBy(blockingProcessId);
+        await orderLocker.query(`SELECT pg_sleep(1.1)`);
+        await orderLocker.query("COMMIT");
+        await bothPlansEntered;
+      } finally {
+        resumePlans();
+        planSpy.mockRestore();
+      }
+
+      const captures = await capturesPromise;
+      expect(captures.map(({ outcome }) => outcome).sort()).toEqual([
+        "CAPTURED",
+        "IGNORED_TERMINAL",
+      ]);
+      expect(
+        (
+          await pool.query(
+            `SELECT payment.status::text AS payment_status,
+                    target_order.status::text AS order_status,
+                    (SELECT count(*)::int FROM payment_provider_events
+                     WHERE payment_id = payment.id) AS event_count,
+                    (SELECT count(*)::int FROM refund_transactions
+                     WHERE payment_id = payment.id) AS refund_count,
+                    (SELECT count(*)::int FROM jobs
+                     WHERE order_id = target_order.id) AS job_count,
+                    (SELECT count(*)::int
+                     FROM phase_reservation_sets reservation_set
+                     JOIN phase_resource_plans resource_plan
+                       ON resource_plan.id =
+                          reservation_set.phase_resource_plan_id
+                     WHERE resource_plan.order_phase_id = $2
+                       AND reservation_set.status = 'HELD') AS held_set_count,
+                    (SELECT count(*)::int
+                     FROM phase_reservation_sets reservation_set
+                     JOIN phase_resource_plans resource_plan
+                       ON resource_plan.id =
+                          reservation_set.phase_resource_plan_id
+                     WHERE resource_plan.order_phase_id = $2
+                       AND reservation_set.status = 'RESERVED')
+                       AS reserved_set_count
+             FROM payments payment
+             JOIN orders target_order ON target_order.id = payment.order_id
+             WHERE payment.id = $1`,
+            [foundation.paymentId, foundation.orderPhaseId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          payment_status: "CAPTURED",
+          order_status: "CONFIRMED",
+          event_count: 2,
+          refund_count: 0,
+          job_count: 1,
+          held_set_count: 1,
+          reserved_set_count: 0,
+        },
+      ]);
+    } catch (error) {
+      await orderLocker.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      orderLocker.release();
+      await app.close();
+    }
   });
 
   it("matches and compensates a returned intent after cancellation won persistence", async () => {

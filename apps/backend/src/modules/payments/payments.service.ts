@@ -454,8 +454,9 @@ export class PaymentsService {
       event.status === "CAPTURED"
         ? await this.isCaptureContextCurrent(event)
         : true;
+    let captureReacquisitionResolved = false;
     if (event.status === "CAPTURED" && captureContextCurrent) {
-      await this.tryReacquireForCapture(event);
+      captureReacquisitionResolved = await this.tryReacquireForCapture(event);
     }
     const kind =
       event.status === "CAPTURED"
@@ -463,6 +464,33 @@ export class PaymentsService {
         : event.status === "FAILED"
           ? "PAYMENT_FAILED"
           : "PAYMENT_PENDING";
+    let outcome = await this.applyProviderEvent(
+      event,
+      kind,
+      captureContextCurrent,
+      captureReacquisitionResolved,
+    );
+    if (outcome === "REACQUIRE_REQUIRED") {
+      captureReacquisitionResolved = await this.tryReacquireForCapture(
+        event,
+        true,
+      );
+      outcome = await this.applyProviderEvent(
+        event,
+        kind,
+        captureContextCurrent,
+        captureReacquisitionResolved,
+      );
+    }
+    return { outcome };
+  }
+
+  private async applyProviderEvent(
+    event: VerifiedPaymentEvent,
+    kind: "PAYMENT_CAPTURED" | "PAYMENT_FAILED" | "PAYMENT_PENDING",
+    captureContextCurrent: boolean,
+    captureReacquisitionResolved: boolean,
+  ): Promise<string> {
     const rows = await this.prisma.$queryRaw<Array<{ outcome: string }>>`
       SELECT taven_apply_checkout_payment_event(
         ${event.provider}, ${event.providerEventId},
@@ -470,10 +498,11 @@ export class PaymentsService {
         ${kind}::payment_provider_event_kind,
         ${event.amountMinor}, ${event.currency}::char(3),
         ${event.occurredAt}, ${jsonInput(event.evidence)}::jsonb,
-        ${captureContextCurrent}, ${event.merchantReference}
+        ${captureContextCurrent}, ${event.merchantReference},
+        ${captureReacquisitionResolved}
       ) AS outcome
     `;
-    return { outcome: rows[0]?.outcome ?? "IGNORED" };
+    return rows[0]?.outcome ?? "IGNORED";
   }
 
   private async prefilterProviderEvent(
@@ -571,7 +600,10 @@ export class PaymentsService {
     }
   }
 
-  private async tryReacquireForCapture(event: VerifiedPaymentEvent) {
+  private async tryReacquireForCapture(
+    event: VerifiedPaymentEvent,
+    resolveRetry = false,
+  ): Promise<boolean> {
     const payment = await this.prisma.payment.findFirst({
       where: {
         provider: event.provider,
@@ -596,7 +628,13 @@ export class PaymentsService {
       !payment.checkoutCaptureExpiresAt ||
       payment.checkoutCaptureExpiresAt.getTime() <= Date.now()
     ) {
-      return;
+      return false;
+    }
+    if (
+      payment.status === PaymentStatus.CREATED &&
+      !(await this.stageCreatedPaymentForVerifiedCapture(payment.id, event))
+    ) {
+      return false;
     }
     const phase = await this.prisma.orderPhase.findUnique({
       where: { orderId: payment.orderId },
@@ -609,17 +647,19 @@ export class PaymentsService {
         },
       },
     });
-    if (!phase) return;
+    if (!phase) return false;
     const sets = phase.eligibilitySnapshots.flatMap(({ phaseResourcePlans }) =>
       phaseResourcePlans.flatMap(({ reservationSets }) => reservationSets),
     );
-    if (
-      sets.some(
-        (set) =>
-          set.status === "RESERVED" && set.expiresAt.getTime() > Date.now(),
-      )
-    ) {
-      return;
+    const liveSet = sets.some(
+      (set) =>
+        set.status === "RESERVED" && set.expiresAt.getTime() > Date.now(),
+    );
+    if (liveSet) {
+      // A set installed by another capture request after the database retry
+      // signal satisfies the forced handshake. Mark the retry as handled so
+      // this request neither releases that fresh set nor asks to reacquire it.
+      return resolveRetry;
     }
     const previous = [...sets].sort(
       (left, right) => right.createdAt.getTime() - left.createdAt.getTime(),
@@ -627,13 +667,7 @@ export class PaymentsService {
     const previousPlan = phase.eligibilitySnapshots
       .flatMap(({ phaseResourcePlans }) => phaseResourcePlans)
       .find((plan) => plan?.id === previous?.phaseResourcePlanId);
-    if (!previous || !previousPlan) return;
-    if (
-      payment.status === PaymentStatus.CREATED &&
-      !(await this.stageCreatedPaymentForVerifiedCapture(payment.id, event))
-    ) {
-      return;
-    }
+    if (!previous || !previousPlan) return true;
     try {
       if (previous.status === "RESERVED") {
         await this.reservations.releaseBeforeCapture(payment.id, previous.id);
@@ -679,7 +713,7 @@ export class PaymentsService {
           reservationKey: `capture-reacquire:${payment.id}:${reservationSuffix}`,
           paymentId: payment.id,
         });
-        return;
+        return true;
       }
       throw new ResourceConflictError(
         "No current unreserved resource plan is available for capture",
@@ -689,7 +723,7 @@ export class PaymentsService {
         error instanceof ResourceConflictError ||
         error instanceof ResourceNotFoundError
       ) {
-        return;
+        return true;
       }
       // The database event transition below converts a verified capture into
       // full compensation when resources cannot be reacquired. No provider

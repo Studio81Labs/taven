@@ -591,6 +591,9 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     existing_replacement_set "phase_reservation_sets"%ROWTYPE;
+    active_checkout_set "phase_reservation_sets"%ROWTYPE;
+    target_payment "payments"%ROWTYPE;
+    target_phase_id uuid;
     target_order_id uuid;
     payment_order_id uuid;
 BEGIN
@@ -644,7 +647,8 @@ BEGIN
             USING ERRCODE = '23503', CONSTRAINT = 'payments_pkey';
     END IF;
 
-    SELECT phase."order_id" INTO target_order_id
+    SELECT phase."id", phase."order_id"
+    INTO target_phase_id, target_order_id
     FROM "phase_resource_plans" plan
     JOIN "order_phases" phase ON phase."id" = plan."order_phase_id"
     WHERE plan."id" = target_phase_resource_plan_id
@@ -659,6 +663,38 @@ BEGIN
     END IF;
 
     PERFORM taven_lock_checkout_payment_envelope(target_payment_id);
+
+    SELECT payment.* INTO target_payment
+    FROM "payments" payment
+    WHERE payment."id" = target_payment_id;
+
+    -- Different authenticated provider-event IDs can race for the same
+    -- Payment and therefore use different reservation keys. The checkout
+    -- envelope is the shared serialization fence: reject a second replacement
+    -- when one won while this caller was preparing its immutable resource plan.
+    -- The service treats this conflict as a resolved reacquisition and lets the
+    -- locked provider-event transition validate and capture the winning set.
+    IF target_payment."status" = 'PENDING'
+       AND target_payment."capture_authorized"
+       AND target_payment."capture_cutoff_at" IS NULL
+       AND target_payment."checkout_capture_expires_at" > clock_timestamp()
+    THEN
+        SELECT reservation_set.* INTO active_checkout_set
+        FROM "phase_reservation_sets" reservation_set
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."id" = reservation_set."phase_resource_plan_id"
+         AND resource_plan."node_id" = reservation_set."node_id"
+        WHERE resource_plan."order_phase_id" = target_phase_id
+          AND reservation_set."status" = 'RESERVED'
+          AND reservation_set."expires_at" > clock_timestamp()
+        ORDER BY reservation_set."created_at" DESC, reservation_set."id" DESC
+        LIMIT 1
+        FOR UPDATE OF reservation_set;
+        IF FOUND THEN
+            RAISE EXCEPTION 'checkout Payment already has a live reservation'
+                USING ERRCODE = '23514', CONSTRAINT = 'phase_reservation_set_capture_reacquire_guard_check';
+        END IF;
+    END IF;
 
     RETURN QUERY
     SELECT *
@@ -1038,7 +1074,8 @@ CREATE FUNCTION taven_apply_checkout_payment_event(
     event_occurred_at timestamptz,
     event_evidence jsonb,
     event_capture_context_valid boolean DEFAULT true,
-    event_merchant_reference text DEFAULT NULL
+    event_merchant_reference text DEFAULT NULL,
+    event_capture_reacquisition_resolved boolean DEFAULT false
 )
 RETURNS text
 LANGUAGE plpgsql
@@ -1051,6 +1088,9 @@ DECLARE
     active_set_id uuid;
     active_set_expires_at timestamptz;
     active_set_capture_eligible boolean := false;
+    capture_evaluated_at timestamptz;
+    capture_topology_current boolean := false;
+    payment_was_created boolean := false;
     verified_at timestamptz := clock_timestamp();
     receipt_id uuid := gen_random_uuid();
     receipt_payload jsonb;
@@ -1194,6 +1234,8 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
     END IF;
 
+    payment_was_created := target_payment."status" = 'CREATED';
+
     -- A create request can be accepted even when its HTTP response is lost.
     -- The provider-authenticated merchant reference binds that intent back to
     -- the one durable checkout command before any provider event is applied.
@@ -1217,6 +1259,77 @@ BEGIN
         'currency', event_currency,
         'evidence', coalesce(event_evidence, '{}'::jsonb)
     );
+
+    IF event_kind = 'PAYMENT_CAPTURED' THEN
+        SELECT phase."id" INTO target_phase_id
+        FROM "order_phases" phase
+        WHERE phase."order_id" = target_payment."order_id"
+          AND phase."kind" = 'SINGLE'
+        FOR UPDATE;
+
+        SELECT reservation_set."id", reservation_set."expires_at"
+        INTO active_set_id, active_set_expires_at
+        FROM "phase_reservation_sets" reservation_set
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."id" = reservation_set."phase_resource_plan_id"
+         AND resource_plan."node_id" = reservation_set."node_id"
+        WHERE resource_plan."order_phase_id" = target_phase_id
+          AND reservation_set."status" = 'RESERVED'
+        ORDER BY reservation_set."created_at" DESC, reservation_set."id" DESC
+        LIMIT 1
+        FOR UPDATE OF reservation_set;
+
+        IF active_set_id IS NOT NULL
+           AND active_set_expires_at > clock_timestamp() THEN
+            active_set_capture_eligible :=
+                taven_phase_reservation_set_is_capture_eligible(active_set_id);
+        END IF;
+
+        -- Reservation validation can itself wait for resource locks. Take the
+        -- liveness timestamp only after the entire capture lock envelope has
+        -- been acquired so a wait which crosses the immutable TTL cannot turn
+        -- a recoverable capture into compensation.
+        capture_evaluated_at := clock_timestamp();
+
+        SELECT EXISTS (
+            SELECT 1
+            FROM "orders" target_order
+            JOIN "order_active_price_bindings" active_binding
+              ON active_binding."order_id" = target_order."id"
+            JOIN "order_price_bindings" binding
+              ON binding."id" = active_binding."order_price_binding_id"
+             AND binding."order_id" = target_order."id"
+            JOIN "automatic_quote_drafts" draft
+              ON draft."order_id" = target_order."id"
+            WHERE target_order."id" = target_payment."order_id"
+              AND target_order."status" = 'QUOTED'
+              AND binding."id" = target_payment."order_price_binding_id"
+              AND binding."price_snapshot_id" =
+                  target_payment."price_snapshot_id"
+              AND binding."invalidated_at" IS NULL
+              AND binding."delivery_destination_id" =
+                  draft."selected_delivery_destination_id"
+        ) INTO capture_topology_current;
+
+        -- The service preflight can observe a live set immediately before its
+        -- immutable TTL elapses. Let it reacquire from the longer checkout
+        -- window before consuming real-money evidence or compensating.
+        IF target_payment."status" = 'PENDING'
+           AND target_payment."capture_authorized"
+           AND target_payment."capture_cutoff_at" IS NULL
+           AND target_payment."checkout_capture_expires_at" >
+               capture_evaluated_at
+           AND event_capture_context_valid
+           AND capture_topology_current
+           AND target_phase_id IS NOT NULL
+           AND (active_set_id IS NULL
+                OR active_set_expires_at <= capture_evaluated_at)
+           AND NOT payment_was_created
+           AND NOT event_capture_reacquisition_resolved THEN
+            RETURN 'REACQUIRE_REQUIRED';
+        END IF;
+    END IF;
+
     INSERT INTO "payment_provider_events" (
         "id", "payment_id", "refund_transaction_id", "provider",
         "provider_event_id", "provider_transaction_id", "kind",
@@ -1246,56 +1359,15 @@ BEGIN
         RETURN 'IGNORED_TERMINAL';
     END IF;
 
-    SELECT phase."id" INTO target_phase_id
-    FROM "order_phases" phase
-    WHERE phase."order_id" = target_payment."order_id"
-      AND phase."kind" = 'SINGLE'
-    FOR UPDATE;
-
-    SELECT reservation_set."id", reservation_set."expires_at"
-    INTO active_set_id, active_set_expires_at
-    FROM "phase_reservation_sets" reservation_set
-    JOIN "phase_resource_plans" resource_plan
-      ON resource_plan."id" = reservation_set."phase_resource_plan_id"
-     AND resource_plan."node_id" = reservation_set."node_id"
-    WHERE resource_plan."order_phase_id" = target_phase_id
-      AND reservation_set."status" = 'RESERVED'
-    ORDER BY reservation_set."created_at" DESC, reservation_set."id" DESC
-    LIMIT 1
-    FOR UPDATE OF reservation_set;
-
-    IF active_set_id IS NOT NULL
-       AND active_set_expires_at > verified_at THEN
-        active_set_capture_eligible :=
-            taven_phase_reservation_set_is_capture_eligible(active_set_id);
-    END IF;
-
     IF target_payment."status" = 'PENDING'
        AND target_payment."capture_authorized"
        AND target_payment."capture_cutoff_at" IS NULL
-       AND target_payment."checkout_capture_expires_at" > verified_at
+       AND target_payment."checkout_capture_expires_at" > capture_evaluated_at
        AND event_capture_context_valid
        AND active_set_id IS NOT NULL
-       AND active_set_expires_at > verified_at
+       AND active_set_expires_at > capture_evaluated_at
        AND active_set_capture_eligible
-       AND EXISTS (
-           SELECT 1
-           FROM "orders" target_order
-           JOIN "order_active_price_bindings" active_binding
-             ON active_binding."order_id" = target_order."id"
-           JOIN "order_price_bindings" binding
-             ON binding."id" = active_binding."order_price_binding_id"
-            AND binding."order_id" = target_order."id"
-           JOIN "automatic_quote_drafts" draft
-             ON draft."order_id" = target_order."id"
-           WHERE target_order."id" = target_payment."order_id"
-             AND target_order."status" = 'QUOTED'
-             AND binding."id" = target_payment."order_price_binding_id"
-             AND binding."price_snapshot_id" = target_payment."price_snapshot_id"
-             AND binding."invalidated_at" IS NULL
-             AND binding."delivery_destination_id" =
-                 draft."selected_delivery_destination_id"
-       ) THEN
+       AND capture_topology_current THEN
         UPDATE "payments"
         SET "status" = 'CAPTURED',
             "captured_amount_minor" = "requested_amount_minor",
