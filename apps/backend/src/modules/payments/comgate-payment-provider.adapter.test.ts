@@ -189,6 +189,35 @@ describe("ComgatePaymentProviderAdapter", () => {
     );
   });
 
+  it("rejects malformed authenticated provider currencies before persistence", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 0,
+          message: "OK",
+          transId: "ABCD-EFGH-IJKL",
+          status: "PAID",
+          price: "12300",
+          curr: "CZKX",
+          refId: "00000000-0000-4000-8000-000000000001",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      adapter.verifyEvent({
+        headers: {},
+        body: {
+          merchant: "merchant",
+          secret: "secret",
+          transId: "ABCD-EFGH-IJKL",
+          refId: "00000000-0000-4000-8000-000000000001",
+        },
+      }),
+    ).rejects.toThrow("Payment provider returned invalid currency");
+  });
+
   it("rejects invalid callback credentials without contacting Comgate", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
 

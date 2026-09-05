@@ -156,7 +156,7 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
       );
     }
     const amountMinor = positiveResponseBigInt(status.price, "price");
-    const currency = requiredResponseText(status, "curr").toUpperCase();
+    const currency = responseCurrency(status);
     const merchantReference = requiredResponseText(status, "refId");
     if (merchantReference !== locator.merchantReference) {
       throw new UnauthorizedException(
@@ -380,6 +380,14 @@ function requiredResponseText(
   const text = optionalResponseText(value, name);
   if (!text) throw new BadGatewayException(`Payment provider omitted ${name}`);
   return text;
+}
+
+function responseCurrency(value: Record<string, unknown>): string {
+  const normalized = requiredResponseText(value, "curr").toUpperCase();
+  if (!/^[A-Z]{3}$/.test(normalized)) {
+    throw new BadGatewayException("Payment provider returned invalid currency");
+  }
+  return normalized;
 }
 
 function optionalResponseText(
