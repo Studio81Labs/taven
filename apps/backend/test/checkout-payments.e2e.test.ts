@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { Prisma } from "@prisma/client";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool, type PoolClient } from "pg";
 import {
   DELIVERY_CAPABILITY,
@@ -19,6 +19,7 @@ import {
   sandboxEventSignature,
 } from "../src/modules/payments/sandbox-payment-provider.adapter";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import {
   PersistenceFactory,
   testTimes,
@@ -1120,6 +1121,26 @@ describe("checkout payment capture protocol", () => {
 
       const sendSandboxOutcome = (outcome: string) =>
         fetch(`${created.checkoutUrl}/${outcome}`, { method: "POST" });
+      const reacquireForCapture = vi
+        .spyOn(app.get(ResourceReservationService), "reacquireForCapture")
+        .mockRejectedValueOnce(
+          new Error("simulated temporary reservation reacquisition failure"),
+        );
+      const transientReacquisitionResponse =
+        await sendSandboxOutcome("capture");
+      reacquireForCapture.mockRestore();
+      expect(transientReacquisitionResponse.status).toBe(500);
+      await expect(
+        prisma.paymentProviderEvent.count({
+          where: { paymentId: created.paymentId },
+        }),
+      ).resolves.toBe(eventsBeforeTransientCapture);
+      await expect(
+        prisma.refundTransaction.count({
+          where: { paymentId: created.paymentId },
+        }),
+      ).resolves.toBe(0);
+
       deliveryResolutionError = new Error(
         "simulated temporary delivery resolution failure",
       );

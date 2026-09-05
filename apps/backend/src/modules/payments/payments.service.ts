@@ -18,6 +18,10 @@ import {
   type ResolvedDeliveryCapability,
 } from "../automatic-quotes/delivery-capability.port";
 import { EligibilityPlanService } from "../resources/eligibility-plan.service";
+import {
+  ResourceConflictError,
+  ResourceNotFoundError,
+} from "../resources/resource-errors";
 import { ResourceReservationService } from "../resources/resource-reservation.service";
 import type {
   CreateCheckoutPaymentDto,
@@ -601,10 +605,17 @@ export class PaymentsService {
         reservationKey: `capture-reacquire:${payment.id}:${suffix}`,
         paymentId: payment.id,
       });
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof ResourceConflictError ||
+        error instanceof ResourceNotFoundError
+      ) {
+        return;
+      }
       // The database event transition below converts a verified capture into
       // full compensation when resources cannot be reacquired. No provider
       // evidence is discarded and no Job is created on this path.
+      throw error;
     }
   }
 
