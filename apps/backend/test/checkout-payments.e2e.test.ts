@@ -214,6 +214,42 @@ async function eventEvidence(
   return row;
 }
 
+async function ageReservationGraph(
+  client: PoolClient,
+  phaseReservationSetId: string,
+  expiresAt: Date,
+): Promise<void> {
+  const createdAt = new Date(expiresAt.getTime() - 15 * 60 * 1_000);
+  await client.query(
+    `UPDATE inventory_reservations inventory_reservation
+     SET created_at = $2, expires_at = $3
+     FROM production_reservations production
+     WHERE production.phase_reservation_set_id = $1
+       AND inventory_reservation.production_reservation_id = production.id`,
+    [phaseReservationSetId, createdAt, expiresAt],
+  );
+  await client.query(
+    `UPDATE capacity_reservations capacity_reservation
+     SET created_at = $2, expires_at = $3
+     FROM production_reservations production
+     WHERE production.phase_reservation_set_id = $1
+       AND capacity_reservation.production_reservation_id = production.id`,
+    [phaseReservationSetId, createdAt, expiresAt],
+  );
+  await client.query(
+    `UPDATE production_reservations
+     SET created_at = $2, expires_at = $3
+     WHERE phase_reservation_set_id = $1`,
+    [phaseReservationSetId, createdAt, expiresAt],
+  );
+  await client.query(
+    `UPDATE phase_reservation_sets
+     SET created_at = $2, expires_at = $3
+     WHERE id = $1`,
+    [phaseReservationSetId, createdAt, expiresAt],
+  );
+}
+
 async function waitForDatabaseLock(applicationName: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const waiting = await pool.query<{ waiting: boolean }>(
@@ -2462,6 +2498,161 @@ describe("checkout payment capture protocol", () => {
     } finally {
       cancellationClient.release();
       releaseClient.release();
+    }
+  });
+
+  it("skips an Order-locked checkout before expiring the next reservation", async () => {
+    const name = `expiry-lock-order-${randomUUID().slice(0, 8)}`;
+    const setupClient = await pool.connect();
+    let lockedFoundation: PersistenceFoundation;
+    let expiringFoundation: PersistenceFoundation;
+    try {
+      await setupClient.query("BEGIN");
+      const lockedFixtures = new PersistenceFactory(
+        setupClient,
+        `${scope}:${name}:locked`,
+        {
+          publicTokenHash: createHash("sha256")
+            .update(`${scope}:${name}:locked:checkout-token`)
+            .digest("hex"),
+        },
+      );
+      const expiringFixtures = new PersistenceFactory(
+        setupClient,
+        `${scope}:${name}:expiring`,
+        {
+          publicTokenHash: createHash("sha256")
+            .update(`${scope}:${name}:expiring:checkout-token`)
+            .digest("hex"),
+        },
+      );
+      ({ foundation: lockedFoundation } = await preparePayment(
+        setupClient,
+        lockedFixtures,
+        `${name}:locked`,
+      ));
+      ({ foundation: expiringFoundation } = await preparePayment(
+        setupClient,
+        expiringFixtures,
+        `${name}:expiring`,
+      ));
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      // Reproduce elapsed immutable deadlines without making this regression
+      // wait for the production 15-minute reservation window.
+      await setupClient.query(`SET LOCAL session_replication_role = 'replica'`);
+      await ageReservationGraph(
+        setupClient,
+        lockedFoundation.phaseReservationSetId,
+        new Date(Date.now() - 120_000),
+      );
+      await ageReservationGraph(
+        setupClient,
+        expiringFoundation.phaseReservationSetId,
+        new Date(Date.now() - 60_000),
+      );
+      await setupClient.query(`SET LOCAL session_replication_role = 'origin'`);
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const checkoutClient = await pool.connect();
+    const expiryClient = await pool.connect();
+    try {
+      await checkoutClient.query("BEGIN");
+      await checkoutClient.query(
+        `SELECT id FROM orders WHERE id = $1 FOR UPDATE`,
+        [lockedFoundation.orderId],
+      );
+
+      await expiryClient.query(`SET statement_timeout = '2s'`);
+      const expired = await expiryClient.query<{
+        phase_reservation_set_id: string;
+      }>(
+        `SELECT phase_reservation_set_id
+         FROM taven_expire_reserved_phase_reservation_sets(1)`,
+      );
+      expect(expired.rows).toEqual([
+        {
+          phase_reservation_set_id: expiringFoundation.phaseReservationSetId,
+        },
+      ]);
+
+      const close = await checkoutClient.query<{ status: string }>(
+        `SELECT taven_close_initial_checkout_payment(
+           $1, 'CUSTOMER_CANCELLED'
+         )::text AS status`,
+        [lockedFoundation.paymentId],
+      );
+      expect(close.rows).toEqual([{ status: "VOIDED" }]);
+      await checkoutClient.query("COMMIT");
+
+      const graph = await pool.query<{
+        id: string;
+        set_status: string;
+        production_status: string;
+        inventory_status: string;
+        capacity_status: string;
+      }>(
+        `SELECT reservation_set.id,
+                reservation_set.status::text AS set_status,
+                production.status::text AS production_status,
+                inventory_reservation.status::text AS inventory_status,
+                capacity_reservation.status::text AS capacity_status
+         FROM phase_reservation_sets reservation_set
+         JOIN production_reservations production
+           ON production.phase_reservation_set_id = reservation_set.id
+         JOIN inventory_reservations inventory_reservation
+           ON inventory_reservation.production_reservation_id = production.id
+         JOIN capacity_reservations capacity_reservation
+           ON capacity_reservation.production_reservation_id = production.id
+         WHERE reservation_set.id = ANY($1::uuid[])`,
+        [
+          [
+            lockedFoundation.phaseReservationSetId,
+            expiringFoundation.phaseReservationSetId,
+          ],
+        ],
+      );
+      expect(graph.rows).toEqual(
+        expect.arrayContaining([
+          {
+            id: lockedFoundation.phaseReservationSetId,
+            set_status: "RELEASED",
+            production_status: "RELEASED",
+            inventory_status: "RELEASED",
+            capacity_status: "RELEASED",
+          },
+          {
+            id: expiringFoundation.phaseReservationSetId,
+            set_status: "EXPIRED",
+            production_status: "EXPIRED",
+            inventory_status: "EXPIRED",
+            capacity_status: "EXPIRED",
+          },
+        ]),
+      );
+
+      const replay = await expiryClient.query<{
+        phase_reservation_set_id: string;
+      }>(
+        `SELECT phase_reservation_set_id
+         FROM taven_expire_reserved_phase_reservation_sets(1000)`,
+      );
+      const replayIds = replay.rows.map(
+        ({ phase_reservation_set_id }) => phase_reservation_set_id,
+      );
+      expect(replayIds).not.toContain(lockedFoundation.phaseReservationSetId);
+      expect(replayIds).not.toContain(expiringFoundation.phaseReservationSetId);
+    } catch (error) {
+      await checkoutClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      checkoutClient.release();
+      expiryClient.release();
     }
   });
 

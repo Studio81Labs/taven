@@ -252,9 +252,32 @@ CREATE TRIGGER "payments_checkout_identity_protected"
 BEFORE INSERT OR UPDATE ON "payments"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_payment_checkout_identity();
 
--- Checkout transitions share this canonical lower-rank lock envelope with
--- refund dispatch: Order, ordered phases, ordered refunds, then Payment.
--- The first Payment read resolves immutable identity only and takes no lock.
+-- Resource and checkout transitions share the same lower-rank envelope before
+-- either can lock a reservation set: Order, then ordered phases.
+CREATE FUNCTION taven_lock_order_phase_envelope(target_order_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1 FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Order does not exist'
+            USING ERRCODE = '23503', CONSTRAINT = 'orders_pkey';
+    END IF;
+
+    PERFORM 1 FROM "order_phases" phase
+    WHERE phase."order_id" = target_order_id
+    ORDER BY phase."id"
+    FOR UPDATE;
+END;
+$$;
+
+-- Checkout transitions extend the canonical order/phase envelope with ordered
+-- refunds and then Payment. The first Payment read resolves immutable identity
+-- only and takes no lock.
 CREATE FUNCTION taven_lock_checkout_payment_envelope(target_payment_id uuid)
 RETURNS void
 LANGUAGE plpgsql
@@ -271,14 +294,7 @@ BEGIN
             USING ERRCODE = '23503', CONSTRAINT = 'payments_pkey';
     END IF;
 
-    PERFORM 1 FROM "orders" target_order
-    WHERE target_order."id" = target_order_id
-    FOR UPDATE;
-
-    PERFORM 1 FROM "order_phases" phase
-    WHERE phase."order_id" = target_order_id
-    ORDER BY phase."id"
-    FOR UPDATE;
+    PERFORM taven_lock_order_phase_envelope(target_order_id);
 
     PERFORM 1 FROM "refund_transactions" refund
     WHERE refund."payment_id" = target_payment_id
@@ -294,6 +310,106 @@ BEGIN
         RAISE EXCEPTION 'checkout Payment identity changed during lock acquisition'
             USING ERRCODE = '23514', CONSTRAINT = 'payment_order_binding_immutable_check';
     END IF;
+END;
+$$;
+
+-- The original expiry functions claimed PhaseReservationSet before a deferred
+-- reconciliation trigger locked Order. Checkout release takes those rows in
+-- the opposite order, so the two workers could deadlock. Preserve the focused
+-- set mutation behind an Order-first wrapper, and make batch claiming skip
+-- already locked Orders without touching their reservation sets.
+ALTER FUNCTION taven_expire_reserved_phase_reservation_set(uuid)
+RENAME TO taven_expire_reserved_phase_reservation_set_after_order_lock;
+
+CREATE FUNCTION taven_expire_reserved_phase_reservation_set(target_set_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid;
+BEGIN
+    SELECT phase."order_id"
+    INTO target_order_id
+    FROM "phase_reservation_sets" reservation_set
+    JOIN "phase_resource_plans" resource_plan
+      ON resource_plan."id" = reservation_set."phase_resource_plan_id"
+     AND resource_plan."node_id" = reservation_set."node_id"
+    JOIN "order_phases" phase
+      ON phase."id" = resource_plan."order_phase_id"
+    WHERE reservation_set."id" = target_set_id;
+
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+
+    -- Expiry is opportunistic worker work. Skip a checkout transition which
+    -- already owns the Order fence instead of waiting behind it.
+    PERFORM 1 FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE SKIP LOCKED;
+
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+
+    PERFORM 1 FROM "order_phases" phase
+    WHERE phase."order_id" = target_order_id
+    ORDER BY phase."id"
+    FOR UPDATE;
+
+    -- Generic non-checkout release predates the Order-first envelope and can
+    -- already own this set. Never wait on it while holding Order, because its
+    -- deferred reconciliation will in turn request the Order lock.
+    PERFORM 1 FROM "phase_reservation_sets" reservation_set
+    WHERE reservation_set."id" = target_set_id
+      AND reservation_set."status" = 'RESERVED'
+      AND reservation_set."expires_at" <= clock_timestamp()
+    FOR UPDATE SKIP LOCKED;
+
+    IF NOT FOUND THEN
+        RETURN false;
+    END IF;
+
+    RETURN taven_expire_reserved_phase_reservation_set_after_order_lock(
+        target_set_id
+    );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION taven_expire_reserved_phase_reservation_sets(
+    batch_limit integer
+)
+RETURNS TABLE (phase_reservation_set_id uuid)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_set_id uuid;
+    expired_count integer := 0;
+BEGIN
+    IF batch_limit IS NULL OR batch_limit < 1 OR batch_limit > 1000 THEN
+        RAISE EXCEPTION 'reservation expiry batch limit must be 1 through 1000'
+            USING ERRCODE = '22023', CONSTRAINT = 'phase_reservation_expiry_batch_limit_check';
+    END IF;
+
+    FOR target_set_id IN
+        SELECT reservation_set."id"
+        FROM "phase_reservation_sets" reservation_set
+        JOIN "phase_resource_plans" resource_plan
+          ON resource_plan."id" = reservation_set."phase_resource_plan_id"
+         AND resource_plan."node_id" = reservation_set."node_id"
+        JOIN "order_phases" phase
+          ON phase."id" = resource_plan."order_phase_id"
+        WHERE reservation_set."status" = 'RESERVED'
+          AND reservation_set."expires_at" <= clock_timestamp()
+        ORDER BY reservation_set."expires_at", reservation_set."id"
+    LOOP
+        IF taven_expire_reserved_phase_reservation_set(target_set_id) THEN
+            phase_reservation_set_id := target_set_id;
+            expired_count := expired_count + 1;
+            RETURN NEXT;
+            EXIT WHEN expired_count >= batch_limit;
+        END IF;
+    END LOOP;
 END;
 $$;
 
