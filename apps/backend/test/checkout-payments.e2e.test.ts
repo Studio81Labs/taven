@@ -776,12 +776,16 @@ describe("checkout payment capture protocol", () => {
     });
     let providerAvailable = true;
     let sandboxCheckoutBaseUrl = "http://sandbox.local";
+    let latestReturnUrls:
+      | Readonly<{ success: string; cancelled: string; pending: string }>
+      | undefined;
     const provider: PaymentProviderPort = {
       providerName: () => sandbox.providerName(),
       capabilities: () => sandbox.capabilities(),
       refundRetrySafety: () => sandbox.refundRetrySafety(),
       createIntent: async (input) => {
         if (!providerAvailable) throw new Error("simulated provider outage");
+        latestReturnUrls = input.returnUrls;
         const intent = await sandbox.createIntent(input);
         return {
           ...intent,
@@ -820,6 +824,49 @@ describe("checkout payment capture protocol", () => {
       const baseUrl = new URL(await app.getUrl());
       sandboxCheckoutBaseUrl = baseUrl.origin;
 
+      const outageIdempotencyKey = "sandbox-http-outage-1";
+      const createOutagePayment = () =>
+        fetch(
+          new URL(
+            `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/payments`,
+            baseUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${outageToken}`,
+              "content-type": "application/json",
+              "idempotency-key": outageIdempotencyKey,
+            },
+            body: JSON.stringify({
+              email: outageCustomerEmail,
+              fullName: "Outage Customer",
+              method: "BANK_TRANSFER",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              acknowledgeWithdrawalException: true,
+            }),
+          },
+        );
+
+      process.env.TAVEN_PUBLIC_SITE_URL = "not-an-absolute-url";
+      const invalidSiteResponse = await createOutagePayment();
+      expect(invalidSiteResponse.status).toBe(500);
+      await expect(
+        app.get(PrismaService).payment.count({
+          where: { orderId: outageFoundation.orderId },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        app.get(PrismaService).idempotencyRecord.count({
+          where: {
+            namespace: `checkout-payment:${outageFoundation.quoteSessionId}`,
+            idempotencyKey: outageIdempotencyKey,
+          },
+        }),
+      ).resolves.toBe(0);
+      process.env.TAVEN_PUBLIC_SITE_URL = "https://taven.cz";
+
       const createPayment = () =>
         fetch(
           new URL(
@@ -856,6 +903,12 @@ describe("checkout payment capture protocol", () => {
         status: "PENDING",
         currency: "EUR",
         checkoutUrl: `${baseUrl.origin}/payments/sandbox/sandbox-${created.paymentId}`,
+      });
+      const returnQuery = `?sessionId=${foundation.quoteSessionId}`;
+      expect(latestReturnUrls).toEqual({
+        success: `https://taven.cz/checkout/payment/success${returnQuery}`,
+        cancelled: `https://taven.cz/checkout/payment/cancelled${returnQuery}`,
+        pending: `https://taven.cz/checkout/payment/pending${returnQuery}`,
       });
 
       const checkoutPageResponse = await fetch(created.checkoutUrl);
@@ -935,30 +988,6 @@ describe("checkout payment capture protocol", () => {
       await expect(replayResponse.json()).resolves.toEqual(created);
 
       providerAvailable = false;
-      const outageIdempotencyKey = "sandbox-http-outage-1";
-      const createOutagePayment = () =>
-        fetch(
-          new URL(
-            `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/payments`,
-            baseUrl,
-          ),
-          {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${outageToken}`,
-              "content-type": "application/json",
-              "idempotency-key": outageIdempotencyKey,
-            },
-            body: JSON.stringify({
-              email: outageCustomerEmail,
-              fullName: "Outage Customer",
-              method: "BANK_TRANSFER",
-              acceptTerms: true,
-              acceptClaimPolicy: true,
-              acknowledgeWithdrawalException: true,
-            }),
-          },
-        );
       const outageResponse = await createOutagePayment();
       expect(outageResponse.status).toBe(502);
       await expect(

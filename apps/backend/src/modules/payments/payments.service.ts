@@ -93,6 +93,7 @@ export class PaymentsService {
       endpointType: destination.endpointType,
     });
     assertDestinationStillCurrent(initial, resolvedDestination);
+    const returnUrls = checkoutReturnUrls(publicSiteUrl(), sessionId);
 
     const staged = await this.prisma.$transaction(async (transaction) => {
       await lockIdempotencyKey(transaction, sessionId, idempotencyKey);
@@ -215,7 +216,6 @@ export class PaymentsService {
     });
     if ("replay" in staged) return staged.replay;
 
-    const siteUrl = publicSiteUrl();
     let intent;
     try {
       intent = await this.provider.createIntent({
@@ -227,11 +227,7 @@ export class PaymentsService {
         email: input.email,
         fullName: input.fullName,
         expiresAt: staged.payment.checkoutCaptureExpiresAt!,
-        returnUrls: {
-          success: `${siteUrl}/checkout/payment/success`,
-          cancelled: `${siteUrl}/checkout/payment/cancelled`,
-          pending: `${siteUrl}/checkout/payment/pending`,
-        },
+        returnUrls,
       });
     } catch {
       await this.recordIntentFailure(
@@ -933,6 +929,19 @@ function publicSiteUrl(): string {
     throw new Error("TAVEN_PUBLIC_SITE_URL must be an HTTP(S) URL");
   }
   return parsed.toString().replace(/\/$/, "");
+}
+
+function checkoutReturnUrls(siteUrl: string, sessionId: string) {
+  const target = (result: "success" | "cancelled" | "pending") => {
+    const url = new URL(`/checkout/payment/${result}`, `${siteUrl}/`);
+    url.searchParams.set("sessionId", sessionId);
+    return url.toString();
+  };
+  return {
+    success: target("success"),
+    cancelled: target("cancelled"),
+    pending: target("pending"),
+  } as const;
 }
 
 function fingerprintOf(value: unknown): string {
