@@ -2557,7 +2557,15 @@ export class OrdersService {
         status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
       },
       include: {
-        payment: { include: { priceSnapshot: true } },
+        payment: {
+          include: {
+            priceSnapshot: true,
+            refunds: {
+              where: { status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] } },
+              select: { amountMinor: true, status: true, completedAt: true },
+            },
+          },
+        },
         providerResultEvent: true,
       },
       orderBy: { requestedAt: "asc" },
@@ -2577,6 +2585,13 @@ export class OrdersService {
     if (succeededRefunds.length > 0) {
       const refund = succeededRefunds[0]!;
       const payment = refund.payment;
+      const succeededPaymentRefunds = payment.refunds.filter(
+        ({ status }) => status === "SUCCEEDED",
+      );
+      const succeededRefundTotal = succeededPaymentRefunds.reduce(
+        (total, succeededRefund) => total + succeededRefund.amountMinor,
+        0n,
+      );
       if (
         succeededRefunds.length !== 1 ||
         cancellationRefunds.some(
@@ -2586,9 +2601,13 @@ export class OrdersService {
         payment.capturedAmountMinor === null ||
         !payment.capturedAt ||
         payment.capturedAt.getTime() >= reconciledAt.getTime() ||
-        refund.amountMinor !== payment.capturedAmountMinor ||
+        payment.refunds.some(({ status }) => status !== "SUCCEEDED") ||
+        succeededRefundTotal !== payment.capturedAmountMinor ||
+        succeededPaymentRefunds.some(
+          ({ completedAt }) =>
+            !completedAt || completedAt.getTime() > reconciledAt.getTime(),
+        ) ||
         !refund.completedAt ||
-        refund.completedAt.getTime() > reconciledAt.getTime() ||
         !refund.providerResultEventId ||
         !refund.providerResultEvent
       ) {
@@ -2596,6 +2615,13 @@ export class OrdersService {
           "Refunded cancellation requires exact manual financial reconciliation",
         );
       }
+      const fullyRefundedAt = new Date(
+        Math.max(
+          ...succeededPaymentRefunds.map(({ completedAt }) =>
+            completedAt!.getTime(),
+          ),
+        ),
+      );
       const capturedPayments = await tx.payment.count({
         where: {
           orderId,
@@ -2612,7 +2638,7 @@ export class OrdersService {
         where: { orderId, outcome: "CANCELLED" },
         data: {
           outcome: "CANCELLED_REFUNDED",
-          updatedAt: refund.completedAt,
+          updatedAt: fullyRefundedAt,
         },
       });
       await tx.orderPhase.updateMany({
@@ -2621,7 +2647,7 @@ export class OrdersService {
       });
       await tx.order.updateMany({
         where: { id: orderId, status: OrderStatus.CANCELLED },
-        data: { status: OrderStatus.REFUNDED, updatedAt: refund.completedAt },
+        data: { status: OrderStatus.REFUNDED, updatedAt: fullyRefundedAt },
       });
       await tx.payment.update({
         where: { id: payment.id },
@@ -2645,7 +2671,7 @@ export class OrdersService {
           capturedTotalMinor: payment.capturedAmountMinor,
           earnedAmountMinor: 0n,
           retainedAmountMinor: 0n,
-          refundAmountMinor: refund.amountMinor,
+          refundAmountMinor: succeededRefundTotal,
           writtenOffAmountMinor: 0n,
           unearnedCancelledAmountMinor:
             payment.priceSnapshot.contractTotalMinor,

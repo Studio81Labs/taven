@@ -657,10 +657,13 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       "replacement-job-pack",
     );
     await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN");
+    await orders.completeOrder(orderId, "replacement-order-complete");
 
     await expect(
       prisma.job.findUniqueOrThrow({ where: { id: replacementJobId } }),
-    ).resolves.toMatchObject({ status: "HANDED_OVER" });
+    ).resolves.toMatchObject({ status: "SETTLED" });
     await expect(
       prisma.job.findUniqueOrThrow({ where: { id: sourceJobId } }),
     ).resolves.toMatchObject({ status: "FAILED" });
@@ -678,7 +681,10 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       status: "CONSUMED",
       phaseReservationSet: { status: "SETTLED" },
     });
-  });
+    await expect(
+      prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
+    ).resolves.toMatchObject({ status: "COMPLETED" });
+  }, 10_000);
 
   it("rejects replacement creation after its database deadline", async () => {
     const fixture = await preparePaidOrder("replacement-expired");
@@ -1470,10 +1476,40 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     });
   });
 
-  it("records the settlement when a pre-void acceptance arrives after refund", async () => {
+  it("records aggregate settlement when a pre-void acceptance arrives after refunds", async () => {
     const fixture = await preparePaidOrder("post-void-handoff-refunded");
     await advanceThroughQc(fixture, 0);
     await labelAndPack(fixture, 0);
+    await markSlotPriceComponentExpress(
+      fixture.foundation.fulfilmentSlotIds[0]!,
+    );
+    const priorAdjustment = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: "1",
+        paymentId: fixture.foundation.paymentId,
+        allocation: {
+          component: "express",
+          reason: "deadline missed before cancellation",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: "1",
+            },
+          ],
+        },
+      },
+      "post-void-handoff-prior-adjustment",
+    );
+    const priorRefund = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      priorAdjustment.result.priceAdjustmentId as string,
+      "post-void-handoff-prior-refund",
+    );
+    const priorRefundId = (priorRefund.result.refundIds as string[])[0];
+    if (!priorRefundId) throw new Error("prior refund was not created");
+    await succeedRefund(priorRefundId, "-prior-adjustment");
     await orders.cancelOrder(
       fixture.foundation.orderId,
       { reason: "carrier acceptance was delayed past the refund" },
@@ -1492,6 +1528,14 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     const refundId = (confirmed.result.refundIds as string[])[0];
     if (!refundId) throw new Error("cancellation refund was not created");
+    const payment = await prisma.payment.findUniqueOrThrow({
+      where: { id: fixture.foundation.paymentId },
+    });
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+    ).resolves.toMatchObject({
+      amountMinor: payment.capturedAmountMinor! - 1n,
+    });
     await succeedRefund(refundId);
 
     const reconciled = await orders.handoffShipment(
@@ -1513,6 +1557,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({
       kind: "UNAUTHORIZED_HANDOFF",
       refundTransactionId: refundId,
+      refundAmountMinor: payment.capturedAmountMinor,
     });
     await expect(
       prisma.handoffReconciliation.findUniqueOrThrow({

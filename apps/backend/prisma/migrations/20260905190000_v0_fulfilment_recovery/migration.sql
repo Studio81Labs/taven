@@ -1702,6 +1702,207 @@ CREATE TRIGGER "refund_transactions_claim_success_reconciled"
 AFTER UPDATE OF "status" ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_reconcile_claim_refund_success();
 
+-- The customer-cancellation refund remains the immutable reconciliation anchor,
+-- but prior successful adjustments can legitimately make it smaller than the
+-- captured amount. Prove the zero-retention settlement from the full refund set.
+CREATE OR REPLACE FUNCTION taven_has_refunded_post_void_handoff_reconciliation(
+    target_order_id uuid,
+    target_phase_id uuid DEFAULT NULL,
+    target_shipment_plan_id uuid DEFAULT NULL,
+    target_slot_id uuid DEFAULT NULL,
+    target_job_id uuid DEFAULT NULL,
+    target_verified_at timestamptz DEFAULT NULL,
+    target_shipment_id uuid DEFAULT NULL,
+    target_settlement_id uuid DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "handoff_reconciliations" reconciliation
+        JOIN "order_settlements" settlement
+          ON settlement."id" = reconciliation."order_settlement_id"
+         AND settlement."order_id" = reconciliation."order_id"
+         AND settlement."order_phase_id" = reconciliation."order_phase_id"
+         AND settlement."payment_id" = reconciliation."payment_id"
+         AND settlement."refund_transaction_id" =
+             reconciliation."refund_transaction_id"
+        JOIN "orders" target_order
+          ON target_order."id" = reconciliation."order_id"
+        JOIN "order_phases" phase
+          ON phase."id" = reconciliation."order_phase_id"
+         AND phase."order_id" = reconciliation."order_id"
+        JOIN "shipments" shipment
+          ON shipment."id" = reconciliation."shipment_id"
+         AND shipment."shipment_plan_id" = reconciliation."shipment_plan_id"
+         AND shipment."order_id" = reconciliation."order_id"
+         AND shipment."order_phase_id" = reconciliation."order_phase_id"
+         AND shipment."delivery_destination_id" =
+             reconciliation."delivery_destination_id"
+        JOIN "shipment_provider_events" acceptance_event
+          ON acceptance_event."id" = reconciliation."acceptance_event_id"
+         AND acceptance_event."shipment_id" = reconciliation."shipment_id"
+        JOIN "shipment_provider_events" void_event
+          ON void_event."id" = reconciliation."void_event_id"
+         AND void_event."shipment_id" = reconciliation."shipment_id"
+        JOIN "payments" payment
+          ON payment."id" = reconciliation."payment_id"
+         AND payment."order_id" = reconciliation."order_id"
+        JOIN "refund_transactions" refund
+          ON refund."id" = reconciliation."refund_transaction_id"
+         AND refund."payment_id" = reconciliation."payment_id"
+        JOIN "payment_provider_events" refund_event
+          ON refund_event."id" = reconciliation."refund_provider_event_id"
+         AND refund_event."refund_transaction_id" = reconciliation."refund_transaction_id"
+         AND refund_event."payment_id" = reconciliation."payment_id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = settlement."order_price_binding_id"
+         AND binding."order_id" = settlement."order_id"
+         AND binding."price_snapshot_id" = settlement."price_snapshot_id"
+        JOIN "price_snapshots" price
+          ON price."id" = settlement."price_snapshot_id"
+         AND price."currency" = settlement."currency"
+        WHERE reconciliation."order_id" = target_order_id
+          AND reconciliation."status" = 'COMPLETED'
+          AND reconciliation."cancellation_requested_at" =
+              shipment."cancellation_requested_at"
+          AND reconciliation."reconciled_at" = shipment."handed_over_at"
+          AND settlement."kind" = 'UNAUTHORIZED_HANDOFF'
+          AND settlement."cutoff_at" = settlement."settled_at"
+          AND settlement."settled_at" <= reconciliation."reconciled_at"
+          AND settlement."order_price_binding_id" =
+              target_order."accepted_order_price_binding_id"
+          AND payment."order_price_binding_id" =
+              settlement."order_price_binding_id"
+          AND payment."price_snapshot_id" = settlement."price_snapshot_id"
+          AND payment."currency" = settlement."currency"
+          AND payment."status" = 'REFUNDED'
+          AND NOT payment."capture_authorized"
+          AND payment."capture_cutoff_at" = settlement."cutoff_at"
+          AND payment."captured_at" IS NOT NULL
+          AND payment."captured_at" < settlement."cutoff_at"
+          AND payment."captured_amount_minor" = settlement."captured_total_minor"
+          AND price."contract_total_minor" = settlement."contract_total_minor"
+          AND refund."reason" = 'CUSTOMER_CANCELLATION'
+          AND refund."status" = 'SUCCEEDED'
+          AND settlement."refund_amount_minor" =
+              payment."captured_amount_minor"
+          AND coalesce((
+              SELECT sum(successful_refund."amount_minor")
+              FROM "refund_transactions" successful_refund
+              WHERE successful_refund."payment_id" = payment."id"
+                AND successful_refund."status" = 'SUCCEEDED'
+          ), 0) = payment."captured_amount_minor"
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "refund_transactions" late_successful_refund
+              WHERE late_successful_refund."payment_id" = payment."id"
+                AND late_successful_refund."status" = 'SUCCEEDED'
+                AND (
+                    late_successful_refund."completed_at" IS NULL
+                    OR late_successful_refund."completed_at" >
+                       reconciliation."reconciled_at"
+                )
+          )
+          AND refund."completed_at" IS NOT NULL
+          AND refund."completed_at" <= reconciliation."reconciled_at"
+          AND refund."provider_result_event_id" = refund_event."id"
+          AND refund_event."kind" = 'REFUND_SUCCEEDED'
+          AND refund_event."provider" = payment."provider"
+          AND refund_event."provider" = refund."provider"
+          AND refund_event."provider_transaction_id" = refund."provider_refund_id"
+          AND refund_event."amount_minor" = refund."amount_minor"
+          AND refund_event."currency" = payment."currency"
+          AND refund_event."verified_at" = refund."completed_at"
+          AND settlement."earned_amount_minor" = 0
+          AND settlement."retained_amount_minor" = 0
+          AND settlement."written_off_amount_minor" = 0
+          AND settlement."unearned_cancelled_amount_minor" =
+              settlement."contract_total_minor"
+          AND settlement."amount_due_minor" = 0
+          AND settlement."refundable_balance_minor" = 0
+          AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED')
+          AND shipment."cancelled_at" IS NOT NULL
+          AND acceptance_event."outbox_message_id" IS NULL
+          AND acceptance_event."kind" = 'ACCEPTANCE_SCAN'
+          AND acceptance_event."source_shipment_status" = 'CANCELLED'
+          AND acceptance_event."carrier" = shipment."carrier"
+          AND acceptance_event."carrier_label_id" = shipment."carrier_label_id"
+          AND acceptance_event."provider_event_id" =
+              shipment."provider_acceptance_scan_id"
+          AND acceptance_event."verified_at" = reconciliation."reconciled_at"
+          AND void_event."kind" = 'LABEL_VOIDED'
+          AND void_event."carrier" = shipment."carrier"
+          AND void_event."carrier_label_id" = shipment."carrier_label_id"
+          AND void_event."provider_event_id" = shipment."provider_void_id"
+          AND void_event."verified_at" = shipment."provider_voided_at"
+          AND acceptance_event."occurred_at" < void_event."occurred_at"
+          AND (target_phase_id IS NULL
+               OR reconciliation."order_phase_id" = target_phase_id)
+          AND (target_shipment_plan_id IS NULL
+               OR reconciliation."shipment_plan_id" = target_shipment_plan_id)
+          AND (target_verified_at IS NULL
+               OR reconciliation."reconciled_at" = target_verified_at)
+          AND (target_shipment_id IS NULL
+               OR reconciliation."shipment_id" = target_shipment_id)
+          AND (target_settlement_id IS NULL
+               OR reconciliation."order_settlement_id" = target_settlement_id)
+          AND (
+              target_slot_id IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM "shipment_plan_fulfilment_slots" allocation
+                  JOIN "fulfilment_slots" slot
+                    ON slot."id" = allocation."fulfilment_slot_id"
+                  WHERE allocation."shipment_plan_id" =
+                        reconciliation."shipment_plan_id"
+                    AND slot."id" = target_slot_id
+                    AND slot."order_id" = reconciliation."order_id"
+                    AND slot."order_phase_id" = reconciliation."order_phase_id"
+              )
+          )
+          AND (
+              target_job_id IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM "jobs" job
+                  WHERE job."id" = target_job_id
+                    AND job."order_id" = reconciliation."order_id"
+                    AND job."order_phase_id" = reconciliation."order_phase_id"
+                    AND job."shipment_plan_id" = reconciliation."shipment_plan_id"
+                    AND job."status" = 'CANCELLED'
+                    AND job."cancellation_reason" = 'ORDER_CANCELLED'
+                    AND job."cancelled_at" IS NOT NULL
+                    AND job."cancelled_at" >= shipment."cancelled_at"
+              )
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "payments" other_payment
+              WHERE other_payment."order_id" = reconciliation."order_id"
+                AND other_payment."id" <> payment."id"
+                AND other_payment."captured_at" IS NOT NULL
+                AND other_payment."captured_at" < settlement."cutoff_at"
+                AND coalesce(other_payment."captured_amount_minor", 0) > 0
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "refund_transactions" pending_refund
+              JOIN "payments" pending_payment
+                ON pending_payment."id" = pending_refund."payment_id"
+              WHERE pending_payment."order_id" = reconciliation."order_id"
+                AND pending_refund."status" IN ('PENDING', 'SUSPENDED')
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM "shipments" replacement
+              WHERE replacement."replaces_shipment_id" = shipment."id"
+          )
+    );
+$$;
+
 CREATE FUNCTION taven_has_scoped_partial_cancellation(
     target_order_id uuid,
     target_shipment_plan_id uuid DEFAULT NULL,
@@ -3042,6 +3243,7 @@ BEGIN
                       WHERE job."order_id" = shipment."order_id"
                         AND job."order_phase_id" = shipment."order_phase_id"
                         AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                        AND taven_job_is_current(job."id")
                   )
                   OR EXISTS (
                       SELECT 1
@@ -3049,6 +3251,7 @@ BEGIN
                       WHERE job."order_id" = shipment."order_id"
                         AND job."order_phase_id" = shipment."order_phase_id"
                         AND job."shipment_plan_id" = shipment."shipment_plan_id"
+                        AND taven_job_is_current(job."id")
                         AND (
                             job."status" NOT IN ('HANDED_OVER', 'SETTLED')
                             OR job."handed_over_at" IS NULL
