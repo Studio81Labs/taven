@@ -22,6 +22,8 @@ const session = shallowRef<StoredQuoteSession>();
 const loading = ref(true);
 const errorMessage = ref<string>();
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+let requestController: AbortController | undefined;
+let disposed = false;
 
 const presentation = computed(() =>
   payment.value
@@ -41,13 +43,24 @@ const toneClass = computed(() => {
   }
 });
 
-onMounted(() => void refreshPayment());
+onMounted(() => {
+  disposed = false;
+  void refreshPayment();
+});
 onBeforeUnmount(() => {
+  disposed = true;
+  requestController?.abort();
+  requestController = undefined;
   if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = undefined;
 });
 
 async function refreshPayment(): Promise<void> {
+  if (disposed) return;
   if (refreshTimer) clearTimeout(refreshTimer);
+  requestController?.abort();
+  const controller = new AbortController();
+  requestController = controller;
   loading.value = true;
   errorMessage.value = undefined;
   try {
@@ -75,8 +88,10 @@ async function refreshPayment(): Promise<void> {
           query: { paymentId: requestedPaymentId },
         },
         headers: { Authorization: `Bearer ${stored.sessionToken}` },
+        signal: controller.signal,
       },
     );
+    if (disposed || controller.signal.aborted) return;
     if (!response.data) {
       throw new Error("Ověřený stav platby se nepodařilo načíst.");
     }
@@ -88,12 +103,14 @@ async function refreshPayment(): Promise<void> {
       refreshTimer = setTimeout(() => void refreshPayment(), 4_000);
     }
   } catch (error) {
+    if (disposed || controller.signal.aborted) return;
     errorMessage.value =
       error instanceof Error
         ? error.message
         : "Ověřený stav platby se nepodařilo načíst.";
   } finally {
-    loading.value = false;
+    if (requestController === controller) requestController = undefined;
+    if (!disposed && !controller.signal.aborted) loading.value = false;
   }
 }
 
