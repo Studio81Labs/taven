@@ -1154,6 +1154,14 @@ describe("checkout payment capture protocol", () => {
     let applicationBaseUrl: URL | undefined;
     let failNextFinalizationBeforeCommit = false;
     let failNextReturnedIntentClose = false;
+    let markAmbiguousCaptureIntentStarted!: () => void;
+    const ambiguousCaptureIntentStarted = new Promise<void>((resolve) => {
+      markAmbiguousCaptureIntentStarted = resolve;
+    });
+    let rejectAmbiguousCaptureIntent!: () => void;
+    const ambiguousCaptureIntentResume = new Promise<void>((resolve) => {
+      rejectAmbiguousCaptureIntent = resolve;
+    });
     let latestReturnUrls:
       | Readonly<{ success: string; cancelled: string; pending: string }>
       | undefined;
@@ -1163,6 +1171,14 @@ describe("checkout payment capture protocol", () => {
       refundRetrySafety: () => sandbox.refundRetrySafety(),
       createIntent: async (input) => {
         providerCreateCalls += 1;
+        if (input.email === ambiguousCaptureCustomerEmail) {
+          await sandbox.createIntent(input);
+          markAmbiguousCaptureIntentStarted();
+          await ambiguousCaptureIntentResume;
+          throw new Error(
+            "simulated lost provider response during verified capture",
+          );
+        }
         if (providerFailure === "DEFINITIVE") {
           throw new PaymentIntentCreationError(
             "DEFINITIVE_FAILURE",
@@ -2078,8 +2094,8 @@ describe("checkout payment capture protocol", () => {
       expect(blockedRetry.status).toBe(409);
       expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 1);
 
-      const ambiguousCaptureResponse = await createAmbiguousCapturePayment();
-      expect(ambiguousCaptureResponse.status).toBe(502);
+      const ambiguousCaptureRequest = createAmbiguousCapturePayment();
+      await ambiguousCaptureIntentStarted;
       const ambiguousCapturePayment = await prisma.payment.findFirstOrThrow({
         where: {
           orderId: ambiguousCaptureFoundation.orderId,
@@ -2101,8 +2117,46 @@ describe("checkout payment capture protocol", () => {
         currency: ambiguousCapturePayment.currency,
         occurredAt: new Date().toISOString(),
       };
-      const recoveredCaptureResponse =
-        await sendPublicWebhook(recoveredCapture);
+      let markRecoveryPlanEntered!: () => void;
+      const recoveryPlanEntered = new Promise<void>((resolve) => {
+        markRecoveryPlanEntered = resolve;
+      });
+      let resumeRecoveryPlan!: () => void;
+      const recoveryPlanResume = new Promise<void>((resolve) => {
+        resumeRecoveryPlan = resolve;
+      });
+      const recoveryPlanSpy = vi
+        .spyOn(eligibilityPlanService, "createCompletePlan")
+        .mockImplementationOnce(async (input) => {
+          const plan = await createCompletePlan(input);
+          markRecoveryPlanEntered();
+          await recoveryPlanResume;
+          return plan;
+        });
+      const recoveredCaptureRequest = sendPublicWebhook(recoveredCapture);
+      try {
+        await recoveryPlanEntered;
+        const concurrentSameKeyRetry = await createAmbiguousCapturePayment();
+        expect(concurrentSameKeyRetry.status).toBe(200);
+        await expect(concurrentSameKeyRetry.json()).resolves.toMatchObject({
+          paymentId: ambiguousCapturePayment.id,
+          status: "PENDING",
+          checkoutUrl: null,
+        });
+        rejectAmbiguousCaptureIntent();
+        const originalCreateResponse = await ambiguousCaptureRequest;
+        expect(originalCreateResponse.status).toBe(200);
+        await expect(originalCreateResponse.json()).resolves.toMatchObject({
+          paymentId: ambiguousCapturePayment.id,
+          status: "PENDING",
+          checkoutUrl: null,
+        });
+      } finally {
+        rejectAmbiguousCaptureIntent();
+        resumeRecoveryPlan();
+        recoveryPlanSpy.mockRestore();
+      }
+      const recoveredCaptureResponse = await recoveredCaptureRequest;
       expect(recoveredCaptureResponse.status).toBe(200);
       await expect(recoveredCaptureResponse.json()).resolves.toEqual({
         outcome: "CAPTURED",
@@ -2131,6 +2185,18 @@ describe("checkout payment capture protocol", () => {
               status: "HELD",
             },
           }),
+          prisma.auditEvent.count({
+            where: {
+              paymentId: ambiguousCapturePayment.id,
+              eventType: "checkout.verified_capture_staged",
+            },
+          }),
+          prisma.outboxMessage.count({
+            where: {
+              aggregateId: ambiguousCapturePayment.id,
+              messageType: "void_payment",
+            },
+          }),
         ]),
       ).resolves.toEqual([
         {
@@ -2142,13 +2208,22 @@ describe("checkout payment capture protocol", () => {
         { status: "CONFIRMED" },
         1,
         1,
+        1,
+        0,
       ]);
       const recoveredCaptureReplay = await sendPublicWebhook(recoveredCapture);
       expect(recoveredCaptureReplay.status).toBe(200);
       await expect(recoveredCaptureReplay.json()).resolves.toEqual({
         outcome: "DUPLICATE",
       });
+      const recoveredCheckoutReplay = await createAmbiguousCapturePayment();
+      expect(recoveredCheckoutReplay.status).toBe(200);
+      await expect(recoveredCheckoutReplay.json()).resolves.toMatchObject({
+        paymentId: ambiguousCapturePayment.id,
+        status: "CAPTURED",
+      });
       expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 2);
+      expect(providerCancelCalls).toBe(0);
 
       const staleCancelResponse = await cancelPayment(
         outageFoundation.quoteSessionId,

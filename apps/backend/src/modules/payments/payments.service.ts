@@ -1166,6 +1166,20 @@ async function checkoutIdempotencyAfterLock(
   };
 }
 
+async function hasVerifiedCaptureStaging(
+  transaction: Transaction,
+  paymentId: string,
+): Promise<boolean> {
+  const marker = await transaction.auditEvent.findFirst({
+    where: {
+      paymentId,
+      eventType: "checkout.verified_capture_staged",
+    },
+    select: { id: true },
+  });
+  return marker !== null;
+}
+
 async function closeReturnedIntentAfterLock(
   transaction: Transaction,
   paymentId: string,
@@ -1175,6 +1189,15 @@ async function closeReturnedIntentAfterLock(
   let payment = await transaction.payment.findUniqueOrThrow({
     where: { id: paymentId },
   });
+  if (
+    payment.providerIntentId === providerIntentId &&
+    (await hasVerifiedCaptureStaging(transaction, paymentId))
+  ) {
+    // Capture recovery owns this provider identity. Returning the current
+    // state prevents every caller from voiding or cancelling the intent while
+    // reservation reacquisition and final event application are in flight.
+    return paymentDto(payment);
+  }
   const callbackStagedPending =
     payment.status === PaymentStatus.PENDING &&
     payment.checkoutCommandId === idempotencyRecordId &&

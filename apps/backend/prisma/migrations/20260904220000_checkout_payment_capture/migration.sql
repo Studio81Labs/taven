@@ -357,6 +357,33 @@ BEGIN
         RETURN false;
     END IF;
 
+    -- This append-only marker distinguishes an authenticated capture recovery
+    -- from a pending callback that arrived while provider intent creation was
+    -- still in flight. Same-key retries may close the latter, but must leave the
+    -- former open for the capture transition (or its compensation path).
+    INSERT INTO "audit_events" (
+        "id", "order_id", "payment_id", "event_type", "actor_kind",
+        "correlation_id", "payload", "created_at"
+    )
+    SELECT gen_random_uuid(), target_payment."order_id", target_payment."id",
+           'checkout.verified_capture_staged', 'SYSTEM',
+           target_payment."checkout_command_id",
+           jsonb_build_object(
+               'provider', event_provider,
+               'providerTransactionId', event_transaction_id,
+               'merchantReference', event_merchant_reference,
+               'amountMinor', event_amount_minor::text,
+               'currency', event_currency,
+               'occurredAt', event_occurred_at
+           ),
+           staged_at
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM "audit_events" staged
+        WHERE staged."payment_id" = target_payment."id"
+          AND staged."event_type" = 'checkout.verified_capture_staged'
+    );
+
     IF target_payment."status" = 'PENDING' THEN
         IF target_payment."provider_intent_id" IS DISTINCT FROM
            event_transaction_id THEN
