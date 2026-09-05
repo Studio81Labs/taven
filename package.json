@@ -37,7 +37,7 @@
     "stack:down": "docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile app --profile init --profile worker --profile contract --profile garage down --remove-orphans",
     "stack:logs": "docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile app logs -f backend web admin postgres redis minio",
     "stack:reset": "docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile app --profile init --profile worker --profile contract --profile garage down --volumes --remove-orphans",
-    "stack:worker": "docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker up --build slicing-dispatcher slicer-worker",
+    "stack:worker": "docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker up --build slicing-dispatcher slicer-worker checkout-payment-worker",
     "stack:storage:test:minio": "docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile init --profile contract run --rm --build storage-contract-minio",
     "stack:storage:test:garage": "docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile garage run --rm --build storage-contract-garage",
     "db:up": "pnpm infra:up",
