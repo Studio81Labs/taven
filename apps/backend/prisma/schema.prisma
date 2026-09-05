@@ -1653,26 +1653,27 @@ model Order {
   createdAt                         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  customer               Customer?                @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  automaticOrigin        AutomaticOrderOrigin?
-  individualOrigin       IndividualOrderOrigin?
-  priceBindings          OrderPriceBinding[]      @relation("OrderPriceBindings")
-  acceptedPriceBinding   OrderPriceBinding?       @relation("CheckoutAcceptanceBinding", fields: [acceptedOrderPriceBindingId], references: [id], onDelete: Restrict)
-  activePriceBinding     OrderActivePriceBinding?
-  deliveryDestinations   DeliveryDestination[]
-  items                  OrderItem[]
-  phases                 OrderPhase[]
-  shipmentPlans          ShipmentPlan[]
-  shipments              Shipment[]
-  jobs                   Job[]
-  auditEvents            AuditEvent[]
-  fulfilmentSlots        FulfilmentSlot[]
-  replacementRequests    ReplacementRequest[]
-  claims                 Claim[]
-  priceAdjustments       PriceAdjustment[]
-  settlements            OrderSettlement[]
-  handoffReconciliations HandoffReconciliation[]
-  automaticQuoteDraft    AutomaticQuoteDraft?
+  customer                 Customer?                 @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  automaticOrigin          AutomaticOrderOrigin?
+  individualOrigin         IndividualOrderOrigin?
+  priceBindings            OrderPriceBinding[]       @relation("OrderPriceBindings")
+  acceptedPriceBinding     OrderPriceBinding?        @relation("CheckoutAcceptanceBinding", fields: [acceptedOrderPriceBindingId], references: [id], onDelete: Restrict)
+  activePriceBinding       OrderActivePriceBinding?
+  deliveryDestinations     DeliveryDestination[]
+  items                    OrderItem[]
+  phases                   OrderPhase[]
+  shipmentPlans            ShipmentPlan[]
+  shipments                Shipment[]
+  jobs                     Job[]
+  auditEvents              AuditEvent[]
+  fulfilmentSlots          FulfilmentSlot[]
+  replacementRequests      ReplacementRequest[]
+  claims                   Claim[]
+  reshipmentAuthorizations ReshipmentAuthorization[]
+  priceAdjustments         PriceAdjustment[]
+  settlements              OrderSettlement[]
+  handoffReconciliations   HandoffReconciliation[]
+  automaticQuoteDraft      AutomaticQuoteDraft?
 
   @@index([customerId, createdAt])
   @@index([status, createdAt])
@@ -1926,16 +1927,17 @@ model OrderPhase {
   createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  eligibilitySnapshots   EligibilitySnapshot[]
-  fulfilmentSlots        FulfilmentSlot[]
-  shipmentPlans          ShipmentPlan[]
-  shipments              Shipment[]
-  jobs                   Job[]
-  replacementRequests    ReplacementRequest[]
-  claims                 Claim[]
-  settlements            OrderSettlement[]
-  handoffReconciliations HandoffReconciliation[]
+  order                    Order                     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  eligibilitySnapshots     EligibilitySnapshot[]
+  fulfilmentSlots          FulfilmentSlot[]
+  shipmentPlans            ShipmentPlan[]
+  shipments                Shipment[]
+  jobs                     Job[]
+  replacementRequests      ReplacementRequest[]
+  claims                   Claim[]
+  settlements              OrderSettlement[]
+  handoffReconciliations   HandoffReconciliation[]
+  reshipmentAuthorizations ReshipmentAuthorization[]
 
   @@unique([id, orderId])
   @@map("order_phases")
@@ -2046,17 +2048,19 @@ model Shipment {
   createdAt                DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderPhase             OrderPhase              @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
-  shipmentPlan           ShipmentPlan            @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
-  deliveryDestination    DeliveryDestination     @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
-  replacesShipment       Shipment?               @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
-  replacementShipment    Shipment?               @relation("ShipmentReplacementLineage")
-  providerEvents         ShipmentProviderEvent[]
-  jobAssignments         JobShipmentAssignment[]
-  incidentClaims         Claim[]                 @relation("ClaimIncidentShipment")
-  replacementResolutions ClaimSlotResolution[]   @relation("ClaimResolutionReplacementShipment")
-  handoffReconciliation  HandoffReconciliation?
+  order                           Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase                      OrderPhase               @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan                    ShipmentPlan             @relation(fields: [shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict)
+  deliveryDestination             DeliveryDestination      @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
+  replacesShipment                Shipment?                @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
+  replacementShipment             Shipment?                @relation("ShipmentReplacementLineage")
+  providerEvents                  ShipmentProviderEvent[]
+  jobAssignments                  JobShipmentAssignment[]
+  incidentClaims                  Claim[]                  @relation("ClaimIncidentShipment")
+  replacementResolutions          ClaimSlotResolution[]    @relation("ClaimResolutionReplacementShipment")
+  handoffReconciliation           HandoffReconciliation?
+  originalReshipmentAuthorization ReshipmentAuthorization? @relation("OriginalReshipmentShipment")
+  reshipmentAuthorization         ReshipmentAuthorization? @relation("AuthorizedReshipmentShipment")
 
   @@unique([id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_lineage_scope_key")
   @@unique([id, shipmentPlanId, orderId, orderPhaseId], map: "shipments_job_scope_key")
@@ -2163,10 +2167,11 @@ model ShipmentProviderEvent {
   verifiedAt            DateTime                  @map("verified_at") @db.Timestamptz(3)
   createdAt             DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  shipment                        Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
-  outboxMessage                   OutboxMessage?         @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
-  acceptanceHandoffReconciliation HandoffReconciliation? @relation("HandoffAcceptanceEvent")
-  voidHandoffReconciliation       HandoffReconciliation? @relation("HandoffVoidEvent")
+  shipment                        Shipment                 @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  outboxMessage                   OutboxMessage?           @relation(fields: [outboxMessageId], references: [id], onDelete: Restrict)
+  acceptanceHandoffReconciliation HandoffReconciliation?   @relation("HandoffAcceptanceEvent")
+  voidHandoffReconciliation       HandoffReconciliation?   @relation("HandoffVoidEvent")
+  reshipmentAuthorization         ReshipmentAuthorization?
 
   @@unique([id, shipmentId])
   @@unique([carrier, providerEventId], map: "shipment_provider_events_carrier_provider_event_id_key")
@@ -2360,16 +2365,49 @@ model Claim {
   createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order            Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderPhase       OrderPhase            @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
-  incidentShipment Shipment?             @relation("ClaimIncidentShipment", fields: [incidentShipmentId], references: [id], onDelete: Restrict)
-  resolutions      ClaimSlotResolution[]
-  refunds          RefundTransaction[]
-  priceAdjustments PriceAdjustment[]
+  order                   Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase              OrderPhase               @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  incidentShipment        Shipment?                @relation("ClaimIncidentShipment", fields: [incidentShipmentId], references: [id], onDelete: Restrict)
+  resolutions             ClaimSlotResolution[]
+  refunds                 RefundTransaction[]
+  priceAdjustments        PriceAdjustment[]
+  reshipmentAuthorization ReshipmentAuthorization?
 
   @@unique([incidentShipmentId], map: "claims_incident_shipment_id_key")
   @@index([orderId, status])
   @@map("claims")
+}
+
+model ReshipmentAuthorization {
+  id                    String   @id @default(uuid()) @db.Uuid
+  orderId               String   @map("order_id") @db.Uuid
+  orderPhaseId          String   @map("order_phase_id") @db.Uuid
+  shipmentPlanId        String   @map("shipment_plan_id") @db.Uuid
+  deliveryDestinationId String   @map("delivery_destination_id") @db.Uuid
+  claimId               String   @unique @map("claim_id") @db.Uuid
+  originalShipmentId    String   @unique @map("original_shipment_id") @db.Uuid
+  reshipmentShipmentId  String   @unique @map("reshipment_shipment_id") @db.Uuid
+  acceptanceEventId     String   @unique @map("acceptance_event_id") @db.Uuid
+  custodyConfirmedAt    DateTime @map("custody_confirmed_at") @db.Timestamptz(3)
+  reQcPassedAt          DateTime @map("re_qc_passed_at") @db.Timestamptz(3)
+  reQcEvidence          String   @map("re_qc_evidence") @db.VarChar(500)
+  issuedAt              DateTime @map("issued_at") @db.Timestamptz(3)
+  consumedAt            DateTime @map("consumed_at") @db.Timestamptz(3)
+  createdAt             DateTime @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order              Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "reshipment_authorizations_order_id_fkey")
+  orderPhase         OrderPhase            @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict, onUpdate: NoAction, map: "reshipment_authorizations_order_phase_scope_fkey")
+  claim              Claim                 @relation(fields: [claimId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "reshipment_authorizations_claim_id_fkey")
+  originalShipment   Shipment              @relation("OriginalReshipmentShipment", fields: [originalShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, onUpdate: NoAction, map: "reshipment_authorizations_original_shipment_scope_fkey")
+  reshipmentShipment Shipment              @relation("AuthorizedReshipmentShipment", fields: [reshipmentShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, onUpdate: NoAction, map: "reshipment_authorizations_reshipment_shipment_scope_fkey")
+  acceptanceEvent    ShipmentProviderEvent @relation(fields: [acceptanceEventId, reshipmentShipmentId], references: [id, shipmentId], onDelete: Restrict, onUpdate: NoAction, map: "reshipment_authorizations_acceptance_event_scope_fkey")
+
+  @@unique([originalShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "reshipment_authorizations_original_shipment_scope_key")
+  @@unique([reshipmentShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "reshipment_authorizations_reshipment_shipment_scope_key")
+  @@unique([acceptanceEventId, reshipmentShipmentId], map: "reshipment_authorizations_acceptance_event_scope_key")
+  @@index([orderId, consumedAt])
+  @@map("reshipment_authorizations")
 }
 
 model ClaimSlotResolution {

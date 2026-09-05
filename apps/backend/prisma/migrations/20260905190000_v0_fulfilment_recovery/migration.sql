@@ -60,6 +60,256 @@ BEGIN
 END;
 $$;
 
+-- Claims can be opened after an Order has reached a terminal state, when the
+-- normal order lifecycle has already released its reproduction evidence. Keep
+-- every order-bound source and photo needed to investigate the Claim until the
+-- last active Claim for that Order is resolved.
+CREATE FUNCTION taven_reconcile_claim_asset_retention()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid := coalesce(NEW."order_id", OLD."order_id");
+BEGIN
+    PERFORM 1
+    FROM "model_files" source
+    WHERE source."id" IN (
+        SELECT item."source_model_file_id"
+        FROM "order_items" item
+        WHERE item."order_id" = target_order_id
+    )
+    ORDER BY source."id"
+    FOR UPDATE;
+
+    PERFORM 1
+    FROM "photo_assets" photo
+    WHERE (
+        photo."kind" = 'QC'::"photo_asset_kind"
+        AND photo."scope_kind" = 'JOB'::"photo_scope_kind"
+        AND EXISTS (
+            SELECT 1
+            FROM "jobs" job
+            WHERE job."order_id" = target_order_id
+              AND job."qc_photo_asset_id" = photo."id"
+              AND photo."scope_id" = job."id"
+        )
+    ) OR (
+        photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+        AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+        AND EXISTS (
+            SELECT 1
+            FROM "individual_order_origins" origin
+            JOIN "quotes" quote ON quote."id" = origin."quote_id"
+            WHERE origin."order_id" = target_order_id
+              AND photo."scope_id" = quote."quote_request_id"
+        )
+    )
+    ORDER BY photo."id"
+    FOR UPDATE OF photo;
+
+    UPDATE "model_files" source
+    SET "retention_hold" = CASE
+        WHEN source."retention_hold" = 'LEGAL' THEN source."retention_hold"
+        WHEN EXISTS (
+            SELECT 1
+            FROM "order_items" claim_item
+            JOIN "claims" active_claim
+              ON active_claim."order_id" = claim_item."order_id"
+             AND active_claim."status" IN ('OPEN', 'ACTIVE')
+            WHERE claim_item."source_model_file_id" = source."id"
+        ) THEN 'ACTIVE_CLAIM'::"retention_hold"
+        WHEN EXISTS (
+            SELECT 1
+            FROM "order_items" active_item
+            JOIN "orders" active_order ON active_order."id" = active_item."order_id"
+            WHERE active_item."source_model_file_id" = source."id"
+              AND (
+                  active_order."status" IN (
+                      'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
+                      'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'
+                  )
+                  OR (
+                      active_order."status" = 'CANCELLED'
+                      AND EXISTS (
+                          SELECT 1
+                          FROM "payments" active_payment
+                          WHERE active_payment."order_id" = active_order."id"
+                            AND coalesce(active_payment."captured_amount_minor", 0) > 0
+                      )
+                  )
+              )
+        ) THEN 'ACTIVE_ORDER'::"retention_hold"
+        ELSE 'NONE'::"retention_hold"
+    END
+    WHERE source."deleted_at" IS NULL
+      AND source."id" IN (
+          SELECT item."source_model_file_id"
+          FROM "order_items" item
+          WHERE item."order_id" = target_order_id
+      );
+
+    UPDATE "photo_assets" photo
+    SET "retention_hold" = CASE
+        WHEN photo."retention_hold" = 'LEGAL' THEN photo."retention_hold"
+        WHEN EXISTS (
+            SELECT 1
+            FROM "claims" active_claim
+            WHERE active_claim."status" IN ('OPEN', 'ACTIVE')
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM "jobs" claim_job
+                      WHERE photo."kind" = 'QC'::"photo_asset_kind"
+                        AND photo."scope_kind" = 'JOB'::"photo_scope_kind"
+                        AND photo."scope_id" = claim_job."id"
+                        AND claim_job."qc_photo_asset_id" = photo."id"
+                        AND claim_job."order_id" = active_claim."order_id"
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "individual_order_origins" claim_origin
+                      JOIN "quotes" claim_quote ON claim_quote."id" = claim_origin."quote_id"
+                      WHERE photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+                        AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+                        AND photo."scope_id" = claim_quote."quote_request_id"
+                        AND claim_origin."order_id" = active_claim."order_id"
+                  )
+              )
+        ) THEN 'ACTIVE_CLAIM'::"retention_hold"
+        WHEN EXISTS (
+            SELECT 1
+            FROM "orders" active_order
+            WHERE (
+                active_order."status" IN (
+                    'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED',
+                    'READY_TO_SHIP', 'SHIPPED', 'DELIVERED'
+                )
+                OR (
+                    active_order."status" = 'CANCELLED'
+                    AND EXISTS (
+                        SELECT 1
+                        FROM "payments" active_payment
+                        WHERE active_payment."order_id" = active_order."id"
+                          AND coalesce(active_payment."captured_amount_minor", 0) > 0
+                    )
+                )
+            )
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM "jobs" active_job
+                      WHERE photo."kind" = 'QC'::"photo_asset_kind"
+                        AND photo."scope_kind" = 'JOB'::"photo_scope_kind"
+                        AND photo."scope_id" = active_job."id"
+                        AND active_job."qc_photo_asset_id" = photo."id"
+                        AND active_job."order_id" = active_order."id"
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "individual_order_origins" active_origin
+                      JOIN "quotes" active_quote ON active_quote."id" = active_origin."quote_id"
+                      WHERE photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+                        AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+                        AND photo."scope_id" = active_quote."quote_request_id"
+                        AND active_origin."order_id" = active_order."id"
+                  )
+              )
+        ) THEN 'ACTIVE_ORDER'::"retention_hold"
+        ELSE 'NONE'::"retention_hold"
+    END
+    WHERE photo."deleted_at" IS NULL
+      AND (
+          (
+              photo."kind" = 'QC'::"photo_asset_kind"
+              AND photo."scope_kind" = 'JOB'::"photo_scope_kind"
+              AND EXISTS (
+                  SELECT 1
+                  FROM "jobs" job
+                  WHERE job."order_id" = target_order_id
+                    AND job."qc_photo_asset_id" = photo."id"
+                    AND photo."scope_id" = job."id"
+              )
+          )
+          OR (
+              photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+              AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+              AND EXISTS (
+                  SELECT 1
+                  FROM "individual_order_origins" origin
+                  JOIN "quotes" quote ON quote."id" = origin."quote_id"
+                  WHERE origin."order_id" = target_order_id
+                    AND photo."scope_id" = quote."quote_request_id"
+              )
+          )
+      );
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE FUNCTION taven_protect_active_claim_source()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (NEW."deleted_at" IS NOT NULL
+        OR NEW."retention_hold" NOT IN ('ACTIVE_CLAIM', 'LEGAL'))
+       AND EXISTS (
+           SELECT 1
+           FROM "order_items" item
+           JOIN "claims" active_claim
+             ON active_claim."order_id" = item."order_id"
+            AND active_claim."status" IN ('OPEN', 'ACTIVE')
+           WHERE item."source_model_file_id" = NEW."id"
+       ) THEN
+        RAISE EXCEPTION 'Claim-bound source ModelFile must remain retained while its Claim is active'
+            USING ERRCODE = '23514', CONSTRAINT = 'claim_source_active_claim_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION taven_protect_active_claim_photo()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (NEW."deleted_at" IS NOT NULL
+        OR NEW."retention_hold" NOT IN ('ACTIVE_CLAIM', 'LEGAL'))
+       AND EXISTS (
+           SELECT 1
+           FROM "claims" active_claim
+           WHERE active_claim."status" IN ('OPEN', 'ACTIVE')
+             AND (
+                 EXISTS (
+                     SELECT 1
+                     FROM "jobs" claim_job
+                     WHERE NEW."kind" = 'QC'::"photo_asset_kind"
+                       AND NEW."scope_kind" = 'JOB'::"photo_scope_kind"
+                       AND NEW."scope_id" = claim_job."id"
+                       AND claim_job."qc_photo_asset_id" = NEW."id"
+                       AND claim_job."order_id" = active_claim."order_id"
+                 )
+                 OR EXISTS (
+                     SELECT 1
+                     FROM "individual_order_origins" claim_origin
+                     JOIN "quotes" claim_quote ON claim_quote."id" = claim_origin."quote_id"
+                     WHERE NEW."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
+                       AND NEW."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
+                       AND NEW."scope_id" = claim_quote."quote_request_id"
+                       AND claim_origin."order_id" = active_claim."order_id"
+                 )
+             )
+       ) THEN
+        RAISE EXCEPTION 'Claim-bound PhotoAsset must remain retained while its Claim is active'
+            USING ERRCODE = '23514', CONSTRAINT = 'claim_photo_active_claim_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
 -- Cancellation refunds reserve only the capture balance not already committed by
 -- another active refund. Keep the order-level obligation aligned with the same
 -- PENDING/SUSPENDED/SUCCEEDED accounting used by the capture guard.
@@ -624,6 +874,103 @@ CREATE INDEX "claim_slot_resolutions_fulfilment_slot_id_status_idx"
 CREATE UNIQUE INDEX "claim_slot_resolutions_one_active_claim_per_slot_key"
     ON "claim_slot_resolutions"("fulfilment_slot_id")
     WHERE "status" IN ('PENDING', 'REPLACEMENT_PENDING', 'RESHIP_PENDING', 'REFUND_PENDING');
+
+CREATE TABLE "reshipment_authorizations" (
+    "id" uuid PRIMARY KEY,
+    "order_id" uuid NOT NULL,
+    "order_phase_id" uuid NOT NULL,
+    "shipment_plan_id" uuid NOT NULL,
+    "delivery_destination_id" uuid NOT NULL,
+    "claim_id" uuid NOT NULL UNIQUE,
+    "original_shipment_id" uuid NOT NULL UNIQUE,
+    "reshipment_shipment_id" uuid NOT NULL UNIQUE,
+    "acceptance_event_id" uuid NOT NULL UNIQUE,
+    "custody_confirmed_at" timestamptz(3) NOT NULL,
+    "re_qc_passed_at" timestamptz(3) NOT NULL,
+    "re_qc_evidence" varchar(500) NOT NULL,
+    "issued_at" timestamptz(3) NOT NULL,
+    "consumed_at" timestamptz(3) NOT NULL,
+    "created_at" timestamptz(3) NOT NULL DEFAULT clock_timestamp(),
+    "updated_at" timestamptz(3) NOT NULL,
+    CONSTRAINT "reshipment_authorizations_order_id_fkey"
+        FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT,
+    CONSTRAINT "reshipment_authorizations_order_phase_scope_fkey"
+        FOREIGN KEY ("order_phase_id", "order_id")
+        REFERENCES "order_phases"("id", "order_id") ON DELETE RESTRICT,
+    CONSTRAINT "reshipment_authorizations_claim_id_fkey"
+        FOREIGN KEY ("claim_id") REFERENCES "claims"("id") ON DELETE RESTRICT,
+    CONSTRAINT "reshipment_authorizations_original_shipment_scope_fkey"
+        FOREIGN KEY (
+            "original_shipment_id", "shipment_plan_id", "order_id",
+            "order_phase_id", "delivery_destination_id"
+        ) REFERENCES "shipments"(
+            "id", "shipment_plan_id", "order_id",
+            "order_phase_id", "delivery_destination_id"
+        ) ON DELETE RESTRICT,
+    CONSTRAINT "reshipment_authorizations_reshipment_shipment_scope_fkey"
+        FOREIGN KEY (
+            "reshipment_shipment_id", "shipment_plan_id", "order_id",
+            "order_phase_id", "delivery_destination_id"
+        ) REFERENCES "shipments"(
+            "id", "shipment_plan_id", "order_id",
+            "order_phase_id", "delivery_destination_id"
+        ) ON DELETE RESTRICT,
+    CONSTRAINT "reshipment_authorizations_acceptance_event_scope_fkey"
+        FOREIGN KEY ("acceptance_event_id", "reshipment_shipment_id")
+        REFERENCES "shipment_provider_events"("id", "shipment_id") ON DELETE RESTRICT,
+    CONSTRAINT "reshipment_authorizations_original_shipment_scope_key"
+        UNIQUE (
+            "original_shipment_id", "shipment_plan_id", "order_id",
+            "order_phase_id", "delivery_destination_id"
+        ),
+    CONSTRAINT "reshipment_authorizations_reshipment_shipment_scope_key"
+        UNIQUE (
+            "reshipment_shipment_id", "shipment_plan_id", "order_id",
+            "order_phase_id", "delivery_destination_id"
+        ),
+    CONSTRAINT "reshipment_authorizations_acceptance_event_scope_key"
+        UNIQUE ("acceptance_event_id", "reshipment_shipment_id"),
+    CONSTRAINT "reshipment_authorizations_evidence_check" CHECK (
+        btrim("re_qc_evidence") <> ''
+        AND "custody_confirmed_at" <= "re_qc_passed_at"
+        AND "re_qc_passed_at" <= "issued_at" + interval '5 seconds'
+        AND "issued_at" = "consumed_at"
+    )
+);
+CREATE INDEX "reshipment_authorizations_order_id_consumed_at_idx"
+    ON "reshipment_authorizations"("order_id", "consumed_at");
+
+CREATE FUNCTION taven_is_consumed_custody_reshipment(
+    target_original_shipment_id uuid,
+    target_reshipment_shipment_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "reshipment_authorizations" auth
+        WHERE auth."original_shipment_id" = target_original_shipment_id
+          AND auth."reshipment_shipment_id" = target_reshipment_shipment_id
+          AND auth."consumed_at" IS NOT NULL
+    );
+$$;
+
+CREATE FUNCTION taven_is_consumed_custody_reshipment_shipment(
+    target_reshipment_shipment_id uuid
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "reshipment_authorizations" auth
+        WHERE auth."reshipment_shipment_id" = target_reshipment_shipment_id
+          AND auth."consumed_at" IS NOT NULL
+    );
+$$;
 
 CREATE TABLE "price_adjustments" (
     "id" uuid PRIMARY KEY,
@@ -2562,6 +2909,9 @@ BEGIN
         WHERE predecessor."order_id" = target_order_id
           AND (predecessor."status" <> 'CANCELLED'
                OR predecessor."cancelled_at" IS NULL)
+          AND NOT taven_is_consumed_custody_reshipment(
+              predecessor."id", replacement."id"
+          )
     ) THEN
         RAISE EXCEPTION 'a replaced Shipment must be terminally cancelled before its successor is attached'
             USING ERRCODE = '23514', CONSTRAINT = 'shipment_replacement_predecessor_terminal_check';
@@ -3533,6 +3883,13 @@ BEGIN
               AND shipment."order_id" = scoped_order_id
               AND shipment."order_phase_id" = scoped_phase_id
               AND allocation."fulfilment_slot_id" = NEW."fulfilment_slot_id"
+        )) OR (NEW."status" IN ('RESHIP_PENDING', 'DELIVERED_RESHIP') AND NOT EXISTS (
+            SELECT 1
+            FROM "reshipment_authorizations" auth
+            WHERE auth."claim_id" = NEW."claim_id"
+              AND auth."reshipment_shipment_id" =
+                  NEW."replacement_shipment_id"
+              AND auth."consumed_at" IS NOT NULL
         )) THEN
             RAISE EXCEPTION 'Claim slot resolution must preserve exact order, phase, slot, and Shipment scope'
                 USING ERRCODE = '23514', CONSTRAINT = 'claim_slot_resolution_scope_check';
@@ -3720,6 +4077,9 @@ BEGIN
               OR EXISTS (
                   SELECT 1 FROM "shipments" successor
                   WHERE successor."replaces_shipment_id" = shipment."id"
+                    AND NOT taven_is_consumed_custody_reshipment(
+                        shipment."id", successor."id"
+                    )
               )
               OR (job."status" IN ('HANDED_OVER', 'SETTLED')
                   AND shipment."status" NOT IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'RETURNED', 'RECOVERED'))
@@ -3729,6 +4089,7 @@ BEGIN
         FROM "shipments" shipment
         WHERE shipment."order_id" = target_order_id
           AND shipment."status" IN ('HANDED_OVER', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'RETURNED', 'RECOVERED')
+          AND NOT taven_is_consumed_custody_reshipment_shipment(shipment."id")
           AND NOT EXISTS (
               SELECT 1
               FROM "jobs" job
@@ -4267,7 +4628,7 @@ BEGIN
            OR (OLD."status" = 'IN_PRODUCTION' AND NEW."status" IN ('QC_PASSED', 'RECOVERY_PENDING', 'CANCELLED'))
            OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('SHIPPED', 'RECOVERY_PENDING', 'CANCELLED'))
            OR (OLD."status" = 'SHIPPED' AND NEW."status" IN ('DELIVERED', 'PARTIALLY_FULFILLED', 'CANCELLED_REFUNDED'))
-           OR (OLD."status" = 'RECOVERY_PENDING' AND NEW."status" IN ('QC_PASSED', 'PARTIALLY_FULFILLED', 'CANCELLED_REFUNDED'))
+           OR (OLD."status" = 'RECOVERY_PENDING' AND NEW."status" IN ('QC_PASSED', 'PARTIALLY_FULFILLED', 'CANCELLED', 'CANCELLED_REFUNDED'))
            OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'CANCELLED_REFUNDED')
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'SHIPPED'
@@ -4442,3 +4803,262 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+CREATE TRIGGER "claims_asset_retention_reconciled_on_insert"
+AFTER INSERT ON "claims"
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_claim_asset_retention();
+CREATE TRIGGER "claims_asset_retention_reconciled_on_status"
+AFTER UPDATE OF "status" ON "claims"
+FOR EACH ROW
+WHEN (OLD."status" IS DISTINCT FROM NEW."status")
+EXECUTE FUNCTION taven_reconcile_claim_asset_retention();
+CREATE TRIGGER "model_files_active_claim_protected"
+BEFORE UPDATE OF "retention_hold", "deleted_at" ON "model_files"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_active_claim_source();
+CREATE TRIGGER "photo_assets_active_claim_protected"
+BEFORE UPDATE OF "retention_hold", "deleted_at" ON "photo_assets"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_active_claim_photo();
+
+CREATE TRIGGER "reshipment_authorizations_immutable"
+BEFORE UPDATE OR DELETE ON "reshipment_authorizations"
+FOR EACH ROW EXECUTE FUNCTION taven_reject_immutable_fulfilment_history_mutation();
+
+-- A v0 custody reshipment is deliberately atomic: the original parcel stays as
+-- immutable Job handoff history while one Claim-authorized successor represents
+-- the new carrier custody. Reconcile the whole graph at commit so direct SQL
+-- cannot manufacture a reshipment or detach it from the incident Claim.
+CREATE FUNCTION taven_reconcile_reshipment_authorization()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    changed_row jsonb := CASE
+        WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+        ELSE to_jsonb(NEW)
+    END;
+    target_order_id uuid;
+BEGIN
+    IF TG_TABLE_NAME = 'claim_slot_resolutions' THEN
+        SELECT claim."order_id"
+        INTO target_order_id
+        FROM "claims" claim
+        WHERE claim."id" = (changed_row ->> 'claim_id')::uuid;
+    ELSE
+        target_order_id := (changed_row ->> 'order_id')::uuid;
+    END IF;
+
+    IF target_order_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "reshipment_authorizations" auth
+        LEFT JOIN "claims" claim
+          ON claim."id" = auth."claim_id"
+        LEFT JOIN "shipments" original
+          ON original."id" = auth."original_shipment_id"
+        LEFT JOIN "shipments" reshipment
+          ON reshipment."id" = auth."reshipment_shipment_id"
+        LEFT JOIN "shipment_provider_events" acceptance
+          ON acceptance."id" = auth."acceptance_event_id"
+         AND acceptance."shipment_id" = auth."reshipment_shipment_id"
+        WHERE auth."order_id" = target_order_id
+          AND (
+              claim."id" IS NULL
+              OR original."id" IS NULL
+              OR reshipment."id" IS NULL
+              OR acceptance."id" IS NULL
+              OR claim."origin" IS DISTINCT FROM 'SHIPMENT_INCIDENT'
+              OR claim."incident_shipment_id" IS DISTINCT FROM original."id"
+              OR (claim."order_id", claim."order_phase_id") IS DISTINCT FROM
+                 (auth."order_id", auth."order_phase_id")
+              OR (original."shipment_plan_id", original."order_id",
+                  original."order_phase_id", original."delivery_destination_id")
+                 IS DISTINCT FROM
+                 (auth."shipment_plan_id", auth."order_id",
+                  auth."order_phase_id", auth."delivery_destination_id")
+              OR original."status" NOT IN ('RETURNED', 'RECOVERED')
+              OR reshipment."replaces_shipment_id" IS DISTINCT FROM original."id"
+              OR (reshipment."shipment_plan_id", reshipment."order_id",
+                  reshipment."order_phase_id", reshipment."delivery_destination_id")
+                 IS DISTINCT FROM
+                 (auth."shipment_plan_id", auth."order_id",
+                  auth."order_phase_id", auth."delivery_destination_id")
+              OR EXISTS (
+                  SELECT 1
+                  FROM "shipments" later_successor
+                  WHERE later_successor."replaces_shipment_id" = reshipment."id"
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM "claims" nested_claim
+                  WHERE nested_claim."incident_shipment_id" = reshipment."id"
+              )
+              OR acceptance."kind" IS DISTINCT FROM 'ACCEPTANCE_SCAN'
+              OR acceptance."source_shipment_status" IS DISTINCT FROM 'LABEL_CREATED'
+              OR acceptance."outbox_message_id" IS NOT NULL
+              OR acceptance."carrier" IS DISTINCT FROM reshipment."carrier"
+              OR acceptance."carrier_label_id" IS DISTINCT FROM
+                 reshipment."carrier_label_id"
+              OR acceptance."provider_event_id" IS DISTINCT FROM
+                 reshipment."provider_acceptance_scan_id"
+              OR acceptance."verified_at" IS DISTINCT FROM
+                 reshipment."handed_over_at"
+              OR acceptance."authenticated_at" IS DISTINCT FROM auth."issued_at"
+              OR acceptance."verified_at" IS DISTINCT FROM auth."consumed_at"
+              OR auth."custody_confirmed_at" > auth."re_qc_passed_at"
+              OR auth."re_qc_passed_at" > acceptance."occurred_at"
+              OR acceptance."occurred_at" > acceptance."verified_at" + interval '5 seconds'
+              OR auth."issued_at" IS DISTINCT FROM auth."consumed_at"
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM "claim_slot_resolutions" resolution
+                  WHERE resolution."claim_id" = auth."claim_id"
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM "claim_slot_resolutions" resolution
+                  WHERE resolution."claim_id" = auth."claim_id"
+                    AND (
+                        resolution."replacement_shipment_id" IS DISTINCT FROM
+                            auth."reshipment_shipment_id"
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM "shipment_plan_fulfilment_slots" allocation
+                            WHERE allocation."shipment_plan_id" =
+                                auth."shipment_plan_id"
+                              AND allocation."fulfilment_slot_id" =
+                                  resolution."fulfilment_slot_id"
+                        )
+                    )
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM "shipment_plan_fulfilment_slots" allocation
+                  WHERE allocation."shipment_plan_id" = auth."shipment_plan_id"
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM "claim_slot_resolutions" resolution
+                        WHERE resolution."claim_id" = auth."claim_id"
+                          AND resolution."fulfilment_slot_id" =
+                              allocation."fulfilment_slot_id"
+                          AND resolution."replacement_shipment_id" =
+                              auth."reshipment_shipment_id"
+                    )
+              )
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM "jobs" job
+                  WHERE job."order_id" = auth."order_id"
+                    AND job."order_phase_id" = auth."order_phase_id"
+                    AND job."shipment_plan_id" = auth."shipment_plan_id"
+                    AND NOT EXISTS (
+                        SELECT 1 FROM "jobs" replacement_job
+                        WHERE replacement_job."replaces_job_id" = job."id"
+                    )
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM "jobs" job
+                  WHERE job."order_id" = auth."order_id"
+                    AND job."order_phase_id" = auth."order_phase_id"
+                    AND job."shipment_plan_id" = auth."shipment_plan_id"
+                    AND NOT EXISTS (
+                        SELECT 1 FROM "jobs" replacement_job
+                        WHERE replacement_job."replaces_job_id" = job."id"
+                    )
+                    AND (
+                        job."status" NOT IN ('HANDED_OVER', 'SETTLED')
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM "job_shipment_assignments" assignment
+                            WHERE assignment."job_id" = job."id"
+                              AND assignment."shipment_id" = original."id"
+                        )
+                    )
+              )
+              OR NOT (
+                  (
+                      claim."status" = 'ACTIVE'
+                      AND reshipment."status" IN ('HANDED_OVER', 'IN_TRANSIT')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM "claim_slot_resolutions" resolution
+                          WHERE resolution."claim_id" = auth."claim_id"
+                            AND resolution."status" <> 'RESHIP_PENDING'
+                      )
+                  )
+                  OR (
+                      claim."status" = 'ACTIVE'
+                      AND reshipment."status" IN ('LOST', 'RETURNED', 'RECOVERED')
+                      AND (
+                          NOT EXISTS (
+                              SELECT 1
+                              FROM "claim_slot_resolutions" resolution
+                              WHERE resolution."claim_id" = auth."claim_id"
+                                AND resolution."status" <> 'PENDING'
+                          )
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM "claim_slot_resolutions" resolution
+                              WHERE resolution."claim_id" = auth."claim_id"
+                                AND resolution."status" <> 'REFUND_PENDING'
+                          )
+                      )
+                  )
+                  OR (
+                      claim."status" = 'RESOLVED_RESHIP'
+                      AND reshipment."status" = 'DELIVERED'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM "claim_slot_resolutions" resolution
+                          WHERE resolution."claim_id" = auth."claim_id"
+                            AND resolution."status" <> 'DELIVERED_RESHIP'
+                      )
+                  )
+                  OR (
+                      claim."status" = 'RESOLVED_REFUND'
+                      AND reshipment."status" IN ('LOST', 'RETURNED', 'RECOVERED')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM "claim_slot_resolutions" resolution
+                          WHERE resolution."claim_id" = auth."claim_id"
+                            AND resolution."status" <> 'REFUNDED'
+                      )
+                  )
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION 'custody reshipment must preserve its exact Claim, parcel, evidence, and original Job graph'
+            USING ERRCODE = '23514', CONSTRAINT = 'reshipment_authorization_graph_check';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "reshipment_authorizations_graph_reconciled"
+AFTER INSERT ON "reshipment_authorizations"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_reshipment_authorization();
+CREATE CONSTRAINT TRIGGER "claims_reshipment_graph_reconciled"
+AFTER UPDATE OF "status", "incident_shipment_id" ON "claims"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_reshipment_authorization();
+CREATE CONSTRAINT TRIGGER "claim_slot_resolutions_reshipment_graph_reconciled"
+AFTER INSERT OR UPDATE OR DELETE ON "claim_slot_resolutions"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_reshipment_authorization();
+CREATE CONSTRAINT TRIGGER "shipments_reshipment_graph_reconciled"
+AFTER UPDATE OF "status", "replaces_shipment_id" ON "shipments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_reshipment_authorization();
+CREATE CONSTRAINT TRIGGER "jobs_reshipment_graph_reconciled"
+AFTER UPDATE OF "status", "replaces_job_id" ON "jobs"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_reshipment_authorization();
+CREATE CONSTRAINT TRIGGER "job_shipment_assignments_reshipment_graph_reconciled"
+AFTER INSERT ON "job_shipment_assignments"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_reshipment_authorization();

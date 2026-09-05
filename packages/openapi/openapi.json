@@ -1263,6 +1263,68 @@
         ],
         "type": "object"
       },
+      "HandoffReshipmentDto": {
+        "properties": {
+          "carrier": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "carrierLabelId": {
+            "maxLength": 190,
+            "minLength": 1,
+            "type": "string"
+          },
+          "custodyConfirmedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "providerEventId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "providerShipmentId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "providerTransactionId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reQcEvidence": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reQcPassedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "trackingCode": {
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerEventId",
+          "providerTransactionId",
+          "occurredAt",
+          "carrier",
+          "providerShipmentId",
+          "carrierLabelId",
+          "custodyConfirmedAt",
+          "reQcPassedAt",
+          "reQcEvidence"
+        ],
+        "type": "object"
+      },
       "HealthResponseDto": {
         "properties": {
           "service": {
@@ -2664,6 +2726,76 @@
           }
         ],
         "summary": "Credit and refund every unresolved slot in a Claim",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reshipment-handoff": {
+      "post": {
+        "operationId": "OrdersController_handoffReshipment",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffReshipmentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Claim, custody, QC, or parcel scope is not reshippable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Re-QC and hand off a custody-confirmed incident reshipment",
         "tags": [
           "operator fulfilment"
         ]

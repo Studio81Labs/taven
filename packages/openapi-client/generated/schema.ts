@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reshipment-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-QC and hand off a custody-confirmed incident reshipment */
+        post: operations["OrdersController_handoffReshipment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/complete": {
         parameters: {
             query?: never;
@@ -1179,6 +1196,21 @@ export interface components {
             shipments: Record<string, never>[];
             slots: Record<string, never>[];
         };
+        HandoffReshipmentDto: {
+            carrier: string;
+            carrierLabelId: string;
+            /** Format: date-time */
+            custodyConfirmedAt: string;
+            /** Format: date-time */
+            occurredAt: string;
+            providerEventId: string;
+            providerShipmentId: string;
+            providerTransactionId: string;
+            reQcEvidence: string;
+            /** Format: date-time */
+            reQcPassedAt: string;
+            trackingCode?: string;
+        };
         HealthResponseDto: {
             /**
              * @example taven-backend
@@ -1646,6 +1678,42 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["FulfilmentCommandResultDto"];
                 };
+            };
+        };
+    };
+    OrdersController_handoffReshipment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HandoffReshipmentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Claim, custody, QC, or parcel scope is not reshippable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -31,6 +31,7 @@ import {
   CreateShipmentDto,
   FulfilmentCommandResultDto,
   FulfilmentProjectionDto,
+  HandoffReshipmentDto,
   JobFailureDto,
   JobPrintedDto,
   JobQcSubmissionDto,
@@ -84,7 +85,11 @@ export class OrdersService {
         fulfilmentSlots: { orderBy: { createdAt: "asc" } },
         replacementRequests: { orderBy: { createdAt: "asc" } },
         claims: {
-          include: { resolutions: true, refunds: true },
+          include: {
+            resolutions: true,
+            refunds: true,
+            reshipmentAuthorization: true,
+          },
           orderBy: { createdAt: "asc" },
         },
         priceAdjustments: { orderBy: { createdAt: "asc" } },
@@ -1402,6 +1407,10 @@ export class OrdersService {
         if (!shipment.carrier || !shipment.carrierLabelId) {
           throw new ConflictException("Shipment has no carrier identity");
         }
+        const reshipmentAuthorization =
+          await tx.reshipmentAuthorization.findUnique({
+            where: { reshipmentShipmentId: shipmentId },
+          });
         const existing = await tx.shipmentProviderEvent.findUnique({
           where: {
             carrier_providerEventId: {
@@ -1453,6 +1462,47 @@ export class OrdersService {
             where: { id: shipmentId },
             data: { status: ShipmentStatus.DELIVERED, deliveredAt: verifiedAt },
           });
+          if (reshipmentAuthorization) {
+            const resolutionCount = await tx.claimSlotResolution.count({
+              where: {
+                claimId: reshipmentAuthorization.claimId,
+                replacementShipmentId: shipmentId,
+              },
+            });
+            const deliveredResolutions =
+              await tx.claimSlotResolution.updateMany({
+                where: {
+                  claimId: reshipmentAuthorization.claimId,
+                  replacementShipmentId: shipmentId,
+                  status: ClaimSlotResolutionStatus.RESHIP_PENDING,
+                },
+                data: {
+                  status: ClaimSlotResolutionStatus.DELIVERED_RESHIP,
+                  resolvedAt: verifiedAt,
+                  updatedAt: verifiedAt,
+                },
+              });
+            const resolvedClaim = await tx.claim.updateMany({
+              where: {
+                id: reshipmentAuthorization.claimId,
+                status: ClaimStatus.ACTIVE,
+              },
+              data: {
+                status: ClaimStatus.RESOLVED_RESHIP,
+                resolvedAt: verifiedAt,
+                updatedAt: verifiedAt,
+              },
+            });
+            if (
+              resolutionCount === 0 ||
+              deliveredResolutions.count !== resolutionCount ||
+              resolvedClaim.count !== 1
+            ) {
+              throw new ConflictException(
+                "Reshipment delivery does not match its active Claim remedy",
+              );
+            }
+          }
           await tx.fulfilmentSlot.updateMany({
             where: {
               outcome: "PENDING",
@@ -1544,32 +1594,61 @@ export class OrdersService {
             kind === ShipmentProviderEventKind.LOST ||
             kind === ShipmentProviderEventKind.RETURNED
           ) {
-            const claim = await tx.claim.create({
-              data: {
-                orderId,
-                orderPhaseId: shipment.orderPhaseId,
-                incidentShipmentId: shipmentId,
-                origin: "SHIPMENT_INCIDENT",
-                status: ClaimStatus.OPEN,
-                reason: `${kind.toLowerCase()} carrier event ${evidence.providerEventId}`,
-                openedAt: verifiedAt,
-              },
-            });
-            const slots = await tx.fulfilmentSlot.findMany({
-              where: {
-                shipmentPlanAllocations: {
-                  some: { shipmentPlanId: shipment.shipmentPlanId },
+            if (reshipmentAuthorization) {
+              const resolutionCount = await tx.claimSlotResolution.count({
+                where: {
+                  claimId: reshipmentAuthorization.claimId,
+                  replacementShipmentId: shipmentId,
                 },
-              },
-              select: { id: true },
-            });
-            await tx.claimSlotResolution.createMany({
-              data: slots.map(({ id }) => ({
-                claimId: claim.id,
-                fulfilmentSlotId: id,
-                status: ClaimSlotResolutionStatus.PENDING,
-              })),
-            });
+              });
+              const recoveredResolutions =
+                await tx.claimSlotResolution.updateMany({
+                  where: {
+                    claimId: reshipmentAuthorization.claimId,
+                    replacementShipmentId: shipmentId,
+                    status: ClaimSlotResolutionStatus.RESHIP_PENDING,
+                  },
+                  data: {
+                    status: ClaimSlotResolutionStatus.PENDING,
+                    updatedAt: verifiedAt,
+                  },
+                });
+              if (
+                resolutionCount === 0 ||
+                recoveredResolutions.count !== resolutionCount
+              ) {
+                throw new ConflictException(
+                  "Reshipment incident does not match its active Claim remedy",
+                );
+              }
+            } else {
+              const claim = await tx.claim.create({
+                data: {
+                  orderId,
+                  orderPhaseId: shipment.orderPhaseId,
+                  incidentShipmentId: shipmentId,
+                  origin: "SHIPMENT_INCIDENT",
+                  status: ClaimStatus.OPEN,
+                  reason: `${kind.toLowerCase()} carrier event ${evidence.providerEventId}`,
+                  openedAt: verifiedAt,
+                },
+              });
+              const slots = await tx.fulfilmentSlot.findMany({
+                where: {
+                  shipmentPlanAllocations: {
+                    some: { shipmentPlanId: shipment.shipmentPlanId },
+                  },
+                },
+                select: { id: true },
+              });
+              await tx.claimSlotResolution.createMany({
+                data: slots.map(({ id }) => ({
+                  claimId: claim.id,
+                  fulfilmentSlotId: id,
+                  status: ClaimSlotResolutionStatus.PENDING,
+                })),
+              });
+            }
           }
         }
         return result(orderId, "SHIPMENT_EVENT_APPLIED", {
@@ -1743,6 +1822,280 @@ export class OrdersService {
           claimId: claim.id,
           origin,
           fulfilmentSlotIds: slotIds,
+        });
+      },
+    );
+  }
+
+  handoffReshipment(
+    orderId: string,
+    claimId: string,
+    body: HandoffReshipmentDto,
+    key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    assertUuid(claimId, "claimId");
+    const carrier = requiredText(body.carrier, "carrier", 100);
+    const providerShipmentId = requiredText(
+      body.providerShipmentId,
+      "providerShipmentId",
+      255,
+    );
+    const carrierLabelId = requiredText(
+      body.carrierLabelId,
+      "carrierLabelId",
+      190,
+    );
+    const trackingCode = optionalText(body.trackingCode, "trackingCode", 255);
+    const reQcEvidence = requiredText(body.reQcEvidence, "reQcEvidence", 500);
+    const evidence = providerEvidence(body);
+    const custodyConfirmedAt = dateEvidence(
+      body.custodyConfirmedAt,
+      "custodyConfirmedAt",
+    );
+    const reQcPassedAt = dateEvidence(body.reQcPassedAt, "reQcPassedAt");
+    if (
+      custodyConfirmedAt.getTime() > reQcPassedAt.getTime() ||
+      reQcPassedAt.getTime() > evidence.occurredAt.getTime()
+    ) {
+      throw new BadRequestException(
+        "custodyConfirmedAt, reQcPassedAt, and occurredAt must be chronological",
+      );
+    }
+    const input = {
+      carrier,
+      providerShipmentId,
+      carrierLabelId,
+      trackingCode: trackingCode ?? null,
+      providerEventId: evidence.providerEventId,
+      providerTransactionId: evidence.providerTransactionId,
+      occurredAt: evidence.occurredAt,
+      custodyConfirmedAt,
+      reQcPassedAt,
+      reQcEvidence,
+    };
+    return this.command(
+      orderId,
+      `claim:${claimId}:reshipment-handoff`,
+      key,
+      input,
+      async (tx) => {
+        const order = await this.lockOrder(tx, orderId);
+        if (order.status !== OrderStatus.SHIPPED) {
+          throw new ConflictException(
+            "Custody reshipment requires a shipped Order",
+          );
+        }
+        await tx.$queryRaw`
+          SELECT id FROM claims
+          WHERE id = ${claimId}::uuid AND order_id = ${orderId}::uuid
+          FOR UPDATE
+        `;
+        const claim = await tx.claim.findFirst({
+          where: { id: claimId, orderId },
+          include: {
+            incidentShipment: true,
+            resolutions: { orderBy: { fulfilmentSlotId: "asc" } },
+            reshipmentAuthorization: true,
+          },
+        });
+        if (!claim) throw new NotFoundException("Claim was not found");
+        const original = claim.incidentShipment;
+        if (
+          claim.origin !== ClaimOrigin.SHIPMENT_INCIDENT ||
+          claim.status !== ClaimStatus.OPEN ||
+          !original ||
+          ![ShipmentStatus.RETURNED, ShipmentStatus.RECOVERED].includes(
+            original.status as
+              typeof ShipmentStatus.RETURNED | typeof ShipmentStatus.RECOVERED,
+          ) ||
+          claim.reshipmentAuthorization
+        ) {
+          throw new ConflictException(
+            "Claim does not have custody-confirmed reshipment scope",
+          );
+        }
+        await tx.$queryRaw`
+          SELECT id FROM shipments
+          WHERE id = ${original.id}::uuid AND order_id = ${orderId}::uuid
+          FOR UPDATE
+        `;
+        await tx.$queryRaw`
+          SELECT id FROM claim_slot_resolutions
+          WHERE claim_id = ${claimId}::uuid
+          ORDER BY id
+          FOR UPDATE
+        `;
+        const successorCount = await tx.shipment.count({
+          where: { replacesShipmentId: original.id },
+        });
+        const planSlots = await tx.shipmentPlanFulfilmentSlot.findMany({
+          where: { shipmentPlanId: original.shipmentPlanId },
+          select: { fulfilmentSlotId: true },
+          orderBy: { fulfilmentSlotId: "asc" },
+        });
+        const claimedSlotIds = claim.resolutions.map(
+          ({ fulfilmentSlotId }) => fulfilmentSlotId,
+        );
+        const planSlotIds = planSlots.map(
+          ({ fulfilmentSlotId }) => fulfilmentSlotId,
+        );
+        if (
+          successorCount !== 0 ||
+          planSlotIds.length === 0 ||
+          claimedSlotIds.length !== planSlotIds.length ||
+          claimedSlotIds.some(
+            (slotId, index) => slotId !== planSlotIds[index],
+          ) ||
+          claim.resolutions.some(
+            ({ status, replacementRequestId, replacementShipmentId }) =>
+              status !== ClaimSlotResolutionStatus.PENDING ||
+              replacementRequestId !== null ||
+              replacementShipmentId !== null,
+          )
+        ) {
+          throw new ConflictException(
+            "Custody reshipment requires the whole unresolved parcel Claim",
+          );
+        }
+        const pendingSlots = await tx.fulfilmentSlot.count({
+          where: { id: { in: claimedSlotIds }, orderId, outcome: "PENDING" },
+        });
+        if (pendingSlots !== claimedSlotIds.length) {
+          throw new ConflictException(
+            "Custody reshipment requires unresolved fulfilment slots",
+          );
+        }
+        const originalJobs = await tx.job.findMany({
+          where: {
+            orderId,
+            orderPhaseId: original.orderPhaseId,
+            shipmentPlanId: original.shipmentPlanId,
+            replacementJob: null,
+          },
+          include: { shipmentAssignment: true },
+          orderBy: { id: "asc" },
+        });
+        if (
+          originalJobs.length === 0 ||
+          originalJobs.some(
+            ({ status, shipmentAssignment }) =>
+              ![JobStatus.HANDED_OVER, JobStatus.SETTLED].includes(
+                status as
+                  typeof JobStatus.HANDED_OVER | typeof JobStatus.SETTLED,
+              ) || shipmentAssignment?.shipmentId !== original.id,
+          )
+        ) {
+          throw new ConflictException(
+            "Custody reshipment requires the original handed-over Job scope",
+          );
+        }
+        const claimFinancialWork = await tx.refundTransaction.count({
+          where: { claimId },
+        });
+        const claimAdjustments = await tx.priceAdjustment.count({
+          where: { claimId },
+        });
+        const activeRefunds = await tx.refundTransaction.count({
+          where: {
+            payment: { orderId },
+            status: { in: ["PENDING", "SUSPENDED"] },
+          },
+        });
+        if (
+          claimFinancialWork > 0 ||
+          claimAdjustments > 0 ||
+          activeRefunds > 0
+        ) {
+          throw new ConflictException(
+            "Custody reshipment requires settled financial recovery",
+          );
+        }
+        const reshipment = await tx.shipment.create({
+          data: {
+            orderId,
+            orderPhaseId: original.orderPhaseId,
+            shipmentPlanId: original.shipmentPlanId,
+            deliveryDestinationId: original.deliveryDestinationId,
+            replacesShipmentId: original.id,
+          },
+        });
+        const verifiedAt = await databaseNow(tx);
+        if (
+          custodyConfirmedAt.getTime() > verifiedAt.getTime() ||
+          reQcPassedAt.getTime() > verifiedAt.getTime() ||
+          evidence.occurredAt.getTime() > verifiedAt.getTime() + 5_000
+        ) {
+          throw new ConflictException(
+            "Custody, re-QC, and carrier evidence cannot be in the future",
+          );
+        }
+        await tx.shipment.update({
+          where: { id: reshipment.id },
+          data: {
+            status: ShipmentStatus.LABEL_CREATED,
+            carrier,
+            providerShipmentId,
+            carrierLabelId,
+            trackingCode: trackingCode ?? null,
+            labelCreatedAt: verifiedAt,
+          },
+        });
+        const acceptanceEvent = await tx.shipmentProviderEvent.create({
+          data: {
+            shipmentId: reshipment.id,
+            carrier,
+            carrierLabelId,
+            providerEventId: evidence.providerEventId,
+            providerTransactionId: evidence.providerTransactionId,
+            kind: ShipmentProviderEventKind.ACCEPTANCE_SCAN,
+            sourceShipmentStatus: ShipmentStatus.LABEL_CREATED,
+            occurredAt: evidence.occurredAt,
+            authenticatedAt: verifiedAt,
+            verifiedAt,
+          },
+        });
+        const authorization = await tx.reshipmentAuthorization.create({
+          data: {
+            orderId,
+            orderPhaseId: original.orderPhaseId,
+            shipmentPlanId: original.shipmentPlanId,
+            deliveryDestinationId: original.deliveryDestinationId,
+            claimId,
+            originalShipmentId: original.id,
+            reshipmentShipmentId: reshipment.id,
+            acceptanceEventId: acceptanceEvent.id,
+            custodyConfirmedAt,
+            reQcPassedAt,
+            reQcEvidence,
+            issuedAt: verifiedAt,
+            consumedAt: verifiedAt,
+          },
+        });
+        await tx.claimSlotResolution.updateMany({
+          where: { claimId, status: ClaimSlotResolutionStatus.PENDING },
+          data: {
+            status: ClaimSlotResolutionStatus.RESHIP_PENDING,
+            replacementShipmentId: reshipment.id,
+          },
+        });
+        await tx.claim.update({
+          where: { id: claimId },
+          data: { status: ClaimStatus.ACTIVE },
+        });
+        await tx.shipment.update({
+          where: { id: reshipment.id },
+          data: {
+            status: ShipmentStatus.HANDED_OVER,
+            providerAcceptanceScanId: evidence.providerEventId,
+            handedOverAt: verifiedAt,
+          },
+        });
+        return result(orderId, "CLAIM_RESHIPMENT_HANDED_OVER", {
+          claimId,
+          authorizationId: authorization.id,
+          originalShipmentId: original.id,
+          reshipmentShipmentId: reshipment.id,
+          handedOverAt: verifiedAt,
         });
       },
     );
@@ -2163,11 +2516,28 @@ export class OrdersService {
               include: { fulfilmentSlot: true },
               orderBy: { fulfilmentSlotId: "asc" },
             },
+            reshipmentAuthorization: {
+              include: { reshipmentShipment: true },
+            },
           },
         });
         if (!claim) throw new NotFoundException("Claim was not found");
+        const reshipmentIncidentRefundable =
+          claim.status === ClaimStatus.ACTIVE &&
+          claim.reshipmentAuthorization !== null &&
+          [
+            ShipmentStatus.LOST,
+            ShipmentStatus.RETURNED,
+            ShipmentStatus.RECOVERED,
+          ].includes(
+            claim.reshipmentAuthorization.reshipmentShipment.status as
+              | typeof ShipmentStatus.LOST
+              | typeof ShipmentStatus.RETURNED
+              | typeof ShipmentStatus.RECOVERED,
+          );
         if (
-          claim.status !== ClaimStatus.OPEN ||
+          (claim.status !== ClaimStatus.OPEN &&
+            !reshipmentIncidentRefundable) ||
           claim.resolutions.length === 0
         ) {
           throw new ConflictException("Claim is not awaiting a remedy");
@@ -2540,6 +2910,17 @@ export class OrdersService {
     ) {
       throw new ConflictException(
         "Partially cancelled Shipment requires exact manual financial reconciliation before handoff",
+      );
+    }
+    const productionFailureRefunds = await tx.refundTransaction.count({
+      where: {
+        payment: { orderId },
+        reason: RefundReason.PRODUCTION_FAILURE,
+      },
+    });
+    if (productionFailureRefunds > 0) {
+      throw new ConflictException(
+        "Production failure refund requires exact manual financial reconciliation before handoff",
       );
     }
     const currentShipments = await tx.shipment.count({
@@ -3475,6 +3856,14 @@ function optionalText(
 ): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   return requiredText(value, name, maximum);
+}
+
+function dateEvidence(value: unknown, name: string): Date {
+  const date = new Date(typeof value === "string" ? value : "");
+  if (!Number.isFinite(date.getTime())) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return date;
 }
 
 function positiveBigInt(

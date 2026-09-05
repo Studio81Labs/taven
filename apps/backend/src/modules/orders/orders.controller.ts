@@ -10,6 +10,7 @@ import {
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
+  ApiBody,
   ApiConflictResponse,
   ApiHeader,
   ApiNotFoundResponse,
@@ -27,6 +28,7 @@ import {
   CreateShipmentDto,
   FulfilmentCommandResultDto,
   FulfilmentProjectionDto,
+  HandoffReshipmentDto,
   JobFailureDto,
   JobPrintedDto,
   JobQcSubmissionDto,
@@ -287,6 +289,28 @@ export class OrdersController {
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
     return this.orders.createClaim(orderId, body, key);
+  }
+
+  @Post("claims/:claimId/reshipment-handoff")
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Re-QC and hand off a custody-confirmed incident reshipment",
+  })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiParam({ name: "claimId", type: String, format: "uuid" })
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: HandoffReshipmentDto })
+  @ApiConflictResponse({
+    description: "Claim, custody, QC, or parcel scope is not reshippable",
+  })
+  @ApiOkResponse({ type: FulfilmentCommandResultDto })
+  handoffReshipment(
+    @Param("orderId") orderId: string,
+    @Param("claimId") claimId: string,
+    @Body() body: HandoffReshipmentDto,
+    @Headers("idempotency-key") key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    return this.orders.handoffReshipment(orderId, claimId, body, key);
   }
 
   @Post("claims/:claimId/refund")

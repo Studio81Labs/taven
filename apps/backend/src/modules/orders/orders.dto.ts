@@ -164,6 +164,29 @@ export class CreateClaimDto {
   incidentShipmentId?: string;
 }
 
+export class HandoffReshipmentDto extends ShipmentProviderEvidenceDto {
+  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
+  carrier!: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 255 })
+  providerShipmentId!: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 190 })
+  carrierLabelId!: string;
+
+  @ApiPropertyOptional({ type: String, maxLength: 255 })
+  trackingCode?: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  custodyConfirmedAt!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  reQcPassedAt!: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 500 })
+  reQcEvidence!: string;
+}
+
 export class CancellationPrintingConsumptionDto {
   @ApiProperty(UUID)
   jobId!: string;

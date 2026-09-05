@@ -840,6 +840,95 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
   });
 
+  it("holds reproduction evidence for a post-delivery Claim until resolution", async () => {
+    const fixture = await preparePaidOrder("post-delivery-claim-retention");
+    const photoAssetId = randomUUID();
+    await prisma.photoAsset.create({
+      data: {
+        id: photoAssetId,
+        kind: "QC",
+        scopeKind: "JOB",
+        scopeId: fixture.productions[0]!.jobId,
+        storageObjectKey: `qc/${photoAssetId}`,
+        contentHash: "c".repeat(64),
+        mediaType: "image/jpeg",
+        sizeBytes: 1n,
+        uploadedAt: new Date(),
+        photoDeleteAfter: new Date(Date.now() + 60 * 60 * 1_000),
+        retentionHold: "ACTIVE_ORDER",
+      },
+    });
+    await advanceThroughQc(fixture, 0, photoAssetId);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN");
+    await orders.completeOrder(
+      fixture.foundation.orderId,
+      "post-delivery-claim-retention-complete",
+    );
+    await expect(
+      prisma.modelFile.findUniqueOrThrow({
+        where: { id: fixture.foundation.modelFileId },
+      }),
+    ).resolves.toMatchObject({ retentionHold: "NONE" });
+    await expect(
+      prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetId } }),
+    ).resolves.toMatchObject({ retentionHold: "NONE" });
+
+    const opened = await orders.createClaim(
+      fixture.foundation.orderId,
+      {
+        origin: "POST_DELIVERY_QUALITY",
+        reason: "retain the exact production evidence during investigation",
+        fulfilmentSlotIds: [fixture.foundation.fulfilmentSlotIds[0]!],
+        incidentShipmentId: fixture.foundation.shipmentId,
+      },
+      "post-delivery-claim-retention-open",
+    );
+    const claimId = opened.result.claimId as string;
+    await expect(
+      prisma.modelFile.findUniqueOrThrow({
+        where: { id: fixture.foundation.modelFileId },
+      }),
+    ).resolves.toMatchObject({ retentionHold: "ACTIVE_CLAIM" });
+    await expect(
+      prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetId } }),
+    ).resolves.toMatchObject({ retentionHold: "ACTIVE_CLAIM" });
+    await expect(
+      prisma.modelFile.update({
+        where: { id: fixture.foundation.modelFileId },
+        data: { retentionHold: "NONE" },
+      }),
+    ).rejects.toThrow("must remain retained while its Claim is active");
+    await expect(
+      prisma.photoAsset.update({
+        where: { id: photoAssetId },
+        data: { retentionHold: "NONE" },
+      }),
+    ).rejects.toThrow("must remain retained while its Claim is active");
+
+    const pending = await orders.refundClaim(
+      fixture.foundation.orderId,
+      claimId,
+      "post-delivery-claim-retention-refund",
+    );
+    const refundId = (pending.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("post-delivery refund was not created");
+    await succeedRefund(refundId);
+    await expect(
+      prisma.claim.findUniqueOrThrow({ where: { id: claimId } }),
+    ).resolves.toMatchObject({ status: "RESOLVED_REFUND" });
+    await expect(
+      prisma.modelFile.findUniqueOrThrow({
+        where: { id: fixture.foundation.modelFileId },
+      }),
+    ).resolves.toMatchObject({ retentionHold: "NONE" });
+    await expect(
+      prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetId } }),
+    ).resolves.toMatchObject({ retentionHold: "NONE" });
+  }, 10_000);
+
   it("settles a later-parcel loss as partial fulfilment without moving the first parcel", async () => {
     const fixture = await preparePaidOrder("partial", 2);
     await advanceThroughQc(fixture, 0);
@@ -961,6 +1050,216 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     await expect(
       prisma.claim.count({ where: { incidentShipmentId: shipment.id } }),
     ).resolves.toBe(claimCount);
+  });
+
+  it("reships a returned parcel from confirmed custody and resolves its Claim on delivery", async () => {
+    const fixture = await preparePaidOrder("returned-custody-reship");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "RETURNED");
+    const claim = await prisma.claim.findUniqueOrThrow({
+      where: { incidentShipmentId: fixture.foundation.shipmentId },
+    });
+    const originalJob = await prisma.job.findUniqueOrThrow({
+      where: { id: fixture.productions[0]!.jobId },
+      include: { shipmentAssignment: true },
+    });
+    const evidenceAt = Date.now();
+    const reshipmentEvidence = {
+      carrier: "test-carrier",
+      providerShipmentId: `reship-provider-${claim.id}`,
+      carrierLabelId: `reship-label-${claim.id}`,
+      trackingCode: `reship-tracking-${claim.id}`,
+      providerEventId: `reship-acceptance-${claim.id}`,
+      providerTransactionId: `reship-acceptance-tx-${claim.id}`,
+      custodyConfirmedAt: new Date(evidenceAt - 3_000).toISOString(),
+      reQcPassedAt: new Date(evidenceAt - 2_000).toISOString(),
+      occurredAt: new Date(evidenceAt - 1_000).toISOString(),
+      reQcEvidence: "operator repeated the final visual and dimensional QC",
+    };
+
+    const handedOver = await orders.handoffReshipment(
+      fixture.foundation.orderId,
+      claim.id,
+      reshipmentEvidence,
+      "returned-custody-reship-handoff",
+    );
+    const replay = await orders.handoffReshipment(
+      fixture.foundation.orderId,
+      claim.id,
+      reshipmentEvidence,
+      "returned-custody-reship-handoff",
+    );
+    const reshipmentShipmentId = handedOver.result
+      .reshipmentShipmentId as string;
+    expect(replay).toEqual(handedOver);
+    await expect(
+      prisma.reshipmentAuthorization.findUniqueOrThrow({
+        where: { claimId: claim.id },
+      }),
+    ).resolves.toMatchObject({
+      originalShipmentId: fixture.foundation.shipmentId,
+      reshipmentShipmentId,
+    });
+    await expect(
+      prisma.claim.findUniqueOrThrow({
+        where: { id: claim.id },
+        include: { resolutions: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "ACTIVE",
+      resolutions: [
+        expect.objectContaining({
+          status: "RESHIP_PENDING",
+          replacementShipmentId: reshipmentShipmentId,
+        }),
+      ],
+    });
+    await expect(
+      prisma.job.findUniqueOrThrow({
+        where: { id: fixture.productions[0]!.jobId },
+        include: { shipmentAssignment: true },
+      }),
+    ).resolves.toMatchObject({
+      status: originalJob.status,
+      shipmentAssignment: {
+        shipmentId: fixture.foundation.shipmentId,
+      },
+    });
+
+    await orders.applyShipmentEvent(
+      fixture.foundation.orderId,
+      reshipmentShipmentId,
+      {
+        kind: "TRANSIT_SCAN",
+        providerEventId: `reship-transit-${claim.id}`,
+        providerTransactionId: `reship-transit-tx-${claim.id}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "returned-custody-reship-transit",
+    );
+    await orders.applyShipmentEvent(
+      fixture.foundation.orderId,
+      reshipmentShipmentId,
+      {
+        kind: "DELIVERY_SCAN",
+        providerEventId: `reship-delivery-${claim.id}`,
+        providerTransactionId: `reship-delivery-tx-${claim.id}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "returned-custody-reship-delivery",
+    );
+
+    await expect(
+      prisma.claim.findUniqueOrThrow({
+        where: { id: claim.id },
+        include: { resolutions: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "RESOLVED_RESHIP",
+      resolutions: [expect.objectContaining({ status: "DELIVERED_RESHIP" })],
+    });
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "DELIVERED" });
+  });
+
+  it("requires recovered custody and refunds the original Claim after a reshipment incident", async () => {
+    const fixture = await preparePaidOrder("recovered-custody-reship-refund");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "LOST");
+    const claim = await prisma.claim.findUniqueOrThrow({
+      where: { incidentShipmentId: fixture.foundation.shipmentId },
+    });
+    const evidenceAt = Date.now();
+    const reshipmentEvidence = {
+      carrier: "test-carrier",
+      providerShipmentId: `recovered-reship-provider-${claim.id}`,
+      carrierLabelId: `recovered-reship-label-${claim.id}`,
+      providerEventId: `recovered-reship-acceptance-${claim.id}`,
+      providerTransactionId: `recovered-reship-acceptance-tx-${claim.id}`,
+      custodyConfirmedAt: new Date(evidenceAt - 3_000).toISOString(),
+      reQcPassedAt: new Date(evidenceAt - 2_000).toISOString(),
+      occurredAt: new Date(evidenceAt - 1_000).toISOString(),
+      reQcEvidence: "recovered parcel passed repeat operator QC",
+    };
+
+    await expect(
+      orders.handoffReshipment(
+        fixture.foundation.orderId,
+        claim.id,
+        reshipmentEvidence,
+        "lost-custody-reship-rejected",
+      ),
+    ).rejects.toThrow("custody-confirmed reshipment scope");
+    await carrierEvent(fixture, 0, "RECOVERED");
+    const handedOver = await orders.handoffReshipment(
+      fixture.foundation.orderId,
+      claim.id,
+      reshipmentEvidence,
+      "recovered-custody-reship-handoff",
+    );
+    const reshipmentShipmentId = handedOver.result
+      .reshipmentShipmentId as string;
+    await orders.applyShipmentEvent(
+      fixture.foundation.orderId,
+      reshipmentShipmentId,
+      {
+        kind: "TRANSIT_SCAN",
+        providerEventId: `recovered-reship-transit-${claim.id}`,
+        providerTransactionId: `recovered-reship-transit-tx-${claim.id}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "recovered-custody-reship-transit",
+    );
+    await orders.applyShipmentEvent(
+      fixture.foundation.orderId,
+      reshipmentShipmentId,
+      {
+        kind: "LOST",
+        providerEventId: `recovered-reship-loss-${claim.id}`,
+        providerTransactionId: `recovered-reship-loss-tx-${claim.id}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "recovered-custody-reship-loss",
+    );
+
+    await expect(
+      prisma.claim.count({ where: { orderId: fixture.foundation.orderId } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.claim.findUniqueOrThrow({
+        where: { id: claim.id },
+        include: { resolutions: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "ACTIVE",
+      resolutions: [expect.objectContaining({ status: "PENDING" })],
+    });
+    const pending = await orders.refundClaim(
+      fixture.foundation.orderId,
+      claim.id,
+      "recovered-custody-reship-refund",
+    );
+    const refundId = (pending.result.refundIds as string[])[0];
+    if (!refundId)
+      throw new Error("reshipment incident refund was not created");
+    await succeedRefund(refundId, "-reshipment-incident");
+    await expect(
+      prisma.claim.findUniqueOrThrow({ where: { id: claim.id } }),
+    ).resolves.toMatchObject({ status: "RESOLVED_REFUND" });
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "REFUNDED" });
   });
 
   it("does not bypass incident remedy authorization with a parcel successor", async () => {
@@ -1575,6 +1874,101 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       shipments: [expect.objectContaining({ status: "HANDED_OVER" })],
       slots: [expect.objectContaining({ outcome: "PENDING" })],
     });
+  });
+
+  it("blocks post-void handoff for every production-failure refund history", async () => {
+    const fixture = await preparePaidOrder(
+      "post-void-production-failure-refund",
+      2,
+    );
+    const shipmentId = fixture.foundation.shipmentIds[0]!;
+    await advanceThroughQc(fixture, 0);
+    await advanceThroughQc(fixture, 1);
+    await labelAndPack(fixture, 0);
+    await orders.failJob(
+      fixture.foundation.orderId,
+      fixture.productions[1]!.jobId,
+      {
+        stage: "POST_QC",
+        reason: "second parcel cannot be produced",
+        recovery: "REFUND",
+      },
+      "post-void-production-failure-fail",
+    );
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "cancel the remaining physical parcel" },
+      "post-void-production-failure-cancel",
+    );
+    const voidOccurredAt = new Date();
+    const confirmed = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      shipmentId,
+      {
+        providerEventId: `production-failure-void-${shipmentId}`,
+        providerTransactionId: `production-failure-void-tx-${shipmentId}`,
+        occurredAt: voidOccurredAt.toISOString(),
+      },
+      "post-void-production-failure-confirm",
+    );
+    const refundId = (confirmed.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("production-failure refund was not created");
+
+    await expect(
+      orders.handoffShipment(
+        fixture.foundation.orderId,
+        shipmentId,
+        {
+          providerEventId: `production-failure-acceptance-${shipmentId}`,
+          providerTransactionId: `production-failure-acceptance-tx-${shipmentId}`,
+          occurredAt: new Date(voidOccurredAt.getTime() - 1).toISOString(),
+        },
+        "post-void-production-failure-handoff",
+      ),
+    ).rejects.toThrow(
+      "Production failure refund requires exact manual financial reconciliation before handoff",
+    );
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+    ).resolves.toMatchObject({
+      reason: "PRODUCTION_FAILURE",
+      status: "PENDING",
+    });
+    await expect(
+      prisma.shipment.findUniqueOrThrow({ where: { id: shipmentId } }),
+    ).resolves.toMatchObject({ status: "CANCELLED" });
+    await expect(
+      prisma.shipmentProviderEvent.count({
+        where: { shipmentId, kind: "ACCEPTANCE_SCAN" },
+      }),
+    ).resolves.toBe(0);
+
+    await failRefund(refundId);
+    await expect(
+      orders.handoffShipment(
+        fixture.foundation.orderId,
+        shipmentId,
+        {
+          providerEventId: `failed-production-refund-acceptance-${shipmentId}`,
+          providerTransactionId: `failed-production-refund-acceptance-tx-${shipmentId}`,
+          occurredAt: new Date(voidOccurredAt.getTime() - 1).toISOString(),
+        },
+        "post-void-failed-production-refund-handoff",
+      ),
+    ).rejects.toThrow(
+      "Production failure refund requires exact manual financial reconciliation before handoff",
+    );
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+    ).resolves.toMatchObject({
+      reason: "PRODUCTION_FAILURE",
+      status: "FAILED",
+    });
+    await expect(
+      prisma.shipmentProviderEvent.count({
+        where: { shipmentId, kind: "ACCEPTANCE_SCAN" },
+      }),
+    ).resolves.toBe(0);
   });
 
   it("lets a verified acceptance scan supersede pending label cancellation", async () => {
