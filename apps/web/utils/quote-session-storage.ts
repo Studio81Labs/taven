@@ -40,16 +40,34 @@ export function loadQuoteSession(
   storage: StorageLike,
   now = Date.now(),
 ): StoredQuoteSession | undefined {
+  const parsed = readStoredQuoteSession(storage);
+  if (!parsed) return undefined;
+  const expiresAt = Date.parse(parsed.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+    clearQuoteSession(storage);
+    return undefined;
+  }
+  return parsed;
+}
+
+/**
+ * Loads credentials only for resources, such as a checkout Payment, whose
+ * server-side lifetime is independent from the quote-session expiry.
+ */
+export function loadPaymentReturnSession(
+  storage: StorageLike,
+): StoredQuoteSession | undefined {
+  return readStoredQuoteSession(storage);
+}
+
+function readStoredQuoteSession(
+  storage: StorageLike,
+): StoredQuoteSession | undefined {
   try {
     const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return undefined;
     const parsed: unknown = JSON.parse(raw);
     if (!isStoredQuoteSession(parsed)) throw new Error("invalid session");
-    const expiresAt = Date.parse(parsed.expiresAt);
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
-      clearQuoteSession(storage);
-      return undefined;
-    }
     return parsed;
   } catch {
     clearQuoteSession(storage);

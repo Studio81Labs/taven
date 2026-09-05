@@ -69,6 +69,13 @@ export type ProductionReservationFixture = {
   requiredMachineSeconds: number;
 };
 
+export type AutomaticCheckoutFixtureOptions = Readonly<{
+  publicTokenHash: string;
+  configurationRevision?: number;
+  expressRequested?: boolean;
+  preacceptCheckout?: boolean;
+}>;
+
 type CapacityInterval = { startsAt: Date; endsAt: Date };
 export type SourceRetention = {
   uploadedAt?: Date;
@@ -160,6 +167,7 @@ export class PersistenceFactory {
   constructor(
     private readonly sql: Sql,
     private readonly scope: string,
+    private readonly automaticCheckout?: AutomaticCheckoutFixtureOptions,
   ) {}
 
   id(name: string): string {
@@ -645,6 +653,9 @@ export class PersistenceFactory {
       paymentScheduleKind:
         paymentScheduleKind ??
         (orderOrigin === "INDIVIDUAL" ? "DEPOSIT_BALANCE" : "FULL"),
+      ...(this.automaticCheckout
+        ? { automaticCheckout: this.automaticCheckout }
+        : {}),
       ...(beforeOrderPricing === undefined
         ? {}
         : {
@@ -690,6 +701,7 @@ export class PersistenceFactory {
     customerOwned: boolean;
     includeShipments: boolean;
     paymentScheduleKind: "FULL" | "DEPOSIT_BALANCE";
+    automaticCheckout?: AutomaticCheckoutFixtureOptions;
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
@@ -740,7 +752,8 @@ export class PersistenceFactory {
       [
         input.quoteSessionId,
         input.customerOwned ? input.customerId : null,
-        this.hash(`${input.name}:token`),
+        input.automaticCheckout?.publicTokenHash ??
+          this.hash(`${input.name}:token`),
         input.quoteSessionExpiresAt,
         t,
       ],
@@ -797,7 +810,18 @@ export class PersistenceFactory {
         "EUR",
         contractTotal,
         priceListRevision,
-        JSON.stringify({}),
+        JSON.stringify(
+          input.automaticCheckout
+            ? {
+                automaticQuote: {
+                  configurationRevision:
+                    input.automaticCheckout.configurationRevision ?? 1,
+                  expressRequested:
+                    input.automaticCheckout.expressRequested ?? false,
+                },
+              }
+            : {},
+        ),
         this.hash(`${input.name}:snapshot`),
         t,
       ],
@@ -835,6 +859,24 @@ export class PersistenceFactory {
         t,
       ],
     );
+    if (input.automaticCheckout) {
+      if (input.orderOrigin !== "AUTOMATIC") {
+        throw new Error("automatic checkout fixture requires automatic origin");
+      }
+      await this.sql.query(
+        `INSERT INTO automatic_quote_drafts
+           (order_id, selected_delivery_destination_id, express_requested,
+            configuration_revision, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$5)`,
+        [
+          input.orderId,
+          input.deliveryDestinationId,
+          input.automaticCheckout.expressRequested ?? false,
+          input.automaticCheckout.configurationRevision ?? 1,
+          t,
+        ],
+      );
+    }
     for (const [index, item] of input.resolvedItems.entries()) {
       await this.sql.query(
         "INSERT INTO order_items (id, order_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, reference_slice_result_id, tail_reference_slice_result_id, reference_parts_per_plate, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'PLA',$10,$11,$12)",
@@ -1144,22 +1186,33 @@ export class PersistenceFactory {
         "UPDATE orders SET status = 'QUOTED', quoted_at = $2, updated_at = $2 WHERE id = $1",
         [input.orderId, t],
       );
-      await this.sql.query(
-        `UPDATE orders
-         SET accepted_order_price_binding_id = $3,
-             accepted_terms_revision = (
-               SELECT list.terms_revision
-               FROM order_price_bindings binding
-               JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
-               JOIN price_lists list ON list.id = snapshot.price_list_id
-               WHERE binding.id = $3 AND binding.order_id = $1
-             ),
-             accepted_claim_policy_revision = 'claim-policy-v1',
-             withdrawal_exception_acknowledged_at = $2,
-             updated_at = $2
-         WHERE id = $1`,
-        [input.orderId, t, input.orderPriceBindingId],
-      );
+      if (input.automaticCheckout?.preacceptCheckout !== false) {
+        await this.sql.query(
+          `UPDATE orders
+           SET accepted_order_price_binding_id = $3,
+               accepted_terms_revision = (
+                 SELECT list.terms_revision
+                 FROM order_price_bindings binding
+                 JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
+                 JOIN price_lists list ON list.id = snapshot.price_list_id
+                 WHERE binding.id = $3 AND binding.order_id = $1
+               ),
+               accepted_claim_policy_revision = 'claim-policy-v1',
+               withdrawal_exception_acknowledged_at = $2,
+               checkout_contact_snapshot = jsonb_build_object(
+                 'email', $4::text,
+                 'fullName', 'Test customer'
+               ),
+               updated_at = $2
+           WHERE id = $1`,
+          [
+            input.orderId,
+            t,
+            input.orderPriceBindingId,
+            `${this.hash(input.name).slice(0, 24)}@example.test`,
+          ],
+        );
+      }
       await this.sql.query(
         "INSERT INTO audit_events (id, quote_id, order_id, event_type, payload, created_at) VALUES ($1,$2,$3,'order.quoted',$4::jsonb,$5)",
         [
@@ -1169,6 +1222,12 @@ export class PersistenceFactory {
           JSON.stringify({}),
           t,
         ],
+      );
+    }
+    if (input.automaticCheckout) {
+      await this.sql.query(
+        "UPDATE quote_sessions SET status = 'CONVERTED', updated_at = $2 WHERE id = $1",
+        [input.quoteSessionId, t],
       );
     }
   }
@@ -1239,6 +1298,10 @@ export class PersistenceFactory {
            ),
            accepted_claim_policy_revision = 'claim-policy-v1',
            withdrawal_exception_acknowledged_at = $2,
+           checkout_contact_snapshot = jsonb_build_object(
+             'email', 'test@example.test',
+             'fullName', 'Test customer'
+           ),
            updated_at = $2
        WHERE id = $1
          AND status = 'QUOTED'

@@ -17089,7 +17089,11 @@ describe("commerce persistence foundations", () => {
              SET accepted_order_price_binding_id = $2,
                  accepted_terms_revision = 'terms-v1',
                  accepted_claim_policy_revision = 'claim-policy-v1',
-                 withdrawal_exception_acknowledged_at = clock_timestamp()
+                 withdrawal_exception_acknowledged_at = clock_timestamp(),
+                 checkout_contact_snapshot = jsonb_build_object(
+                   'email', 'test@example.test',
+                   'fullName', 'Test customer'
+                 )
              WHERE id = $1`,
             [checkout.orderId, replacementBindingId],
           ),
@@ -17140,7 +17144,11 @@ describe("commerce persistence foundations", () => {
              SET accepted_order_price_binding_id = $2,
                  accepted_terms_revision = 'terms-v2',
                  accepted_claim_policy_revision = 'claim-policy-v1',
-                 withdrawal_exception_acknowledged_at = clock_timestamp()
+                 withdrawal_exception_acknowledged_at = clock_timestamp(),
+                 checkout_contact_snapshot = jsonb_build_object(
+                   'email', 'test@example.test',
+                   'fullName', 'Test customer'
+                 )
              WHERE id = $1`,
             [checkout.orderId, checkout.orderPriceBindingId],
           ),
@@ -17159,7 +17167,11 @@ describe("commerce persistence foundations", () => {
                  accepted_terms_revision = 'terms-v1',
                  accepted_claim_policy_revision = 'claim-policy-v1',
                  withdrawal_exception_acknowledged_at =
-                   clock_timestamp() + interval '60 seconds'
+                   clock_timestamp() + interval '60 seconds',
+                 checkout_contact_snapshot = jsonb_build_object(
+                   'email', 'test@example.test',
+                   'fullName', 'Test customer'
+                 )
              WHERE id = $1`,
             [checkout.orderId, checkout.orderPriceBindingId],
           ),
@@ -20189,6 +20201,10 @@ describe("commerce persistence foundations", () => {
           `${fixtureScope}:lock-ordered-refund-insert`,
         ],
       );
+      const refundInsertAssertion = expect(refundInsert).rejects.toMatchObject({
+        code: "23514",
+        constraint: "refund_captured_payment_check",
+      });
 
       let refundInsertWaitsForOrder = false;
       for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -20221,10 +20237,7 @@ describe("commerce persistence foundations", () => {
       ).resolves.toBeDefined();
 
       await refundHolder.query("ROLLBACK");
-      await expect(refundInsert).rejects.toMatchObject({
-        code: "23514",
-        constraint: "refund_captured_payment_check",
-      });
+      await refundInsertAssertion;
       await receiptWriter.query("ROLLBACK");
       refundInsert = undefined;
 

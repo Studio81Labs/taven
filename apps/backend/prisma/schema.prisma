@@ -346,6 +346,7 @@ enum ShipmentProviderEventKind {
 }
 
 enum PaymentProviderEventKind {
+  PAYMENT_PENDING
   PAYMENT_CAPTURED
   PAYMENT_FAILED
   REFUND_SUCCEEDED
@@ -636,6 +637,18 @@ model AnonymousQuoteLimit {
 
   @@index([windowExpiresAt])
   @@map("anonymous_quote_limits")
+}
+
+model PaymentWebhookLimit {
+  subjectHash     String   @id @map("subject_hash") @db.VarChar(64)
+  windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+  windowExpiresAt DateTime @map("window_expires_at") @db.Timestamptz(3)
+  issuedCount     Int      @default(0) @map("issued_count")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([windowExpiresAt])
+  @@map("payment_webhook_limits")
 }
 
 model ObjectStorageSweepCursor {
@@ -1249,6 +1262,8 @@ model IdempotencyRecord {
   createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  checkoutPayment Payment? @relation("CheckoutPaymentCommand")
+
   @@unique([namespace, idempotencyKey, generation], map: "idempotency_records_namespace_key_generation_key")
   @@index([expiresAt])
   @@map("idempotency_records")
@@ -1560,6 +1575,7 @@ model Order {
   acceptedTermsRevision             String?     @map("accepted_terms_revision") @db.VarChar(100)
   acceptedClaimPolicyRevision       String?     @map("accepted_claim_policy_revision") @db.VarChar(100)
   withdrawalExceptionAcknowledgedAt DateTime?   @map("withdrawal_exception_acknowledged_at") @db.Timestamptz(3)
+  checkoutContactSnapshot           Json?       @map("checkout_contact_snapshot") @db.JsonB
   createdAt                         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -2131,7 +2147,11 @@ model Payment {
   paymentScheduleId             String        @map("payment_schedule_id") @db.Uuid
   role                          PaymentRole
   provider                      String        @db.VarChar(100)
+  checkoutMethod                String        @default("ALL") @map("checkout_method") @db.VarChar(50)
+  merchantReference             String?       @map("merchant_reference") @db.VarChar(255)
+  checkoutCommandId             String?       @unique @map("checkout_command_id") @db.Uuid
   providerIntentId              String?       @map("provider_intent_id") @db.VarChar(255)
+  providerCheckoutUrl           String?       @map("provider_checkout_url") @db.Text
   providerCaptureId             String?       @map("provider_capture_id") @db.VarChar(255)
   intentCreationFailureResultId String?       @unique @map("intent_creation_failure_result_id") @db.Uuid
   requestedAmountMinor          BigInt        @map("requested_amount_minor")
@@ -2147,6 +2167,7 @@ model Payment {
   updatedAt                     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   orderPriceBinding              OrderPriceBinding             @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
+  checkoutCommand                IdempotencyRecord?            @relation("CheckoutPaymentCommand", fields: [checkoutCommandId], references: [id], onDelete: Restrict, map: "payments_checkout_command_fkey")
   priceSnapshot                  PriceSnapshot                 @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
   paymentSchedule                PaymentSchedule               @relation(fields: [paymentScheduleId, priceSnapshotId, role, requestedAmountMinor], references: [id, priceSnapshotId, role, grossAmountMinor], onDelete: Restrict, map: "payments_schedule_contract_fkey")
   intentCreationFailureEvidence  PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailurePayment")
@@ -2161,6 +2182,7 @@ model Payment {
 
   @@unique([id, orderId])
   @@unique([provider, providerIntentId], map: "payments_provider_provider_intent_id_key")
+  @@unique([provider, merchantReference], map: "payments_provider_merchant_reference_key")
   @@unique([provider, providerCaptureId], map: "payments_provider_provider_capture_id_key")
   @@unique([intentCreationFailureResultId, id, provider], map: "payments_intent_creation_failure_scope_key")
   @@index([orderId, status])

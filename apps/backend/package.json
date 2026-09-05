@@ -11,6 +11,8 @@
     "start:prod": "node dist/main.js",
     "start:balance-payment-deadline-worker": "node dist/balance-payment-deadline-worker.js",
     "balance-payment-deadline-worker:dev": "tsx src/balance-payment-deadline-worker.ts",
+    "start:checkout-payment-worker": "node dist/checkout-payment-worker.js",
+    "checkout-payment-worker:dev": "tsx src/checkout-payment-worker.ts",
     "start:resource-reservation-expiry-worker": "node dist/resource-reservation-expiry-worker.js",
     "resource-reservation-expiry-worker:dev": "tsx src/resource-reservation-expiry-worker.ts",
     "start:retention-worker": "node dist/retention-worker.js",

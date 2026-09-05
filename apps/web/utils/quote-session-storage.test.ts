@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clearQuoteSession,
   getSessionStorage,
+  loadPaymentReturnSession,
   loadQuoteSession,
   saveQuoteSession,
   type StoredQuoteSession,
@@ -63,9 +64,22 @@ describe("quote session storage", () => {
     expect(storage.values.size).toBe(0);
   });
 
+  it("keeps valid payment credentials readable after quote expiry", () => {
+    const storage = new MemoryStorage();
+    const expiredQuoteSession = {
+      ...session,
+      expiresAt: "2020-01-01T00:00:00.000Z",
+    };
+    saveQuoteSession(storage, expiredQuoteSession);
+
+    expect(loadPaymentReturnSession(storage)).toEqual(expiredQuoteSession);
+    expect(storage.values.size).toBe(1);
+  });
+
   it("keeps the active flow usable when session storage is unavailable", () => {
     const storage = new UnavailableStorage();
     expect(loadQuoteSession(storage)).toBeUndefined();
+    expect(loadPaymentReturnSession(storage)).toBeUndefined();
     expect(saveQuoteSession(storage, session)).toBe(false);
     expect(clearQuoteSession(storage)).toBe(false);
   });

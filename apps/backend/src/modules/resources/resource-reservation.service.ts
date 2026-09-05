@@ -189,6 +189,24 @@ export class ResourceReservationService {
     }
   }
 
+  /** Releases a checkout set after acquiring its canonical Payment envelope. */
+  async releaseBeforeCapture(
+    paymentId: string,
+    phaseReservationSetId: string,
+  ): Promise<boolean> {
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ released: boolean }>>`
+        SELECT taven_release_checkout_phase_reservation_set(
+          ${paymentId}::uuid,
+          ${phaseReservationSetId}::uuid
+        ) AS released
+      `;
+      return rows[0]?.released ?? false;
+    } catch (error) {
+      return reservationWriteError(error);
+    }
+  }
+
   /** Releases one failed held/scheduled production group and keeps siblings intact. */
   async releaseProductionBeforePrint(
     productionReservationId: string,
