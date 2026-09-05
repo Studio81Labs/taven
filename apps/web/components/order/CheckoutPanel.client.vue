@@ -8,9 +8,9 @@ import {
 } from "../../utils/checkout-flow";
 import {
   checkoutRequestFingerprint,
+  finalizeCapturedCheckoutStorage,
   loadCheckoutSession,
   recoverableCheckoutDraft,
-  redactCheckoutCustomerInput,
   saveCheckoutSession,
   type CheckoutCommandHandoff,
   type CheckoutCustomerDraft,
@@ -271,7 +271,13 @@ async function refreshPayment(): Promise<void> {
     }
     if (result.data.status === "CAPTURED") {
       const storage = getSessionStorage(window);
-      if (storage) redactCheckoutCustomerInput(storage, props.quote.sessionId);
+      if (storage) {
+        finalizeCapturedCheckoutStorage(
+          storage,
+          props.quote.sessionId,
+          result.data.paymentId,
+        );
+      }
     }
   } catch {
     errorMessage.value = "Ověřený stav platby se nepodařilo načíst.";
@@ -309,6 +315,14 @@ async function cancelPayment(): Promise<void> {
 
 async function continueFromPayment(value: CheckoutPayment): Promise<void> {
   if (value.status === "CAPTURED") {
+    const storage = getSessionStorage(window);
+    if (storage) {
+      finalizeCapturedCheckoutStorage(
+        storage,
+        props.quote.sessionId,
+        value.paymentId,
+      );
+    }
     await navigateTo(
       paymentStatusPath("success", props.quote.sessionId, value.paymentId),
     );

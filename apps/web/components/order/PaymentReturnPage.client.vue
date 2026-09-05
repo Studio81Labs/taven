@@ -8,8 +8,8 @@ import {
 } from "../../utils/quote-session-storage";
 import {
   clearCheckoutSession,
+  finalizeCapturedCheckoutStorage,
   loadCheckoutSession,
-  redactCheckoutCustomerInput,
 } from "../../utils/checkout-session-storage";
 import {
   initialPaymentReturnPresentation,
@@ -123,7 +123,11 @@ async function refreshPayment(): Promise<void> {
     }
     payment.value = response.data;
     if (payment.value.status === "CAPTURED") {
-      redactCheckoutCustomerInput(storage, stored.sessionId);
+      finalizeCapturedCheckoutStorage(
+        storage,
+        stored.sessionId,
+        payment.value.paymentId,
+      );
     }
     if (
       payment.value.status === "CREATED" ||

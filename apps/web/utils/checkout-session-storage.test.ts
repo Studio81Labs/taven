@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   clearCheckoutSession,
   checkoutRequestFingerprint,
+  finalizeCapturedCheckoutStorage,
   loadCheckoutSession,
   recoverableCheckoutDraft,
   redactCheckoutCustomerInput,
   saveCheckoutSession,
   type StoredCheckoutSession,
 } from "./checkout-session-storage";
+import {
+  loadPaymentReturnSession,
+  loadQuoteSession,
+  saveQuoteSession,
+} from "./quote-session-storage";
 
 class MemoryStorage {
   readonly values = new Map<string, string>();
@@ -64,6 +70,31 @@ describe("checkout session storage", () => {
       command: stored.command,
     });
     expect([...storage.values.values()][0]).not.toContain("ada@example.test");
+  });
+
+  it("finalizes captured checkout storage without dropping payment credentials", () => {
+    const storage = new MemoryStorage();
+    saveQuoteSession(storage, {
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      filename: "part.stl",
+      publicReference: "TAV-123",
+      sessionId: "session-a",
+      sessionToken: "secret-capability",
+    });
+    saveCheckoutSession(storage, stored);
+
+    finalizeCapturedCheckoutStorage(storage, "session-a", "payment-a");
+
+    expect(loadQuoteSession(storage, Date.parse("2029-01-01"))).toBeUndefined();
+    expect(loadPaymentReturnSession(storage)).toMatchObject({
+      capturedPaymentId: "payment-a",
+      sessionId: "session-a",
+      sessionToken: "secret-capability",
+    });
+    expect(loadCheckoutSession(storage, "session-a")).toEqual({
+      sessionId: "session-a",
+      command: stored.command,
+    });
   });
 
   it("uses a canonical request fingerprint for safe idempotent retries", () => {

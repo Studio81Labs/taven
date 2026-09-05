@@ -4,6 +4,7 @@ import {
   getSessionStorage,
   loadPaymentReturnSession,
   loadQuoteSession,
+  markQuoteSessionCaptured,
   saveQuoteSession,
   type StoredQuoteSession,
 } from "./quote-session-storage";
@@ -74,6 +75,33 @@ describe("quote session storage", () => {
 
     expect(loadPaymentReturnSession(storage)).toEqual(expiredQuoteSession);
     expect(storage.values.size).toBe(1);
+  });
+
+  it("blocks captured orders from quote restoration while retaining payment credentials", () => {
+    const storage = new MemoryStorage();
+    saveQuoteSession(storage, session);
+
+    expect(
+      markQuoteSessionCaptured(storage, session.sessionId, "payment-id"),
+    ).toBe(true);
+    expect(loadQuoteSession(storage, Date.parse("2029-01-01"))).toBeUndefined();
+    expect(storage.values.size).toBe(1);
+    expect(loadPaymentReturnSession(storage)).toEqual({
+      ...session,
+      capturedPaymentId: "payment-id",
+    });
+  });
+
+  it("does not mark credentials for another quote session as captured", () => {
+    const storage = new MemoryStorage();
+    saveQuoteSession(storage, session);
+
+    expect(
+      markQuoteSessionCaptured(storage, "different-session", "payment-id"),
+    ).toBe(false);
+    expect(loadQuoteSession(storage, Date.parse("2029-01-01"))).toEqual(
+      session,
+    );
   });
 
   it("keeps the active flow usable when session storage is unavailable", () => {

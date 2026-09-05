@@ -1,5 +1,8 @@
 import type { components } from "@taven/openapi-client";
-import type { StorageLike } from "./quote-session-storage";
+import {
+  markQuoteSessionCaptured,
+  type StorageLike,
+} from "./quote-session-storage";
 
 const STORAGE_KEY = "taven:checkout-session:v1";
 
@@ -102,6 +105,15 @@ export function redactCheckoutCustomerInput(
     sessionId,
     ...(current.command ? { command: current.command } : {}),
   });
+}
+
+export function finalizeCapturedCheckoutStorage(
+  storage: StorageLike,
+  sessionId: string,
+  paymentId: string,
+): void {
+  markQuoteSessionCaptured(storage, sessionId, paymentId);
+  redactCheckoutCustomerInput(storage, sessionId);
 }
 
 function isStoredCheckoutSession(
