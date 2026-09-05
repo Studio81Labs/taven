@@ -1,4 +1,5 @@
 x-local-payment-environment: &local-payment-environment
+  NODE_ENV: development
   TAVEN_PAYMENT_PROVIDER: ${TAVEN_PAYMENT_PROVIDER:-sandbox}
   TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: ${TAVEN_PAYMENT_SANDBOX_PUBLIC_URL:-http://localhost:3001}
   TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET: ${TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET:-local-only-payment-sandbox-secret-32}
