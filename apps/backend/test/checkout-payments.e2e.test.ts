@@ -751,6 +751,55 @@ describe("checkout payment capture protocol", () => {
         ],
       );
 
+      for (const [eventId, eventKind] of [
+        ["returned-intent-pending", "PAYMENT_PENDING"],
+        ["returned-intent-failed", "PAYMENT_FAILED"],
+      ] as const) {
+        const applyTerminalEvent = () =>
+          client.query<{ outcome: string }>(
+            `SELECT taven_apply_checkout_payment_event(
+               'sandbox', $1, $2, $3::payment_provider_event_kind, $4, $5,
+               clock_timestamp(), '{}'::jsonb
+             ) AS outcome`,
+            [
+              eventId,
+              providerIntentId,
+              eventKind,
+              evidence.amount_minor,
+              evidence.currency,
+            ],
+          );
+        expect((await applyTerminalEvent()).rows).toEqual([
+          { outcome: "IGNORED_TERMINAL" },
+        ]);
+        expect((await applyTerminalEvent()).rows).toEqual([
+          { outcome: "DUPLICATE" },
+        ]);
+      }
+      expect(
+        (
+          await client.query(
+            `SELECT payment.status::text AS payment_status,
+                    (SELECT count(*)::int FROM payment_provider_events
+                     WHERE payment_id = payment.id) AS event_count,
+                    (SELECT count(*)::int FROM refund_transactions
+                     WHERE payment_id = payment.id) AS refund_count,
+                    (SELECT count(*)::int FROM jobs
+                     WHERE order_id = payment.order_id) AS job_count
+             FROM payments payment
+             WHERE payment.id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          payment_status: "VOIDED",
+          event_count: 2,
+          refund_count: 0,
+          job_count: 0,
+        },
+      ]);
+
       expect(
         (
           await client.query<{ outcome: string }>(
@@ -769,7 +818,9 @@ describe("checkout payment capture protocol", () => {
             `SELECT payment.status::text AS payment_status,
                     count(refund.id)::int AS refund_count,
                     (SELECT count(*)::int FROM jobs
-                     WHERE order_id = payment.order_id) AS job_count
+                     WHERE order_id = payment.order_id) AS job_count,
+                    (SELECT count(*)::int FROM payment_provider_events
+                     WHERE payment_id = payment.id) AS event_count
              FROM payments payment
              LEFT JOIN refund_transactions refund
                ON refund.payment_id = payment.id
@@ -783,6 +834,7 @@ describe("checkout payment capture protocol", () => {
           payment_status: "REFUND_PENDING",
           refund_count: 1,
           job_count: 0,
+          event_count: 3,
         },
       ]);
     });

@@ -24,6 +24,7 @@ DECLARE
     target_provider_intent_id varchar(255);
     target_provider_capture_id varchar(255);
     target_payment_created_at timestamptz;
+    target_returned_intent_matched boolean := false;
     target_refund_payment_id uuid;
     target_refund_status "refund_status";
     target_refund_amount bigint;
@@ -83,6 +84,24 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
     END IF;
 
+    -- A returned intent can be closed before it is assigned to the Payment.
+    -- Its durable void command remains the exact locator for later callbacks.
+    IF target_payment_status = 'VOIDED'
+       AND target_provider_intent_id IS NULL THEN
+        SELECT EXISTS (
+            SELECT 1
+            FROM "outbox_messages" command
+            WHERE command."aggregate_type" = 'Payment'
+              AND command."aggregate_id" = NEW."payment_id"
+              AND command."message_type" = 'void_payment'
+              AND command."payload" ->> 'paymentId' = NEW."payment_id"::text
+              AND command."payload" ->> 'provider' = NEW."provider"
+              AND command."payload" ->> 'providerIntentId' =
+                  NEW."provider_transaction_id"
+              AND command."payload" ->> 'action' = 'void_payment'
+        ) INTO target_returned_intent_matched;
+    END IF;
+
     IF NEW."kind" IN (
         'PAYMENT_PENDING', 'PAYMENT_CAPTURED', 'PAYMENT_FAILED'
     ) THEN
@@ -93,9 +112,12 @@ BEGIN
                    'PENDING', 'FAILED', 'VOIDED', 'CAPTURED', 'REFUND_PENDING',
                    'PARTIALLY_REFUNDED', 'REFUNDED'
                )
-               OR target_provider_intent_id IS NULL
-               OR target_provider_intent_id !~ '[^[:space:]]'
-               OR NEW."provider_transaction_id" IS DISTINCT FROM target_provider_intent_id
+               OR (NOT target_returned_intent_matched AND (
+                   target_provider_intent_id IS NULL
+                   OR target_provider_intent_id !~ '[^[:space:]]'
+                   OR NEW."provider_transaction_id" IS DISTINCT FROM
+                      target_provider_intent_id
+               ))
            ))
            OR (NEW."kind" = 'PAYMENT_CAPTURED' AND (
                target_payment_status NOT IN (
@@ -114,9 +136,12 @@ BEGIN
                    'PENDING', 'FAILED', 'VOIDED', 'CAPTURED',
                    'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'
                )
-               OR target_provider_intent_id IS NULL
-               OR target_provider_intent_id !~ '[^[:space:]]'
-               OR NEW."provider_transaction_id" IS DISTINCT FROM target_provider_intent_id
+               OR (NOT target_returned_intent_matched AND (
+                   target_provider_intent_id IS NULL
+                   OR target_provider_intent_id !~ '[^[:space:]]'
+                   OR NEW."provider_transaction_id" IS DISTINCT FROM
+                      target_provider_intent_id
+               ))
            )) THEN
             RAISE EXCEPTION 'Payment provider event does not match its exact Payment outcome scope'
                 USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
@@ -700,8 +725,7 @@ BEGIN
               )
           )
           OR (
-              event_kind = 'PAYMENT_CAPTURED'
-              AND payment."provider_intent_id" IS NULL
+              payment."provider_intent_id" IS NULL
               AND payment."status" = 'VOIDED'
               AND EXISTS (
                   SELECT 1
@@ -743,8 +767,7 @@ BEGIN
               )
           )
           OR (
-              event_kind = 'PAYMENT_CAPTURED'
-              AND payment."provider_intent_id" IS NULL
+              payment."provider_intent_id" IS NULL
               AND payment."status" = 'VOIDED'
               AND EXISTS (
                   SELECT 1
