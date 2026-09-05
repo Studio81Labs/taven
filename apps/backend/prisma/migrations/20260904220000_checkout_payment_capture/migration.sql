@@ -1011,7 +1011,8 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     target_payment "payments"%ROWTYPE;
-    closed_at timestamptz := coalesce(close_observed_at, clock_timestamp());
+    closed_at timestamptz;
+    effective_close_reason text := close_reason;
     terminal_order_status "order_status";
 BEGIN
     IF close_reason NOT IN (
@@ -1037,7 +1038,17 @@ BEGIN
         RETURN target_payment."status";
     END IF;
 
-    IF close_reason = 'CHECKOUT_EXPIRED' THEN
+    -- Decide against the locked Payment. A customer cancellation which waited
+    -- behind another checkout transition must not win with a timestamp from
+    -- before the immutable capture deadline elapsed.
+    closed_at := coalesce(close_observed_at, clock_timestamp());
+    IF effective_close_reason = 'CUSTOMER_CANCELLED'
+       AND target_payment."checkout_capture_expires_at" IS NOT NULL
+       AND target_payment."checkout_capture_expires_at" <= closed_at THEN
+        effective_close_reason := 'CHECKOUT_EXPIRED';
+    END IF;
+
+    IF effective_close_reason = 'CHECKOUT_EXPIRED' THEN
         IF target_payment."checkout_capture_expires_at" IS NULL
            OR target_payment."checkout_capture_expires_at" > closed_at THEN
             RAISE EXCEPTION 'checkout Payment deadline has not elapsed'
@@ -1045,7 +1056,7 @@ BEGIN
         END IF;
         closed_at := target_payment."checkout_capture_expires_at";
         terminal_order_status := 'EXPIRED';
-    ELSIF close_reason = 'CAPACITY_UNAVAILABLE' THEN
+    ELSIF effective_close_reason = 'CAPACITY_UNAVAILABLE' THEN
         IF target_payment."checkout_capture_expires_at" IS NULL
            OR target_payment."checkout_capture_expires_at" <= closed_at THEN
             RAISE EXCEPTION 'checkout capacity failure must precede the capture deadline'
@@ -1157,7 +1168,7 @@ BEGIN
     ) VALUES (
         gen_random_uuid(), target_payment."order_id", target_payment_id,
         'checkout.payment_closed', 'SYSTEM',
-        jsonb_build_object('reason', close_reason), closed_at
+        jsonb_build_object('reason', effective_close_reason), closed_at
     );
 
     IF target_payment."provider_intent_id" IS NOT NULL THEN

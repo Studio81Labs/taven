@@ -1463,6 +1463,10 @@ describe("checkout payment capture protocol", () => {
     const callbackPublicTokenHash = createHash("sha256")
       .update(callbackToken)
       .digest("hex");
+    const inFlightCallbackToken = randomBytes(32).toString("base64url");
+    const inFlightCallbackPublicTokenHash = createHash("sha256")
+      .update(inFlightCallbackToken)
+      .digest("hex");
     const ambiguousCallbackToken = randomBytes(32).toString("base64url");
     const ambiguousCallbackPublicTokenHash = createHash("sha256")
       .update(ambiguousCallbackToken)
@@ -1476,18 +1480,21 @@ describe("checkout payment capture protocol", () => {
     let outageFoundation: PersistenceFoundation;
     let returnedIntentFoundation: PersistenceFoundation;
     let callbackFoundation: PersistenceFoundation;
+    let inFlightCallbackFoundation: PersistenceFoundation;
     let ambiguousCallbackFoundation: PersistenceFoundation;
     let ambiguousCaptureFoundation: PersistenceFoundation;
     let customerEmail: string;
     let outageCustomerEmail: string;
     let returnedIntentCustomerEmail: string;
     let callbackCustomerEmail: string;
+    let inFlightCallbackCustomerEmail: string;
     let ambiguousCallbackCustomerEmail: string;
     let ambiguousCaptureCustomerEmail: string;
     let destination: ResolvedDeliveryCapability;
     let outageDestination: ResolvedDeliveryCapability;
     let returnedIntentDestination: ResolvedDeliveryCapability;
     let callbackDestination: ResolvedDeliveryCapability;
+    let inFlightCallbackDestination: ResolvedDeliveryCapability;
     let ambiguousCallbackDestination: ResolvedDeliveryCapability;
     let ambiguousCaptureDestination: ResolvedDeliveryCapability;
     try {
@@ -1654,6 +1661,47 @@ describe("checkout payment capture protocol", () => {
           callbackDestinationRow.capability_snapshot as Prisma.InputJsonObject,
         supportedCategoryIds: ["standard"],
       };
+      const inFlightCallbackFixtures = new PersistenceFactory(
+        setupClient,
+        `${scope}:http-callback-in-flight`,
+        {
+          publicTokenHash: inFlightCallbackPublicTokenHash,
+          preacceptCheckout: false,
+        },
+      );
+      inFlightCallbackFoundation = await prepareReservedFoundation(
+        setupClient,
+        inFlightCallbackFixtures,
+        "http-callback-in-flight",
+      );
+      inFlightCallbackCustomerEmail = (
+        await setupClient.query<{ email: string }>(
+          "SELECT email FROM customers WHERE id = $1",
+          [inFlightCallbackFoundation.customerId],
+        )
+      ).rows[0]!.email;
+      const inFlightCallbackDestinationRow = (
+        await setupClient.query<{
+          provider_endpoint_id: string;
+          endpoint_type: string;
+          address_snapshot: Record<string, unknown>;
+          capability_snapshot: Record<string, unknown>;
+        }>(
+          `SELECT provider_endpoint_id, endpoint_type, address_snapshot,
+                  capability_snapshot
+           FROM delivery_destinations WHERE id = $1`,
+          [inFlightCallbackFoundation.deliveryDestinationId],
+        )
+      ).rows[0]!;
+      inFlightCallbackDestination = {
+        providerEndpointId: inFlightCallbackDestinationRow.provider_endpoint_id,
+        endpointType: inFlightCallbackDestinationRow.endpoint_type,
+        addressSnapshot:
+          inFlightCallbackDestinationRow.address_snapshot as Prisma.InputJsonObject,
+        capabilitySnapshot:
+          inFlightCallbackDestinationRow.capability_snapshot as Prisma.InputJsonObject,
+        supportedCategoryIds: ["standard"],
+      };
       const ambiguousCallbackFixtures = new PersistenceFactory(
         setupClient,
         `${scope}:http-callback-ambiguity`,
@@ -1781,6 +1829,14 @@ describe("checkout payment capture protocol", () => {
     let applicationBaseUrl: URL | undefined;
     let failNextFinalizationBeforeCommit = false;
     let failNextReturnedIntentClose = false;
+    let markCallbackIntentStaged!: () => void;
+    const callbackIntentStaged = new Promise<void>((resolve) => {
+      markCallbackIntentStaged = resolve;
+    });
+    let resumeCallbackIntent!: () => void;
+    const callbackIntentResume = new Promise<void>((resolve) => {
+      resumeCallbackIntent = resolve;
+    });
     let markAmbiguousCaptureIntentStarted!: () => void;
     const ambiguousCaptureIntentStarted = new Promise<void>((resolve) => {
       markAmbiguousCaptureIntentStarted = resolve;
@@ -1830,6 +1886,7 @@ describe("checkout payment capture protocol", () => {
         }
         if (
           input.email === callbackCustomerEmail ||
+          input.email === inFlightCallbackCustomerEmail ||
           input.email === ambiguousCallbackCustomerEmail
         ) {
           if (!applicationBaseUrl) {
@@ -1866,7 +1923,12 @@ describe("checkout payment capture protocol", () => {
               "simulated lost provider response after pending callback",
             );
           }
-          failNextFinalizationBeforeCommit = true;
+          if (input.email === inFlightCallbackCustomerEmail) {
+            markCallbackIntentStaged();
+            await callbackIntentResume;
+          } else {
+            failNextFinalizationBeforeCommit = true;
+          }
         }
         return {
           ...intent,
@@ -1908,6 +1970,12 @@ describe("checkout payment capture protocol", () => {
               callbackDestination.providerEndpointId
             ) {
               return callbackDestination;
+            }
+            if (
+              input.providerEndpointId ===
+              inFlightCallbackDestination.providerEndpointId
+            ) {
+              return inFlightCallbackDestination;
             }
             if (
               input.providerEndpointId ===
@@ -2089,6 +2157,31 @@ describe("checkout payment capture protocol", () => {
             body: JSON.stringify({
               email: callbackCustomerEmail,
               fullName: "Callback Customer",
+              method: "CARD",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              termsRevision: "terms-v1",
+              claimPolicyRevision: "claim-policy-v1",
+              acknowledgeWithdrawalException: true,
+            }),
+          },
+        );
+      const createInFlightCallbackPayment = () =>
+        fetch(
+          new URL(
+            `/automatic-quote-sessions/${inFlightCallbackFoundation.quoteSessionId}/checkout/payments`,
+            baseUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${inFlightCallbackToken}`,
+              "content-type": "application/json",
+              "idempotency-key": "sandbox-callback-in-flight-1",
+            },
+            body: JSON.stringify({
+              email: inFlightCallbackCustomerEmail,
+              fullName: "In-flight Callback Customer",
               method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
@@ -2325,6 +2418,43 @@ describe("checkout payment capture protocol", () => {
       });
       expect(providerCreateCalls).toBe(providerCallsAfterAmbiguousCallback);
       expect(providerCancelCalls).toBe(0);
+
+      const inFlightProviderCalls = providerCreateCalls;
+      const inFlightCallbackResponsePromise = createInFlightCallbackPayment();
+      await callbackIntentStaged;
+      const inFlightRetryResponse = await createInFlightCallbackPayment();
+      expect(inFlightRetryResponse.status).toBe(409);
+      await expect(
+        prisma.payment.findFirstOrThrow({
+          where: { orderId: inFlightCallbackFoundation.orderId },
+          include: { checkoutCommand: true },
+        }),
+      ).resolves.toMatchObject({
+        status: "PENDING",
+        providerIntentId: expect.any(String),
+        providerCheckoutUrl: null,
+        checkoutCommand: { status: "PROCESSING" },
+      });
+      expect(providerCreateCalls).toBe(inFlightProviderCalls + 1);
+      expect(providerCancelCalls).toBe(0);
+      resumeCallbackIntent();
+      const inFlightCallbackResponse = await inFlightCallbackResponsePromise;
+      expect(inFlightCallbackResponse.status).toBe(200);
+      const inFlightPayment = await prisma.payment.findFirstOrThrow({
+        where: { orderId: inFlightCallbackFoundation.orderId },
+        include: { checkoutCommand: true },
+      });
+      await expect(inFlightCallbackResponse.json()).resolves.toMatchObject({
+        paymentId: inFlightPayment.id,
+        status: "PENDING",
+        checkoutUrl: expect.any(String),
+      });
+      expect(inFlightPayment).toMatchObject({
+        status: "PENDING",
+        providerIntentId: `sandbox-${inFlightPayment.id}`,
+        providerCheckoutUrl: expect.any(String),
+        checkoutCommand: { status: "COMPLETED" },
+      });
 
       const callbackTransactionSpy = vi
         .spyOn(transactions, "$transaction")
@@ -3200,7 +3330,7 @@ describe("checkout payment capture protocol", () => {
       );
       restoreEnvironment("TAVEN_PUBLIC_SITE_URL", previousEnvironment.siteUrl);
     }
-  }, 15_000);
+  }, 30_000);
 
   it("turns a capture after customer cancellation into one compensation", async () => {
     await rollback("cancel-race", async (client, fixtures) => {
@@ -3239,6 +3369,52 @@ describe("checkout payment capture protocol", () => {
           )
         ).rows,
       ).toEqual([{ count: 1 }]);
+    });
+  });
+
+  it("classifies an overdue customer cancellation as checkout expiry", async () => {
+    await rollback("overdue-customer-cancel", async (client, fixtures) => {
+      const { foundation } = await preparePayment(
+        client,
+        fixtures,
+        "overdue-customer-cancel",
+        new Date(Date.now() + 60 * 60 * 1_000),
+        100,
+      );
+      await client.query("SELECT pg_sleep(0.2)");
+
+      const closed = await client.query<{ status: string }>(
+        `SELECT taven_close_initial_checkout_payment(
+           $1, 'CUSTOMER_CANCELLED'
+         )::text AS status`,
+        [foundation.paymentId],
+      );
+      expect(closed.rows).toEqual([{ status: "VOIDED" }]);
+      expect(
+        (
+          await client.query(
+            `SELECT payment.status::text AS payment_status,
+                    target_order.status::text AS order_status,
+                    audit.payload ->> 'reason' AS close_reason,
+                    payment.capture_cutoff_at =
+                      payment.checkout_capture_expires_at AS cutoff_at_deadline
+             FROM payments payment
+             JOIN orders target_order ON target_order.id = payment.order_id
+             JOIN audit_events audit
+               ON audit.payment_id = payment.id
+              AND audit.event_type = 'checkout.payment_closed'
+             WHERE payment.id = $1`,
+            [foundation.paymentId],
+          )
+        ).rows,
+      ).toEqual([
+        {
+          payment_status: "VOIDED",
+          order_status: "EXPIRED",
+          close_reason: "CHECKOUT_EXPIRED",
+          cutoff_at_deadline: true,
+        },
+      ]);
     });
   });
 

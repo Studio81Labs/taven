@@ -1187,28 +1187,31 @@ async function checkoutIdempotencyAfterLock(
     let reconciledPayment = await transaction.payment.findUnique({
       where: { checkoutCommandId: existing.id },
     });
+    // A provider-authenticated pending callback can assign the intent identity
+    // while the original createIntent call is still in flight. Only that
+    // original invocation knows whether the provider call returned or failed,
+    // so a concurrent idempotent retry must not close the staged intent.
     if (
       reconciledPayment?.status === PaymentStatus.PENDING &&
       reconciledPayment.providerIntentId &&
       !reconciledPayment.providerCheckoutUrl
     ) {
       await lockPaymentEnvelope(transaction, reconciledPayment.id);
-      const closed = await closeReturnedIntentAfterLock(
-        transaction,
-        reconciledPayment.id,
-        existing.id,
-        reconciledPayment.providerIntentId,
-      );
-      if (closed) {
+      reconciledPayment = await transaction.payment.findUnique({
+        where: { checkoutCommandId: existing.id },
+      });
+      if (
+        reconciledPayment?.status === PaymentStatus.PENDING &&
+        reconciledPayment.providerIntentId &&
+        !reconciledPayment.providerCheckoutUrl &&
+        (await hasVerifiedCaptureStaging(transaction, reconciledPayment.id))
+      ) {
         return {
-          replay: closed,
+          replay: paymentDto(reconciledPayment),
           nextGeneration: existing.generation,
           observedAt,
         };
       }
-      reconciledPayment = await transaction.payment.findUnique({
-        where: { checkoutCommandId: existing.id },
-      });
     }
     if (
       reconciledPayment &&
