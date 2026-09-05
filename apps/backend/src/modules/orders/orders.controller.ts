@@ -50,6 +50,20 @@ const IDEMPOTENCY_HEADER = {
   },
 };
 
+const ORDER_ID_PARAM = { name: "orderId", type: String, format: "uuid" };
+const JOB_ID_PARAM = { name: "jobId", type: String, format: "uuid" };
+const SHIPMENT_ID_PARAM = {
+  name: "shipmentId",
+  type: String,
+  format: "uuid",
+};
+const ADJUSTMENT_ID_PARAM = {
+  name: "adjustmentId",
+  type: String,
+  format: "uuid",
+};
+const CLAIM_ID_PARAM = { name: "claimId", type: String, format: "uuid" };
+
 @ApiTags("operator fulfilment")
 @ApiBearerAuth()
 @UseGuards(OperatorAccessGuard)
@@ -59,7 +73,7 @@ export class OrdersController {
 
   @Get()
   @ApiOperation({ summary: "Read the fulfilment and recovery projection" })
-  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiParam(ORDER_ID_PARAM)
   @ApiOkResponse({ type: FulfilmentProjectionDto })
   @ApiNotFoundResponse({ description: "Order was not found" })
   get(@Param("orderId") orderId: string): Promise<FulfilmentProjectionDto> {
@@ -69,6 +83,8 @@ export class OrdersController {
   @Post("jobs/:jobId/accept")
   @HttpCode(200)
   @ApiOperation({ summary: "Accept a platform-owned production Job" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   acceptJob(
@@ -82,6 +98,8 @@ export class OrdersController {
   @Post("jobs/:jobId/printing")
   @HttpCode(200)
   @ApiOperation({ summary: "Start printing a G-code-ready Job" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   startPrinting(
@@ -95,7 +113,10 @@ export class OrdersController {
   @Post("jobs/:jobId/printed")
   @HttpCode(200)
   @ApiOperation({ summary: "Finish printing and settle consumed resources" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: JobPrintedDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   printed(
     @Param("orderId") orderId: string,
@@ -109,7 +130,10 @@ export class OrdersController {
   @Post("jobs/:jobId/qc-submission")
   @HttpCode(200)
   @ApiOperation({ summary: "Submit optional v0 QC evidence" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: JobQcSubmissionDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   submitQc(
     @Param("orderId") orderId: string,
@@ -123,6 +147,8 @@ export class OrdersController {
   @Post("jobs/:jobId/qc-approval")
   @HttpCode(200)
   @ApiOperation({ summary: "Approve a Job after QC" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   approveQc(
@@ -138,7 +164,10 @@ export class OrdersController {
   @ApiOperation({
     summary: "Record a terminal Job failure and recovery obligation",
   })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: JobFailureDto })
   @ApiConflictResponse({
     description: "Failure or recovery conflicts with current state",
   })
@@ -157,7 +186,10 @@ export class OrdersController {
   @ApiOperation({
     summary: "Reserve fresh resources and create a replacement Job",
   })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreateReplacementDto })
   @ApiConflictResponse({ description: "Fresh resources cannot be reserved" })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   createReplacement(
@@ -172,7 +204,10 @@ export class OrdersController {
   @Post("jobs/:jobId/packing")
   @HttpCode(200)
   @ApiOperation({ summary: "Pack and bind a Job to exactly one Shipment" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: PackJobDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   packJob(
     @Param("orderId") orderId: string,
@@ -186,7 +221,9 @@ export class OrdersController {
   @Post("shipments")
   @HttpCode(200)
   @ApiOperation({ summary: "Create a parcel or replacement parcel leaf" })
+  @ApiParam(ORDER_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreateShipmentDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   createShipment(
     @Param("orderId") orderId: string,
@@ -199,7 +236,10 @@ export class OrdersController {
   @Post("shipments/:shipmentId/label")
   @HttpCode(200)
   @ApiOperation({ summary: "Record a manually-created carrier label" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(SHIPMENT_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ShipmentLabelDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   labelShipment(
     @Param("orderId") orderId: string,
@@ -213,7 +253,10 @@ export class OrdersController {
   @Post("shipments/:shipmentId/label-void")
   @HttpCode(200)
   @ApiOperation({ summary: "Record a provider-confirmed carrier label void" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(SHIPMENT_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ShipmentProviderEvidenceDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   confirmLabelVoid(
     @Param("orderId") orderId: string,
@@ -227,7 +270,10 @@ export class OrdersController {
   @Post("shipments/:shipmentId/handoff")
   @HttpCode(200)
   @ApiOperation({ summary: "Commit one provider-confirmed parcel handoff" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(SHIPMENT_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ShipmentProviderEvidenceDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   handoffShipment(
     @Param("orderId") orderId: string,
@@ -241,7 +287,10 @@ export class OrdersController {
   @Post("shipments/:shipmentId/events")
   @HttpCode(200)
   @ApiOperation({ summary: "Apply an authenticated carrier lifecycle event" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(SHIPMENT_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ShipmentEventDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   shipmentEvent(
     @Param("orderId") orderId: string,
@@ -255,7 +304,9 @@ export class OrdersController {
   @Post("adjustments")
   @HttpCode(200)
   @ApiOperation({ summary: "Record an immutable manual price adjustment" })
+  @ApiParam(ORDER_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreatePriceAdjustmentDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   adjustment(
     @Param("orderId") orderId: string,
@@ -268,6 +319,8 @@ export class OrdersController {
   @Post("adjustments/:adjustmentId/refund")
   @HttpCode(200)
   @ApiOperation({ summary: "Request the refund for a manual price adjustment" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(ADJUSTMENT_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   refundAdjustment(
@@ -281,7 +334,9 @@ export class OrdersController {
   @Post("claims")
   @HttpCode(200)
   @ApiOperation({ summary: "Open a manually verified fulfilment Claim" })
+  @ApiParam(ORDER_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreateClaimDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   createClaim(
     @Param("orderId") orderId: string,
@@ -296,8 +351,8 @@ export class OrdersController {
   @ApiOperation({
     summary: "Re-QC and hand off a custody-confirmed incident reshipment",
   })
-  @ApiParam({ name: "orderId", type: String, format: "uuid" })
-  @ApiParam({ name: "claimId", type: String, format: "uuid" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(CLAIM_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiBody({ type: HandoffReshipmentDto })
   @ApiConflictResponse({
@@ -318,6 +373,8 @@ export class OrdersController {
   @ApiOperation({
     summary: "Credit and refund every unresolved slot in a Claim",
   })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(CLAIM_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   refundClaim(
@@ -331,6 +388,7 @@ export class OrdersController {
   @Post("complete")
   @HttpCode(200)
   @ApiOperation({ summary: "Complete a fully delivered and settled order" })
+  @ApiParam(ORDER_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   complete(
@@ -345,7 +403,9 @@ export class OrdersController {
   @ApiOperation({
     summary: "Cancel an order before physical handoff and request refunds",
   })
+  @ApiParam(ORDER_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CancelOrderDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   cancel(
     @Param("orderId") orderId: string,

@@ -1854,7 +1854,7 @@ export class OrdersService {
     );
     const reQcPassedAt = dateEvidence(body.reQcPassedAt, "reQcPassedAt");
     if (
-      custodyConfirmedAt.getTime() > reQcPassedAt.getTime() ||
+      custodyConfirmedAt.getTime() >= reQcPassedAt.getTime() ||
       reQcPassedAt.getTime() > evidence.occurredAt.getTime()
     ) {
       throw new BadRequestException(

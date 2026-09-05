@@ -1080,6 +1080,20 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       reQcEvidence: "operator repeated the final visual and dimensional QC",
     };
 
+    expect(() =>
+      orders.handoffReshipment(
+        fixture.foundation.orderId,
+        claim.id,
+        {
+          ...reshipmentEvidence,
+          reQcPassedAt: reshipmentEvidence.custodyConfirmedAt,
+        },
+        "returned-custody-reship-equal-qc-time",
+      ),
+    ).toThrow(
+      "custodyConfirmedAt, reQcPassedAt, and occurredAt must be chronological",
+    );
+
     const handedOver = await orders.handoffReshipment(
       fixture.foundation.orderId,
       claim.id,

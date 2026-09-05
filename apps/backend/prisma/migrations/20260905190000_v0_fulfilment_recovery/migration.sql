@@ -932,7 +932,7 @@ CREATE TABLE "reshipment_authorizations" (
         UNIQUE ("acceptance_event_id", "reshipment_shipment_id"),
     CONSTRAINT "reshipment_authorizations_evidence_check" CHECK (
         btrim("re_qc_evidence") <> ''
-        AND "custody_confirmed_at" <= "re_qc_passed_at"
+        AND "custody_confirmed_at" < "re_qc_passed_at"
         AND "re_qc_passed_at" <= "issued_at" + interval '5 seconds'
         AND "issued_at" = "consumed_at"
     )
@@ -4907,7 +4907,7 @@ BEGIN
                  reshipment."handed_over_at"
               OR acceptance."authenticated_at" IS DISTINCT FROM auth."issued_at"
               OR acceptance."verified_at" IS DISTINCT FROM auth."consumed_at"
-              OR auth."custody_confirmed_at" > auth."re_qc_passed_at"
+              OR auth."custody_confirmed_at" >= auth."re_qc_passed_at"
               OR auth."re_qc_passed_at" > acceptance."occurred_at"
               OR acceptance."occurred_at" > acceptance."verified_at" + interval '5 seconds'
               OR auth."issued_at" IS DISTINCT FROM auth."consumed_at"

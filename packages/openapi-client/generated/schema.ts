@@ -1071,6 +1071,16 @@ export interface components {
             /** Format: uuid */
             sessionId: string;
         };
+        CancellationPrintingConsumptionDto: {
+            actualMaterialMilligrams: string;
+            /** Format: uuid */
+            jobId: string;
+        };
+        CancelOrderDto: {
+            /** @description Exact material consumption for every Job that is actively printing */
+            printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
+            reason: string;
+        };
         CheckoutBillingDto: {
             addressLine1: string;
             addressLine2?: string;
@@ -1165,6 +1175,24 @@ export interface components {
             photoPublicationConsent: boolean;
             termsRevision: string;
         };
+        CreateClaimDto: {
+            fulfilmentSlotIds: string[];
+            /** Format: uuid */
+            incidentShipmentId?: string;
+            /** @enum {string} */
+            origin: "SHIPMENT_INCIDENT" | "POST_DELIVERY_QUALITY";
+            reason: string;
+        };
+        CreatePriceAdjustmentDto: {
+            allocation: components["schemas"]["PriceAdjustmentAllocationDto"];
+            amountMinor: string;
+            /** Format: uuid */
+            claimId?: string;
+            /** Format: uuid */
+            paymentId?: string;
+            /** @enum {string} */
+            reason: "EXPRESS_BREACH" | "PRODUCTION_FAILURE" | "SHIPMENT_INCIDENT" | "POST_DELIVERY_ISSUE";
+        };
         CreateQuoteRequestDto: {
             attribution?: {
                 [key: string]: unknown;
@@ -1177,6 +1205,21 @@ export interface components {
             purpose?: string;
             /** Format: date */
             requestedDate?: string;
+        };
+        CreateReplacementDto: {
+            /**
+             * Format: uuid
+             * @description Compatible candidate calculated after the source failure with future capacity
+             */
+            candidateResourceEstimateId: string;
+            /** @description Stable resource-plan identity; omitted values derive from the command key */
+            planKey?: string;
+        };
+        CreateShipmentDto: {
+            /** Format: uuid */
+            replacesShipmentId?: string;
+            /** Format: uuid */
+            shipmentPlanId: string;
         };
         FulfilmentCommandResultDto: {
             /** Format: uuid */
@@ -1280,6 +1323,22 @@ export interface components {
             };
             vatAmountMinor: number;
             vatRateBasisPoints: number;
+        };
+        JobFailureDto: {
+            actualMaterialMilligrams?: string;
+            reason: string;
+            /** @enum {string} */
+            recovery: "REPLACE" | "REFUND";
+            /** @enum {string} */
+            stage: "PREPARATION" | "GCODE" | "MACHINE" | "PRINTING" | "POST_PRINT" | "POST_QC" | "PACKING";
+        };
+        JobPrintedDto: {
+            actualMaterialMilligrams: string;
+        };
+        JobQcSubmissionDto: {
+            omissionReason?: string;
+            /** Format: uuid */
+            photoAssetId?: string;
         };
         ModelOfferItemDto: {
             color?: string;
@@ -1421,6 +1480,10 @@ export interface components {
             plannedWeightMilligrams: number;
             shippingAmountMinor: number;
         };
+        PackJobDto: {
+            /** Format: uuid */
+            shipmentId: string;
+        };
         PaymentCapabilitiesDto: {
             available: boolean;
             legalDocuments: components["schemas"]["CheckoutLegalDocumentsDto"] | null;
@@ -1429,6 +1492,15 @@ export interface components {
         };
         PaymentWebhookAcceptedDto: {
             outcome: string;
+        };
+        PriceAdjustmentAllocationDto: {
+            /** @description Exact per-slot credit allocation; required for non-express adjustments and derived from the immutable express component when omitted for express adjustments */
+            slotCredits?: components["schemas"]["PriceAdjustmentSlotCreditDto"][];
+        };
+        PriceAdjustmentSlotCreditDto: {
+            amountMinor: string;
+            /** Format: uuid */
+            fulfilmentSlotId: string;
         };
         QuoteAttachmentDto: {
             /** Format: date-time */
@@ -1507,6 +1579,26 @@ export interface components {
         SetAutomaticQuoteExpressDto: {
             requested: boolean;
         };
+        ShipmentEventDto: {
+            /** @enum {string} */
+            kind: "TRANSIT_SCAN" | "DELIVERY_SCAN" | "LOST" | "RETURNED" | "RECOVERED";
+            /** Format: date-time */
+            occurredAt: string;
+            providerEventId: string;
+            providerTransactionId: string;
+        };
+        ShipmentLabelDto: {
+            carrier: string;
+            carrierLabelId: string;
+            providerShipmentId: string;
+            trackingCode?: string;
+        };
+        ShipmentProviderEvidenceDto: {
+            /** Format: date-time */
+            occurredAt: string;
+            providerEventId: string;
+            providerTransactionId: string;
+        };
         SignedDownloadResponseDto: {
             /** Format: uri */
             downloadUrl: string;
@@ -1578,10 +1670,16 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePriceAdjustmentDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1600,7 +1698,10 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                adjustmentId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -1622,10 +1723,16 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelOrderDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1644,10 +1751,16 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateClaimDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1666,7 +1779,10 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                claimId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -1724,7 +1840,9 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                orderId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -1746,7 +1864,10 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                jobId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -1768,10 +1889,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                jobId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobFailureDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1797,10 +1925,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                jobId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackJobDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1819,10 +1954,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                jobId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobPrintedDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1841,7 +1983,10 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                jobId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -1863,7 +2008,10 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                jobId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -1885,10 +2033,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                jobId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobQcSubmissionDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1907,10 +2062,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                jobId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReplacementDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1936,10 +2098,16 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateShipmentDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1958,10 +2126,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                shipmentId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentEventDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -1980,10 +2155,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                shipmentId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentProviderEvidenceDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -2002,10 +2184,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                shipmentId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentLabelDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -2024,10 +2213,17 @@ export interface operations {
                 /** @description Stable command key; replaying altered input returns 409 */
                 "Idempotency-Key": string;
             };
-            path?: never;
+            path: {
+                shipmentId: string;
+                orderId: string;
+            };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentProviderEvidenceDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
