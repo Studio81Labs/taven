@@ -16,6 +16,7 @@ import {
   assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
   assertCheckoutTermsRevisionCurrent,
+  CHECKOUT_PAYMENT_FLOWS_ENV,
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
@@ -65,7 +66,10 @@ export class PaymentsService {
     private readonly reservations: ResourceReservationService,
   ) {}
 
-  async capabilities() {
+  async capabilities(env: NodeJS.ProcessEnv = process.env) {
+    if (env[CHECKOUT_PAYMENT_FLOWS_ENV] !== "true") {
+      return { provider: "disabled", methods: [] };
+    }
     const value = await this.provider.capabilities();
     return { provider: value.provider, methods: [...value.methods] };
   }
@@ -662,8 +666,7 @@ export class PaymentsService {
       (payment.status !== PaymentStatus.CREATED &&
         payment.status !== PaymentStatus.PENDING) ||
       !payment.captureAuthorized ||
-      !payment.checkoutCaptureExpiresAt ||
-      payment.checkoutCaptureExpiresAt.getTime() <= Date.now()
+      !payment.checkoutCaptureExpiresAt
     ) {
       return false;
     }
@@ -671,6 +674,10 @@ export class PaymentsService {
       payment.status === PaymentStatus.CREATED &&
       !(await this.stageCreatedPaymentForVerifiedCapture(payment.id, event))
     ) {
+      return false;
+    }
+    const observedAt = await databaseNow(this.prisma);
+    if (payment.checkoutCaptureExpiresAt.getTime() <= observedAt.getTime()) {
       return false;
     }
     const phase = await this.prisma.orderPhase.findUnique({
@@ -690,7 +697,8 @@ export class PaymentsService {
     );
     const liveSet = sets.some(
       (set) =>
-        set.status === "RESERVED" && set.expiresAt.getTime() > Date.now(),
+        set.status === "RESERVED" &&
+        set.expiresAt.getTime() > observedAt.getTime(),
     );
     if (liveSet) {
       // A set installed by another capture request after the database retry
@@ -728,10 +736,11 @@ export class PaymentsService {
           orderPhaseId: phase.id,
           planKey,
         });
+        const planObservedAt = await databaseNow(this.prisma);
         if (
           usedPlanIds.has(plan.phaseResourcePlanId) ||
           plan.expiresAt.getTime() <=
-            Date.now() + REACQUISITION_RESERVATION_MILLISECONDS
+            planObservedAt.getTime() + REACQUISITION_RESERVATION_MILLISECONDS
         ) {
           planKey = `${basePlanKey}:after-${createHash("sha256")
             .update(plan.phaseResourcePlanId)
@@ -1391,7 +1400,9 @@ async function lockPaymentEnvelope(
   `;
 }
 
-async function databaseNow(client: Transaction): Promise<Date> {
+async function databaseNow(
+  client: Pick<Transaction, "$queryRaw">,
+): Promise<Date> {
   const rows = await client.$queryRaw<Array<{ observed_at: Date }>>`
     SELECT clock_timestamp() AS observed_at
   `;

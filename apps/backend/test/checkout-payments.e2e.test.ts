@@ -978,8 +978,10 @@ describe("checkout payment capture protocol", () => {
     }
   });
 
-  it("rejects an unresolved capture handshake under application clock skew", async () => {
-    const name = `capture-clock-skew-${randomUUID().slice(0, 8)}`;
+  async function assertDatabaseTimedCaptureReacquisition(
+    initialPaymentStatus: "PENDING" | "CREATED",
+  ): Promise<void> {
+    const name = `capture-clock-skew-${initialPaymentStatus.toLowerCase()}-${randomUUID().slice(0, 8)}`;
     const setupClient = await pool.connect();
     const captureExpiresAt = new Date(Date.now() + 60 * 60 * 1_000);
     let foundation: PersistenceFoundation;
@@ -1025,9 +1027,15 @@ describe("checkout payment capture protocol", () => {
       await setupClient.query(
         `UPDATE payments
          SET checkout_method = 'CARD', merchant_reference = id::text,
-             checkout_command_id = $2
+             checkout_command_id = $2,
+             status = CASE WHEN $3 THEN 'CREATED'::payment_status ELSE status END,
+             provider_intent_id = CASE WHEN $3 THEN NULL ELSE provider_intent_id END
          WHERE id = $1`,
-        [foundation.paymentId, checkoutCommandId],
+        [
+          foundation.paymentId,
+          checkoutCommandId,
+          initialPaymentStatus === "CREATED",
+        ],
       );
       await setupClient.query(`SET LOCAL session_replication_role = 'origin'`);
       ({
@@ -1122,9 +1130,7 @@ describe("checkout payment capture protocol", () => {
             },
             event,
           ),
-        ).rejects.toThrow(
-          "Payment capture resource reacquisition remains unresolved",
-        );
+        ).resolves.toEqual({ outcome: "CAPTURED" });
       } finally {
         applicationClock.mockRestore();
       }
@@ -1132,16 +1138,32 @@ describe("checkout payment capture protocol", () => {
         (
           await pool.query(
             `SELECT payment.status::text AS payment_status,
+                    target_order.status::text AS order_status,
                     (SELECT count(*)::int FROM payment_provider_events
                      WHERE payment_id = payment.id) AS event_count,
                     (SELECT count(*)::int FROM refund_transactions
-                     WHERE payment_id = payment.id) AS refund_count
-             FROM payments payment WHERE payment.id = $1`,
+                     WHERE payment_id = payment.id) AS refund_count,
+                    (SELECT count(*)::int FROM jobs
+                     WHERE order_id = target_order.id) AS job_count,
+                    (SELECT count(*)::int FROM audit_events
+                     WHERE payment_id = payment.id
+                       AND event_type = 'checkout.verified_capture_staged')
+                       AS staged_count
+             FROM payments payment
+             JOIN orders target_order ON target_order.id = payment.order_id
+             WHERE payment.id = $1`,
             [foundation.paymentId],
           )
         ).rows,
       ).toEqual([
-        { payment_status: "PENDING", event_count: 0, refund_count: 0 },
+        {
+          payment_status: "CAPTURED",
+          order_status: "CONFIRMED",
+          event_count: 1,
+          refund_count: 0,
+          job_count: 1,
+          staged_count: initialPaymentStatus === "CREATED" ? 1 : 0,
+        },
       ]);
     } finally {
       await pool.query(
@@ -1152,7 +1174,12 @@ describe("checkout payment capture protocol", () => {
       );
       await app.close();
     }
-  });
+  }
+
+  it.each(["PENDING", "CREATED"] as const)(
+    "uses database time to reacquire for a %s capture under application clock skew",
+    assertDatabaseTimedCaptureReacquisition,
+  );
 
   it("reacquires once for concurrent service applies which cross expiry", async () => {
     const name = `service-capture-expiry-${randomUUID().slice(0, 8)}`;

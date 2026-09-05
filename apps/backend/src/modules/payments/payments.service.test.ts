@@ -1,5 +1,36 @@
-import { describe, expect, it } from "vitest";
-import { publicSiteUrl } from "./payments.service";
+import { describe, expect, it, vi } from "vitest";
+import { CHECKOUT_PAYMENT_FLOWS_ENV } from "../../launch-approval-gates";
+import { PaymentsService, publicSiteUrl } from "./payments.service";
+
+describe("payment capabilities", () => {
+  it("hides provider methods while checkout is disabled", async () => {
+    const capabilities = vi.fn().mockResolvedValue({
+      provider: "comgate",
+      methods: ["CARD", "BANK_TRANSFER"],
+    });
+    const service = new PaymentsService(
+      {} as never,
+      { capabilities } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(service.capabilities({})).resolves.toEqual({
+      provider: "disabled",
+      methods: [],
+    });
+    expect(capabilities).not.toHaveBeenCalled();
+
+    await expect(
+      service.capabilities({ [CHECKOUT_PAYMENT_FLOWS_ENV]: "true" }),
+    ).resolves.toEqual({
+      provider: "comgate",
+      methods: ["CARD", "BANK_TRANSFER"],
+    });
+    expect(capabilities).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("payment return site URL", () => {
   it("requires an explicitly configured HTTPS origin in production", () => {
