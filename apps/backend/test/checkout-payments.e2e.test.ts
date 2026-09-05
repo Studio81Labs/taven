@@ -64,8 +64,23 @@ async function prepareReservedFoundation(
   client: PoolClient,
   fixtures: PersistenceFactory,
   name: string,
+  customerOwned = true,
 ) {
-  const foundation = await fixtures.createFoundation(name);
+  const foundation = await fixtures.createFoundation(
+    name,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    1,
+    undefined,
+    "QUOTED",
+    undefined,
+    {},
+    "AUTOMATIC",
+    true,
+    customerOwned,
+  );
   const productions: ProductionReservationFixture[] = [];
   for (const [index] of foundation.fulfilmentSlotIds.entries()) {
     productions.push(
@@ -682,6 +697,7 @@ describe("checkout payment capture protocol", () => {
         setupClient,
         fixtures,
         "http-sandbox",
+        false,
       );
       customerEmail = (
         await setupClient.query<{ email: string }>(
@@ -779,6 +795,7 @@ describe("checkout payment capture protocol", () => {
       webhookSigningSecret: signingSecret,
     });
     let providerFailure: "DEFINITIVE" | "AMBIGUOUS" | null = null;
+    let deliveryResolutionError: Error | null = null;
     let providerCreateCalls = 0;
     let sandboxCheckoutBaseUrl = "http://sandbox.local";
     let latestReturnUrls:
@@ -825,10 +842,12 @@ describe("checkout payment capture protocol", () => {
           resolve: async (input: {
             providerEndpointId: string;
             endpointType: string;
-          }) =>
-            input.providerEndpointId === destination.providerEndpointId
+          }) => {
+            if (deliveryResolutionError) throw deliveryResolutionError;
+            return input.providerEndpointId === destination.providerEndpointId
               ? destination
-              : outageDestination,
+              : outageDestination;
+          },
         })
         .overrideProvider(PAYMENT_PROVIDER)
         .useValue(provider)
@@ -837,6 +856,11 @@ describe("checkout payment capture protocol", () => {
       await app.listen(0, "127.0.0.1");
       const baseUrl = new URL(await app.getUrl());
       sandboxCheckoutBaseUrl = baseUrl.origin;
+      const prisma = app.get(PrismaService);
+      await prisma.customer.update({
+        where: { id: foundation.customerId },
+        data: { displayName: "Existing Customer" },
+      });
 
       const outageIdempotencyKey = "sandbox-http-outage-1";
       const createOutagePayment = (idempotencyKey = outageIdempotencyKey) =>
@@ -881,7 +905,14 @@ describe("checkout payment capture protocol", () => {
       ).resolves.toBe(0);
       process.env.TAVEN_PUBLIC_SITE_URL = "https://taven.cz";
 
-      const createPayment = () =>
+      const createPayment = (
+        idempotencyKey = "sandbox-http-create-1",
+        overrides: Partial<{
+          email: string;
+          fullName: string;
+          method: "CARD" | "BANK_TRANSFER";
+        }> = {},
+      ) =>
         fetch(
           new URL(
             `/automatic-quote-sessions/${foundation.quoteSessionId}/checkout/payments`,
@@ -892,7 +923,7 @@ describe("checkout payment capture protocol", () => {
             headers: {
               authorization: `Bearer ${token}`,
               "content-type": "application/json",
-              "idempotency-key": "sandbox-http-create-1",
+              "idempotency-key": idempotencyKey,
             },
             body: JSON.stringify({
               email: customerEmail,
@@ -901,6 +932,7 @@ describe("checkout payment capture protocol", () => {
               acceptTerms: true,
               acceptClaimPolicy: true,
               acknowledgeWithdrawalException: true,
+              ...overrides,
             }),
           },
         );
@@ -952,6 +984,46 @@ describe("checkout payment capture protocol", () => {
         status: "PENDING",
       });
       await expect(
+        prisma.customer.findUniqueOrThrow({
+          where: { id: foundation.customerId },
+          select: { displayName: true },
+        }),
+      ).resolves.toEqual({ displayName: "Existing Customer" });
+      await expect(
+        Promise.all([
+          prisma.quoteSession.findUniqueOrThrow({
+            where: { id: foundation.quoteSessionId },
+            select: { customerId: true },
+          }),
+          prisma.order.findUniqueOrThrow({
+            where: { id: foundation.orderId },
+            select: { customerId: true },
+          }),
+        ]),
+      ).resolves.toEqual([
+        { customerId: foundation.customerId },
+        { customerId: foundation.customerId },
+      ]);
+      const callsAfterInitialPayment = providerCreateCalls;
+      for (const [idempotencyKey, overrides] of [
+        ["sandbox-http-changed-method", { method: "BANK_TRANSFER" }],
+        ["sandbox-http-changed-name", { fullName: "Changed Name" }],
+        ["sandbox-http-changed-email", { email: "other@example.test" }],
+      ] as const) {
+        const changedResponse = await createPayment(idempotencyKey, overrides);
+        expect(changedResponse.status).toBe(409);
+      }
+      expect(providerCreateCalls).toBe(callsAfterInitialPayment);
+      await expect(
+        prisma.payment.count({ where: { orderId: foundation.orderId } }),
+      ).resolves.toBe(1);
+      const matchingResponse = await createPayment(
+        "sandbox-http-matching-input",
+      );
+      expect(matchingResponse.status).toBe(200);
+      await expect(matchingResponse.json()).resolves.toEqual(created);
+      expect(providerCreateCalls).toBe(callsAfterInitialPayment);
+      await expect(
         readPayment(foundation.quoteSessionId, token),
       ).resolves.toMatchObject({ status: 400 });
       await expect(
@@ -971,7 +1043,6 @@ describe("checkout payment capture protocol", () => {
         "TAVEN. sandbox checkout",
       );
 
-      const prisma = app.get(PrismaService);
       await prisma.$queryRaw`
         SELECT taven_release_phase_reservation_set(
           ${foundation.phaseReservationSetId}::uuid
@@ -1002,6 +1073,26 @@ describe("checkout payment capture protocol", () => {
 
       const sendSandboxOutcome = (outcome: string) =>
         fetch(`${created.checkoutUrl}/${outcome}`, { method: "POST" });
+      deliveryResolutionError = new Error(
+        "simulated temporary delivery resolution failure",
+      );
+      const transientCaptureResponse = await sendSandboxOutcome("capture");
+      expect(transientCaptureResponse.status).toBe(500);
+      await expect(
+        prisma.payment.findUniqueOrThrow({
+          where: { id: created.paymentId },
+          select: {
+            status: true,
+            providerEvents: { select: { id: true } },
+            refunds: { select: { id: true } },
+          },
+        }),
+      ).resolves.toEqual({
+        status: "PENDING",
+        providerEvents: [],
+        refunds: [],
+      });
+      deliveryResolutionError = null;
       const capturedResponse = await sendSandboxOutcome("capture");
       expect(capturedResponse.status).toBe(200);
       expect(await capturedResponse.text()).toContain(
@@ -1248,7 +1339,7 @@ describe("checkout payment capture protocol", () => {
       );
       restoreEnvironment("TAVEN_PUBLIC_SITE_URL", previousEnvironment.siteUrl);
     }
-  });
+  }, 15_000);
 
   it("turns a capture after customer cancellation into one compensation", async () => {
     await rollback("cancel-race", async (client, fixtures) => {

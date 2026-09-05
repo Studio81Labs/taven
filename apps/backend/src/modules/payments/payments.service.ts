@@ -121,8 +121,19 @@ export class PaymentsService {
           paymentScheduleId: schedule.id,
           status: { in: ["CREATED", "PENDING", "CAPTURED"] },
         },
+        include: {
+          checkoutCommand: { select: { requestFingerprint: true } },
+        },
         orderBy: { createdAt: "desc" },
       });
+      if (
+        active &&
+        active.checkoutCommand?.requestFingerprint !== fingerprint
+      ) {
+        throw new ConflictException(
+          "Active payment was created from different checkout input",
+        );
+      }
       if (active?.status === PaymentStatus.CREATED) {
         throw new ConflictException(
           "Payment intent creation is still incomplete",
@@ -153,7 +164,7 @@ export class PaymentsService {
             ? {}
             : { firstAttribution: jsonInput(context.attribution) }),
         },
-        update: { displayName: input.fullName },
+        update: {},
       });
       if (context.customerId && context.customerId !== customer.id) {
         throw new ConflictException("Checkout customer identity changed");
@@ -407,47 +418,65 @@ export class PaymentsService {
   private async isCaptureContextCurrent(
     event: VerifiedPaymentEvent,
   ): Promise<boolean> {
+    const payment = await this.prisma.payment.findFirst({
+      where: {
+        provider: event.provider,
+        OR: [
+          { providerIntentId: event.providerTransactionId },
+          {
+            providerIntentId: null,
+            merchantReference: event.merchantReference,
+          },
+        ],
+      },
+      select: {
+        orderId: true,
+        orderPriceBindingId: true,
+      },
+    });
+    if (!payment) return false;
+    const origin = await this.prisma.automaticOrderOrigin.findUnique({
+      where: { orderId: payment.orderId },
+      select: { quoteSessionId: true },
+    });
+    if (!origin) return false;
+    let context: CheckoutContext;
     try {
-      const payment = await this.prisma.payment.findFirst({
-        where: {
-          provider: event.provider,
-          OR: [
-            { providerIntentId: event.providerTransactionId },
-            {
-              providerIntentId: null,
-              merchantReference: event.merchantReference,
-            },
-          ],
-        },
-        select: {
-          orderId: true,
-          orderPriceBindingId: true,
-        },
-      });
-      if (!payment) return false;
-      const origin = await this.prisma.automaticOrderOrigin.findUnique({
-        where: { orderId: payment.orderId },
-        select: { quoteSessionId: true },
-      });
-      if (!origin) return false;
-      const context = await this.loadContext(origin.quoteSessionId);
+      context = await this.loadContext(origin.quoteSessionId);
       assertCheckoutTopology(context);
+    } catch (error) {
       if (
-        context.order.activePriceBinding?.orderPriceBinding.id !==
-        payment.orderPriceBindingId
+        error instanceof NotFoundException ||
+        error instanceof ConflictException
       ) {
         return false;
       }
-      const destination =
-        context.order.automaticQuoteDraft!.selectedDeliveryDestination!;
-      const resolved = await this.deliveryCapabilities.resolve({
+      throw error;
+    }
+    if (
+      context.order.activePriceBinding?.orderPriceBinding.id !==
+      payment.orderPriceBindingId
+    ) {
+      return false;
+    }
+    const destination =
+      context.order.automaticQuoteDraft!.selectedDeliveryDestination!;
+    let resolved: ResolvedDeliveryCapability;
+    try {
+      resolved = await this.deliveryCapabilities.resolve({
         providerEndpointId: destination.providerEndpointId,
         endpointType: destination.endpointType,
       });
+    } catch (error) {
+      if (error instanceof BadRequestException) return false;
+      throw error;
+    }
+    try {
       assertDestinationStillCurrent(context, resolved);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (error instanceof ConflictException) return false;
+      throw error;
     }
   }
 
