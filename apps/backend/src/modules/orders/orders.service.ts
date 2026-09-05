@@ -1007,16 +1007,23 @@ export class OrdersService {
           throw new ConflictException("Carrier label void command is missing");
         }
         const verifiedAt = await databaseNow(tx);
-        await tx.outboxMessage.update({
-          where: { id: outbox.id },
-          data: {
-            status: "DELIVERED",
-            deliveredAt: verifiedAt,
-            lockedAt: null,
-            lastError: null,
-            updatedAt: verifiedAt,
-          },
-        });
+        if (outbox.status === "SUPERSEDED") {
+          throw new ConflictException(
+            "Carrier label void command was superseded",
+          );
+        }
+        if (outbox.status !== "DELIVERED") {
+          await tx.outboxMessage.update({
+            where: { id: outbox.id },
+            data: {
+              status: "DELIVERED",
+              deliveredAt: verifiedAt,
+              lockedAt: null,
+              lastError: null,
+              updatedAt: verifiedAt,
+            },
+          });
+        }
         await tx.shipmentProviderEvent.create({
           data: {
             shipmentId,
@@ -1613,24 +1620,24 @@ export class OrdersService {
     if (!body.allocation || typeof body.allocation !== "object") {
       throw new BadRequestException("allocation is invalid");
     }
-    const slotCredits = priceAdjustmentSlotCredits(
+    const requestedSlotCredits = priceAdjustmentSlotCredits(
       body.allocation,
       reason !== PriceAdjustmentReason.EXPRESS_BREACH,
     );
-    const allocatedAmount = slotCredits.reduce(
+    const allocatedAmount = requestedSlotCredits.reduce(
       (total, credit) => total + credit.amountMinor,
       0n,
     );
-    if (slotCredits.length > 0 && allocatedAmount !== amountMinor) {
+    if (requestedSlotCredits.length > 0 && allocatedAmount !== amountMinor) {
       throw new BadRequestException(
         "allocation slotCredits must sum to amountMinor",
       );
     }
-    const allocation = {
+    const requestedAllocation = {
       ...body.allocation,
-      ...(slotCredits.length > 0
+      ...(requestedSlotCredits.length > 0
         ? {
-            slotCredits: slotCredits.map((credit) => ({
+            slotCredits: requestedSlotCredits.map((credit) => ({
               fulfilmentSlotId: credit.fulfilmentSlotId,
               amountMinor: credit.amountMinor.toString(),
             })),
@@ -1646,10 +1653,22 @@ export class OrdersService {
         amountMinor: amountMinor.toString(),
         paymentId: body.paymentId ?? null,
         claimId: body.claimId ?? null,
-        allocation,
+        allocation: requestedAllocation,
       },
       async (tx) => {
         await this.lockOrder(tx, orderId);
+        const slotCredits =
+          reason === PriceAdjustmentReason.EXPRESS_BREACH &&
+          requestedSlotCredits.length === 0
+            ? await this.expressAdjustmentSlotCredits(tx, orderId, amountMinor)
+            : requestedSlotCredits;
+        const allocation = {
+          ...body.allocation,
+          slotCredits: slotCredits.map((credit) => ({
+            fulfilmentSlotId: credit.fulfilmentSlotId,
+            amountMinor: credit.amountMinor.toString(),
+          })),
+        };
         if (slotCredits.length > 0) {
           const ownedSlots = await tx.fulfilmentSlot.findMany({
             where: {
@@ -2464,6 +2483,59 @@ export class OrdersService {
       LIMIT 1
     `;
     return cancellationPrintingConsumptions(rows[0]?.printingConsumptions);
+  }
+
+  private async expressAdjustmentSlotCredits(
+    tx: Transaction,
+    orderId: string,
+    amountMinor: bigint,
+  ): Promise<PriceAdjustmentSlotCredit[]> {
+    const targets = await tx.$queryRaw<
+      Array<{ fulfilmentSlotId: string; basisMinor: bigint; currency: string }>
+    >`
+      SELECT allocation.fulfilment_slot_id AS "fulfilmentSlotId",
+             sum(allocation.amount_minor)::bigint AS "basisMinor",
+             snapshot.currency
+      FROM order_active_price_bindings active_binding
+      JOIN order_price_bindings binding
+        ON binding.id = active_binding.order_price_binding_id
+       AND binding.order_id = active_binding.order_id
+      JOIN price_snapshots snapshot
+        ON snapshot.id = binding.price_snapshot_id
+      JOIN price_snapshot_components component
+        ON component.price_snapshot_id = snapshot.id
+       AND component.kind = 'EXPRESS'
+      JOIN price_component_fulfilment_allocations allocation
+        ON allocation.price_snapshot_component_id = component.id
+      WHERE active_binding.order_id = ${orderId}::uuid
+      GROUP BY allocation.fulfilment_slot_id, snapshot.currency
+      ORDER BY allocation.fulfilment_slot_id
+    `;
+    const totalBasis = targets.reduce(
+      (total, target) => total + target.basisMinor,
+      0n,
+    );
+    const currency = targets[0]?.currency;
+    if (
+      !currency ||
+      targets.some((target) => target.currency !== currency) ||
+      totalBasis <= 0n
+    ) {
+      throw new ConflictException("Order has no allocated express surcharge");
+    }
+    const { allocateMoney, Money } = await import("@taven/core");
+    return allocateMoney(
+      Money.of(amountMinor, currency),
+      targets.map((target) => ({
+        id: target.fulfilmentSlotId,
+        basis: target.basisMinor,
+      })),
+    )
+      .filter((allocation) => allocation.amount.minorUnits > 0n)
+      .map((allocation) => ({
+        fulfilmentSlotId: allocation.targetId,
+        amountMinor: allocation.amount.minorUnits,
+      }));
   }
 
   private async command(

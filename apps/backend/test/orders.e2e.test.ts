@@ -333,6 +333,32 @@ async function succeedRefund(refundId: string): Promise<void> {
   );
 }
 
+async function markSlotPriceComponentExpress(slotId: string): Promise<void> {
+  const client = await pool.connect();
+  await client.query("BEGIN");
+  try {
+    await client.query("SET LOCAL session_replication_role = 'replica'");
+    const updated = await client.query(
+      `UPDATE price_snapshot_components component
+       SET kind = 'EXPRESS'
+       FROM price_component_fulfilment_allocations allocation
+       WHERE allocation.price_snapshot_component_id = component.id
+         AND allocation.fulfilment_slot_id = $1
+         AND component.kind = 'ORDER_MIN_PRINT'`,
+      [slotId],
+    );
+    if (updated.rowCount !== 1) {
+      throw new Error("fixture express component was not configured");
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
   beforeAll(async () => {
     pool = new Pool({ connectionString: databaseUrl });
@@ -937,6 +963,52 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({ status: "DELIVERED" });
   });
 
+  it("preserves dispatcher evidence when confirming a delivered label void", async () => {
+    const fixture = await preparePaidOrder("delivered-label-void");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "customer cancelled before physical handoff" },
+      "delivered-label-void-cancel",
+    );
+    const deduplicationKey = `void_carrier_label:${fixture.foundation.shipmentId}:label-${fixture.foundation.shipmentId}`;
+    const deliveredAt = new Date();
+    const delivered = await prisma.outboxMessage.update({
+      where: { deduplicationKey },
+      data: { status: "DELIVERED", deliveredAt, lockedAt: null },
+    });
+
+    const confirmed = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      {
+        providerEventId: `delivered-void-${fixture.foundation.shipmentId}`,
+        providerTransactionId: `delivered-void-tx-${fixture.foundation.shipmentId}`,
+        occurredAt: deliveredAt.toISOString(),
+      },
+      "delivered-label-void-confirm",
+    );
+
+    expect(confirmed.status).toBe("LABEL_VOID_CONFIRMED_AND_ORDER_CANCELLED");
+    await expect(
+      prisma.outboxMessage.findUniqueOrThrow({
+        where: { deduplicationKey },
+      }),
+    ).resolves.toMatchObject({
+      status: "DELIVERED",
+      deliveredAt: delivered.deliveredAt,
+    });
+    await expect(
+      prisma.shipmentProviderEvent.findFirstOrThrow({
+        where: {
+          shipmentId: fixture.foundation.shipmentId,
+          kind: "LABEL_VOIDED",
+        },
+      }),
+    ).resolves.toMatchObject({ outboxMessageId: delivered.id });
+  });
+
   it("lets a verified acceptance scan supersede pending label cancellation", async () => {
     const fixture = await preparePaidOrder("label-void-acceptance-wins");
     await advanceThroughQc(fixture, 0);
@@ -1018,7 +1090,16 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         reason: "EXPRESS_BREACH",
         amountMinor: "1",
         paymentId: fixture.foundation.paymentId,
-        allocation: { component: "express", reason: "deadline missed" },
+        allocation: {
+          component: "express",
+          reason: "deadline missed",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: "1",
+            },
+          ],
+        },
       },
       "acceptance-pending-adjustment-create",
     );
@@ -1069,7 +1150,16 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         reason: "EXPRESS_BREACH",
         amountMinor: "1",
         paymentId: fixture.foundation.paymentId,
-        allocation: { component: "express", reason: "deadline missed" },
+        allocation: {
+          component: "express",
+          reason: "deadline missed",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: "1",
+            },
+          ],
+        },
       },
       "express-adjustment-key",
     );
@@ -1145,7 +1235,16 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         reason: "EXPRESS_BREACH",
         amountMinor: deposit.capturedAmountMinor!.toString(),
         paymentId: deposit.id,
-        allocation: { component: "deposit", reason: "full deposit credit" },
+        allocation: {
+          component: "deposit",
+          reason: "full deposit credit",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: deposit.capturedAmountMinor!.toString(),
+            },
+          ],
+        },
       },
       "split-exhaust-deposit-key",
     );
@@ -1167,7 +1266,16 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
           reason: "EXPRESS_BREACH",
           amountMinor: "1",
           paymentId: deposit.id,
-          allocation: { component: "deposit", reason: "already exhausted" },
+          allocation: {
+            component: "deposit",
+            reason: "already exhausted",
+            slotCredits: [
+              {
+                fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+                amountMinor: "1",
+              },
+            ],
+          },
         },
         "split-explicit-exhausted-key",
       ),
@@ -1180,7 +1288,16 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       {
         reason: "EXPRESS_BREACH",
         amountMinor: "1",
-        allocation: { component: "order", reason: "use remaining balance" },
+        allocation: {
+          component: "order",
+          reason: "use remaining balance",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: "1",
+            },
+          ],
+        },
       },
       "split-unbound-adjustment-key",
     );
@@ -1247,7 +1364,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
   });
 
-  it("records and refunds a manual post-delivery Claim without rewinding completion", async () => {
+  it("deducts a derived express slot credit from a post-delivery Claim", async () => {
     const fixture = await preparePaidOrder("post-delivery-claim");
     await advanceThroughQc(fixture, 0);
     await labelAndPack(fixture, 0);
@@ -1261,26 +1378,30 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const slot = await prisma.fulfilmentSlot.findUniqueOrThrow({
       where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
     });
+    await markSlotPriceComponentExpress(slot.id);
     const priorCredit = await orders.createPriceAdjustment(
       fixture.foundation.orderId,
       {
-        reason: "POST_DELIVERY_ISSUE",
+        reason: "EXPRESS_BREACH",
         amountMinor: "1",
-        allocation: {
-          slotCredits: [
-            {
-              fulfilmentSlotId: slot.id,
-              amountMinor: "1",
-            },
-          ],
-        },
+        allocation: { component: "express", reason: "deadline missed" },
       },
-      "post-delivery-prior-credit-key",
+      "post-delivery-express-credit-key",
     );
+    await expect(
+      prisma.priceAdjustment.findUniqueOrThrow({
+        where: { id: priorCredit.result.priceAdjustmentId as string },
+      }),
+    ).resolves.toMatchObject({
+      allocation: {
+        component: "express",
+        slotCredits: [{ fulfilmentSlotId: slot.id, amountMinor: "1" }],
+      },
+    });
     const priorCreditRefund = await orders.refundAdjustment(
       fixture.foundation.orderId,
       priorCredit.result.priceAdjustmentId as string,
-      "post-delivery-prior-credit-refund-key",
+      "post-delivery-express-credit-refund-key",
     );
     const priorCreditRefundId = (
       priorCreditRefund.result.refundIds as string[]
@@ -1357,7 +1478,16 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         reason: "EXPRESS_BREACH",
         amountMinor: "1",
         paymentId: payment.id,
-        allocation: { component: "express", reason: "deadline missed" },
+        allocation: {
+          component: "express",
+          reason: "deadline missed",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: "1",
+            },
+          ],
+        },
       },
       "cancel-pending-refund-adjustment",
     );

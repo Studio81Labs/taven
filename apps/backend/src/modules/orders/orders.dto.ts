@@ -117,7 +117,7 @@ export class PriceAdjustmentAllocationDto {
     type: [PriceAdjustmentSlotCreditDto],
     minItems: 1,
     description:
-      "Exact per-slot credit allocation; required for non-express adjustments",
+      "Exact per-slot credit allocation; required for non-express adjustments and derived from the immutable express component when omitted for express adjustments",
   })
   slotCredits?: PriceAdjustmentSlotCreditDto[];
 }
