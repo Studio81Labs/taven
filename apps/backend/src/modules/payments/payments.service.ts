@@ -329,11 +329,18 @@ export class PaymentsService {
         return response;
       });
     } catch (error) {
+      const finalized = await this.reconcileCommittedIntentFinalization(
+        staged.payment.id,
+        staged.idempotencyRecordId,
+        intent.providerIntentId,
+        intent.checkoutUrl,
+      );
+      if (finalized) return finalized;
       const closed = await this.closeReturnedIntent(
         staged.payment.id,
         staged.idempotencyRecordId,
         intent.providerIntentId,
-      ).catch(() => null);
+      );
       if (closed) return closed;
       await this.provider
         .cancelIntent(intent.providerIntentId)
@@ -754,6 +761,38 @@ export class PaymentsService {
       await completeIdempotency(transaction, idempotencyRecordId, response);
       return response;
     });
+  }
+
+  private async reconcileCommittedIntentFinalization(
+    paymentId: string,
+    idempotencyRecordId: string,
+    providerIntentId: string,
+    checkoutUrl: string,
+  ): Promise<CheckoutPaymentDto | null> {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: {
+        checkoutCommand: {
+          select: { id: true, status: true, responseBody: true },
+        },
+      },
+    });
+    const committedResponse = asRecord(payment?.checkoutCommand?.responseBody);
+    if (
+      !payment ||
+      payment.checkoutCommandId !== idempotencyRecordId ||
+      payment.checkoutCommand?.id !== idempotencyRecordId ||
+      payment.checkoutCommand.status !== IdempotencyStatus.COMPLETED ||
+      payment.providerIntentId !== providerIntentId ||
+      payment.providerCheckoutUrl !== checkoutUrl ||
+      !committedResponse ||
+      committedResponse.paymentId !== paymentId ||
+      committedResponse.status !== PaymentStatus.PENDING ||
+      committedResponse.checkoutUrl !== checkoutUrl
+    ) {
+      return null;
+    }
+    return paymentDto(payment);
   }
 
   private loadContext(

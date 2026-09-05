@@ -40,6 +40,10 @@ const databaseUrl = process.env.DATABASE_URL;
 const scope = `checkout-payments-${randomUUID()}`;
 let pool: Pool;
 
+type InteractiveTransaction = (
+  work: (transaction: Prisma.TransactionClient) => Promise<unknown>,
+) => Promise<unknown>;
+
 async function rollback<T>(
   name: string,
   work: (client: PoolClient, fixtures: PersistenceFactory) => Promise<T>,
@@ -799,6 +803,7 @@ describe("checkout payment capture protocol", () => {
     let deliveryResolutionError: Error | null = null;
     let providerCreateCalls = 0;
     let providerVerifyCalls = 0;
+    let providerCancelCalls = 0;
     let sandboxCheckoutBaseUrl = "http://sandbox.local";
     let latestReturnUrls:
       | Readonly<{ success: string; cancelled: string; pending: string }>
@@ -833,8 +838,10 @@ describe("checkout payment capture protocol", () => {
         providerVerifyCalls += 1;
         return sandbox.verifyEvent(input);
       },
-      cancelIntent: (providerIntentId) =>
-        sandbox.cancelIntent(providerIntentId),
+      cancelIntent: (providerIntentId) => {
+        providerCancelCalls += 1;
+        return sandbox.cancelIntent(providerIntentId);
+      },
       refund: (input) => sandbox.refund(input),
     };
     let app: INestApplication | undefined;
@@ -958,8 +965,26 @@ describe("checkout payment capture protocol", () => {
           headers: { authorization: `Bearer ${sessionToken}` },
         });
       };
+      const transactions = prisma as unknown as {
+        $transaction: InteractiveTransaction;
+      };
+      const originalTransaction = transactions.$transaction.bind(prisma);
+      let checkoutTransactionCount = 0;
+      const transactionSpy = vi
+        .spyOn(transactions, "$transaction")
+        .mockImplementation(async (work) => {
+          const result = await originalTransaction(work);
+          checkoutTransactionCount += 1;
+          if (checkoutTransactionCount === 3) {
+            throw new Error("simulated lost commit acknowledgement");
+          }
+          return result;
+        });
       const createdResponse = await createPayment();
+      transactionSpy.mockRestore();
       expect(createdResponse.status).toBe(200);
+      expect(checkoutTransactionCount).toBe(3);
+      expect(providerCancelCalls).toBe(0);
       const created = (await createdResponse.json()) as {
         paymentId: string;
         amountMinor: number;
