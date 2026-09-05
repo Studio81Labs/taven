@@ -70,6 +70,28 @@ export function assertCheckoutPaymentFlowsEnabled(
   };
 }
 
+export function assertCheckoutAcceptanceRevisionsCurrent(
+  accepted: Readonly<{
+    termsRevision: string | null;
+    claimPolicyRevision: string | null;
+  }>,
+  approved: Readonly<{
+    termsRevision: string;
+    claimPolicyRevision: string;
+  }>,
+): void {
+  if (
+    (accepted.termsRevision !== null &&
+      accepted.termsRevision !== approved.termsRevision) ||
+    (accepted.claimPolicyRevision !== null &&
+      accepted.claimPolicyRevision !== approved.claimPolicyRevision)
+  ) {
+    throw launchApprovalRequired(
+      "Checkout acceptance does not use the currently approved legal revisions",
+    );
+  }
+}
+
 export function approvedCheckoutTermsRevision(
   env: NodeJS.ProcessEnv = process.env,
 ): string {

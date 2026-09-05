@@ -992,7 +992,7 @@ describe("checkout payment capture protocol", () => {
     };
     const signingSecret = "e2e-sandbox-payment-signing-secret-32";
     process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
-    process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v1-approved";
+    process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
     process.env.TAVEN_TERMS_REVISION = "terms-v1";
     process.env.TAVEN_PAYMENT_PROVIDER = "sandbox";
     process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET = signingSecret;
@@ -1449,6 +1449,13 @@ describe("checkout payment capture protocol", () => {
         { customerId: foundation.customerId },
       ]);
       const callsAfterInitialPayment = providerCreateCalls;
+      process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
+      const changedActivePolicyResponse = await createPayment(
+        "sandbox-http-changed-active-claim-policy",
+      );
+      expect(changedActivePolicyResponse.status).toBe(503);
+      process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
+      expect(providerCreateCalls).toBe(callsAfterInitialPayment);
       for (const [idempotencyKey, overrides] of [
         ["sandbox-http-changed-method", { method: "BANK_TRANSFER" }],
         ["sandbox-http-changed-name", { fullName: "Changed Name" }],
@@ -1677,6 +1684,35 @@ describe("checkout payment capture protocol", () => {
         status: "FAILED",
         intentCreationFailureResultId: expect.any(String),
       });
+
+      const callsBeforeFailedPolicyChange = providerCreateCalls;
+      process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
+      const changedFailedPolicyResponse = await createOutagePayment(
+        "sandbox-http-changed-failed-claim-policy",
+      );
+      expect(changedFailedPolicyResponse.status).toBe(503);
+      process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
+      expect(providerCreateCalls).toBe(callsBeforeFailedPolicyChange);
+      await expect(
+        Promise.all([
+          prisma.payment.count({
+            where: { orderId: outageFoundation.orderId },
+          }),
+          prisma.order.findUniqueOrThrow({
+            where: { id: outageFoundation.orderId },
+            select: {
+              acceptedTermsRevision: true,
+              acceptedClaimPolicyRevision: true,
+            },
+          }),
+        ]),
+      ).resolves.toEqual([
+        1,
+        {
+          acceptedTermsRevision: "terms-v1",
+          acceptedClaimPolicyRevision: "claim-policy-v1",
+        },
+      ]);
 
       const firstOutageRecord = await prisma.idempotencyRecord.findFirstOrThrow(
         {

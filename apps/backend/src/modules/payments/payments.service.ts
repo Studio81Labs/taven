@@ -10,7 +10,10 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { IdempotencyStatus, PaymentStatus, Prisma } from "@prisma/client";
-import { assertCheckoutPaymentFlowsEnabled } from "../../launch-approval-gates";
+import {
+  assertCheckoutAcceptanceRevisionsCurrent,
+  assertCheckoutPaymentFlowsEnabled,
+} from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
   DELIVERY_CAPABILITY,
@@ -89,9 +92,16 @@ export class PaymentsService {
     );
     if (initialIdempotency.replay) return initialIdempotency.replay;
     assertCheckoutContext(initial, token);
-    assertCheckoutPaymentFlowsEnabled(
+    const initialLegalRevisions = assertCheckoutPaymentFlowsEnabled(
       initial.order.activePriceBinding!.orderPriceBinding.priceSnapshot
         .priceList.termsRevision,
+    );
+    assertCheckoutAcceptanceRevisionsCurrent(
+      {
+        termsRevision: initial.order.acceptedTermsRevision,
+        claimPolicyRevision: initial.order.acceptedClaimPolicyRevision,
+      },
+      initialLegalRevisions,
     );
 
     const capabilities = await this.provider.capabilities();
@@ -123,6 +133,13 @@ export class PaymentsService {
       const binding = context.order.activePriceBinding!.orderPriceBinding;
       const legalRevisions = assertCheckoutPaymentFlowsEnabled(
         binding.priceSnapshot.priceList.termsRevision,
+      );
+      assertCheckoutAcceptanceRevisionsCurrent(
+        {
+          termsRevision: context.order.acceptedTermsRevision,
+          claimPolicyRevision: context.order.acceptedClaimPolicyRevision,
+        },
+        legalRevisions,
       );
       const schedule = binding.priceSnapshot.paymentSchedules.find(
         ({ role }) => role === "FULL",

@@ -2,6 +2,7 @@ import { ServiceUnavailableException } from "@nestjs/common";
 import { describe, expect, it } from "vitest";
 import {
   assertBindingQuoteFlowsEnabled,
+  assertCheckoutAcceptanceRevisionsCurrent,
   assertCheckoutPaymentFlowsEnabled,
   assertQuotePhotoUploadsEnabled,
   approvedCheckoutClaimPolicyRevision,
@@ -116,6 +117,48 @@ describe("launch approval gates", () => {
         [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
       }),
     ).toThrowError(ServiceUnavailableException);
+  });
+
+  it.each([
+    ["terms-v0", "claims-v1-approved"],
+    ["terms-v1-approved", "claims-v0"],
+  ])(
+    "rejects immutable acceptance of terms %s and claim policy %s",
+    (termsRevision, claimPolicyRevision) => {
+      expect(() =>
+        assertCheckoutAcceptanceRevisionsCurrent(
+          { termsRevision, claimPolicyRevision },
+          {
+            termsRevision: "terms-v1-approved",
+            claimPolicyRevision: "claims-v1-approved",
+          },
+        ),
+      ).toThrowError(ServiceUnavailableException);
+    },
+  );
+
+  it("allows missing or currently approved immutable acceptance", () => {
+    expect(() =>
+      assertCheckoutAcceptanceRevisionsCurrent(
+        { termsRevision: null, claimPolicyRevision: null },
+        {
+          termsRevision: "terms-v1-approved",
+          claimPolicyRevision: "claims-v1-approved",
+        },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertCheckoutAcceptanceRevisionsCurrent(
+        {
+          termsRevision: "terms-v1-approved",
+          claimPolicyRevision: "claims-v1-approved",
+        },
+        {
+          termsRevision: "terms-v1-approved",
+          claimPolicyRevision: "claims-v1-approved",
+        },
+      ),
+    ).not.toThrow();
   });
 
   it("returns the trimmed approved claim-policy revision", () => {
