@@ -2,7 +2,7 @@
 import type { components } from "@taven/openapi-client";
 import {
   getSessionStorage,
-  loadQuoteSession,
+  loadPaymentReturnSession,
   type StoredQuoteSession,
 } from "../../utils/quote-session-storage";
 import {
@@ -52,7 +52,7 @@ async function refreshPayment(): Promise<void> {
   errorMessage.value = undefined;
   try {
     const storage = getSessionStorage(window);
-    const stored = storage ? loadQuoteSession(storage) : undefined;
+    const stored = storage ? loadPaymentReturnSession(storage) : undefined;
     if (!stored) {
       throw new Error(
         "Uložená relace objednávky není v tomto prohlížeči dostupná.",
