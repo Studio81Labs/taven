@@ -14600,7 +14600,7 @@ describe("commerce persistence foundations", () => {
               winningScanOccurredAt,
             );
             await client.query(
-              `SET CONSTRAINTS "shipment_provider_events_consumed" IMMEDIATE`,
+              `SET CONSTRAINTS "shipment_provider_events_cancelled_acceptance_consumed" IMMEDIATE`,
             );
           },
           {
@@ -14943,7 +14943,7 @@ describe("commerce persistence foundations", () => {
             winningScanOccurredAt,
           );
           await recoveryClient.query(
-            `SET CONSTRAINTS "shipment_provider_events_consumed" IMMEDIATE`,
+            `SET CONSTRAINTS "shipment_provider_events_cancelled_acceptance_consumed" IMMEDIATE`,
           );
         },
         {

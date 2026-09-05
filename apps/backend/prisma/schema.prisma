@@ -406,6 +406,7 @@ enum JobCancellationReason {
   ORDER_CANCELLED
   PHASE_CANCELLED
   CLAIM_WITHDRAWN
+  PRODUCTION_FAILURE
 
   @@map("job_cancellation_reason")
 }
@@ -2033,6 +2034,7 @@ model Shipment {
   shipmentPlanId           String         @map("shipment_plan_id") @db.Uuid
   deliveryDestinationId    String         @map("delivery_destination_id") @db.Uuid
   replacesShipmentId       String?        @map("replaces_shipment_id") @db.Uuid
+  reprintClaimId           String?        @map("reprint_claim_id") @db.Uuid
   status                   ShipmentStatus @default(PLANNED)
   carrier                  String?        @db.VarChar(100)
   providerShipmentId       String?        @map("provider_shipment_id") @db.VarChar(255)
@@ -2055,6 +2057,7 @@ model Shipment {
   deliveryDestination             DeliveryDestination      @relation(fields: [deliveryDestinationId, orderId], references: [id, orderId], onDelete: Restrict)
   replacesShipment                Shipment?                @relation("ShipmentReplacementLineage", fields: [replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], references: [id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], onDelete: Restrict, map: "shipments_replacement_scope_fkey")
   replacementShipment             Shipment?                @relation("ShipmentReplacementLineage")
+  reprintClaim                    Claim?                   @relation("ClaimReprintShipments", fields: [reprintClaimId], references: [id], onDelete: Restrict)
   providerEvents                  ShipmentProviderEvent[]
   jobAssignments                  JobShipmentAssignment[]
   incidentClaims                  Claim[]                  @relation("ClaimIncidentShipment")
@@ -2071,6 +2074,7 @@ model Shipment {
   @@unique([replacesShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_replaces_shipment_id_key")
   @@index([orderId, status])
   @@index([shipmentPlanId, status])
+  @@index([reprintClaimId])
   @@map("shipments")
 }
 
@@ -2342,13 +2346,13 @@ model ReplacementRequest {
   createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order               Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderPhase          OrderPhase           @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
-  shipmentPlan        ShipmentPlan         @relation(fields: [shipmentPlanId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict)
-  sourceJob           Job                  @relation("ReplacementRequestSourceJob", fields: [sourceJobId], references: [id], onDelete: Restrict)
-  replacementJob      Job?                 @relation("ReplacementRequestResultJob", fields: [replacementJobId], references: [id], onDelete: Restrict)
-  phaseReservationSet PhaseReservationSet? @relation(fields: [phaseReservationSetId], references: [id], onDelete: Restrict)
-  claim               Claim?               @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  order               Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase          OrderPhase            @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  shipmentPlan        ShipmentPlan          @relation(fields: [shipmentPlanId, orderId, orderPhaseId], references: [id, orderId, orderPhaseId], onDelete: Restrict)
+  sourceJob           Job                   @relation("ReplacementRequestSourceJob", fields: [sourceJobId], references: [id], onDelete: Restrict)
+  replacementJob      Job?                  @relation("ReplacementRequestResultJob", fields: [replacementJobId], references: [id], onDelete: Restrict)
+  phaseReservationSet PhaseReservationSet?  @relation(fields: [phaseReservationSetId], references: [id], onDelete: Restrict)
+  claim               Claim?                @relation(fields: [claimId], references: [id], onDelete: Restrict)
   claimResolutions    ClaimSlotResolution[]
 
   @@index([orderId, status, deadlineAt])
@@ -2371,6 +2375,7 @@ model Claim {
   order                   Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
   orderPhase              OrderPhase               @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
   incidentShipment        Shipment?                @relation("ClaimIncidentShipment", fields: [incidentShipmentId], references: [id], onDelete: Restrict)
+  reprintShipments        Shipment[]               @relation("ClaimReprintShipments")
   resolutions             ClaimSlotResolution[]
   refunds                 RefundTransaction[]
   priceAdjustments        PriceAdjustment[]
