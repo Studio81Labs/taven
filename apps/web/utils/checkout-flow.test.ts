@@ -66,9 +66,11 @@ describe("checkout flow", () => {
   });
 
   it("maps recoverable API failures and creates an exact payment status URL", () => {
-    for (const status of [409, 410, 503]) {
+    for (const status of [409, 503]) {
       expect(checkoutErrorMessage(status)).toContain("zůstal");
     }
+    expect(checkoutErrorMessage(410)).toContain("novou kalkulaci");
+    expect(checkoutErrorMessage(410)).not.toContain("zůstal");
     expect(paymentStatusPath("pending", "session a", "payment/b")).toBe(
       "/checkout/payment/pending?sessionId=session+a&paymentId=payment%2Fb",
     );

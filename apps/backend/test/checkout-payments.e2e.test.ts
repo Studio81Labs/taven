@@ -3080,8 +3080,16 @@ describe("checkout payment capture protocol", () => {
         });
       const outageResponse = await createOutagePayment();
       definitiveFailureTransactionSpy.mockRestore();
-      expect(outageResponse.status).toBe(502);
+      expect(outageResponse.status).toBe(200);
       expect(definitiveFailureTransactionCount).toBe(4);
+      const firstFailedResponse = (await outageResponse.json()) as {
+        paymentId: string;
+        status: string;
+      };
+      expect(firstFailedResponse).toMatchObject({
+        paymentId: expect.any(String),
+        status: "FAILED",
+      });
       const firstFailedPayment = await prisma.payment.findFirstOrThrow({
         where: { orderId: outageFoundation.orderId },
         select: {
@@ -3091,9 +3099,17 @@ describe("checkout payment capture protocol", () => {
         },
       });
       expect(firstFailedPayment).toMatchObject({
+        id: firstFailedResponse.paymentId,
         status: "FAILED",
         intentCreationFailureResultId: expect.any(String),
       });
+      const callsAfterDefinitiveFailure = providerCreateCalls;
+      const definitiveFailureReplay = await createOutagePayment();
+      expect(definitiveFailureReplay.status).toBe(200);
+      await expect(definitiveFailureReplay.json()).resolves.toMatchObject(
+        firstFailedResponse,
+      );
+      expect(providerCreateCalls).toBe(callsAfterDefinitiveFailure);
 
       const callsBeforeFailedPolicyChange = providerCreateCalls;
       process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
@@ -3141,7 +3157,13 @@ describe("checkout payment capture protocol", () => {
       });
 
       const retriedOutageResponse = await createOutagePayment();
-      expect(retriedOutageResponse.status).toBe(502);
+      expect(retriedOutageResponse.status).toBe(200);
+      const retriedOutageBody = (await retriedOutageResponse.json()) as {
+        paymentId: string;
+        status: string;
+      };
+      expect(retriedOutageBody.status).toBe("FAILED");
+      expect(retriedOutageBody.paymentId).not.toBe(firstFailedPayment.id);
       await expect(
         prisma.idempotencyRecord.findMany({
           where: {

@@ -39,7 +39,7 @@ export function checkoutErrorMessage(status: number): string {
     return "Cena, doprava nebo předchozí platební pokus se změnily. Načetli jsme aktuální objednávku; údaje ve formuláři zůstaly uložené.";
   }
   if (status === 410) {
-    return "Platnost závazné ceny nebo rezervace vypršela. Údaje ve formuláři zůstaly uložené pro novou kalkulaci.";
+    return "Platnost závazné ceny nebo rezervace vypršela. Pro další objednání začněte novou kalkulaci; údaje z tohoto formuláře se z bezpečnostních důvodů nepřenášejí.";
   }
   if (status === 503) {
     return "Platba teď není dostupná. Údaje zůstaly uložené a pokus můžete bezpečně zopakovat.";

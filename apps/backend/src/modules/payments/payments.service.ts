@@ -375,11 +375,12 @@ export class PaymentsService {
         error instanceof PaymentIntentCreationError &&
         error.outcome === "DEFINITIVE_FAILURE"
       ) {
-        await this.recordIntentFailure(
+        const failed = await this.recordIntentFailure(
           staged.payment.id,
           staged.idempotencyRecordId,
           staged.idempotencyRecordId,
         );
+        if (failed) return failed;
       } else {
         const reconciled = await this.recordIntentAmbiguity(
           staged.payment.id,
@@ -841,15 +842,24 @@ export class PaymentsService {
     paymentId: string,
     idempotencyRecordId: string,
     attemptKey: string,
-  ): Promise<void> {
+  ): Promise<CheckoutPaymentDto | null> {
     for (let attempt = 1; ; attempt += 1) {
       try {
-        await this.prisma.$transaction(async (transaction) => {
+        return await this.prisma.$transaction(async (transaction) => {
           await lockPaymentEnvelope(transaction, paymentId);
           const payment = await transaction.payment.findUniqueOrThrow({
             where: { id: paymentId },
           });
-          if (payment.status !== PaymentStatus.CREATED) return;
+          if (payment.status !== PaymentStatus.CREATED) {
+            if (payment.status !== PaymentStatus.FAILED) return null;
+            const response = paymentDto(payment);
+            await completeIdempotency(
+              transaction,
+              idempotencyRecordId,
+              response,
+            );
+            return response;
+          }
           const failedAt = await databaseNow(transaction);
           const failure = await transaction.paymentIntentCreationFailure.create(
             {
@@ -863,7 +873,7 @@ export class PaymentsService {
               },
             },
           );
-          await transaction.payment.update({
+          const failedPayment = await transaction.payment.update({
             where: { id: paymentId },
             data: {
               status: PaymentStatus.FAILED,
@@ -872,12 +882,10 @@ export class PaymentsService {
               intentCreationFailureResultId: failure.id,
             },
           });
-          await completeIdempotency(transaction, idempotencyRecordId, {
-            paymentId,
-            status: "FAILED",
-          });
+          const response = paymentDto(failedPayment);
+          await completeIdempotency(transaction, idempotencyRecordId, response);
+          return response;
         });
-        return;
       } catch (error) {
         if (attempt >= INTENT_RECONCILIATION_ATTEMPTS) throw error;
       }
@@ -1404,7 +1412,17 @@ async function checkoutIdempotencyAfterLock(
   }
   const response = existing.responseBody as Record<string, unknown>;
   if (response.status === "FAILED") {
-    throw new BadGatewayException("Payment provider is unavailable");
+    const failedPayment = await transaction.payment.findUnique({
+      where: { checkoutCommandId: existing.id },
+    });
+    if (failedPayment?.status === PaymentStatus.FAILED) {
+      return {
+        replay: paymentDto(failedPayment),
+        nextGeneration: existing.generation,
+        observedAt,
+      };
+    }
+    throw new ConflictException("Failed checkout payment is unavailable");
   }
   if (response.status === PaymentStatus.PENDING && !response.checkoutUrl) {
     const callbackStagedPayment = await transaction.payment.findUnique({
