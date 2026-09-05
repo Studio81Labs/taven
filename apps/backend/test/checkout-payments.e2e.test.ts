@@ -795,6 +795,10 @@ describe("checkout payment capture protocol", () => {
     const outagePublicTokenHash = createHash("sha256")
       .update(outageToken)
       .digest("hex");
+    const returnedIntentToken = randomBytes(32).toString("base64url");
+    const returnedIntentPublicTokenHash = createHash("sha256")
+      .update(returnedIntentToken)
+      .digest("hex");
     const callbackToken = randomBytes(32).toString("base64url");
     const callbackPublicTokenHash = createHash("sha256")
       .update(callbackToken)
@@ -806,14 +810,17 @@ describe("checkout payment capture protocol", () => {
     const setupClient = await pool.connect();
     let foundation: PersistenceFoundation;
     let outageFoundation: PersistenceFoundation;
+    let returnedIntentFoundation: PersistenceFoundation;
     let callbackFoundation: PersistenceFoundation;
     let ambiguousCallbackFoundation: PersistenceFoundation;
     let customerEmail: string;
     let outageCustomerEmail: string;
+    let returnedIntentCustomerEmail: string;
     let callbackCustomerEmail: string;
     let ambiguousCallbackCustomerEmail: string;
     let destination: ResolvedDeliveryCapability;
     let outageDestination: ResolvedDeliveryCapability;
+    let returnedIntentDestination: ResolvedDeliveryCapability;
     let callbackDestination: ResolvedDeliveryCapability;
     let ambiguousCallbackDestination: ResolvedDeliveryCapability;
     try {
@@ -893,6 +900,44 @@ describe("checkout payment capture protocol", () => {
           outageDestinationRow.address_snapshot as Prisma.InputJsonObject,
         capabilitySnapshot:
           outageDestinationRow.capability_snapshot as Prisma.InputJsonObject,
+        supportedCategoryIds: ["standard"],
+      };
+      const returnedIntentFixtures = new PersistenceFactory(
+        setupClient,
+        `${scope}:http-returned-intent`,
+        { publicTokenHash: returnedIntentPublicTokenHash },
+      );
+      returnedIntentFoundation = await prepareReservedFoundation(
+        setupClient,
+        returnedIntentFixtures,
+        "http-returned-intent",
+      );
+      returnedIntentCustomerEmail = (
+        await setupClient.query<{ email: string }>(
+          "SELECT email FROM customers WHERE id = $1",
+          [returnedIntentFoundation.customerId],
+        )
+      ).rows[0]!.email;
+      const returnedIntentDestinationRow = (
+        await setupClient.query<{
+          provider_endpoint_id: string;
+          endpoint_type: string;
+          address_snapshot: Record<string, unknown>;
+          capability_snapshot: Record<string, unknown>;
+        }>(
+          `SELECT provider_endpoint_id, endpoint_type, address_snapshot,
+                  capability_snapshot
+           FROM delivery_destinations WHERE id = $1`,
+          [returnedIntentFoundation.deliveryDestinationId],
+        )
+      ).rows[0]!;
+      returnedIntentDestination = {
+        providerEndpointId: returnedIntentDestinationRow.provider_endpoint_id,
+        endpointType: returnedIntentDestinationRow.endpoint_type,
+        addressSnapshot:
+          returnedIntentDestinationRow.address_snapshot as Prisma.InputJsonObject,
+        capabilitySnapshot:
+          returnedIntentDestinationRow.capability_snapshot as Prisma.InputJsonObject,
         supportedCategoryIds: ["standard"],
       };
       const callbackFixtures = new PersistenceFactory(
@@ -1011,6 +1056,7 @@ describe("checkout payment capture protocol", () => {
     let sandboxCheckoutBaseUrl = "http://sandbox.local";
     let applicationBaseUrl: URL | undefined;
     let failNextFinalizationBeforeCommit = false;
+    let failNextReturnedIntentClose = false;
     let latestReturnUrls:
       | Readonly<{ success: string; cancelled: string; pending: string }>
       | undefined;
@@ -1031,6 +1077,14 @@ describe("checkout payment capture protocol", () => {
         }
         latestReturnUrls = input.returnUrls;
         const intent = await sandbox.createIntent(input);
+        if (input.email === returnedIntentCustomerEmail) {
+          failNextReturnedIntentClose = true;
+          throw new PaymentIntentCreationError(
+            "AMBIGUOUS",
+            "simulated unusable checkout result",
+            { providerIntentId: intent.providerIntentId },
+          );
+        }
         if (
           input.email === callbackCustomerEmail ||
           input.email === ambiguousCallbackCustomerEmail
@@ -1118,6 +1172,12 @@ describe("checkout payment capture protocol", () => {
             ) {
               return ambiguousCallbackDestination;
             }
+            if (
+              input.providerEndpointId ===
+              returnedIntentDestination.providerEndpointId
+            ) {
+              return returnedIntentDestination;
+            }
             return outageDestination;
           },
         })
@@ -1153,6 +1213,29 @@ describe("checkout payment capture protocol", () => {
               email: outageCustomerEmail,
               fullName: "Outage Customer",
               method: "BANK_TRANSFER",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              acknowledgeWithdrawalException: true,
+            }),
+          },
+        );
+      const createReturnedIntentPayment = () =>
+        fetch(
+          new URL(
+            `/automatic-quote-sessions/${returnedIntentFoundation.quoteSessionId}/checkout/payments`,
+            baseUrl,
+          ),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${returnedIntentToken}`,
+              "content-type": "application/json",
+              "idempotency-key": "sandbox-returned-intent-1",
+            },
+            body: JSON.stringify({
+              email: returnedIntentCustomerEmail,
+              fullName: "Returned Intent Customer",
+              method: "CARD",
               acceptTerms: true,
               acceptClaimPolicy: true,
               acknowledgeWithdrawalException: true,
@@ -1301,6 +1384,61 @@ describe("checkout payment capture protocol", () => {
       expect(unapprovedTermsResponse.status).toBe(503);
       expect(providerCreateCalls).toBe(providerCallsBeforeUnapprovedTerms);
       process.env.TAVEN_TERMS_REVISION = "terms-v1";
+
+      let returnedIntentCloseFailures = 0;
+      const returnedIntentTransactionSpy = vi
+        .spyOn(transactions, "$transaction")
+        .mockImplementation(async (work) => {
+          if (failNextReturnedIntentClose) {
+            failNextReturnedIntentClose = false;
+            returnedIntentCloseFailures += 1;
+            throw new Error("simulated returned-intent close failure");
+          }
+          return originalTransaction(work);
+        });
+      const returnedIntentResponse = await createReturnedIntentPayment();
+      returnedIntentTransactionSpy.mockRestore();
+      expect(returnedIntentResponse.status).toBe(200);
+      expect(returnedIntentCloseFailures).toBe(1);
+      const returnedIntentPayment = await prisma.payment.findFirstOrThrow({
+        where: { orderId: returnedIntentFoundation.orderId },
+        include: { checkoutCommand: true },
+      });
+      await expect(returnedIntentResponse.json()).resolves.toMatchObject({
+        paymentId: returnedIntentPayment.id,
+        status: "VOIDED",
+        checkoutUrl: null,
+      });
+      expect(returnedIntentPayment).toMatchObject({
+        status: "VOIDED",
+        providerIntentId: null,
+        providerCheckoutUrl: null,
+        checkoutCommand: { status: "COMPLETED" },
+      });
+      await expect(
+        prisma.outboxMessage.findFirstOrThrow({
+          where: {
+            aggregateId: returnedIntentPayment.id,
+            messageType: "void_payment",
+          },
+          select: { payload: true },
+        }),
+      ).resolves.toMatchObject({
+        payload: {
+          paymentId: returnedIntentPayment.id,
+          providerIntentId: `sandbox-${returnedIntentPayment.id}`,
+          action: "void_payment",
+        },
+      });
+      const providerCallsAfterReturnedIntent = providerCreateCalls;
+      const returnedIntentReplay = await createReturnedIntentPayment();
+      expect(returnedIntentReplay.status).toBe(200);
+      await expect(returnedIntentReplay.json()).resolves.toMatchObject({
+        paymentId: returnedIntentPayment.id,
+        status: "VOIDED",
+      });
+      expect(providerCreateCalls).toBe(providerCallsAfterReturnedIntent);
+      expect(providerCancelCalls).toBe(0);
 
       const ambiguousCallbackResponse = await createAmbiguousCallbackPayment();
       expect(ambiguousCallbackResponse.status).toBe(200);

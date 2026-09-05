@@ -43,6 +43,7 @@ import { reservePaymentWebhookVerification } from "./payment-webhook-limit";
 const CHECKOUT_CAPTURE_MILLISECONDS = 60 * 60 * 1_000;
 const REACQUISITION_RESERVATION_MILLISECONDS = 15 * 60 * 1_000;
 const MAX_REACQUISITION_PLAN_GENERATIONS = 8;
+const RETURNED_INTENT_CLOSE_ATTEMPTS = 3;
 const IDEMPOTENCY_DAYS = 7;
 type Transaction = Prisma.TransactionClient;
 
@@ -292,7 +293,7 @@ export class PaymentsService {
           staged.payment.id,
           staged.idempotencyRecordId,
           error.providerIntentId,
-        ).catch(() => null);
+        );
         if (closed) return closed;
         await this.provider
           .cancelIntent(error.providerIntentId)
@@ -785,17 +786,23 @@ export class PaymentsService {
     idempotencyRecordId: string,
     providerIntentId: string,
   ): Promise<CheckoutPaymentDto | null> {
-    return this.prisma.$transaction(async (transaction) => {
-      await transaction.$queryRaw`
-        SELECT taven_lock_checkout_payment_envelope(${paymentId}::uuid)::text
-      `;
-      return closeReturnedIntentAfterLock(
-        transaction,
-        paymentId,
-        idempotencyRecordId,
-        providerIntentId,
-      );
-    });
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (transaction) => {
+          await transaction.$queryRaw`
+            SELECT taven_lock_checkout_payment_envelope(${paymentId}::uuid)::text
+          `;
+          return closeReturnedIntentAfterLock(
+            transaction,
+            paymentId,
+            idempotencyRecordId,
+            providerIntentId,
+          );
+        });
+      } catch (error) {
+        if (attempt >= RETURNED_INTENT_CLOSE_ATTEMPTS) throw error;
+      }
+    }
   }
 
   private async reconcileCommittedIntentFinalization(
