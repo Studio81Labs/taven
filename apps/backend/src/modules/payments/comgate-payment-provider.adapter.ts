@@ -7,6 +7,7 @@ import type {
   CreatePaymentIntentInput,
   CreatedPaymentIntent,
   PaymentProviderPort,
+  PaymentProviderCapabilities,
   PaymentEventLocator,
   ProviderRefundResult,
   VerifiedPaymentEvent,
@@ -19,11 +20,9 @@ const CAPABILITY_CACHE_MILLISECONDS = 5 * 60 * 1_000;
 export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
   private capabilityCache?: Readonly<{
     expiresAt: number;
-    value: Readonly<{
-      provider: "comgate";
-      methods: readonly CheckoutPaymentMethod[];
-    }>;
+    value: PaymentProviderCapabilities;
   }>;
+  private capabilityRequest: Promise<PaymentProviderCapabilities> | undefined;
 
   constructor(private readonly config: ComgateConfig) {}
 
@@ -35,6 +34,20 @@ export class ComgatePaymentProviderAdapter implements PaymentProviderPort {
     if (this.capabilityCache && this.capabilityCache.expiresAt > Date.now()) {
       return this.capabilityCache.value;
     }
+    if (this.capabilityRequest) return this.capabilityRequest;
+
+    const request = this.discoverCapabilities();
+    this.capabilityRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (this.capabilityRequest === request) {
+        this.capabilityRequest = undefined;
+      }
+    }
+  }
+
+  private async discoverCapabilities(): Promise<PaymentProviderCapabilities> {
     const response = await this.request(
       "/method.json?lang=cs&curr=CZK&country=CZ",
       { method: "GET" },

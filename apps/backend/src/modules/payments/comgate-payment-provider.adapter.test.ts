@@ -42,6 +42,53 @@ describe("ComgatePaymentProviderAdapter", () => {
     );
   });
 
+  it("coalesces concurrent capability discovery and retries after a failure", async () => {
+    const isolatedAdapter = new ComgatePaymentProviderAdapter({
+      provider: "comgate",
+      merchantId: "merchant",
+      secret: "secret",
+      testMode: true,
+      apiBaseUrl: "https://payments.comgate.cz/v2.0",
+    });
+    let resolveFirstRequest: ((response: Response) => void) | undefined;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveFirstRequest = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            code: 0,
+            methods: [{ id: "CARD_CZ_CSOB_2", group: "CARD" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+
+    const first = isolatedAdapter.capabilities();
+    const concurrent = isolatedAdapter.capabilities();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveFirstRequest?.(new Response("unavailable", { status: 503 }));
+    await expect(Promise.all([first, concurrent])).rejects.toThrow(
+      "Payment provider returned invalid JSON",
+    );
+
+    await expect(isolatedAdapter.capabilities()).rejects.toThrow(
+      "Payment provider is unavailable",
+    );
+    await expect(isolatedAdapter.capabilities()).resolves.toEqual({
+      provider: "comgate",
+      methods: ["CARD"],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("maps the neutral card method and preserves Comgate's redirect URL", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
