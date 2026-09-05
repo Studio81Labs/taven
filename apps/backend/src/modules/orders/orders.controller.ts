@@ -41,7 +41,11 @@ const IDEMPOTENCY_HEADER = {
   name: "Idempotency-Key",
   required: true,
   description: "Stable command key; replaying altered input returns 409",
-  schema: { type: "string", minLength: 8 },
+  schema: {
+    type: "string",
+    minLength: 8,
+    pattern: "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+  },
 };
 
 @ApiTags("operator fulfilment")
