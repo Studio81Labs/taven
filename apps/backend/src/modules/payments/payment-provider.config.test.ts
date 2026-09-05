@@ -2,18 +2,33 @@ import { describe, expect, it } from "vitest";
 import { readPaymentProviderConfig } from "./payment-provider.config";
 
 describe("payment provider configuration", () => {
-  it("uses the deterministic sandbox outside production", () => {
-    expect(readPaymentProviderConfig({})).toEqual({
+  it("does not require provider settings while checkout is disabled", () => {
+    expect(
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED: "false",
+      }),
+    ).toEqual({ provider: "disabled" });
+    expect(readPaymentProviderConfig({})).toEqual({ provider: "disabled" });
+  });
+
+  it("uses the explicitly selected deterministic sandbox outside production", () => {
+    expect(
+      readPaymentProviderConfig({ TAVEN_PAYMENT_PROVIDER: "sandbox" }),
+    ).toEqual({
       provider: "sandbox",
       publicBaseUrl: "http://localhost:3001",
       webhookSigningSecret: "local-only-payment-sandbox-secret-32",
     });
   });
 
-  it("fails closed when production does not select a provider", () => {
-    expect(() => readPaymentProviderConfig({ NODE_ENV: "production" })).toThrow(
-      "TAVEN_PAYMENT_PROVIDER is required",
-    );
+  it("fails closed when enabled checkout does not select a provider", () => {
+    expect(() =>
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED: "true",
+      }),
+    ).toThrow("TAVEN_PAYMENT_PROVIDER is required");
     expect(() =>
       readPaymentProviderConfig({
         NODE_ENV: "production",

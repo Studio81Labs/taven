@@ -5,6 +5,7 @@ import { ResourcesModule } from "../resources/resources.module";
 import { BalancePaymentDeadlineService } from "./balance-payment-deadline.service";
 import { CheckoutPaymentDeadlineService } from "./checkout-payment-deadline.service";
 import { ComgatePaymentProviderAdapter } from "./comgate-payment-provider.adapter";
+import { DisabledPaymentProviderAdapter } from "./disabled-payment-provider.adapter";
 import { PaymentOutboxDispatcherService } from "./payment-outbox-dispatcher.service";
 import {
   PAYMENT_PROVIDER_CONFIG,
@@ -31,7 +32,9 @@ import { SandboxPaymentProviderAdapter } from "./sandbox-payment-provider.adapte
       useFactory: (config: PaymentProviderConfig) =>
         config.provider === "comgate"
           ? new ComgatePaymentProviderAdapter(config)
-          : new SandboxPaymentProviderAdapter(config),
+          : config.provider === "sandbox"
+            ? new SandboxPaymentProviderAdapter(config)
+            : new DisabledPaymentProviderAdapter(),
     },
     PaymentsService,
     BalancePaymentDeadlineService,

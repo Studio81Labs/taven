@@ -1,4 +1,7 @@
+import { CHECKOUT_PAYMENT_FLOWS_ENV } from "../../launch-approval-gates";
+
 export type PaymentProviderConfig =
+  | Readonly<{ provider: "disabled" }>
   | Readonly<{
       provider: "sandbox";
       publicBaseUrl: string;
@@ -20,10 +23,15 @@ export function readPaymentProviderConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): PaymentProviderConfig {
   const provider = env.TAVEN_PAYMENT_PROVIDER?.trim().toLowerCase();
-  if (!provider || provider === "sandbox") {
-    if (env.NODE_ENV === "production" && !provider) {
-      throw new Error("TAVEN_PAYMENT_PROVIDER is required in production");
+  if (!provider) {
+    if (env[CHECKOUT_PAYMENT_FLOWS_ENV] !== "true") {
+      return { provider: "disabled" };
     }
+    throw new Error(
+      "TAVEN_PAYMENT_PROVIDER is required when checkout payments are enabled",
+    );
+  }
+  if (provider === "sandbox") {
     const sandboxPublicUrl = env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL?.trim();
     const sandboxSecret = env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET?.trim();
     if (
