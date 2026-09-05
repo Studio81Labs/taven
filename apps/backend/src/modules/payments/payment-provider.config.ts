@@ -32,16 +32,13 @@ export function readPaymentProviderConfig(
     );
   }
   if (provider === "sandbox") {
-    const sandboxPublicUrl = env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL?.trim();
-    const sandboxSecret = env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET?.trim();
-    if (
-      env.NODE_ENV === "production" &&
-      (!sandboxPublicUrl || !sandboxSecret)
-    ) {
+    if (env.NODE_ENV === "production") {
       throw new Error(
-        "Production sandbox requires an explicit public URL and webhook secret",
+        "TAVEN_PAYMENT_PROVIDER=sandbox is unavailable in production",
       );
     }
+    const sandboxPublicUrl = env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL?.trim();
+    const sandboxSecret = env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET?.trim();
     const publicBaseUrl = absoluteHttpUrl(
       sandboxPublicUrl || "http://localhost:3001",
       "TAVEN_PAYMENT_SANDBOX_PUBLIC_URL",

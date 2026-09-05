@@ -29,12 +29,18 @@ describe("payment provider configuration", () => {
         TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED: "true",
       }),
     ).toThrow("TAVEN_PAYMENT_PROVIDER is required");
+  });
+
+  it("rejects the deterministic sandbox in production", () => {
     expect(() =>
       readPaymentProviderConfig({
         NODE_ENV: "production",
         TAVEN_PAYMENT_PROVIDER: "sandbox",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://payments.example.test",
+        TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET:
+          "production-looking-sandbox-secret-32",
       }),
-    ).toThrow("Production sandbox requires an explicit public URL");
+    ).toThrow("sandbox is unavailable in production");
   });
 
   it("requires Comgate credentials and HTTPS", () => {
