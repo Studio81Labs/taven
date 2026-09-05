@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { CHECKOUT_PAYMENT_FLOWS_ENV } from "../../launch-approval-gates";
+import {
+  CHECKOUT_CLAIM_POLICY_REVISION_ENV,
+  CHECKOUT_PAYMENT_FLOWS_ENV,
+  CHECKOUT_TERMS_REVISION_ENV,
+} from "../../launch-approval-gates";
 import { PaymentsService, publicSiteUrl } from "./payments.service";
 
 describe("payment capabilities", () => {
@@ -22,13 +26,59 @@ describe("payment capabilities", () => {
     });
     expect(capabilities).not.toHaveBeenCalled();
 
+    for (const env of [
+      { [CHECKOUT_PAYMENT_FLOWS_ENV]: "true" },
+      {
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_TERMS_REVISION_ENV]: "terms-pending",
+        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+      },
+      {
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
+        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-draft-v1",
+      },
+    ]) {
+      await expect(service.capabilities(env)).resolves.toEqual({
+        provider: "disabled",
+        methods: [],
+      });
+    }
+    expect(capabilities).not.toHaveBeenCalled();
+
     await expect(
-      service.capabilities({ [CHECKOUT_PAYMENT_FLOWS_ENV]: "true" }),
+      service.capabilities({
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
+        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+      }),
     ).resolves.toEqual({
       provider: "comgate",
       methods: ["CARD", "BANK_TRANSFER"],
     });
     expect(capabilities).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides incomplete provider methods while checkout cannot launch", async () => {
+    const capabilities = vi.fn().mockResolvedValue({
+      provider: "comgate",
+      methods: ["CARD"],
+    });
+    const service = new PaymentsService(
+      {} as never,
+      { capabilities } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.capabilities({
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
+        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+      }),
+    ).resolves.toEqual({ provider: "disabled", methods: [] });
   });
 });
 

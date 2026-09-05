@@ -16,7 +16,7 @@ import {
   assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
   assertCheckoutTermsRevisionCurrent,
-  CHECKOUT_PAYMENT_FLOWS_ENV,
+  checkoutPaymentLaunchInputsApproved,
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
@@ -67,10 +67,16 @@ export class PaymentsService {
   ) {}
 
   async capabilities(env: NodeJS.ProcessEnv = process.env) {
-    if (env[CHECKOUT_PAYMENT_FLOWS_ENV] !== "true") {
+    if (!checkoutPaymentLaunchInputsApproved(env)) {
       return { provider: "disabled", methods: [] };
     }
     const value = await this.provider.capabilities();
+    if (
+      !value.methods.includes("CARD") ||
+      !value.methods.includes("BANK_TRANSFER")
+    ) {
+      return { provider: "disabled", methods: [] };
+    }
     return { provider: value.provider, methods: [...value.methods] };
   }
 
@@ -99,7 +105,7 @@ export class PaymentsService {
       },
     );
     if (initialIdempotency.replay) return initialIdempotency.replay;
-    assertCheckoutContext(initial, token);
+    assertCheckoutContext(initial, token, initialIdempotency.observedAt);
     const initialLegalRevisions = assertCheckoutPaymentFlowsEnabled(
       initial.order.activePriceBinding!.orderPriceBinding.priceSnapshot
         .priceList.termsRevision,
@@ -145,7 +151,8 @@ export class PaymentsService {
       if (idempotency.replay) return { replay: idempotency.replay } as const;
 
       const context = await this.loadContext(sessionId, transaction, true);
-      assertCheckoutContext(context, token);
+      const observedAt = await databaseNow(transaction);
+      assertCheckoutContext(context, token, observedAt);
       assertDestinationStillCurrent(context, resolvedDestination);
       const binding = context.order.activePriceBinding!.orderPriceBinding;
       const legalRevisions = assertCheckoutPaymentFlowsEnabled(
@@ -218,7 +225,6 @@ export class PaymentsService {
         return { replay: response } as const;
       }
 
-      const observedAt = await databaseNow(transaction);
       assertCheckoutContactMatches(
         context.order.checkoutContactSnapshot,
         input,
@@ -1014,11 +1020,15 @@ export class PaymentsService {
   }
 }
 
-function assertCheckoutContext(context: CheckoutContext, token: string): void {
+function assertCheckoutContext(
+  context: CheckoutContext,
+  token: string,
+  observedAt: Date,
+): void {
   assertSessionCapability(context, token);
   if (
     context.status !== "CONVERTED" ||
-    context.expiresAt.getTime() <= Date.now()
+    context.expiresAt.getTime() <= observedAt.getTime()
   ) {
     throw new GoneException("Automatic quote session is no longer payable");
   }

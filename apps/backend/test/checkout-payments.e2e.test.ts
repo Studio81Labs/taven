@@ -2663,7 +2663,13 @@ describe("checkout payment capture protocol", () => {
           }
           return result;
         });
-      const createdResponse = await createPayment();
+      const actualApplicationNow = Date.now();
+      const applicationClock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(actualApplicationNow + 24 * 60 * 60 * 1_000);
+      const createdResponse = await createPayment().finally(() => {
+        applicationClock.mockRestore();
+      });
       transactionSpy.mockRestore();
       expect(createdResponse.status).toBe(200);
       expect(checkoutTransactionCount).toBe(3);

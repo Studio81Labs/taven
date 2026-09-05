@@ -127,15 +127,21 @@ export function assertCheckoutPaymentMethodsAvailable(
   }
 }
 
+export function checkoutPaymentLaunchInputsApproved(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return (
+    isExplicitlyEnabled(env, CHECKOUT_PAYMENT_FLOWS_ENV) &&
+    approvedCheckoutRevision(env[CHECKOUT_TERMS_REVISION_ENV]) !== null &&
+    approvedCheckoutRevision(env[CHECKOUT_CLAIM_POLICY_REVISION_ENV]) !== null
+  );
+}
+
 export function approvedCheckoutTermsRevision(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const revision = env[CHECKOUT_TERMS_REVISION_ENV]?.trim();
-  if (
-    !revision ||
-    revision.length > 100 ||
-    /(?:^|[-_.\s])(draft|pending)(?:$|[-_.\s])/i.test(revision)
-  ) {
+  const revision = approvedCheckoutRevision(env[CHECKOUT_TERMS_REVISION_ENV]);
+  if (!revision) {
     throw launchApprovalRequired(
       "Checkout payment flows require an explicit approved terms revision",
     );
@@ -146,15 +152,25 @@ export function approvedCheckoutTermsRevision(
 export function approvedCheckoutClaimPolicyRevision(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const revision = env[CHECKOUT_CLAIM_POLICY_REVISION_ENV]?.trim();
+  const revision = approvedCheckoutRevision(
+    env[CHECKOUT_CLAIM_POLICY_REVISION_ENV],
+  );
+  if (!revision) {
+    throw launchApprovalRequired(
+      "Checkout payment flows require an explicit approved claim-policy revision",
+    );
+  }
+  return revision;
+}
+
+function approvedCheckoutRevision(value: string | undefined): string | null {
+  const revision = value?.trim();
   if (
     !revision ||
     revision.length > 100 ||
     /(?:^|[-_.\s])(draft|pending)(?:$|[-_.\s])/i.test(revision)
   ) {
-    throw launchApprovalRequired(
-      "Checkout payment flows require an explicit approved claim-policy revision",
-    );
+    return null;
   }
   return revision;
 }
