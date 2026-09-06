@@ -70,7 +70,7 @@ export class AuditController {
     @CurrentOperator() operator: OperatorContext,
     @Query("cursor") cursor?: string,
     @Query("limit") limit?: string,
-    @Query("eventType") eventType?: string,
+    @Query("eventType") eventType?: string | string[],
     @Query("nodeId") nodeId?: string,
     @Query("operatorIdentityId") operatorIdentityId?: string,
     @Query("orderId") orderId?: string,
@@ -78,7 +78,10 @@ export class AuditController {
     @Query("quoteRequestId") quoteRequestId?: string,
   ): Promise<AuditEventPageDto> {
     const parsedLimit = limit === undefined ? undefined : Number(limit);
-    if (eventType === "") {
+    if (
+      eventType !== undefined &&
+      (typeof eventType !== "string" || eventType.length === 0)
+    ) {
       throw new BadRequestException("eventType is invalid");
     }
     for (const [name, value] of Object.entries({
