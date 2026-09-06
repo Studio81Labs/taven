@@ -40,6 +40,21 @@ describe("OpenAPI artifact", () => {
     });
   });
 
+  it("requires the operator payload in authenticated sessions", async () => {
+    const contract = JSON.parse(
+      await readFile(new URL("../openapi.json", import.meta.url), "utf8"),
+    ) as {
+      components: {
+        schemas: Record<string, { required?: string[] }>;
+      };
+    };
+
+    expect(contract.components.schemas.OperatorSessionDto?.required).toEqual([
+      "operator",
+      "csrfToken",
+    ]);
+  });
+
   it("describes individual offer inputs as the service validates them", async () => {
     const contract = JSON.parse(
       await readFile(new URL("../openapi.json", import.meta.url), "utf8"),

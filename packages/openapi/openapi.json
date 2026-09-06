@@ -2455,46 +2455,49 @@
             "type": "string"
           },
           "operator": {
-            "additionalProperties": false,
-            "properties": {
-              "authenticationMethod": {
-                "enum": [
-                  "DEVELOPMENT_PASSWORD",
-                  "GITHUB"
-                ],
-                "type": "string"
-              },
-              "nodeIds": {
-                "items": {
-                  "format": "uuid",
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "operatorId": {
-                "format": "uuid",
-                "type": "string"
-              },
-              "role": {
-                "enum": [
-                  "ADMIN",
-                  "OPERATOR",
-                  "VIEWER"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "operatorId",
-              "role",
-              "nodeIds",
-              "authenticationMethod"
-            ],
-            "type": "object"
+            "$ref": "#/components/schemas/OperatorSessionOperatorDto"
           }
         },
         "required": [
+          "operator",
           "csrfToken"
+        ],
+        "type": "object"
+      },
+      "OperatorSessionOperatorDto": {
+        "properties": {
+          "authenticationMethod": {
+            "enum": [
+              "DEVELOPMENT_PASSWORD",
+              "GITHUB"
+            ],
+            "type": "string"
+          },
+          "nodeIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "operatorId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "ADMIN",
+              "OPERATOR",
+              "VIEWER"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "operatorId",
+          "role",
+          "nodeIds",
+          "authenticationMethod"
         ],
         "type": "object"
       },

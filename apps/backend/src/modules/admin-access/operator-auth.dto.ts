@@ -22,30 +22,23 @@ export class OperatorAuthMethodsDto {
   methods!: ("EMAIL_PASSWORD" | "GITHUB")[];
 }
 
+export class OperatorSessionOperatorDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  operatorId!: string;
+
+  @ApiProperty({ enum: ["ADMIN", "OPERATOR", "VIEWER"] })
+  role!: "ADMIN" | "OPERATOR" | "VIEWER";
+
+  @ApiProperty({ type: [String], format: "uuid" })
+  nodeIds!: string[];
+
+  @ApiProperty({ enum: ["DEVELOPMENT_PASSWORD", "GITHUB"] })
+  authenticationMethod!: "DEVELOPMENT_PASSWORD" | "GITHUB";
+}
+
 export class OperatorSessionDto {
-  @ApiProperty({
-    type: "object",
-    additionalProperties: false,
-    required: ["operatorId", "role", "nodeIds", "authenticationMethod"],
-    properties: {
-      operatorId: { type: "string", format: "uuid" },
-      role: { type: "string", enum: ["ADMIN", "OPERATOR", "VIEWER"] },
-      nodeIds: {
-        type: "array",
-        items: { type: "string", format: "uuid" },
-      },
-      authenticationMethod: {
-        type: "string",
-        enum: ["DEVELOPMENT_PASSWORD", "GITHUB"],
-      },
-    },
-  })
-  operator!: {
-    operatorId: string;
-    role: "ADMIN" | "OPERATOR" | "VIEWER";
-    nodeIds: string[];
-    authenticationMethod: "DEVELOPMENT_PASSWORD" | "GITHUB";
-  };
+  @ApiProperty({ type: () => OperatorSessionOperatorDto })
+  operator!: OperatorSessionOperatorDto;
 
   @ApiProperty({ type: String })
   csrfToken!: string;

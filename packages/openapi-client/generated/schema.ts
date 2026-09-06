@@ -1712,15 +1712,16 @@ export interface components {
         };
         OperatorSessionDto: {
             csrfToken: string;
-            operator?: {
-                /** @enum {string} */
-                authenticationMethod: "DEVELOPMENT_PASSWORD" | "GITHUB";
-                nodeIds: string[];
-                /** Format: uuid */
-                operatorId: string;
-                /** @enum {string} */
-                role: "ADMIN" | "OPERATOR" | "VIEWER";
-            };
+            operator: components["schemas"]["OperatorSessionOperatorDto"];
+        };
+        OperatorSessionOperatorDto: {
+            /** @enum {string} */
+            authenticationMethod: "DEVELOPMENT_PASSWORD" | "GITHUB";
+            nodeIds: string[];
+            /** Format: uuid */
+            operatorId: string;
+            /** @enum {string} */
+            role: "ADMIN" | "OPERATOR" | "VIEWER";
         };
         PackJobDto: {
             /** Format: uuid */
