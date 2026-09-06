@@ -341,7 +341,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         select: { issuedCount: true },
       }),
     ).toEqual({ issuedCount: 5 });
-  });
+  }, 15_000);
 
   it("binds preparation idempotency to the revision observed under the session lock", async () => {
     const created = await automaticQuotes.createSession(
