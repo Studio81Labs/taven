@@ -77,10 +77,9 @@ export class AuditService {
     cursor?: string,
     limit = 25,
   ): Promise<AuditEventPageDto> {
-    if (!Number.isSafeInteger(limit) || limit < 1) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw new BadRequestException("Audit limit is invalid");
     }
-    const normalizedLimit = Math.min(Math.max(limit, 1), 100);
     if (filters.nodeId && !operator.nodeIds.includes(filters.nodeId)) {
       throw new NotFoundException("Audit node was not found");
     }
@@ -106,12 +105,12 @@ export class AuditService {
     const rows = await this.prisma.auditEvent.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: normalizedLimit + 1,
+      take: limit + 1,
     });
-    const page = rows.slice(0, normalizedLimit);
+    const page = rows.slice(0, limit);
     const last = page.at(-1);
     const nextCursor =
-      rows.length > normalizedLimit && last
+      rows.length > limit && last
         ? encodeCursor({ createdAt: last.createdAt, id: last.id, filterHash })
         : undefined;
     return {
