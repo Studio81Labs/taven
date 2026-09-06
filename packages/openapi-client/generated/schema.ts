@@ -1896,6 +1896,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Redirects the browser after the GitHub callback is handled */
+            302: {
+                headers: {
+                    /** @description Operator completion or failure URL */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             400: {
                 headers: {
                     [name: string]: unknown;

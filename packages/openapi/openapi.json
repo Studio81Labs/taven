@@ -3089,6 +3089,18 @@
           }
         ],
         "responses": {
+          "302": {
+            "description": "Redirects the browser after the GitHub callback is handled",
+            "headers": {
+              "Location": {
+                "description": "Operator completion or failure URL",
+                "schema": {
+                  "format": "uri",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "400": {
             "description": ""
           },

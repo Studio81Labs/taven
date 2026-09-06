@@ -10,6 +10,36 @@ describe("OpenAPI artifact", () => {
     expect(contract.paths).toHaveProperty("/health");
   });
 
+  it("describes the GitHub callback redirect", async () => {
+    const contract = JSON.parse(
+      await readFile(new URL("../openapi.json", import.meta.url), "utf8"),
+    ) as {
+      paths: Record<
+        string,
+        Record<
+          string,
+          {
+            responses?: Record<
+              string,
+              { description?: string; headers?: Record<string, unknown> }
+            >;
+          }
+        >
+      >;
+    };
+
+    expect(
+      contract.paths["/admin/auth/github/callback"]?.get?.responses?.["302"],
+    ).toMatchObject({
+      description: "Redirects the browser after the GitHub callback is handled",
+      headers: {
+        Location: {
+          schema: { type: "string", format: "uri" },
+        },
+      },
+    });
+  });
+
   it("describes individual offer inputs as the service validates them", async () => {
     const contract = JSON.parse(
       await readFile(new URL("../openapi.json", import.meta.url), "utf8"),

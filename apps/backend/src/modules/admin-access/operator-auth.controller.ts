@@ -19,6 +19,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiQuery,
+  ApiResponse,
   ApiSecurity,
   ApiTags,
   ApiTooManyRequestsResponse,
@@ -126,6 +127,16 @@ export class OperatorAuthController {
   @ApiQuery({ name: "state", required: true, minLength: 20, maxLength: 2048 })
   @ApiQuery({ name: "code", required: true, minLength: 20, maxLength: 2048 })
   @ApiQuery({ name: "error", required: false })
+  @ApiResponse({
+    status: 302,
+    description: "Redirects the browser after the GitHub callback is handled",
+    headers: {
+      Location: {
+        description: "Operator completion or failure URL",
+        schema: { type: "string", format: "uri" },
+      },
+    },
+  })
   @ApiBadRequestResponse()
   @ApiUnauthorizedResponse()
   async completeGithub(
