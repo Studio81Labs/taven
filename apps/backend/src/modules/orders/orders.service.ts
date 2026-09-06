@@ -1689,7 +1689,11 @@ export class OrdersService {
           );
         }
         const readiness = await tx.$queryRaw<
-          Array<{ packingReady: boolean; financialReady: boolean }>
+          Array<{
+            packingReady: boolean;
+            customerFunded: boolean;
+            financialReady: boolean;
+          }>
         >`
           SELECT EXISTS (
             SELECT 1 FROM jobs job
@@ -1734,6 +1738,26 @@ export class OrdersService {
                 JOIN payments payment ON payment.id = refund.payment_id
                 WHERE payment.order_id = ${orderId}::uuid
                   AND refund.status = 'SUCCEEDED'
+              ), 0) >= revision.contract_total_minor
+          ) AS "customerFunded",
+          EXISTS (
+            SELECT 1
+            FROM order_active_contract_prices active_contract
+            JOIN order_contract_price_revisions revision
+              ON revision.id = active_contract.contract_price_revision_id
+             AND revision.order_id = active_contract.order_id
+            WHERE active_contract.order_id = ${orderId}::uuid
+              AND coalesce((
+                SELECT sum(payment.captured_amount_minor)
+                FROM payments payment
+                WHERE payment.order_id = ${orderId}::uuid
+                  AND payment.captured_amount_minor IS NOT NULL
+              ), 0) - coalesce((
+                SELECT sum(refund.amount_minor)
+                FROM refund_transactions refund
+                JOIN payments payment ON payment.id = refund.payment_id
+                WHERE payment.order_id = ${orderId}::uuid
+                  AND refund.status = 'SUCCEEDED'
               ), 0) = revision.contract_total_minor
           ) AND NOT EXISTS (
             SELECT 1
@@ -1745,6 +1769,8 @@ export class OrdersService {
         `;
         if (
           (!postVoidCancellation && !readiness[0]?.packingReady) ||
+          (shipment.status === ShipmentStatus.CANCELLATION_PENDING &&
+            !readiness[0]?.customerFunded) ||
           (!readiness[0]?.financialReady &&
             shipment.status !== ShipmentStatus.CANCELLATION_PENDING &&
             !postVoidCancellation)
@@ -2345,6 +2371,20 @@ export class OrdersService {
           ) {
             throw new ConflictException(
               "Shipment incident Claim requires terminal carrier evidence",
+            );
+          }
+          if (
+            origin === ClaimOrigin.SHIPMENT_INCIDENT &&
+            shipment.status === ShipmentStatus.DELIVERED &&
+            slots.some(
+              ({ outcome, claimUntil }) =>
+                outcome !== "DELIVERED" ||
+                claimUntil === null ||
+                openedAt.getTime() > claimUntil.getTime(),
+            )
+          ) {
+            throw new ConflictException(
+              "Delivered Shipment incident Claims require claimable delivered fulfilment slots",
             );
           }
           if (

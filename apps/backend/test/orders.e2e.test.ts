@@ -840,6 +840,87 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({ status: "READY_TO_SHIP" });
   });
 
+  it("keeps cancellation-race handoff blocked until the split balance is settled", async () => {
+    const fixture = await preparePaidOrder(
+      "balance-cancellation-handoff-race",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    const balance = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "balance-cancellation-handoff-link",
+    );
+    const pending = await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "customer cancelled while the balance was still unpaid" },
+      "balance-cancellation-handoff-cancel",
+    );
+    expect(pending.status).toBe("LABEL_CANCELLATION_PENDING");
+
+    await expect(
+      orders.handoffShipment(
+        fixture.foundation.orderId,
+        fixture.foundation.shipmentId,
+        {
+          providerEventId: `unpaid-handoff-${fixture.foundation.shipmentId}`,
+          providerTransactionId: `unpaid-handoff-tx-${fixture.foundation.shipmentId}`,
+          occurredAt: new Date().toISOString(),
+        },
+        "balance-cancellation-unpaid-handoff",
+      ),
+    ).rejects.toThrow(
+      "Shipment packing or financial handoff barriers are not satisfied",
+    );
+    await expect(
+      prisma.shipmentProviderEvent.count({
+        where: {
+          shipmentId: fixture.foundation.shipmentId,
+          kind: "ACCEPTANCE_SCAN",
+        },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "AWAITING_BALANCE" });
+    await expect(
+      prisma.job.findUniqueOrThrow({
+        where: { id: fixture.productions[0]!.jobId },
+      }),
+    ).resolves.toMatchObject({ status: "PACKED" });
+    await expect(
+      prisma.shipment.findUniqueOrThrow({
+        where: { id: fixture.foundation.shipmentId },
+      }),
+    ).resolves.toMatchObject({ status: "CANCELLATION_PENDING" });
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: balance.paymentId } }),
+    ).resolves.toMatchObject({ status: "PENDING" });
+
+    const voided = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      fixture.foundation.shipmentId,
+      {
+        providerEventId: `unpaid-void-${fixture.foundation.shipmentId}`,
+        providerTransactionId: `unpaid-void-tx-${fixture.foundation.shipmentId}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "balance-cancellation-unpaid-void",
+    );
+    expect(voided.status).toBe("LABEL_VOID_CONFIRMED_AND_ORDER_CANCELLED");
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: balance.paymentId } }),
+    ).resolves.toMatchObject({
+      status: "VOIDED",
+      captureAuthorized: false,
+      captureCutoffAt: expect.any(Date),
+    });
+  });
+
   it("derives the post-QC balance from the reduced active contract", async () => {
     const fixture = await preparePaidOrder(
       "reduced-post-qc-balance",
@@ -1631,6 +1712,81 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       }),
     ).rejects.toThrow(
       "Claim slot resolution must preserve exact order, phase, slot, and Shipment scope",
+    );
+  }, 10_000);
+
+  it("rejects a delivered Shipment incident after its slot deadline", async () => {
+    const fixture = await preparePaidOrder("expired-delivered-incident");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN");
+    await orders.completeOrder(
+      fixture.foundation.orderId,
+      "expired-delivered-incident-complete",
+    );
+    const client = await pool.connect();
+    try {
+      await client.query("SET session_replication_role = 'replica'");
+      await client.query(
+        `UPDATE fulfilment_slots
+         SET claim_until = delivered_at + interval '1 millisecond'
+         WHERE id = $1`,
+        [fixture.foundation.fulfilmentSlotIds[0]!],
+      );
+    } finally {
+      await client
+        .query("SET session_replication_role = 'origin'")
+        .catch(() => undefined);
+      client.release();
+    }
+    const slot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
+    });
+    if (!slot.claimUntil) throw new Error("Claim deadline was not retained");
+
+    await expect(
+      orders.createClaim(
+        fixture.foundation.orderId,
+        {
+          origin: "SHIPMENT_INCIDENT",
+          reason: "late delivered-parcel damage report",
+          fulfilmentSlotIds: [slot.id],
+          incidentShipmentId: fixture.foundation.shipmentId,
+        },
+        "expired-delivered-incident-service",
+      ),
+    ).rejects.toThrow(
+      "Delivered Shipment incident Claims require claimable delivered fulfilment slots",
+    );
+    await expect(
+      prisma.claim.count({
+        where: {
+          orderId: fixture.foundation.orderId,
+          origin: "SHIPMENT_INCIDENT",
+        },
+      }),
+    ).resolves.toBe(0);
+
+    await expect(
+      prisma.$transaction(async (transaction) => {
+        const claim = await transaction.claim.create({
+          data: {
+            orderId: fixture.foundation.orderId,
+            orderPhaseId: fixture.foundation.orderPhaseId,
+            incidentShipmentId: fixture.foundation.shipmentId,
+            origin: "SHIPMENT_INCIDENT",
+            reason: "direct late incident write",
+            openedAt: new Date(slot.claimUntil!.getTime() + 1),
+          },
+        });
+        await transaction.claimSlotResolution.create({
+          data: { claimId: claim.id, fulfilmentSlotId: slot.id },
+        });
+      }),
+    ).rejects.toThrow(
+      "delivered Shipment incident Claim exceeds the accepted Claim window",
     );
   }, 10_000);
 

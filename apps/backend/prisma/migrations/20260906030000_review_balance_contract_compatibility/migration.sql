@@ -1629,3 +1629,43 @@ BEGIN
     RETURN 'IGNORED_TERMINAL';
 END;
 $$;
+
+-- A delivered parcel can still be useful as incident evidence, but it must not
+-- bypass the same accepted customer Claim window as any other post-delivery
+-- report. Undelivered LOST and RETURNED parcels remain deadline-independent.
+CREATE FUNCTION taven_enforce_delivered_incident_claim_window()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM "claims" claim
+        JOIN "shipments" incident
+          ON incident."id" = claim."incident_shipment_id"
+        WHERE claim."id" = NEW."claim_id"
+          AND claim."origin" = 'SHIPMENT_INCIDENT'
+          AND incident."status" = 'DELIVERED'
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM "claims" claim
+        JOIN "fulfilment_slots" slot
+          ON slot."id" = NEW."fulfilment_slot_id"
+         AND slot."order_id" = claim."order_id"
+         AND slot."order_phase_id" = claim."order_phase_id"
+        WHERE claim."id" = NEW."claim_id"
+          AND slot."outcome" = 'DELIVERED'
+          AND slot."claim_until" IS NOT NULL
+          AND claim."opened_at" <= slot."claim_until"
+    ) THEN
+        RAISE EXCEPTION 'delivered Shipment incident Claim exceeds the accepted Claim window'
+            USING ERRCODE = '23514',
+                  CONSTRAINT = 'claim_delivered_incident_window_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "claim_slot_resolutions_delivered_incident_window_valid"
+BEFORE INSERT OR UPDATE ON "claim_slot_resolutions"
+FOR EACH ROW EXECUTE FUNCTION taven_enforce_delivered_incident_claim_window();

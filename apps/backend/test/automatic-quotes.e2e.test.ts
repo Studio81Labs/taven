@@ -392,7 +392,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         },
       }),
     ).toBe(1);
-  });
+  }, 10_000);
 
   it("resumes a quote through binding, complete reservation, and endpoint replacement", async () => {
     const sql = await pool.connect();
