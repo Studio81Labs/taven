@@ -85,7 +85,8 @@ export class AuditService {
       throw new NotFoundException("Audit node was not found");
     }
     const filterHash = digest(filters);
-    const keyset = cursor ? parseCursor(cursor, filterHash) : undefined;
+    const keyset =
+      cursor !== undefined ? parseCursor(cursor, filterHash) : undefined;
     const where: Prisma.AuditEventWhereInput = {
       AND: [
         { nodeId: { in: [...operator.nodeIds] } },
