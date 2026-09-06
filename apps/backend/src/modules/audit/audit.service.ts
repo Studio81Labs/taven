@@ -21,6 +21,7 @@ type AuditFilters = Readonly<{
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const POSTGRES_MIN_TIMESTAMP_YEAR = -4712;
 
 @Injectable()
 export class AuditService {
@@ -182,6 +183,7 @@ function parseCursor(
     if (
       !createdAt ||
       Number.isNaN(createdAt.getTime()) ||
+      createdAt.getUTCFullYear() < POSTGRES_MIN_TIMESTAMP_YEAR ||
       !value.id ||
       !UUID_PATTERN.test(value.id) ||
       value.filterHash !== filterHash
