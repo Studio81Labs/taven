@@ -4499,9 +4499,9 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
   }
 
   it("records cancellation-race handoff while an adjustment refund is pending", async () => {
-    const fixture = await preparePaidOrder("acceptance-pending-adjustment");
+    const fixture = await preparePaidOrder("acceptance-pending-adjustment", 2);
     await advanceThroughQc(fixture, 0);
-    await labelAndPack(fixture, 0);
+    await advanceThroughQc(fixture, 1);
     await markSlotPriceComponentExpress(
       fixture.foundation.fulfilmentSlotIds[0]!,
     );
@@ -4531,35 +4531,162 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     const refundId = (pending.result.refundIds as string[])[0];
     if (!refundId) throw new Error("adjustment refund was not created");
-    await orders.cancelOrder(
+    await labelAndPack(fixture, 0);
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "QC_PASSED" });
+    const cancellation = await orders.cancelOrder(
       fixture.foundation.orderId,
       { reason: "carrier acceptance raced with cancellation" },
       "acceptance-pending-adjustment-cancel",
     );
+    expect(cancellation.status).toBe("LABEL_CANCELLATION_PENDING");
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "RECOVERY_PENDING" });
 
+    const shipmentId = fixture.foundation.shipmentIds[0]!;
+    const acceptanceEvidence = {
+      providerEventId: `acceptance-pending-${shipmentId}`,
+      providerTransactionId: `acceptance-pending-tx-${shipmentId}`,
+      occurredAt: new Date().toISOString(),
+    };
     const accepted = await orders.handoffShipment(
       fixture.foundation.orderId,
-      fixture.foundation.shipmentId,
-      {
-        providerEventId: `acceptance-pending-${fixture.foundation.shipmentId}`,
-        providerTransactionId: `acceptance-pending-tx-${fixture.foundation.shipmentId}`,
-        occurredAt: new Date().toISOString(),
-      },
+      shipmentId,
+      acceptanceEvidence,
       "acceptance-pending-adjustment-handoff",
+    );
+    const replay = await orders.handoffShipment(
+      fixture.foundation.orderId,
+      shipmentId,
+      acceptanceEvidence,
+      "acceptance-pending-adjustment-handoff-replay",
     );
 
     expect(accepted.status).toBe("SHIPMENT_HANDED_OVER");
+    expect(replay.status).toBe("SHIPMENT_HANDOFF_ALREADY_APPLIED");
+    await expect(
+      orders.getFulfilment(fixture.foundation.orderId),
+    ).resolves.toMatchObject({
+      orderStatus: "SHIPPED",
+      phase: { status: "SHIPPED" },
+      jobs: expect.arrayContaining([
+        expect.objectContaining({
+          id: fixture.productions[0]!.jobId,
+          status: "HANDED_OVER",
+        }),
+        expect.objectContaining({
+          id: fixture.productions[1]!.jobId,
+          status: "QC_APPROVED",
+        }),
+      ]),
+      shipments: expect.arrayContaining([
+        expect.objectContaining({ id: shipmentId, status: "HANDED_OVER" }),
+        expect.objectContaining({
+          id: fixture.foundation.shipmentIds[1]!,
+          status: "PLANNED",
+        }),
+      ]),
+    });
     await expect(
       prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
     ).resolves.toMatchObject({ status: "PENDING" });
     await expect(
-      prisma.outboxMessage.findUniqueOrThrow({
+      prisma.outboxMessage.findUnique({
         where: {
-          deduplicationKey: `void_carrier_label:${fixture.foundation.shipmentId}:label-${fixture.foundation.shipmentId}`,
+          deduplicationKey: `void_carrier_label:${shipmentId}:label-${shipmentId}`,
         },
       }),
     ).resolves.toMatchObject({ status: "SUPERSEDED" });
+    await expect(
+      prisma.outboxMessage.findUnique({
+        where: {
+          deduplicationKey: `void_carrier_label:${fixture.foundation.shipmentIds[1]}:label-${fixture.foundation.shipmentIds[1]}`,
+        },
+      }),
+    ).resolves.toBeNull();
   });
+
+  it("rejects a PriceAdjustment linked to another Order's Claim", async () => {
+    const target = await preparePaidOrder("cross-order-adjustment-target");
+    const foreign = await preparePaidOrder("cross-order-adjustment-claim");
+    await advanceThroughQc(foreign, 0);
+    await labelAndPack(foreign, 0);
+    await handoff(foreign, 0);
+    await carrierEvent(foreign, 0, "TRANSIT_SCAN");
+    await carrierEvent(foreign, 0, "DELIVERY_SCAN");
+    await orders.completeOrder(
+      foreign.foundation.orderId,
+      "cross-order-adjustment-foreign-complete",
+    );
+    const opened = await orders.createClaim(
+      foreign.foundation.orderId,
+      {
+        origin: "POST_DELIVERY_QUALITY",
+        reason: "quality issue scoped to a different order",
+        fulfilmentSlotIds: [foreign.foundation.fulfilmentSlotIds[0]!],
+      },
+      "cross-order-adjustment-foreign-claim",
+    );
+    const claimId = opened.result.claimId as string;
+    const allocation = {
+      slotCredits: [
+        {
+          fulfilmentSlotId: target.foundation.fulfilmentSlotIds[0]!,
+          amountMinor: "1",
+        },
+      ],
+    };
+
+    await expect(
+      orders.createPriceAdjustment(
+        target.foundation.orderId,
+        {
+          reason: "POST_DELIVERY_ISSUE",
+          amountMinor: "1",
+          claimId,
+          allocation,
+        },
+        "cross-order-adjustment-service",
+      ),
+    ).rejects.toThrow("Claim was not found for this Order");
+
+    const activeContract =
+      await prisma.orderActiveContractPrice.findUniqueOrThrow({
+        where: { orderId: target.foundation.orderId },
+        include: { contractPriceRevision: true },
+      });
+    await expect(
+      pool.query(
+        `SELECT * FROM taven_create_price_adjustment_with_revision(
+           $1::uuid, $2::uuid, NULL::uuid, $3::uuid, $4,
+           'POST_DELIVERY_ISSUE'::price_adjustment_reason, 1,
+           $5::char(3), $6::jsonb
+         )`,
+        [
+          randomUUID(),
+          target.foundation.orderId,
+          claimId,
+          `cross-order-adjustment-database-${randomUUID()}`,
+          activeContract.contractPriceRevision.currency,
+          JSON.stringify(allocation),
+        ],
+      ),
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint: "price_adjustment_claim_scope_check",
+    });
+    await expect(
+      prisma.priceAdjustment.count({
+        where: { orderId: target.foundation.orderId },
+      }),
+    ).resolves.toBe(0);
+  }, 10_000);
 
   it("blocks handoff until an express PriceAdjustment refund succeeds", async () => {
     const fixture = await preparePaidOrder("express-adjustment");

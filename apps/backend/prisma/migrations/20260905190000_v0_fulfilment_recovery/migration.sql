@@ -4107,6 +4107,34 @@ AS $$
     );
 $$;
 
+CREATE FUNCTION taven_has_cancellation_pending_handoff(
+    target_order_id uuid,
+    target_order_phase_id uuid DEFAULT NULL,
+    target_shipped_at timestamptz DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "shipments" shipment
+        JOIN "shipment_provider_events" provider_event
+          ON provider_event."shipment_id" = shipment."id"
+         AND provider_event."kind" = 'ACCEPTANCE_SCAN'
+         AND provider_event."source_shipment_status" = 'CANCELLATION_PENDING'
+         AND provider_event."provider_event_id" = shipment."provider_acceptance_scan_id"
+         AND provider_event."verified_at" = shipment."handed_over_at"
+        WHERE shipment."order_id" = target_order_id
+          AND (target_order_phase_id IS NULL
+               OR shipment."order_phase_id" = target_order_phase_id)
+          AND shipment."status" = 'HANDED_OVER'
+          AND shipment."handed_over_at" IS NOT NULL
+          AND (target_shipped_at IS NULL
+               OR shipment."handed_over_at" = target_shipped_at)
+    )
+$$;
+
 CREATE OR REPLACE FUNCTION taven_reconcile_order_post_confirmation_lifecycle()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -4209,6 +4237,48 @@ BEGIN
              ON original."id" = replacement."replaces_shipment_id"
            WHERE replacement."order_id" = target_order_id
              AND taven_is_claim_reprint(original."id", replacement."id")
+       ) THEN
+        RETURN NULL;
+    END IF;
+
+    -- A verified custody scan can win while cancellation has frozen a
+    -- QC-passed aggregate in recovery even if a sibling parcel is not packed
+    -- yet. Preserve that still-valid QC graph while recording the physical
+    -- first handoff; later parcel commands continue from the shipped aggregate.
+    IF target_status = 'SHIPPED'
+       AND taven_has_cancellation_pending_handoff(target_order_id)
+       AND EXISTS (
+           SELECT 1
+           FROM "order_phases" phase
+           WHERE phase."order_id" = target_order_id
+             AND phase."status" = 'SHIPPED'
+             AND phase."shipped_at" IS NOT NULL
+       )
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "jobs" job
+           WHERE job."order_id" = target_order_id
+             AND taven_job_is_current(job."id")
+             AND job."status" NOT IN ('QC_APPROVED', 'PACKED', 'HANDED_OVER')
+       )
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "shipments" shipment
+           WHERE shipment."order_id" = target_order_id
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM "shipments" replacement
+                 WHERE replacement."replaces_shipment_id" = shipment."id"
+             )
+             AND shipment."status" NOT IN (
+                 'PLANNED', 'LABEL_CREATED', 'CANCELLATION_PENDING', 'HANDED_OVER'
+             )
+       )
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "fulfilment_slots" slot
+           WHERE slot."order_id" = target_order_id
+             AND slot."outcome" <> 'PENDING'
        ) THEN
         RETURN NULL;
     END IF;
@@ -5781,6 +5851,8 @@ BEGIN
                AND taven_has_unresolved_scoped_partial_cancellation(NEW."id"))
            OR (OLD."status" = 'SHIPPED' AND NEW."status" IN ('DELIVERED', 'PARTIALLY_FULFILLED', 'CANCELLED', 'REFUNDED'))
            OR (OLD."status" = 'RECOVERY_PENDING' AND NEW."status" IN ('QC_PASSED', 'PARTIALLY_FULFILLED', 'CANCELLED'))
+           OR (OLD."status" = 'RECOVERY_PENDING' AND NEW."status" = 'SHIPPED'
+               AND taven_has_cancellation_pending_handoff(NEW."id"))
            OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
            -- CANCELLED_SETTLED stays unreachable until the deferred settlement
            -- tranche persists the immutable OrderSettlement that proves it.
@@ -5879,6 +5951,10 @@ BEGIN
            OR (OLD."status" = 'QC_PASSED' AND NEW."status" IN ('SHIPPED', 'RECOVERY_PENDING', 'CANCELLED'))
            OR (OLD."status" = 'SHIPPED' AND NEW."status" IN ('DELIVERED', 'PARTIALLY_FULFILLED', 'CANCELLED_REFUNDED'))
            OR (OLD."status" = 'RECOVERY_PENDING' AND NEW."status" IN ('QC_PASSED', 'PARTIALLY_FULFILLED', 'CANCELLED', 'CANCELLED_REFUNDED'))
+           OR (OLD."status" = 'RECOVERY_PENDING' AND NEW."status" = 'SHIPPED'
+               AND taven_has_cancellation_pending_handoff(
+                   NEW."order_id", NEW."id", NEW."shipped_at"
+               ))
            OR (OLD."status" = 'DELIVERED' AND NEW."status" = 'COMPLETED')
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'CANCELLED_REFUNDED')
            OR (OLD."status" = 'CANCELLED' AND NEW."status" = 'SHIPPED'
@@ -6008,6 +6084,17 @@ BEGIN
                     OR NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at")
                AND (to_jsonb(NEW) - ARRAY['status', 'updated_at', 'qc_passed_at']) =
                    (to_jsonb(OLD) - ARRAY['status', 'updated_at', 'qc_passed_at']))
+           OR (OLD."status" = 'RECOVERY_PENDING'
+               AND NEW."status" = 'SHIPPED'
+               AND taven_has_cancellation_pending_handoff(
+                   NEW."order_id", NEW."id", NEW."shipped_at"
+               )
+               AND NEW."activated_at" IS NOT DISTINCT FROM OLD."activated_at"
+               AND NEW."qc_passed_at" IS NOT DISTINCT FROM OLD."qc_passed_at"
+               AND NEW."shipped_at" IS DISTINCT FROM OLD."shipped_at"
+               AND NEW."delivered_at" IS NOT DISTINCT FROM OLD."delivered_at"
+               AND NEW."completed_at" IS NOT DISTINCT FROM OLD."completed_at"
+               AND NEW."cancelled_at" IS NOT DISTINCT FROM OLD."cancelled_at")
        ) THEN
         RAISE EXCEPTION 'order phase transition may assign only its own lifecycle evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'order_phase_lifecycle_evidence_check';

@@ -1861,15 +1861,31 @@ export class OrdersService {
             handedOverAt: verifiedAt,
           },
         });
+        const cancellationPendingHandoff =
+          shipment.status === ShipmentStatus.CANCELLATION_PENDING;
         await tx.orderPhase.updateMany({
           where: {
             id: shipment.orderPhaseId,
-            status: OrderPhaseStatus.QC_PASSED,
+            status: cancellationPendingHandoff
+              ? {
+                  in: [
+                    OrderPhaseStatus.QC_PASSED,
+                    OrderPhaseStatus.RECOVERY_PENDING,
+                  ],
+                }
+              : OrderPhaseStatus.QC_PASSED,
           },
           data: { status: OrderPhaseStatus.SHIPPED, shippedAt: verifiedAt },
         });
         await tx.order.updateMany({
-          where: { id: orderId, status: OrderStatus.READY_TO_SHIP },
+          where: {
+            id: orderId,
+            status: cancellationPendingHandoff
+              ? {
+                  in: [OrderStatus.READY_TO_SHIP, OrderStatus.RECOVERY_PENDING],
+                }
+              : OrderStatus.READY_TO_SHIP,
+          },
           data: { status: OrderStatus.SHIPPED, updatedAt: verifiedAt },
         });
         return result(orderId, "SHIPMENT_HANDED_OVER", {
@@ -3470,6 +3486,15 @@ export class OrdersService {
       },
       async (tx) => {
         await this.lockOrder(tx, orderId);
+        if (body.claimId) {
+          const claim = await tx.claim.findFirst({
+            where: { id: body.claimId, orderId },
+            select: { id: true },
+          });
+          if (!claim) {
+            throw new NotFoundException("Claim was not found for this Order");
+          }
+        }
         const slotCredits =
           reason === PriceAdjustmentReason.EXPRESS_BREACH
             ? await this.expressAdjustmentSlotCredits(

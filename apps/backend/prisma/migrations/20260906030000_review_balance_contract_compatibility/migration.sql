@@ -417,6 +417,18 @@ BEGIN
             USING ERRCODE = '23503', CONSTRAINT = 'orders_pkey';
     END IF;
 
+    IF target_claim_id IS NOT NULL THEN
+        PERFORM 1
+        FROM "claims"
+        WHERE "id" = target_claim_id
+          AND "order_id" = target_order_id
+        FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Claim does not belong to the adjusted Order'
+                USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_claim_scope_check';
+        END IF;
+    END IF;
+
     SELECT revision.* INTO source_revision
     FROM "order_active_contract_prices" active
     JOIN "order_contract_price_revisions" revision
