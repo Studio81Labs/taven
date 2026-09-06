@@ -238,6 +238,23 @@ export class PaymentsService {
       ) {
         throw new ConflictException("Balance payment is unavailable");
       }
+      const requestedAmountMinor = open
+        ? open.requestedAmountMinor
+        : (
+            await transaction.$queryRaw<
+              Array<{ requestedAmountMinor: bigint | null }>
+            >`
+              SELECT taven_balance_requested_amount(${orderId}::uuid)
+                AS "requestedAmountMinor"
+            `
+          )[0]?.requestedAmountMinor;
+      if (
+        requestedAmountMinor === null ||
+        requestedAmountMinor === undefined ||
+        requestedAmountMinor <= 0n
+      ) {
+        throw new ConflictException("Balance payment is unavailable");
+      }
 
       const record = await transaction.idempotencyRecord.create({
         data: {
@@ -270,7 +287,7 @@ export class PaymentsService {
               checkoutMethod: method,
               merchantReference: retryPaymentId,
               checkoutCommandId: record.id,
-              requestedAmountMinor: template.requestedAmountMinor,
+              requestedAmountMinor,
               currency: template.currency,
               balanceDueAt: template.balanceDueAt,
               createdAt: observedAt,

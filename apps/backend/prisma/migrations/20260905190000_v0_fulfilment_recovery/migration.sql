@@ -2839,6 +2839,25 @@ FOR EACH ROW EXECUTE FUNCTION taven_reconcile_claim_refund_success();
 -- The customer-cancellation refund remains the immutable reconciliation anchor,
 -- but prior successful adjustments can legitimately make it smaller than the
 -- captured amount. Prove the zero-retention settlement from the full refund set.
+CREATE FUNCTION taven_settlement_contract_total_matches(
+    target_order_id uuid,
+    target_price_snapshot_id uuid,
+    target_contract_total_minor bigint,
+    target_currency char(3)
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "price_snapshots" price
+        WHERE price."id" = target_price_snapshot_id
+          AND price."contract_total_minor" = target_contract_total_minor
+          AND price."currency" = target_currency
+    );
+$$;
+
 CREATE OR REPLACE FUNCTION taven_has_refunded_post_void_handoff_reconciliation(
     target_order_id uuid,
     target_phase_id uuid DEFAULT NULL,
@@ -2918,7 +2937,12 @@ AS $$
           AND payment."captured_at" IS NOT NULL
           AND payment."captured_at" < settlement."cutoff_at"
           AND payment."captured_amount_minor" = settlement."captured_total_minor"
-          AND price."contract_total_minor" = settlement."contract_total_minor"
+          AND taven_settlement_contract_total_matches(
+              settlement."order_id",
+              settlement."price_snapshot_id",
+              settlement."contract_total_minor",
+              settlement."currency"
+          )
           AND refund."reason" = 'CUSTOMER_CANCELLATION'
           AND refund."status" = 'SUCCEEDED'
           AND settlement."refund_amount_minor" =

@@ -12227,7 +12227,7 @@ function requireExactRefundedHandoffFinancialProof<S extends string>(
     contractTotal <= 0n ||
     typeof capturedTotal !== "bigint" ||
     capturedTotal <= 0n ||
-    capturedTotal !== contractTotal ||
+    capturedTotal < contractTotal ||
     settlement.earnedAmountMinor !== 0n ||
     settlement.retainedAmountMinor !== 0n ||
     refundAmount !== capturedTotal ||

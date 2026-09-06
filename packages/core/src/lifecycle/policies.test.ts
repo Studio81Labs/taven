@@ -12970,6 +12970,53 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
+  it("accepts a fully refunded capture above the credited contract total", () => {
+    const context = contextForTransition("shipped", "refunded");
+    const capturedTotalMinor = 1_001n;
+    expect(
+      transition(orderPolicy, {
+        ...commandAnchors(orderPolicy, "refunded", "shipped"),
+        current: "refunded",
+        target: "shipped",
+        idempotencyKey: "refunded-credited-contract-recovery",
+        context: {
+          ...context,
+          handoffRefundedSettlement: {
+            ...context.handoffRefundedSettlement,
+            capturedTotalMinor,
+            refundAmountMinor: capturedTotalMinor,
+          },
+          handoffRefundedPayment: {
+            ...context.handoffRefundedPayment,
+            capturedAmountMinor: capturedTotalMinor,
+          },
+          handoffRefundedRefund: {
+            ...context.handoffRefundedRefund,
+            amountMinor: capturedTotalMinor,
+          },
+          handoffRefundedProviderEvent: {
+            ...context.handoffRefundedProviderEvent,
+            amountMinor: capturedTotalMinor,
+          },
+          handoffSettlementOrderPayments:
+            context.handoffSettlementOrderPayments.map((payment) => ({
+              ...payment,
+              capturedAmountMinor: capturedTotalMinor,
+            })),
+          handoffSettlementOrderRefunds:
+            context.handoffSettlementOrderRefunds.map((refund) => ({
+              ...refund,
+              amountMinor: capturedTotalMinor,
+            })),
+        },
+      }),
+    ).toEqual({
+      kind: "changed",
+      previous: "refunded",
+      current: "shipped",
+    });
+  });
+
   it.each([
     [
       "reconciliation settlement link",

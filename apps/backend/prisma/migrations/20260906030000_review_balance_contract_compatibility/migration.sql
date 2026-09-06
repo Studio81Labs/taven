@@ -2196,3 +2196,62 @@ $$;
 CREATE TRIGGER "claim_slot_resolutions_delivered_incident_window_valid"
 BEFORE INSERT OR UPDATE ON "claim_slot_resolutions"
 FOR EACH ROW EXECUTE FUNCTION taven_enforce_delivered_incident_claim_window();
+
+-- Settlements created after a contract credit retain the accepted quote binding
+-- for payment traceability, while their financial total follows the active
+-- contractual revision.
+CREATE OR REPLACE FUNCTION taven_settlement_contract_total_matches(
+    target_order_id uuid,
+    target_price_snapshot_id uuid,
+    target_contract_total_minor bigint,
+    target_currency char(3)
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "order_active_contract_prices" active_contract
+        JOIN "order_contract_price_revisions" revision
+          ON revision."id" = active_contract."contract_price_revision_id"
+         AND revision."order_id" = active_contract."order_id"
+        WHERE active_contract."order_id" = target_order_id
+          AND revision."contract_total_minor" = target_contract_total_minor
+          AND revision."currency" = target_currency
+    );
+$$;
+
+ALTER TABLE "order_settlements"
+    DROP CONSTRAINT "order_settlements_kind_formula_check",
+    ADD CONSTRAINT "order_settlements_kind_formula_check" CHECK (
+        (
+            "kind" = 'UNAUTHORIZED_HANDOFF'
+            AND "refund_transaction_id" IS NOT NULL
+            AND "balance_payment_id" IS NULL
+            AND "captured_total_minor" >= "contract_total_minor"
+            AND "earned_amount_minor" = 0
+            AND "retained_amount_minor" = least("captured_total_minor", "earned_amount_minor")
+            AND "refund_amount_minor" = "captured_total_minor" - "retained_amount_minor"
+            AND "written_off_amount_minor" = greatest(0, "earned_amount_minor" - "captured_total_minor")
+            AND "unearned_cancelled_amount_minor" = "contract_total_minor" - "earned_amount_minor"
+            AND "amount_due_minor" = 0
+            AND "refundable_balance_minor" = 0
+        )
+        OR
+        (
+            "kind" = 'BALANCE_SETTLEMENT'
+            AND "captured_total_minor" < "contract_total_minor"
+            AND "balance_payment_id" IS NOT NULL
+            AND "retained_amount_minor" = least("captured_total_minor", "earned_amount_minor")
+            AND "refund_amount_minor" = "captured_total_minor" - "retained_amount_minor"
+            AND "written_off_amount_minor" = greatest(0, "earned_amount_minor" - "captured_total_minor")
+            AND "unearned_cancelled_amount_minor" = "contract_total_minor" - "earned_amount_minor"
+            AND "amount_due_minor" = 0
+            AND "refundable_balance_minor" = "refund_amount_minor"
+            AND (
+                ("refund_amount_minor" = 0 AND "refund_transaction_id" IS NULL)
+                OR ("refund_amount_minor" > 0 AND "refund_transaction_id" IS NOT NULL)
+            )
+        )
+    );

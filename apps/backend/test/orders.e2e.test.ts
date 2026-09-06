@@ -280,6 +280,29 @@ async function advanceThroughQc(
   await orders.approveQc(orderId, jobId, `qc-approve-${index}-key`);
 }
 
+async function capturePostQcBalance(
+  fixture: FulfilmentFixture,
+  key: string,
+): Promise<void> {
+  const pending = await payments.createBalancePayment(
+    fixture.foundation.orderId,
+    { method: "CARD" },
+    `${key}-link`,
+  );
+  await payments.consumeProviderEvent(
+    "test",
+    {},
+    {
+      providerEventId: `${key}-captured-${pending.paymentId}`,
+      providerTransactionId: `balance-intent-${pending.paymentId}`,
+      merchantReference: pending.paymentId,
+      status: "CAPTURED",
+      amountMinor: BigInt(pending.amountMinor),
+      currency: pending.currency,
+    },
+  );
+}
+
 async function labelAndPack(
   fixture: FulfilmentFixture,
   index: number,
@@ -1024,6 +1047,81 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       releaseIntent();
       pauseBalanceIntentBeforeReturn = undefined;
     }
+  });
+
+  it("recalculates a failed balance retry after a contract credit", async () => {
+    const fixture = await preparePaidOrder(
+      "post-qc-balance-adjusted-retry",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    const first = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "post-qc-balance-adjusted-first",
+    );
+    await expect(
+      payments.consumeProviderEvent(
+        "test",
+        {},
+        {
+          providerEventId: `balance-adjusted-failed-${first.paymentId}`,
+          providerTransactionId: `balance-intent-${first.paymentId}`,
+          merchantReference: first.paymentId,
+          status: "FAILED",
+          amountMinor: BigInt(first.amountMinor),
+          currency: first.currency,
+        },
+      ),
+    ).resolves.toEqual({ outcome: "FAILED" });
+    const failed = await prisma.payment.findUniqueOrThrow({
+      where: { id: first.paymentId },
+    });
+    await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "PRODUCTION_FAILURE",
+        amountMinor: "1",
+        allocation: {
+          reason: "credit granted before the balance retry",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: "1",
+            },
+          ],
+        },
+      },
+      "post-qc-balance-adjusted-credit",
+    );
+
+    createdBalanceIntent = undefined;
+    const retry = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "post-qc-balance-adjusted-retry",
+    );
+    const retried = await prisma.payment.findUniqueOrThrow({
+      where: { id: retry.paymentId },
+    });
+
+    expect(retry.paymentId).not.toBe(first.paymentId);
+    expect(BigInt(retry.amountMinor)).toBe(BigInt(first.amountMinor) - 1n);
+    expect(retried).toMatchObject({
+      status: "PENDING",
+      priceSnapshotId: failed.priceSnapshotId,
+      orderPriceBindingId: failed.orderPriceBindingId,
+      paymentScheduleId: failed.paymentScheduleId,
+      provider: failed.provider,
+      currency: failed.currency,
+      balanceDueAt: failed.balanceDueAt,
+    });
+    expect(createdBalanceIntent).toMatchObject({
+      paymentId: retry.paymentId,
+      amountMinor: BigInt(first.amountMinor) - 1n,
+      merchantReference: retry.paymentId,
+    });
   });
 
   it("keeps cancellation-race handoff blocked until the split balance is settled", async () => {
@@ -2378,9 +2476,47 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
   });
 
   it("settles a later production failure without cancelling the parcel already in custody", async () => {
-    const fixture = await preparePaidOrder("post-handoff-production-refund", 2);
+    const fixture = await preparePaidOrder(
+      "post-handoff-production-refund",
+      2,
+      "DEPOSIT_BALANCE",
+    );
+    const retainedSlot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
+    });
+    const priorCredit = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "PRODUCTION_FAILURE",
+        amountMinor: retainedSlot.settlementAmountMinor.toString(),
+        allocation: {
+          reason: "pre-QC credit consumes the retained parcel value",
+          slotCredits: [
+            {
+              fulfilmentSlotId: retainedSlot.id,
+              amountMinor: retainedSlot.settlementAmountMinor.toString(),
+            },
+          ],
+        },
+      },
+      "post-handoff-production-prior-credit",
+    );
+    await expect(
+      prisma.priceAdjustment.findUniqueOrThrow({
+        where: {
+          id: priorCredit.result.priceAdjustmentId as string,
+        },
+      }),
+    ).resolves.toMatchObject({ refundRequiredMinor: 0n });
     await advanceThroughQc(fixture, 0);
     await advanceThroughQc(fixture, 1);
+    await capturePostQcBalance(fixture, "post-handoff-production-balance");
+    const refundableContract = (
+      await prisma.orderActiveContractPrice.findUniqueOrThrow({
+        where: { orderId: fixture.foundation.orderId },
+        include: { contractPriceRevision: true },
+      })
+    ).contractPriceRevision.contractTotalMinor;
     await labelAndPack(fixture, 0);
     await labelAndPack(fixture, 1);
     await handoff(fixture, 0);
@@ -2407,11 +2543,22 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       },
       "post-handoff-production-refund-void",
     );
-    const refundId = (confirmed.result.refundIds as string[])[0];
+    const refundIds = confirmed.result.refundIds as string[];
+    const refundId = refundIds[0];
     if (!refundId) throw new Error("production failure refund was not created");
     expect(confirmed.status).toBe(
       "LABEL_VOID_CONFIRMED_PRODUCTION_FAILURE_REFUND",
     );
+    const cancelledSlot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[1]! },
+    });
+    expect(refundableContract).toBe(cancelledSlot.settlementAmountMinor);
+    const refundRows = await prisma.refundTransaction.findMany({
+      where: { id: { in: refundIds } },
+    });
+    expect(
+      refundRows.reduce((total, refund) => total + refund.amountMinor, 0n),
+    ).toBe(refundableContract);
     await carrierEvent(
       fixture,
       0,
@@ -2424,7 +2571,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       "DELIVERY_SCAN",
       "post-handoff-production-delivery",
     );
-    await succeedRefund(refundId);
+    for (const id of refundIds) await succeedRefund(id);
 
     await expect(
       orders.getFulfilment(fixture.foundation.orderId),
@@ -3831,6 +3978,77 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).rejects.toThrow("order status transition is not allowed");
   }, 10_000);
 
+  it("does not reserve a balance-only credit against a later partial cancellation", async () => {
+    const fixture = await preparePaidOrder(
+      "partial-label-void-balance-credit",
+      2,
+      "DEPOSIT_BALANCE",
+    );
+    const retainedSlot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
+    });
+    const priorAdjustment = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "PRODUCTION_FAILURE",
+        amountMinor: retainedSlot.settlementAmountMinor.toString(),
+        allocation: {
+          reason: "pre-QC credit consumes the retained parcel value",
+          slotCredits: [
+            {
+              fulfilmentSlotId: retainedSlot.id,
+              amountMinor: retainedSlot.settlementAmountMinor.toString(),
+            },
+          ],
+        },
+      },
+      "partial-label-void-balance-credit-adjustment",
+    );
+    await expect(
+      prisma.priceAdjustment.findUniqueOrThrow({
+        where: { id: priorAdjustment.result.priceAdjustmentId as string },
+      }),
+    ).resolves.toMatchObject({ refundRequiredMinor: 0n });
+    await advanceThroughQc(fixture, 0);
+    await advanceThroughQc(fixture, 1);
+    await capturePostQcBalance(fixture, "partial-label-void-credit-balance");
+    const refundableContract = (
+      await prisma.orderActiveContractPrice.findUniqueOrThrow({
+        where: { orderId: fixture.foundation.orderId },
+        include: { contractPriceRevision: true },
+      })
+    ).contractPriceRevision.contractTotalMinor;
+    await labelAndPack(fixture, 0);
+    await labelAndPack(fixture, 1);
+    await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "customer cancelled after the retained parcel was accepted" },
+      "partial-label-void-balance-credit-cancel",
+    );
+    await handoff(fixture, 0);
+
+    const shipmentId = fixture.foundation.shipmentIds[1]!;
+    const confirmed = await orders.confirmLabelVoid(
+      fixture.foundation.orderId,
+      shipmentId,
+      {
+        providerEventId: `partial-credit-void-${shipmentId}`,
+        providerTransactionId: `partial-credit-void-tx-${shipmentId}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "partial-label-void-balance-credit-confirm",
+    );
+    const refundIds = confirmed.result.refundIds as string[];
+    expect(confirmed.status).toBe("LABEL_VOID_CONFIRMED_PARTIAL_CANCELLATION");
+    expect(refundIds).not.toEqual([]);
+    const refunds = await prisma.refundTransaction.findMany({
+      where: { id: { in: refundIds } },
+    });
+    expect(
+      refunds.reduce((total, refund) => total + refund.amountMinor, 0n),
+    ).toBe(refundableContract);
+  }, 10_000);
+
   it("retains a scoped partial cancellation when its refund attempt fails", async () => {
     const fixture = await preparePaidOrder("partial-label-void-failed", 2);
     await advanceThroughQc(fixture, 0);
@@ -4092,6 +4310,14 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const payment = await prisma.payment.findUniqueOrThrow({
       where: { id: fixture.foundation.paymentId },
     });
+    const activeContract =
+      await prisma.orderActiveContractPrice.findUniqueOrThrow({
+        where: { orderId: fixture.foundation.orderId },
+        include: { contractPriceRevision: true },
+      });
+    expect(activeContract.contractPriceRevision.contractTotalMinor).toBe(
+      payment.capturedAmountMinor! - 1n,
+    );
     await expect(
       prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
     ).resolves.toMatchObject({
@@ -4118,7 +4344,12 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({
       kind: "UNAUTHORIZED_HANDOFF",
       refundTransactionId: refundId,
+      contractTotalMinor:
+        activeContract.contractPriceRevision.contractTotalMinor,
+      capturedTotalMinor: payment.capturedAmountMinor,
       refundAmountMinor: payment.capturedAmountMinor,
+      unearnedCancelledAmountMinor:
+        activeContract.contractPriceRevision.contractTotalMinor,
     });
     await expect(
       prisma.handoffReconciliation.findUniqueOrThrow({

@@ -4736,7 +4736,6 @@ export class OrdersService {
       include: {
         payment: {
           include: {
-            priceSnapshot: true,
             refunds: {
               where: { status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] } },
               select: { amountMinor: true, status: true, completedAt: true },
@@ -4811,6 +4810,24 @@ export class OrdersService {
           "Refunded cancellation requires exact manual financial reconciliation",
         );
       }
+      const activeContract = (
+        await tx.$queryRaw<
+          Array<{ contractTotalMinor: bigint; currency: string }>
+        >`
+          SELECT revision.contract_total_minor AS "contractTotalMinor",
+                 revision.currency
+          FROM order_active_contract_prices active_contract
+          JOIN order_contract_price_revisions revision
+            ON revision.id = active_contract.contract_price_revision_id
+           AND revision.order_id = active_contract.order_id
+          WHERE active_contract.order_id = ${orderId}::uuid
+        `
+      )[0];
+      if (!activeContract || activeContract.currency !== payment.currency) {
+        throw new ConflictException(
+          "Refunded cancellation requires exact manual financial reconciliation",
+        );
+      }
       await tx.fulfilmentSlot.updateMany({
         where: { orderId, outcome: "CANCELLED" },
         data: {
@@ -4844,14 +4861,13 @@ export class OrdersService {
           refundTransactionId: refund.id,
           kind: "UNAUTHORIZED_HANDOFF",
           currency: payment.currency,
-          contractTotalMinor: payment.priceSnapshot.contractTotalMinor,
+          contractTotalMinor: activeContract.contractTotalMinor,
           capturedTotalMinor: payment.capturedAmountMinor,
           earnedAmountMinor: 0n,
           retainedAmountMinor: 0n,
           refundAmountMinor: succeededRefundTotal,
           writtenOffAmountMinor: 0n,
-          unearnedCancelledAmountMinor:
-            payment.priceSnapshot.contractTotalMinor,
+          unearnedCancelledAmountMinor: activeContract.contractTotalMinor,
           amountDueMinor: 0n,
           refundableBalanceMinor: 0n,
           cutoffAt: reconciledAt,
@@ -5152,7 +5168,7 @@ export class OrdersService {
         (sum, refund) => sum + refund.amountMinor,
         0n,
       );
-      const outstanding = adjustment.amountMinor - committed;
+      const outstanding = adjustment.refundRequiredMinor - committed;
       return total + (outstanding > 0n ? outstanding : 0n);
     }, 0n);
     const available =
@@ -5206,7 +5222,7 @@ export class OrdersService {
         (sum, refund) => sum + refund.amountMinor,
         0n,
       );
-      const outstanding = prior.amountMinor - committed;
+      const outstanding = prior.refundRequiredMinor - committed;
       return total + (outstanding > 0n ? outstanding : 0n);
     }, 0n);
     const refundIds: string[] = [];
@@ -5222,7 +5238,7 @@ export class OrdersService {
           (sum, refund) => sum + refund.amountMinor,
           0n,
         );
-        const outstanding = prior.amountMinor - committed;
+        const outstanding = prior.refundRequiredMinor - committed;
         return total + (outstanding > 0n ? outstanding : 0n);
       }, 0n);
       let paymentAvailable =
@@ -5373,7 +5389,7 @@ export class OrdersService {
         (sum, refund) => sum + refund.amountMinor,
         0n,
       );
-      const outstanding = adjustment.amountMinor - committed;
+      const outstanding = adjustment.refundRequiredMinor - committed;
       return total + (outstanding > 0n ? outstanding : 0n);
     }, 0n);
     const available =
@@ -5427,7 +5443,7 @@ export class OrdersService {
         (sum, refund) => sum + refund.amountMinor,
         0n,
       );
-      const outstanding = adjustment.amountMinor - committed;
+      const outstanding = adjustment.refundRequiredMinor - committed;
       return total + (outstanding > 0n ? outstanding : 0n);
     }, 0n);
     const refundIds: string[] = [];
@@ -5443,7 +5459,7 @@ export class OrdersService {
           (sum, refund) => sum + refund.amountMinor,
           0n,
         );
-        const outstanding = adjustment.amountMinor - committed;
+        const outstanding = adjustment.refundRequiredMinor - committed;
         return total + (outstanding > 0n ? outstanding : 0n);
       }, 0n);
       let paymentAvailable =
