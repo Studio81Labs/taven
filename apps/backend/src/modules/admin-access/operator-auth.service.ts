@@ -37,6 +37,7 @@ const SESSION_ABSOLUTE_MILLISECONDS = 8 * 60 * 60 * 1_000;
 const LOGIN_ATTEMPT_MILLISECONDS = 10 * 60 * 1_000;
 const SECURITY_EVENT_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const LOGIN_WINDOW_MILLISECONDS = 15 * 60 * 1_000;
+const SESSION_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const MAX_PASSWORD_FAILURES = 5;
 const MAX_LOGIN_STARTS = 100;
 const LAST_SEEN_WRITE_MILLISECONDS = 60 * 1_000;
@@ -66,7 +67,7 @@ export class OperatorAuthService {
   private readonly config: AdminAccessConfig;
 
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(GITHUB_AUTH) private readonly github: GithubAuth,
   ) {
     this.config = readAdminAccessConfig();
@@ -407,7 +408,7 @@ export class OperatorAuthService {
       take: remaining,
       select: { id: true },
     });
-    await this.prisma.$transaction([
+    const deleted = await this.prisma.$transaction([
       this.prisma.operatorLoginAttempt.deleteMany({
         where: { id: { in: attempts.map((attempt) => attempt.id) } },
       }),
@@ -415,7 +416,39 @@ export class OperatorAuthService {
         where: { id: { in: events.map((event) => event.id) } },
       }),
     ]);
-    return attempts.length + events.length;
+    const sessionSlots = limit - deleted[0].count - deleted[1].count;
+    const expiredSessions = await this.prisma.operatorSession.findMany({
+      where: {
+        absoluteExpiresAt: {
+          lt: new Date(now.getTime() - SESSION_RETENTION_MILLISECONDS),
+        },
+        loginAttempts: { none: {} },
+        securityEvents: { none: {} },
+      },
+      orderBy: { absoluteExpiresAt: "asc" },
+      take: sessionSlots,
+      select: { id: true },
+    });
+    const bucketSlots = sessionSlots - expiredSessions.length;
+    const expiredBuckets = await this.prisma.operatorLoginRateBucket.findMany({
+      where: {
+        windowStart: {
+          lt: new Date(now.getTime() - 2 * LOGIN_WINDOW_MILLISECONDS),
+        },
+      },
+      orderBy: { windowStart: "asc" },
+      take: bucketSlots,
+      select: { id: true },
+    });
+    const [sessions, buckets] = await this.prisma.$transaction([
+      this.prisma.operatorSession.deleteMany({
+        where: { id: { in: expiredSessions.map((session) => session.id) } },
+      }),
+      this.prisma.operatorLoginRateBucket.deleteMany({
+        where: { id: { in: expiredBuckets.map((bucket) => bucket.id) } },
+      }),
+    ]);
+    return deleted[0].count + deleted[1].count + sessions.count + buckets.count;
   }
 
   private async claimGithubAttempt(state: string): Promise<string | undefined> {
@@ -798,7 +831,9 @@ function safeEqual(left: string | Buffer, right: string | Buffer): boolean {
 
 function encrypt(value: string, key: Buffer): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, {
+    authTagLength: 16,
+  });
   const encrypted = Buffer.concat([
     cipher.update(value, "utf8"),
     cipher.final(),
@@ -814,6 +849,7 @@ function decrypt(value: string, key: Buffer): string {
     "aes-256-gcm",
     key,
     encoded.subarray(0, 12),
+    { authTagLength: 16 },
   );
   decipher.setAuthTag(encoded.subarray(12, 28));
   return Buffer.concat([

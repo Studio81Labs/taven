@@ -12,9 +12,13 @@ import {
 } from "@nestjs/common";
 import {
   ApiBadRequestResponse,
+  ApiBody,
   ApiForbiddenResponse,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiQuery,
+  ApiSecurity,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
@@ -70,6 +74,7 @@ export class OperatorAuthController {
     summary:
       "Create a development-only operator session from a provisioned password",
   })
+  @ApiBody({ type: DevelopmentOperatorLoginDto })
   @ApiOkResponse({ type: OperatorSessionDto })
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
@@ -116,6 +121,9 @@ export class OperatorAuthController {
     summary:
       "Complete the browser-bound GitHub operator authorization callback",
   })
+  @ApiQuery({ name: "state", required: true, minLength: 20, maxLength: 2048 })
+  @ApiQuery({ name: "code", required: true, minLength: 20, maxLength: 2048 })
+  @ApiQuery({ name: "error", required: false })
   @ApiBadRequestResponse()
   @ApiUnauthorizedResponse()
   async completeGithub(
@@ -148,6 +156,7 @@ export class OperatorAuthController {
 
   @Get("session")
   @UseGuards(OperatorAccessGuard)
+  @ApiSecurity("operatorSession")
   @ApiOperation({
     summary: "Read the current authenticated operator session and CSRF token",
   })
@@ -160,9 +169,11 @@ export class OperatorAuthController {
   @Delete("session")
   @HttpCode(204)
   @UseGuards(OperatorAccessGuard)
+  @ApiSecurity("operatorSession")
   @ApiOperation({ summary: "Revoke the current operator session" })
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiNoContentResponse()
   async logout(
     @Req() request: AdminRequest,
     @Res({ passthrough: true }) response: ResponseLike,

@@ -11,6 +11,7 @@ The approved implementation plan is:
 Read it completely before modifying code.
 
 Also read:
+
 - AGENTS.md
 - referenced GitHub issues
 - relevant repository documentation

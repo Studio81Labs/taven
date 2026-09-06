@@ -1400,6 +1400,26 @@
         ],
         "type": "object"
       },
+      "DevelopmentOperatorLoginDto": {
+        "properties": {
+          "email": {
+            "format": "email",
+            "maxLength": 320,
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "maxLength": 1024,
+            "minLength": 12,
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "type": "object"
+      },
       "ExpireReplacementDto": {
         "properties": {
           "printingConsumptions": {
@@ -1491,6 +1511,18 @@
           "replacementRequests",
           "claims",
           "priceAdjustments"
+        ],
+        "type": "object"
+      },
+      "GithubLoginStartDto": {
+        "properties": {
+          "authorizationUrl": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorizationUrl"
         ],
         "type": "object"
       },
@@ -2399,6 +2431,73 @@
         ],
         "type": "object"
       },
+      "OperatorAuthMethodsDto": {
+        "properties": {
+          "methods": {
+            "items": {
+              "enum": [
+                "EMAIL_PASSWORD",
+                "GITHUB"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "methods"
+        ],
+        "type": "object"
+      },
+      "OperatorSessionDto": {
+        "properties": {
+          "csrfToken": {
+            "type": "string"
+          },
+          "operator": {
+            "additionalProperties": false,
+            "properties": {
+              "authenticationMethod": {
+                "enum": [
+                  "DEVELOPMENT_PASSWORD",
+                  "GITHUB"
+                ],
+                "type": "string"
+              },
+              "nodeIds": {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "operatorId": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "ADMIN",
+                  "OPERATOR",
+                  "VIEWER"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "operatorId",
+              "role",
+              "nodeIds",
+              "authenticationMethod"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "csrfToken"
+        ],
+        "type": "object"
+      },
       "PackJobDto": {
         "properties": {
           "shipmentId": {
@@ -2943,6 +3042,12 @@
         "bearerFormat": "opaque",
         "scheme": "bearer",
         "type": "http"
+      },
+      "operatorSession": {
+        "description": "Environment-specific HttpOnly operator session cookie; development uses a local cookie name.",
+        "in": "cookie",
+        "name": "__Host-taven_admin",
+        "type": "apiKey"
       }
     }
   },
@@ -2954,6 +3059,194 @@
   },
   "openapi": "3.0.0",
   "paths": {
+    "/admin/auth/github/callback": {
+      "get": {
+        "operationId": "OperatorAuthController_completeGithub",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {}
+          },
+          {
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "maxLength": 2048,
+              "minLength": 20
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "maxLength": 2048,
+              "minLength": 20
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          }
+        },
+        "summary": "Complete the browser-bound GitHub operator authorization callback",
+        "tags": [
+          "operator authentication"
+        ]
+      }
+    },
+    "/admin/auth/github/start": {
+      "post": {
+        "operationId": "OperatorAuthController_startGithub",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubLoginStartDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "429": {
+            "description": ""
+          }
+        },
+        "summary": "Start the production or staging GitHub operator authorization flow",
+        "tags": [
+          "operator authentication"
+        ]
+      }
+    },
+    "/admin/auth/login": {
+      "post": {
+        "operationId": "OperatorAuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentOperatorLoginDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorSessionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "429": {
+            "description": ""
+          }
+        },
+        "summary": "Create a development-only operator session from a provisioned password",
+        "tags": [
+          "operator authentication"
+        ]
+      }
+    },
+    "/admin/auth/methods": {
+      "get": {
+        "operationId": "OperatorAuthController_methods",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorAuthMethodsDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "summary": "List the operator authentication methods enabled in this environment",
+        "tags": [
+          "operator authentication"
+        ]
+      }
+    },
+    "/admin/auth/session": {
+      "delete": {
+        "operationId": "OperatorAuthController_logout",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Revoke the current operator session",
+        "tags": [
+          "operator authentication"
+        ]
+      },
+      "get": {
+        "operationId": "OperatorAuthController_session",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorSessionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read the current authenticated operator session and CSRF token",
+        "tags": [
+          "operator authentication"
+        ]
+      }
+    },
     "/admin/orders/{orderId}/balance-payment": {
       "post": {
         "operationId": "PaymentsController_createBalance",
@@ -3009,7 +3302,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Create the post-QC balance payment intent",
@@ -3049,7 +3342,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Read the fulfilment and recovery projection",
@@ -3107,7 +3400,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Record an immutable manual price adjustment",
@@ -3164,7 +3457,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Request the refund for a manual price adjustment",
@@ -3222,7 +3515,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Cancel an order before physical handoff and request refunds",
@@ -3280,7 +3573,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Approve the exact Claim window for a legacy accepted Order",
@@ -3338,7 +3631,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Open a manually verified fulfilment Claim",
@@ -3395,7 +3688,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Credit and refund every unresolved slot in a Claim",
@@ -3465,7 +3758,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Reject a clean post-delivery quality Claim",
@@ -3535,7 +3828,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Reserve and create a whole-parcel reprint for a LOST Claim",
@@ -3605,7 +3898,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Re-QC and hand off a custody-confirmed incident reshipment",
@@ -3675,7 +3968,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Withdraw a clean post-delivery quality Claim",
@@ -3723,7 +4016,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Complete a fully delivered and settled order",
@@ -3780,7 +4073,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Accept a platform-owned production Job",
@@ -3850,7 +4143,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Record a terminal Job failure and recovery obligation",
@@ -3917,7 +4210,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Pack and bind a Job to exactly one Shipment",
@@ -3984,7 +4277,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Finish printing and settle consumed resources",
@@ -4041,7 +4334,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Start printing a G-code-ready Job",
@@ -4098,7 +4391,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Approve a Job after QC",
@@ -4165,7 +4458,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Submit optional v0 QC evidence",
@@ -4235,7 +4528,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Reserve fresh resources and create a replacement Job",
@@ -4305,7 +4598,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Close an expired replacement request into refund recovery",
@@ -4363,7 +4656,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Create a parcel or replacement parcel leaf",
@@ -4430,7 +4723,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Apply an authenticated carrier lifecycle event",
@@ -4497,7 +4790,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Commit one provider-confirmed parcel handoff",
@@ -4564,7 +4857,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Record a manually-created carrier label",
@@ -4631,7 +4924,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Record a provider-confirmed carrier label void",
@@ -4679,7 +4972,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "List the operator quote-request queue",
@@ -4716,7 +5009,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Read one operator quote-request detail",
@@ -4768,7 +5061,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Create an operator quote-attachment download URL",
@@ -4819,7 +5112,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Expire an overdue individual offer",
@@ -4883,7 +5176,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Issue an immutable tokenized individual offer",
@@ -4931,7 +5224,7 @@
         },
         "security": [
           {
-            "bearer": []
+            "operatorSession": []
           }
         ],
         "summary": "Move a new request into operator review",

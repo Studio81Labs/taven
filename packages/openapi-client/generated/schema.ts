@@ -4,6 +4,92 @@
  */
 
 export interface paths {
+    "/admin/auth/github/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Complete the browser-bound GitHub operator authorization callback */
+        get: operations["OperatorAuthController_completeGithub"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/auth/github/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start the production or staging GitHub operator authorization flow */
+        post: operations["OperatorAuthController_startGithub"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a development-only operator session from a provisioned password */
+        post: operations["OperatorAuthController_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/auth/methods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the operator authentication methods enabled in this environment */
+        get: operations["OperatorAuthController_methods"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current authenticated operator session and CSRF token */
+        get: operations["OperatorAuthController_session"];
+        put?: never;
+        post?: never;
+        /** Revoke the current operator session */
+        delete: operations["OperatorAuthController_logout"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/balance-payment": {
         parameters: {
             query?: never;
@@ -1346,6 +1432,12 @@ export interface components {
             /** Format: uuid */
             shipmentPlanId: string;
         };
+        DevelopmentOperatorLoginDto: {
+            /** Format: email */
+            email: string;
+            /** Format: password */
+            password: string;
+        };
         ExpireReplacementDto: {
             /** @description Exact material consumption for every actively printing Job abandoned by the expired replacement request */
             printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
@@ -1367,6 +1459,10 @@ export interface components {
             replacementRequests: Record<string, never>[];
             shipments: Record<string, never>[];
             slots: Record<string, never>[];
+        };
+        GithubLoginStartDto: {
+            /** Format: uri */
+            authorizationUrl: string;
         };
         HandoffReshipmentDto: {
             carrier: string;
@@ -1611,6 +1707,21 @@ export interface components {
             plannedWeightMilligrams: number;
             shippingAmountMinor: number;
         };
+        OperatorAuthMethodsDto: {
+            methods: ("EMAIL_PASSWORD" | "GITHUB")[];
+        };
+        OperatorSessionDto: {
+            csrfToken: string;
+            operator?: {
+                /** @enum {string} */
+                authenticationMethod: "DEVELOPMENT_PASSWORD" | "GITHUB";
+                nodeIds: string[];
+                /** Format: uuid */
+                operatorId: string;
+                /** @enum {string} */
+                role: "ADMIN" | "OPERATOR" | "VIEWER";
+            };
+        };
         PackJobDto: {
             /** Format: uuid */
             shipmentId: string;
@@ -1772,6 +1883,178 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    OperatorAuthController_completeGithub: {
+        parameters: {
+            query: {
+                error?: unknown;
+                code: unknown;
+                state: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorAuthController_startGithub: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubLoginStartDto"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorAuthController_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentOperatorLoginDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorSessionDto"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorAuthController_methods: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorAuthMethodsDto"];
+                };
+            };
+        };
+    };
+    OperatorAuthController_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorSessionDto"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorAuthController_logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     PaymentsController_createBalance: {
         parameters: {
             query?: never;
