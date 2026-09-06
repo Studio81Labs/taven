@@ -50,6 +50,8 @@ const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_KEY_LENGTH = 64;
 const SCRYPT_MAX_MEMORY = 128 * 1024 * 1024;
+const DUMMY_PASSWORD_HASH =
+  "scrypt$32768$8$1$MDEyMzQ1Njc4OWFiY2RlZg$nCmsIFU_k1mX8di2iPX8EGrBuEqNfiVHhkUiDLo5lHHRQpOPzECy22koavXfHYZ_WvLfdGEhWrK5zmG-7uGrOg";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -100,8 +102,7 @@ export class OperatorAuthService {
       });
     const valid = await verifyPassword(
       input.password,
-      credential?.passwordHash ??
-        (await passwordHash("not-an-operator-password")),
+      credential?.passwordHash ?? DUMMY_PASSWORD_HASH,
     );
     if (!credential || !valid) {
       await this.recordFailedLogin(subjectHash, this.clientHash(request));
@@ -110,6 +111,7 @@ export class OperatorAuthService {
       );
     }
     return this.prisma.$transaction(async (transaction) => {
+      await this.lockOperatorIdentity(transaction, credential.operatorId);
       await this.revokeOperatorSessions(transaction, credential.operatorId);
       return this.createSession(
         transaction,
@@ -228,6 +230,7 @@ export class OperatorAuthService {
         );
       }
       const result = await this.prisma.$transaction(async (transaction) => {
+        await this.lockOperatorIdentity(transaction, operator.id);
         await this.revokeOperatorSessions(transaction, operator.id);
         const session = await this.createSession(
           transaction,
@@ -549,6 +552,22 @@ export class OperatorAuthService {
       where: { operatorId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+  }
+
+  private async lockOperatorIdentity(
+    transaction: Transaction,
+    operatorId: string,
+  ): Promise<void> {
+    const rows = await transaction.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "operator_identities"
+      WHERE "id" = ${operatorId}::uuid
+      FOR UPDATE
+    `;
+    if (rows.length !== 1) {
+      throw new UnauthorizedException(
+        "Operator authentication was not accepted",
+      );
+    }
   }
 
   private async recordFailedLogin(

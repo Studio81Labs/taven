@@ -1,6 +1,8 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import type { GithubAuth, GithubAuthenticatedUser } from "./github-auth.port";
 
+const GITHUB_REQUEST_TIMEOUT_MILLISECONDS = 10_000;
+
 @Injectable()
 export class FetchGithubAuthAdapter implements GithubAuth {
   async exchangeCode(
@@ -12,7 +14,7 @@ export class FetchGithubAuthAdapter implements GithubAuth {
       verifier: string;
     }>,
   ): Promise<GithubAuthenticatedUser> {
-    const tokenResponse = await fetch(
+    const tokenResponse = await this.request(
       "https://github.com/login/oauth/access_token",
       {
         method: "POST",
@@ -39,7 +41,7 @@ export class FetchGithubAuthAdapter implements GithubAuth {
     ) {
       throw new UnauthorizedException("GitHub authorization was not accepted");
     }
-    const userResponse = await fetch("https://api.github.com/user", {
+    const userResponse = await this.request("https://api.github.com/user", {
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token.access_token}`,
@@ -63,5 +65,16 @@ export class FetchGithubAuthAdapter implements GithubAuth {
       throw new UnauthorizedException("GitHub authorization was not accepted");
     }
     return { id: String(user.id), login: user.login };
+  }
+
+  private async request(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MILLISECONDS),
+      });
+    } catch {
+      throw new UnauthorizedException("GitHub authorization was not accepted");
+    }
   }
 }
