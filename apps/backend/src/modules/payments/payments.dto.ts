@@ -131,6 +131,11 @@ export class CreateCheckoutPaymentDto {
   photoConsentRevision?: string | null;
 }
 
+export class CreateBalancePaymentDto {
+  @ApiProperty({ type: String, enum: ["CARD", "BANK_TRANSFER"] })
+  method!: "CARD" | "BANK_TRANSFER";
+}
+
 export class CheckoutPaymentDto {
   @ApiProperty({ type: String, format: "uuid" })
   paymentId!: string;

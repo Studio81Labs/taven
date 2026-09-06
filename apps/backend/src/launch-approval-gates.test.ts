@@ -10,9 +10,11 @@ import {
   assertCheckoutTermsRevisionCurrent,
   assertQuotePhotoUploadsEnabled,
   approvedCheckoutClaimPolicyRevision,
+  approvedCheckoutClaimWindowDays,
   approvedCheckoutTermsRevision,
   BINDING_QUOTE_FLOWS_ENV,
   CHECKOUT_CLAIM_POLICY_REVISION_ENV,
+  CHECKOUT_CLAIM_WINDOW_DAYS_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
   CHECKOUT_PHOTO_CONSENT_REVISION_ENV,
   CHECKOUT_TERMS_REVISION_ENV,
@@ -83,6 +85,7 @@ describe("launch approval gates", () => {
       assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
         [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
       }),
     ).not.toThrow();
@@ -95,6 +98,7 @@ describe("launch approval gates", () => {
         assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
           [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
           [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: revision,
+          [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
           [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
         }),
       ).toThrowError(ServiceUnavailableException);
@@ -108,6 +112,7 @@ describe("launch approval gates", () => {
         assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
           [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
           [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+          [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
           [CHECKOUT_TERMS_REVISION_ENV]: revision,
         }),
       ).toThrowError(ServiceUnavailableException);
@@ -119,6 +124,7 @@ describe("launch approval gates", () => {
       assertCheckoutPaymentFlowsEnabled("terms-v0", {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
         [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
       }),
     ).toThrowError(ServiceUnavailableException);
@@ -132,10 +138,11 @@ describe("launch approval gates", () => {
     (termsRevision, claimPolicyRevision) => {
       expect(() =>
         assertCheckoutAcceptanceRevisionsCurrent(
-          { termsRevision, claimPolicyRevision },
+          { termsRevision, claimPolicyRevision, claimWindowDays: 30 },
           {
             termsRevision: "terms-v1-approved",
             claimPolicyRevision: "claims-v1-approved",
+            claimWindowDays: 30,
           },
         ),
       ).toThrowError(ServiceUnavailableException);
@@ -145,10 +152,15 @@ describe("launch approval gates", () => {
   it("allows missing or currently approved immutable acceptance", () => {
     expect(() =>
       assertCheckoutAcceptanceRevisionsCurrent(
-        { termsRevision: null, claimPolicyRevision: null },
+        {
+          termsRevision: null,
+          claimPolicyRevision: null,
+          claimWindowDays: null,
+        },
         {
           termsRevision: "terms-v1-approved",
           claimPolicyRevision: "claims-v1-approved",
+          claimWindowDays: 30,
         },
       ),
     ).not.toThrow();
@@ -157,13 +169,49 @@ describe("launch approval gates", () => {
         {
           termsRevision: "terms-v1-approved",
           claimPolicyRevision: "claims-v1-approved",
+          claimWindowDays: 30,
         },
         {
           termsRevision: "terms-v1-approved",
           claimPolicyRevision: "claims-v1-approved",
+          claimWindowDays: 30,
         },
       ),
     ).not.toThrow();
+  });
+
+  it("rejects a changed immutable Claim-window snapshot", () => {
+    expect(() =>
+      assertCheckoutAcceptanceRevisionsCurrent(
+        {
+          termsRevision: "terms-v1-approved",
+          claimPolicyRevision: "claims-v1-approved",
+          claimWindowDays: 60,
+        },
+        {
+          termsRevision: "terms-v1-approved",
+          claimPolicyRevision: "claims-v1-approved",
+          claimWindowDays: 30,
+        },
+      ),
+    ).toThrowError(ServiceUnavailableException);
+  });
+
+  it("rejects a legacy partial legal snapshot without Claim-window days", () => {
+    expect(() =>
+      assertCheckoutAcceptanceRevisionsCurrent(
+        {
+          termsRevision: "terms-v1-approved",
+          claimPolicyRevision: "claims-v1-approved",
+          claimWindowDays: null,
+        },
+        {
+          termsRevision: "terms-v1-approved",
+          claimPolicyRevision: "claims-v1-approved",
+          claimWindowDays: 30,
+        },
+      ),
+    ).toThrowError(ServiceUnavailableException);
   });
 
   it("requires the checkout request to bind the approved claim policy", () => {
@@ -236,6 +284,25 @@ describe("launch approval gates", () => {
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: " claims-v1-approved ",
       }),
     ).toBe("claims-v1-approved");
+  });
+
+  it.each([undefined, "", "0", "-1", "1.5", "3651", "pending"])(
+    "rejects invalid approved Claim-window days %s",
+    (days) => {
+      expect(() =>
+        approvedCheckoutClaimWindowDays({
+          [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: days,
+        }),
+      ).toThrowError(ServiceUnavailableException);
+    },
+  );
+
+  it("returns approved Claim-window days", () => {
+    expect(
+      approvedCheckoutClaimWindowDays({
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: " 30 ",
+      }),
+    ).toBe(30);
   });
 
   it("returns the trimmed approved terms revision", () => {

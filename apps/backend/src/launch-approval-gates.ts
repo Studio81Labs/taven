@@ -8,6 +8,8 @@ export const CHECKOUT_PAYMENT_FLOWS_ENV =
   "TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED" as const;
 export const CHECKOUT_CLAIM_POLICY_REVISION_ENV =
   "TAVEN_CLAIM_POLICY_REVISION" as const;
+export const CHECKOUT_CLAIM_WINDOW_DAYS_ENV =
+  "TAVEN_CLAIM_WINDOW_DAYS" as const;
 export const CHECKOUT_TERMS_REVISION_ENV = "TAVEN_TERMS_REVISION" as const;
 export const CHECKOUT_PHOTO_CONSENT_REVISION_ENV =
   "TAVEN_PHOTO_CONSENT_REVISION" as const;
@@ -54,7 +56,11 @@ export function assertQuotePhotoUploadsEnabled(
 export function assertCheckoutPaymentFlowsEnabled(
   boundTermsRevision: string,
   env: NodeJS.ProcessEnv = process.env,
-): Readonly<{ claimPolicyRevision: string; termsRevision: string }> {
+): Readonly<{
+  claimPolicyRevision: string;
+  claimWindowDays: number;
+  termsRevision: string;
+}> {
   if (!isExplicitlyEnabled(env, CHECKOUT_PAYMENT_FLOWS_ENV)) {
     throw launchApprovalRequired(
       "Checkout payment flows are unavailable until legal documents and provider launch inputs are approved",
@@ -68,6 +74,7 @@ export function assertCheckoutPaymentFlowsEnabled(
   }
   return {
     claimPolicyRevision: approvedCheckoutClaimPolicyRevision(env),
+    claimWindowDays: approvedCheckoutClaimWindowDays(env),
     termsRevision,
   };
 }
@@ -76,17 +83,29 @@ export function assertCheckoutAcceptanceRevisionsCurrent(
   accepted: Readonly<{
     termsRevision: string | null;
     claimPolicyRevision: string | null;
+    claimWindowDays: number | null;
   }>,
   approved: Readonly<{
     termsRevision: string;
     claimPolicyRevision: string;
+    claimWindowDays: number;
   }>,
 ): void {
+  const hasAcceptedLegalSnapshot =
+    accepted.termsRevision !== null ||
+    accepted.claimPolicyRevision !== null ||
+    accepted.claimWindowDays !== null;
   if (
+    (hasAcceptedLegalSnapshot &&
+      (accepted.termsRevision === null ||
+        accepted.claimPolicyRevision === null ||
+        accepted.claimWindowDays === null)) ||
     (accepted.termsRevision !== null &&
       accepted.termsRevision !== approved.termsRevision) ||
     (accepted.claimPolicyRevision !== null &&
-      accepted.claimPolicyRevision !== approved.claimPolicyRevision)
+      accepted.claimPolicyRevision !== approved.claimPolicyRevision) ||
+    (accepted.claimWindowDays !== null &&
+      accepted.claimWindowDays !== approved.claimWindowDays)
   ) {
     throw launchApprovalRequired(
       "Checkout acceptance does not use the currently approved legal revisions",
@@ -135,7 +154,9 @@ export function checkoutPaymentLaunchInputsApproved(
   return (
     isExplicitlyEnabled(env, CHECKOUT_PAYMENT_FLOWS_ENV) &&
     approvedCheckoutRevision(env[CHECKOUT_TERMS_REVISION_ENV]) !== null &&
-    approvedCheckoutRevision(env[CHECKOUT_CLAIM_POLICY_REVISION_ENV]) !== null
+    approvedCheckoutRevision(env[CHECKOUT_CLAIM_POLICY_REVISION_ENV]) !==
+      null &&
+    approvedCheckoutClaimWindowDaysOrNull(env) !== null
   );
 }
 
@@ -194,6 +215,27 @@ export function approvedCheckoutClaimPolicyRevision(
     );
   }
   return revision;
+}
+
+export function approvedCheckoutClaimWindowDays(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const days = approvedCheckoutClaimWindowDaysOrNull(env);
+  if (days === null) {
+    throw launchApprovalRequired(
+      "Checkout payment flows require an explicit approved Claim window",
+    );
+  }
+  return days;
+}
+
+function approvedCheckoutClaimWindowDaysOrNull(
+  env: NodeJS.ProcessEnv,
+): number | null {
+  const raw = env[CHECKOUT_CLAIM_WINDOW_DAYS_ENV]?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const days = Number(raw);
+  return Number.isSafeInteger(days) && days > 0 && days <= 3_650 ? days : null;
 }
 
 function approvedCheckoutRevision(value: string | undefined): string | null {

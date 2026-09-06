@@ -1959,6 +1959,7 @@ describe("checkout payment capture protocol", () => {
     const previousEnvironment = {
       gate: process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED,
       claimPolicyRevision: process.env.TAVEN_CLAIM_POLICY_REVISION,
+      claimWindowDays: process.env.TAVEN_CLAIM_WINDOW_DAYS,
       termsRevision: process.env.TAVEN_TERMS_REVISION,
       photoConsentRevision: process.env.TAVEN_PHOTO_CONSENT_REVISION,
       provider: process.env.TAVEN_PAYMENT_PROVIDER,
@@ -1969,6 +1970,7 @@ describe("checkout payment capture protocol", () => {
     const signingSecret = "e2e-sandbox-payment-signing-secret-32";
     process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
     process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
+    process.env.TAVEN_CLAIM_WINDOW_DAYS = "30";
     process.env.TAVEN_TERMS_REVISION = "terms-v1";
     process.env.TAVEN_PHOTO_CONSENT_REVISION = "photos-v1";
     process.env.TAVEN_PAYMENT_PROVIDER = "sandbox";
@@ -2470,6 +2472,7 @@ describe("checkout payment capture protocol", () => {
               acceptedOrderPriceBindingId: true,
               acceptedTermsRevision: true,
               acceptedClaimPolicyRevision: true,
+              acceptedClaimWindowDays: true,
               withdrawalExceptionAcknowledgedAt: true,
               checkoutContactSnapshot: true,
             },
@@ -2481,6 +2484,7 @@ describe("checkout payment capture protocol", () => {
           acceptedOrderPriceBindingId: null,
           acceptedTermsRevision: null,
           acceptedClaimPolicyRevision: null,
+          acceptedClaimWindowDays: null,
           withdrawalExceptionAcknowledgedAt: null,
           checkoutContactSnapshot: null,
         },
@@ -3129,6 +3133,7 @@ describe("checkout payment capture protocol", () => {
             select: {
               acceptedTermsRevision: true,
               acceptedClaimPolicyRevision: true,
+              acceptedClaimWindowDays: true,
             },
           }),
         ]),
@@ -3137,6 +3142,7 @@ describe("checkout payment capture protocol", () => {
         {
           acceptedTermsRevision: "terms-v1",
           acceptedClaimPolicyRevision: "claim-policy-v1",
+          acceptedClaimWindowDays: 30,
         },
       ]);
 
@@ -3592,6 +3598,10 @@ describe("checkout payment capture protocol", () => {
       restoreEnvironment(
         "TAVEN_CLAIM_POLICY_REVISION",
         previousEnvironment.claimPolicyRevision,
+      );
+      restoreEnvironment(
+        "TAVEN_CLAIM_WINDOW_DAYS",
+        previousEnvironment.claimWindowDays,
       );
       restoreEnvironment(
         "TAVEN_TERMS_REVISION",

@@ -4,6 +4,465 @@
  */
 
 export interface paths {
+    "/admin/orders/{orderId}/balance-payment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create the post-QC balance payment intent */
+        post: operations["PaymentsController_createBalance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the fulfilment and recovery projection */
+        get: operations["OrdersController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/adjustments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an immutable manual price adjustment */
+        post: operations["OrdersController_adjustment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/adjustments/{adjustmentId}/refund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request the refund for a manual price adjustment */
+        post: operations["OrdersController_refundAdjustment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel an order before physical handoff and request refunds */
+        post: operations["OrdersController_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claim-window-migration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve the exact Claim window for a legacy accepted Order */
+        post: operations["OrdersController_approveLegacyClaimWindow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open a manually verified fulfilment Claim */
+        post: operations["OrdersController_createClaim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/refund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Credit and refund every unresolved slot in a Claim */
+        post: operations["OrdersController_refundClaim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/rejection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a clean post-delivery quality Claim */
+        post: operations["OrdersController_rejectClaim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve and create a whole-parcel reprint for a LOST Claim */
+        post: operations["OrdersController_createClaimReprint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reshipment-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-QC and hand off a custody-confirmed incident reshipment */
+        post: operations["OrdersController_handoffReshipment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/withdrawal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw a clean post-delivery quality Claim */
+        post: operations["OrdersController_withdrawClaim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete a fully delivered and settled order */
+        post: operations["OrdersController_complete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept a platform-owned production Job */
+        post: operations["OrdersController_acceptJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/failure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a terminal Job failure and recovery obligation */
+        post: operations["OrdersController_failJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/packing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pack and bind a Job to exactly one Shipment */
+        post: operations["OrdersController_packJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/printed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish printing and settle consumed resources */
+        post: operations["OrdersController_printed"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/printing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start printing a G-code-ready Job */
+        post: operations["OrdersController_startPrinting"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/qc-approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a Job after QC */
+        post: operations["OrdersController_approveQc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/qc-submission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit optional v0 QC evidence */
+        post: operations["OrdersController_submitQc"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve fresh resources and create a replacement Job */
+        post: operations["OrdersController_createReplacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-expiry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close an expired replacement request into refund recovery */
+        post: operations["OrdersController_expireReplacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/shipments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a parcel or replacement parcel leaf */
+        post: operations["OrdersController_createShipment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/shipments/{shipmentId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply an authenticated carrier lifecycle event */
+        post: operations["OrdersController_shipmentEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/shipments/{shipmentId}/handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Commit one provider-confirmed parcel handoff */
+        post: operations["OrdersController_handoffShipment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/shipments/{shipmentId}/label": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a manually-created carrier label */
+        post: operations["OrdersController_labelShipment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/shipments/{shipmentId}/label-void": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a provider-confirmed carrier label void */
+        post: operations["OrdersController_confirmLabelVoid"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/quote-requests": {
         parameters: {
             query?: never;
@@ -548,6 +1007,11 @@ export interface components {
             termsRevision: string;
             version: number;
         };
+        ApproveLegacyClaimWindowDto: {
+            approvalReference: string;
+            claimPolicyRevision: string;
+            claimWindowDays: number;
+        };
         AttachAutomaticQuoteModelFileDto: {
             /** Format: uuid */
             modelFileId: string;
@@ -714,6 +1178,16 @@ export interface components {
             /** Format: uuid */
             sessionId: string;
         };
+        CancellationPrintingConsumptionDto: {
+            actualMaterialMilligrams: string;
+            /** Format: uuid */
+            jobId: string;
+        };
+        CancelOrderDto: {
+            /** @description Exact material consumption for every Job that is actively printing */
+            printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
+            reason: string;
+        };
         CheckoutBillingDto: {
             addressLine1: string;
             addressLine2?: string;
@@ -744,6 +1218,15 @@ export interface components {
             provider: string;
             /** @enum {string} */
             status: "CREATED" | "PENDING" | "CAPTURED" | "FAILED" | "VOIDED" | "REFUND_PENDING" | "PARTIALLY_REFUNDED" | "REFUNDED";
+        };
+        ClaimReprintJobDto: {
+            /**
+             * Format: uuid
+             * @description Compatible candidate calculated after the parcel loss with future capacity
+             */
+            candidateResourceEstimateId: string;
+            /** Format: uuid */
+            sourceJobId: string;
         };
         ConfigureAutomaticQuoteDraftItemDto: {
             bodyIds: string[];
@@ -793,6 +1276,10 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        CreateBalancePaymentDto: {
+            /** @enum {string} */
+            method: "CARD" | "BANK_TRANSFER";
+        };
         CreateCheckoutPaymentDto: {
             acceptClaimPolicy: boolean;
             acceptTerms: boolean;
@@ -808,6 +1295,29 @@ export interface components {
             photoPublicationConsent: boolean;
             termsRevision: string;
         };
+        CreateClaimDto: {
+            fulfilmentSlotIds: string[];
+            /** Format: uuid */
+            incidentShipmentId?: string;
+            /** @enum {string} */
+            origin: "SHIPMENT_INCIDENT" | "POST_DELIVERY_QUALITY";
+            reason: string;
+        };
+        CreateClaimReprintDto: {
+            /** @description Stable reprint identity; omitted values derive from the command key */
+            planKey?: string;
+            replacements: components["schemas"]["ClaimReprintJobDto"][];
+        };
+        CreatePriceAdjustmentDto: {
+            allocation: components["schemas"]["PriceAdjustmentAllocationDto"];
+            amountMinor: string;
+            /** Format: uuid */
+            claimId?: string;
+            /** Format: uuid */
+            paymentId?: string;
+            /** @enum {string} */
+            reason: "EXPRESS_BREACH" | "PRODUCTION_FAILURE" | "SHIPMENT_INCIDENT" | "POST_DELIVERY_ISSUE";
+        };
         CreateQuoteRequestDto: {
             attribution?: {
                 [key: string]: unknown;
@@ -820,6 +1330,58 @@ export interface components {
             purpose?: string;
             /** Format: date */
             requestedDate?: string;
+        };
+        CreateReplacementDto: {
+            /**
+             * Format: uuid
+             * @description Compatible candidate calculated after the source failure with future capacity
+             */
+            candidateResourceEstimateId: string;
+            /** @description Stable resource-plan identity; omitted values derive from the command key */
+            planKey?: string;
+        };
+        CreateShipmentDto: {
+            /** Format: uuid */
+            replacesShipmentId?: string;
+            /** Format: uuid */
+            shipmentPlanId: string;
+        };
+        ExpireReplacementDto: {
+            /** @description Exact material consumption for every actively printing Job abandoned by the expired replacement request */
+            printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
+        };
+        FulfilmentCommandResultDto: {
+            /** Format: uuid */
+            orderId: string;
+            result: Record<string, never>;
+            status: string;
+        };
+        FulfilmentProjectionDto: {
+            claims: Record<string, never>[];
+            jobs: Record<string, never>[];
+            /** Format: uuid */
+            orderId: string;
+            orderStatus: string;
+            phase: Record<string, never>;
+            priceAdjustments: Record<string, never>[];
+            replacementRequests: Record<string, never>[];
+            shipments: Record<string, never>[];
+            slots: Record<string, never>[];
+        };
+        HandoffReshipmentDto: {
+            carrier: string;
+            carrierLabelId: string;
+            /** Format: date-time */
+            custodyConfirmedAt: string;
+            /** Format: date-time */
+            occurredAt: string;
+            providerEventId: string;
+            providerShipmentId: string;
+            providerTransactionId: string;
+            reQcEvidence: string;
+            /** Format: date-time */
+            reQcPassedAt: string;
+            trackingCode?: string;
         };
         HealthResponseDto: {
             /**
@@ -890,6 +1452,24 @@ export interface components {
             };
             vatAmountMinor: number;
             vatRateBasisPoints: number;
+        };
+        JobFailureDto: {
+            actualMaterialMilligrams?: string;
+            /** @description Exact material consumption for every other actively printing Job in the failed parcel */
+            printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
+            reason: string;
+            /** @enum {string} */
+            recovery: "REPLACE" | "REFUND";
+            /** @enum {string} */
+            stage: "PREPARATION" | "GCODE" | "MACHINE" | "PRINTING" | "POST_PRINT" | "POST_QC" | "PACKING";
+        };
+        JobPrintedDto: {
+            actualMaterialMilligrams: string;
+        };
+        JobQcSubmissionDto: {
+            omissionReason?: string;
+            /** Format: uuid */
+            photoAssetId?: string;
         };
         ModelOfferItemDto: {
             color?: string;
@@ -1031,6 +1611,10 @@ export interface components {
             plannedWeightMilligrams: number;
             shippingAmountMinor: number;
         };
+        PackJobDto: {
+            /** Format: uuid */
+            shipmentId: string;
+        };
         PaymentCapabilitiesDto: {
             available: boolean;
             legalDocuments: components["schemas"]["CheckoutLegalDocumentsDto"] | null;
@@ -1039,6 +1623,15 @@ export interface components {
         };
         PaymentWebhookAcceptedDto: {
             outcome: string;
+        };
+        PriceAdjustmentAllocationDto: {
+            /** @description Exact per-slot credit allocation; required for non-express adjustments and derived from the immutable express component when omitted for express adjustments */
+            slotCredits?: components["schemas"]["PriceAdjustmentSlotCreditDto"][];
+        };
+        PriceAdjustmentSlotCreditDto: {
+            amountMinor: string;
+            /** Format: uuid */
+            fulfilmentSlotId: string;
         };
         QuoteAttachmentDto: {
             /** Format: date-time */
@@ -1095,6 +1688,9 @@ export interface components {
             /** @enum {string} */
             status: "IN_REVIEW" | "REJECTED" | "EXPIRED";
         };
+        RejectClaimDto: {
+            reason: string;
+        };
         RejectOfferDto: {
             reason?: string;
             termsRevision: string;
@@ -1116,6 +1712,26 @@ export interface components {
         };
         SetAutomaticQuoteExpressDto: {
             requested: boolean;
+        };
+        ShipmentEventDto: {
+            /** @enum {string} */
+            kind: "TRANSIT_SCAN" | "DELIVERY_SCAN" | "LOST" | "RETURNED" | "RECOVERED";
+            /** Format: date-time */
+            occurredAt: string;
+            providerEventId: string;
+            providerTransactionId: string;
+        };
+        ShipmentLabelDto: {
+            carrier: string;
+            carrierLabelId: string;
+            providerShipmentId: string;
+            trackingCode?: string;
+        };
+        ShipmentProviderEvidenceDto: {
+            /** Format: date-time */
+            occurredAt: string;
+            providerEventId: string;
+            providerTransactionId: string;
         };
         SignedDownloadResponseDto: {
             /** Format: uri */
@@ -1144,6 +1760,9 @@ export interface components {
             /** Format: uri */
             uploadUrl: string;
         };
+        WithdrawClaimDto: {
+            reason: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -1153,6 +1772,820 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    PaymentsController_createBalance: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable client command identity (8-255 characters) */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBalancePaymentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutPaymentDto"];
+                };
+            };
+            /** @description Balance topology or command changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The configured payment provider is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentProjectionDto"];
+                };
+            };
+            /** @description Order was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_adjustment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePriceAdjustmentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_refundAdjustment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                adjustmentId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_cancel: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelOrderDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_approveLegacyClaimWindow: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveLegacyClaimWindowDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_createClaim: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateClaimDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_refundClaim: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_rejectClaim: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectClaimDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Claim has incident, remedy, or financial recovery history */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_createClaimReprint: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateClaimReprintDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Claim scope or fresh replacement capacity is unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_handoffReshipment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HandoffReshipmentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Claim, custody, QC, or parcel scope is not reshippable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_withdrawClaim: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WithdrawClaimDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Claim has incident, remedy, or financial recovery history */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_complete: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_acceptJob: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_failJob: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobFailureDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Failure or recovery conflicts with current state */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_packJob: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackJobDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_printed: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobPrintedDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_startPrinting: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_approveQc: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_submitQc: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobQcSubmissionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_createReplacement: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReplacementDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Fresh resources cannot be reserved */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_expireReplacement: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpireReplacementDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Replacement request has not expired */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_createShipment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateShipmentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_shipmentEvent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                shipmentId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentEventDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_handoffShipment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                shipmentId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentProviderEvidenceDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_labelShipment: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                shipmentId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentLabelDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_confirmLabelVoid: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                shipmentId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShipmentProviderEvidenceDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
     OperatorQuoteRequestsController_list: {
         parameters: {
             query?: {

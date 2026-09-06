@@ -113,7 +113,7 @@ describe("OpenAPI artifact", () => {
       ),
     );
 
-    expect(idempotencyHeaders).toHaveLength(16);
+    expect(idempotencyHeaders).toHaveLength(42);
     expect(idempotencyHeaders).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -130,6 +130,88 @@ describe("OpenAPI artifact", () => {
         type: "string",
         minLength: 8,
         pattern: "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+      });
+    }
+  });
+
+  it("describes every fulfilment route input", async () => {
+    type Parameter = {
+      in?: string;
+      name?: string;
+      required?: boolean;
+      schema?: Record<string, unknown>;
+    };
+    type Operation = {
+      parameters?: Parameter[];
+      requestBody?: {
+        required?: boolean;
+        content?: Record<string, { schema?: Record<string, unknown> }>;
+      };
+    };
+    const contract = JSON.parse(
+      await readFile(new URL("../openapi.json", import.meta.url), "utf8"),
+    ) as { paths: Record<string, Record<string, Operation>> };
+    const fulfilmentPrefix = "/admin/orders/{orderId}/fulfilment";
+
+    for (const [path, pathItem] of Object.entries(contract.paths)) {
+      if (!path.startsWith(fulfilmentPrefix)) continue;
+      const parameterNames = [...path.matchAll(/\{([^}]+)\}/g)].map(
+        ([, name]) => name,
+      );
+      for (const operation of Object.values(pathItem)) {
+        for (const name of parameterNames) {
+          expect(
+            operation.parameters,
+            `${path} path parameter ${name}`,
+          ).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                in: "path",
+                name,
+                required: true,
+                schema: { type: "string", format: "uuid" },
+              }),
+            ]),
+          );
+        }
+      }
+    }
+
+    const requestBodies: Record<string, string> = {
+      [`${fulfilmentPrefix}/jobs/{jobId}/printed`]: "JobPrintedDto",
+      [`${fulfilmentPrefix}/jobs/{jobId}/qc-submission`]: "JobQcSubmissionDto",
+      [`${fulfilmentPrefix}/jobs/{jobId}/failure`]: "JobFailureDto",
+      [`${fulfilmentPrefix}/jobs/{jobId}/replacement`]: "CreateReplacementDto",
+      [`${fulfilmentPrefix}/jobs/{jobId}/replacement-expiry`]:
+        "ExpireReplacementDto",
+      [`${fulfilmentPrefix}/jobs/{jobId}/packing`]: "PackJobDto",
+      [`${fulfilmentPrefix}/shipments`]: "CreateShipmentDto",
+      [`${fulfilmentPrefix}/shipments/{shipmentId}/label`]: "ShipmentLabelDto",
+      [`${fulfilmentPrefix}/shipments/{shipmentId}/label-void`]:
+        "ShipmentProviderEvidenceDto",
+      [`${fulfilmentPrefix}/shipments/{shipmentId}/handoff`]:
+        "ShipmentProviderEvidenceDto",
+      [`${fulfilmentPrefix}/shipments/{shipmentId}/events`]: "ShipmentEventDto",
+      [`${fulfilmentPrefix}/adjustments`]: "CreatePriceAdjustmentDto",
+      [`${fulfilmentPrefix}/claims`]: "CreateClaimDto",
+      [`${fulfilmentPrefix}/claims/{claimId}/rejection`]: "RejectClaimDto",
+      [`${fulfilmentPrefix}/claims/{claimId}/withdrawal`]: "WithdrawClaimDto",
+      [`${fulfilmentPrefix}/claims/{claimId}/reshipment-handoff`]:
+        "HandoffReshipmentDto",
+      [`${fulfilmentPrefix}/claims/{claimId}/reprint`]: "CreateClaimReprintDto",
+      [`${fulfilmentPrefix}/cancel`]: "CancelOrderDto",
+    };
+    for (const [path, schemaName] of Object.entries(requestBodies)) {
+      expect(
+        contract.paths[path]?.post?.requestBody,
+        `${path} request body`,
+      ).toEqual({
+        required: true,
+        content: {
+          "application/json": {
+            schema: { $ref: `#/components/schemas/${schemaName}` },
+          },
+        },
       });
     }
   });

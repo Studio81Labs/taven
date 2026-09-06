@@ -26,7 +26,9 @@ snapshots are never recalculated.
 Anonymous checkout freezes normalized electronic contact and billing details
 on the order before creating a provider intent. No phone or customer account is
 required. `TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED` stays false until the terms and
-claim-policy revisions are approved and configured. Optional publication
+claim-policy revision and its `TAVEN_CLAIM_WINDOW_DAYS` are approved and
+configured. The accepted duration is snapshotted on each order so later policy
+changes cannot shorten an existing customer's window. Optional publication
 consent is offered only when `TAVEN_PHOTO_CONSENT_REVISION` names the same
 approved document revision published by the web application.
 

@@ -1198,6 +1198,7 @@ export class PersistenceFactory {
                  WHERE binding.id = $3 AND binding.order_id = $1
                ),
                accepted_claim_policy_revision = 'claim-policy-v1',
+               accepted_claim_window_days = 30,
                withdrawal_exception_acknowledged_at = $2,
                checkout_contact_snapshot = jsonb_build_object(
                  'email', $4::text,
@@ -1297,6 +1298,7 @@ export class PersistenceFactory {
              WHERE binding.id = $3 AND binding.order_id = $1
            ),
            accepted_claim_policy_revision = 'claim-policy-v1',
+           accepted_claim_window_days = 30,
            withdrawal_exception_acknowledged_at = $2,
            checkout_contact_snapshot = jsonb_build_object(
              'email', 'test@example.test',
@@ -1308,6 +1310,7 @@ export class PersistenceFactory {
          AND accepted_order_price_binding_id IS NULL
          AND accepted_terms_revision IS NULL
          AND accepted_claim_policy_revision IS NULL
+         AND accepted_claim_window_days IS NULL
          AND withdrawal_exception_acknowledged_at IS NULL`,
       [foundation.orderId, acknowledgedAt, foundation.orderPriceBindingId],
     );

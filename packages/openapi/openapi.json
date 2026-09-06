@@ -44,6 +44,31 @@
         ],
         "type": "object"
       },
+      "ApproveLegacyClaimWindowDto": {
+        "properties": {
+          "approvalReference": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "claimPolicyRevision": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "claimWindowDays": {
+            "maximum": 3650,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "claimPolicyRevision",
+          "claimWindowDays",
+          "approvalReference"
+        ],
+        "type": "object"
+      },
       "AttachAutomaticQuoteModelFileDto": {
         "properties": {
           "modelFileId": {
@@ -776,6 +801,43 @@
         ],
         "type": "object"
       },
+      "CancellationPrintingConsumptionDto": {
+        "properties": {
+          "actualMaterialMilligrams": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "jobId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "actualMaterialMilligrams"
+        ],
+        "type": "object"
+      },
+      "CancelOrderDto": {
+        "properties": {
+          "printingConsumptions": {
+            "description": "Exact material consumption for every Job that is actively printing",
+            "items": {
+              "$ref": "#/components/schemas/CancellationPrintingConsumptionDto"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "CheckoutBillingDto": {
         "properties": {
           "addressLine1": {
@@ -912,6 +974,24 @@
           "currency",
           "checkoutUrl",
           "expiresAt"
+        ],
+        "type": "object"
+      },
+      "ClaimReprintJobDto": {
+        "properties": {
+          "candidateResourceEstimateId": {
+            "description": "Compatible candidate calculated after the parcel loss with future capacity",
+            "format": "uuid",
+            "type": "string"
+          },
+          "sourceJobId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceJobId",
+          "candidateResourceEstimateId"
         ],
         "type": "object"
       },
@@ -1079,6 +1159,21 @@
         },
         "type": "object"
       },
+      "CreateBalancePaymentDto": {
+        "properties": {
+          "method": {
+            "enum": [
+              "CARD",
+              "BANK_TRANSFER"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
       "CreateCheckoutPaymentDto": {
         "properties": {
           "acceptClaimPolicy": {
@@ -1146,6 +1241,95 @@
         ],
         "type": "object"
       },
+      "CreateClaimDto": {
+        "properties": {
+          "fulfilmentSlotIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "incidentShipmentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "SHIPMENT_INCIDENT",
+              "POST_DELIVERY_QUALITY"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "reason",
+          "fulfilmentSlotIds"
+        ],
+        "type": "object"
+      },
+      "CreateClaimReprintDto": {
+        "properties": {
+          "planKey": {
+            "description": "Stable reprint identity; omitted values derive from the command key",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "replacements": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimReprintJobDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "replacements"
+        ],
+        "type": "object"
+      },
+      "CreatePriceAdjustmentDto": {
+        "properties": {
+          "allocation": {
+            "$ref": "#/components/schemas/PriceAdjustmentAllocationDto"
+          },
+          "amountMinor": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "claimId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "paymentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "EXPRESS_BREACH",
+              "PRODUCTION_FAILURE",
+              "SHIPMENT_INCIDENT",
+              "POST_DELIVERY_ISSUE"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "amountMinor",
+          "allocation"
+        ],
+        "type": "object"
+      },
       "CreateQuoteRequestDto": {
         "properties": {
           "attribution": {
@@ -1178,6 +1362,197 @@
         "required": [
           "description",
           "contact"
+        ],
+        "type": "object"
+      },
+      "CreateReplacementDto": {
+        "properties": {
+          "candidateResourceEstimateId": {
+            "description": "Compatible candidate calculated after the source failure with future capacity",
+            "format": "uuid",
+            "type": "string"
+          },
+          "planKey": {
+            "description": "Stable resource-plan identity; omitted values derive from the command key",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidateResourceEstimateId"
+        ],
+        "type": "object"
+      },
+      "CreateShipmentDto": {
+        "properties": {
+          "replacesShipmentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "shipmentPlanId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shipmentPlanId"
+        ],
+        "type": "object"
+      },
+      "ExpireReplacementDto": {
+        "properties": {
+          "printingConsumptions": {
+            "description": "Exact material consumption for every actively printing Job abandoned by the expired replacement request",
+            "items": {
+              "$ref": "#/components/schemas/CancellationPrintingConsumptionDto"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "FulfilmentCommandResultDto": {
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "status",
+          "result"
+        ],
+        "type": "object"
+      },
+      "FulfilmentProjectionDto": {
+        "properties": {
+          "claims": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "jobs": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderStatus": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "object"
+          },
+          "priceAdjustments": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "replacementRequests": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "shipments": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "slots": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "orderId",
+          "orderStatus",
+          "phase",
+          "jobs",
+          "shipments",
+          "slots",
+          "replacementRequests",
+          "claims",
+          "priceAdjustments"
+        ],
+        "type": "object"
+      },
+      "HandoffReshipmentDto": {
+        "properties": {
+          "carrier": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "carrierLabelId": {
+            "maxLength": 190,
+            "minLength": 1,
+            "type": "string"
+          },
+          "custodyConfirmedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "providerEventId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "providerShipmentId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "providerTransactionId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reQcEvidence": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reQcPassedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "trackingCode": {
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerEventId",
+          "providerTransactionId",
+          "occurredAt",
+          "carrier",
+          "providerShipmentId",
+          "carrierLabelId",
+          "custodyConfirmedAt",
+          "reQcPassedAt",
+          "reQcEvidence"
         ],
         "type": "object"
       },
@@ -1408,6 +1783,77 @@
           "items",
           "components"
         ],
+        "type": "object"
+      },
+      "JobFailureDto": {
+        "properties": {
+          "actualMaterialMilligrams": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "printingConsumptions": {
+            "description": "Exact material consumption for every other actively printing Job in the failed parcel",
+            "items": {
+              "$ref": "#/components/schemas/CancellationPrintingConsumptionDto"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "recovery": {
+            "enum": [
+              "REPLACE",
+              "REFUND"
+            ],
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "PREPARATION",
+              "GCODE",
+              "MACHINE",
+              "PRINTING",
+              "POST_PRINT",
+              "POST_QC",
+              "PACKING"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "reason",
+          "recovery"
+        ],
+        "type": "object"
+      },
+      "JobPrintedDto": {
+        "properties": {
+          "actualMaterialMilligrams": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actualMaterialMilligrams"
+        ],
+        "type": "object"
+      },
+      "JobQcSubmissionDto": {
+        "properties": {
+          "omissionReason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "photoAssetId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "ModelOfferItemDto": {
@@ -1953,6 +2399,18 @@
         ],
         "type": "object"
       },
+      "PackJobDto": {
+        "properties": {
+          "shipmentId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shipmentId"
+        ],
+        "type": "object"
+      },
       "PaymentCapabilitiesDto": {
         "properties": {
           "available": {
@@ -1997,6 +2455,36 @@
         },
         "required": [
           "outcome"
+        ],
+        "type": "object"
+      },
+      "PriceAdjustmentAllocationDto": {
+        "properties": {
+          "slotCredits": {
+            "description": "Exact per-slot credit allocation; required for non-express adjustments and derived from the immutable express component when omitted for express adjustments",
+            "items": {
+              "$ref": "#/components/schemas/PriceAdjustmentSlotCreditDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "PriceAdjustmentSlotCreditDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "fulfilmentSlotId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fulfilmentSlotId",
+          "amountMinor"
         ],
         "type": "object"
       },
@@ -2181,6 +2669,19 @@
         ],
         "type": "object"
       },
+      "RejectClaimDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "RejectOfferDto": {
         "properties": {
           "reason": {
@@ -2275,6 +2776,94 @@
         ],
         "type": "object"
       },
+      "ShipmentEventDto": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "TRANSIT_SCAN",
+              "DELIVERY_SCAN",
+              "LOST",
+              "RETURNED",
+              "RECOVERED"
+            ],
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "providerEventId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "providerTransactionId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerEventId",
+          "providerTransactionId",
+          "occurredAt",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ShipmentLabelDto": {
+        "properties": {
+          "carrier": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "carrierLabelId": {
+            "maxLength": 190,
+            "minLength": 1,
+            "type": "string"
+          },
+          "providerShipmentId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "trackingCode": {
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "carrier",
+          "providerShipmentId",
+          "carrierLabelId"
+        ],
+        "type": "object"
+      },
+      "ShipmentProviderEvidenceDto": {
+        "properties": {
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "providerEventId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "providerTransactionId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerEventId",
+          "providerTransactionId",
+          "occurredAt"
+        ],
+        "type": "object"
+      },
       "SignedDownloadResponseDto": {
         "properties": {
           "downloadUrl": {
@@ -2334,6 +2923,19 @@
           "requiredHeaders"
         ],
         "type": "object"
+      },
+      "WithdrawClaimDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -2352,6 +2954,1692 @@
   },
   "openapi": "3.0.0",
   "paths": {
+    "/admin/orders/{orderId}/balance-payment": {
+      "post": {
+        "operationId": "PaymentsController_createBalance",
+        "parameters": [
+          {
+            "description": "Stable client command identity (8-255 characters)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBalancePaymentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutPaymentDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Balance topology or command changed"
+          },
+          "503": {
+            "description": "The configured payment provider is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create the post-QC balance payment intent",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment": {
+      "get": {
+        "operationId": "OrdersController_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentProjectionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": "Order was not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read the fulfilment and recovery projection",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/adjustments": {
+      "post": {
+        "operationId": "OrdersController_adjustment",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePriceAdjustmentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Record an immutable manual price adjustment",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/adjustments/{adjustmentId}/refund": {
+      "post": {
+        "operationId": "OrdersController_refundAdjustment",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "adjustmentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Request the refund for a manual price adjustment",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/cancel": {
+      "post": {
+        "operationId": "OrdersController_cancel",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelOrderDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel an order before physical handoff and request refunds",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claim-window-migration": {
+      "post": {
+        "operationId": "OrdersController_approveLegacyClaimWindow",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveLegacyClaimWindowDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Approve the exact Claim window for a legacy accepted Order",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims": {
+      "post": {
+        "operationId": "OrdersController_createClaim",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClaimDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Open a manually verified fulfilment Claim",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/refund": {
+      "post": {
+        "operationId": "OrdersController_refundClaim",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Credit and refund every unresolved slot in a Claim",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/rejection": {
+      "post": {
+        "operationId": "OrdersController_rejectClaim",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectClaimDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Claim has incident, remedy, or financial recovery history"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reject a clean post-delivery quality Claim",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint": {
+      "post": {
+        "operationId": "OrdersController_createClaimReprint",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClaimReprintDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Claim scope or fresh replacement capacity is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reserve and create a whole-parcel reprint for a LOST Claim",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reshipment-handoff": {
+      "post": {
+        "operationId": "OrdersController_handoffReshipment",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffReshipmentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Claim, custody, QC, or parcel scope is not reshippable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Re-QC and hand off a custody-confirmed incident reshipment",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/withdrawal": {
+      "post": {
+        "operationId": "OrdersController_withdrawClaim",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawClaimDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Claim has incident, remedy, or financial recovery history"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Withdraw a clean post-delivery quality Claim",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/complete": {
+      "post": {
+        "operationId": "OrdersController_complete",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Complete a fully delivered and settled order",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/accept": {
+      "post": {
+        "operationId": "OrdersController_acceptJob",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Accept a platform-owned production Job",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/failure": {
+      "post": {
+        "operationId": "OrdersController_failJob",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobFailureDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Failure or recovery conflicts with current state"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Record a terminal Job failure and recovery obligation",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/packing": {
+      "post": {
+        "operationId": "OrdersController_packJob",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackJobDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pack and bind a Job to exactly one Shipment",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/printed": {
+      "post": {
+        "operationId": "OrdersController_printed",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobPrintedDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Finish printing and settle consumed resources",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/printing": {
+      "post": {
+        "operationId": "OrdersController_startPrinting",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Start printing a G-code-ready Job",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/qc-approval": {
+      "post": {
+        "operationId": "OrdersController_approveQc",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Approve a Job after QC",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/qc-submission": {
+      "post": {
+        "operationId": "OrdersController_submitQc",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobQcSubmissionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Submit optional v0 QC evidence",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement": {
+      "post": {
+        "operationId": "OrdersController_createReplacement",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReplacementDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Fresh resources cannot be reserved"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reserve fresh resources and create a replacement Job",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-expiry": {
+      "post": {
+        "operationId": "OrdersController_expireReplacement",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpireReplacementDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Replacement request has not expired"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Close an expired replacement request into refund recovery",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/shipments": {
+      "post": {
+        "operationId": "OrdersController_createShipment",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateShipmentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a parcel or replacement parcel leaf",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/shipments/{shipmentId}/events": {
+      "post": {
+        "operationId": "OrdersController_shipmentEvent",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "shipmentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShipmentEventDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Apply an authenticated carrier lifecycle event",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/shipments/{shipmentId}/handoff": {
+      "post": {
+        "operationId": "OrdersController_handoffShipment",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "shipmentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShipmentProviderEvidenceDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Commit one provider-confirmed parcel handoff",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/shipments/{shipmentId}/label": {
+      "post": {
+        "operationId": "OrdersController_labelShipment",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "shipmentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShipmentLabelDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Record a manually-created carrier label",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/shipments/{shipmentId}/label-void": {
+      "post": {
+        "operationId": "OrdersController_confirmLabelVoid",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "shipmentId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShipmentProviderEvidenceDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Record a provider-confirmed carrier label void",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
     "/admin/quote-requests": {
       "get": {
         "operationId": "OperatorQuoteRequestsController_list",
