@@ -27,6 +27,7 @@ CREATE TABLE "handling_sessions" (
   "command_idempotency_key" varchar(255) NOT NULL,
   "completed_at" timestamptz(3),
   "voided_at" timestamptz(3),
+  "void_reason" varchar(1000),
   "created_at" timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" timestamptz(3) NOT NULL,
   CONSTRAINT "handling_sessions_pkey" PRIMARY KEY ("id"),
@@ -34,11 +35,14 @@ CREATE TABLE "handling_sessions" (
   CONSTRAINT "handling_sessions_operator_identity_id_fkey" FOREIGN KEY ("operator_identity_id") REFERENCES "operator_identities"("id") ON DELETE RESTRICT,
   CONSTRAINT "handling_sessions_rate_check" CHECK ("labor_rate_numerator" >= 0 AND "labor_rate_denominator" > 0),
   CONSTRAINT "handling_sessions_currency_check" CHECK ("currency" ~ '^[A-Z]{3}$'),
-  CONSTRAINT "handling_sessions_reason_check" CHECK ("reason" IS NULL OR length(btrim("reason")) BETWEEN 1 AND 1000),
+  CONSTRAINT "handling_sessions_reason_check" CHECK (
+    ("reason" IS NULL OR length(btrim("reason")) BETWEEN 1 AND 1000)
+    AND ("void_reason" IS NULL OR length(btrim("void_reason")) BETWEEN 1 AND 1000)
+  ),
   CONSTRAINT "handling_sessions_shape_check" CHECK (
     ("lifecycle" = 'OPEN' AND "source" = 'TIMER' AND "ended_at" IS NULL AND "duration_milliseconds" IS NULL AND "total_cost_minor" IS NULL AND "completed_at" IS NULL AND "voided_at" IS NULL)
     OR ("lifecycle" = 'COMPLETED' AND "ended_at" IS NOT NULL AND "ended_at" >= "started_at" AND "duration_milliseconds" > 0 AND "total_cost_minor" >= 0 AND "completed_at" IS NOT NULL AND "voided_at" IS NULL)
-    OR ("lifecycle" = 'VOIDED' AND "voided_at" IS NOT NULL)
+    OR ("lifecycle" = 'VOIDED' AND "voided_at" IS NOT NULL AND "void_reason" IS NOT NULL)
   )
 );
 CREATE INDEX "handling_sessions_node_id_created_at_idx" ON "handling_sessions"("node_id", "created_at");
@@ -233,6 +237,7 @@ BEGIN
      OR NEW."labor_rate_denominator" IS DISTINCT FROM OLD."labor_rate_denominator"
      OR NEW."currency" IS DISTINCT FROM OLD."currency"
      OR NEW."command_idempotency_key" IS DISTINCT FROM OLD."command_idempotency_key"
+     OR NEW."reason" IS DISTINCT FROM OLD."reason"
      OR NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
     RAISE EXCEPTION 'handling measurement inputs are immutable';
   END IF;

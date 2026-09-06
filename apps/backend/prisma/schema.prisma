@@ -1050,6 +1050,7 @@ model HandlingSession {
   commandIdempotencyKey String                   @map("command_idempotency_key") @db.VarChar(255)
   completedAt           DateTime?                @map("completed_at") @db.Timestamptz(3)
   voidedAt              DateTime?                @map("voided_at") @db.Timestamptz(3)
+  voidReason            String?                  @map("void_reason") @db.VarChar(1000)
   createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
 

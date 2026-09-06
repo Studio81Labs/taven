@@ -111,6 +111,11 @@ export class MeasurementService {
       allocations,
       async (tx) => {
         const session = await this.lockSession(tx, sessionId, nodeId);
+        if (session.operatorIdentityId !== operator.operatorId) {
+          throw new ForbiddenException(
+            "Handling timer belongs to another operator",
+          );
+        }
         if (session.lifecycle !== HandlingSessionLifecycle.OPEN) {
           throw new ConflictException("Handling session is already closed");
         }
@@ -237,7 +242,7 @@ export class MeasurementService {
           data: {
             lifecycle: HandlingSessionLifecycle.VOIDED,
             voidedAt: await databaseNow(tx),
-            reason,
+            voidReason: reason,
           },
         });
         await this.audit.recordOperator(tx, operator, {
@@ -496,7 +501,10 @@ export class MeasurementService {
         );
       if (
         component === HandlingComponent.HANDLING_PACK &&
-        (!input.shipmentId || input.servedUnits !== 1n)
+        (!input.shipmentId ||
+          input.orderItemId ||
+          input.jobId ||
+          input.servedUnits !== 1n)
       )
         throw new BadRequestException(
           "Pack handling requires one actual shipment per allocation",
@@ -704,7 +712,7 @@ function parseActualCost(body: RecordActualCostDto) {
   )
     throw new BadRequestException("Cost category or source is invalid");
   const reason = optionalText(body.reason, "reason", 1000);
-  if (body.source === ActualCostSource.MANUAL && !reason)
+  if ((body.source === ActualCostSource.MANUAL || body.supersedesId) && !reason)
     throw new BadRequestException("Manual cost evidence requires a reason");
   return {
     category: body.category as ActualCostCategory,
