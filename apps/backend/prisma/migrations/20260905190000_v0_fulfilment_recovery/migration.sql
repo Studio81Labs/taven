@@ -1278,7 +1278,7 @@ CREATE TABLE "claims" (
     CONSTRAINT "claims_reason_check" CHECK (btrim("reason") <> ''),
     CONSTRAINT "claims_origin_scope_check" CHECK (
         ("origin" = 'SHIPMENT_INCIDENT' AND "incident_shipment_id" IS NOT NULL)
-        OR ("origin" = 'POST_DELIVERY_QUALITY')
+        OR ("origin" = 'POST_DELIVERY_QUALITY' AND "incident_shipment_id" IS NULL)
     ),
     CONSTRAINT "claims_resolution_check" CHECK (
         ("status" IN ('OPEN', 'ACTIVE') AND "resolved_at" IS NULL)

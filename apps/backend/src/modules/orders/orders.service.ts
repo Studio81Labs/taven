@@ -2296,7 +2296,15 @@ export class OrdersService {
       throw new BadRequestException("fulfilmentSlotIds contains duplicates");
     }
     for (const slotId of slotIds) assertUuid(slotId, "fulfilmentSlotId");
-    if (body.incidentShipmentId) {
+    if (
+      origin === ClaimOrigin.POST_DELIVERY_QUALITY &&
+      body.incidentShipmentId !== undefined
+    ) {
+      throw new BadRequestException(
+        "incidentShipmentId is not allowed for a post-delivery quality Claim",
+      );
+    }
+    if (body.incidentShipmentId !== undefined) {
       assertUuid(body.incidentShipmentId, "incidentShipmentId");
     }
     if (origin === ClaimOrigin.SHIPMENT_INCIDENT && !body.incidentShipmentId) {
@@ -2312,7 +2320,10 @@ export class OrdersService {
         origin,
         reason,
         fulfilmentSlotIds: slotIds,
-        incidentShipmentId: body.incidentShipmentId ?? null,
+        incidentShipmentId:
+          origin === ClaimOrigin.SHIPMENT_INCIDENT
+            ? (body.incidentShipmentId ?? null)
+            : null,
       },
       async (tx) => {
         const order = await this.lockOrder(tx, orderId);
@@ -2441,7 +2452,10 @@ export class OrdersService {
           data: {
             orderId,
             orderPhaseId: phase.id,
-            incidentShipmentId: body.incidentShipmentId ?? null,
+            incidentShipmentId:
+              origin === ClaimOrigin.SHIPMENT_INCIDENT
+                ? (body.incidentShipmentId ?? null)
+                : null,
             origin,
             reason,
             openedAt,
@@ -4261,21 +4275,32 @@ export class OrdersService {
     readyAt: Date,
   ): Promise<void> {
     const financial = await tx.$queryRaw<
-      Array<{ balance_due_minor: bigint | null; balance_captured: boolean }>
+      Array<{ balance_due_minor: bigint | null; balance_settled: boolean }>
     >`
       SELECT taven_balance_requested_amount(${orderId}::uuid) AS balance_due_minor,
              EXISTS (
-               SELECT 1 FROM payments payment
-               WHERE payment.order_id = ${orderId}::uuid
-                 AND payment.role = 'BALANCE'
-                 AND payment.status = 'CAPTURED'
-             ) AS balance_captured
+               SELECT 1
+               FROM payments balance
+               WHERE balance.order_id = ${orderId}::uuid
+                 AND balance.role = 'BALANCE'
+                 AND balance.status IN (
+                   'CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED'
+                 )
+                 AND balance.captured_amount_minor =
+                     balance.requested_amount_minor
+                 AND balance.captured_amount_minor - coalesce((
+                   SELECT sum(refund.amount_minor)
+                   FROM refund_transactions refund
+                   WHERE refund.payment_id = balance.id
+                     AND refund.status = 'SUCCEEDED'
+                 ), 0) = taven_balance_requested_amount(${orderId}::uuid)
+             ) AS balance_settled
     `;
     const sourceStatuses: OrderStatus[] = [];
     if (financial[0]?.balance_due_minor === 0n) {
       sourceStatuses.push(OrderStatus.QC_PASSED);
     }
-    if (financial[0]?.balance_captured) {
+    if (financial[0]?.balance_settled) {
       sourceStatuses.push(OrderStatus.AWAITING_BALANCE);
     }
     if (sourceStatuses.length === 0) return;

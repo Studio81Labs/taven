@@ -1722,7 +1722,6 @@ BEGIN
              AND balance."order_price_binding_id" = binding."id"
              AND balance."price_snapshot_id" = binding."price_snapshot_id"
              AND balance."role" = 'BALANCE'
-             AND balance."requested_amount_minor" = required_balance
              AND balance."checkout_capture_expires_at" IS NULL
              AND taven_balance_deadline_is_anchored(
                  target_order."id", balance."created_at", balance."balance_due_at",
@@ -1736,14 +1735,23 @@ BEGIN
               AND (
                   (
                       balance."status" = 'PENDING'
+                      AND balance."requested_amount_minor" = required_balance
                       AND balance."provider_intent_id" ~ '[^[:space:]]'
                       AND balance."capture_authorized"
                       AND balance."capture_cutoff_at" IS NULL
                       AND balance."balance_due_at" > clock_timestamp()
                   )
                   OR (
-                      balance."status" = 'CAPTURED'
+                      balance."status" IN (
+                          'CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED'
+                      )
                       AND balance."captured_amount_minor" = balance."requested_amount_minor"
+                      AND balance."captured_amount_minor" - coalesce((
+                          SELECT sum(refund."amount_minor")
+                          FROM "refund_transactions" refund
+                          WHERE refund."payment_id" = balance."id"
+                            AND refund."status" = 'SUCCEEDED'
+                      ), 0) = required_balance
                       AND balance."provider_capture_id" ~ '[^[:space:]]'
                       AND balance."captured_at" IS NOT NULL
                       AND balance."captured_at" < balance."balance_due_at"
@@ -1771,7 +1779,7 @@ BEGIN
                      AND candidate."role" = 'BALANCE'
                      AND candidate."status" IN (
                          'CREATED', 'PENDING', 'CAPTURED',
-                         'REFUND_PENDING', 'PARTIALLY_REFUNDED'
+                         'REFUND_PENDING', 'PARTIALLY_REFUNDED', 'REFUNDED'
                      )) = 1
               AND EXISTS (SELECT 1 FROM "jobs" job WHERE job."order_id" = target_order."id")
               AND NOT EXISTS (
@@ -1819,9 +1827,16 @@ BEGIN
              AND balance."order_price_binding_id" = binding."id"
              AND balance."price_snapshot_id" = binding."price_snapshot_id"
              AND balance."role" = 'BALANCE'
-             AND balance."status" = 'CAPTURED'
-             AND balance."requested_amount_minor" = required_balance
+             AND balance."status" IN (
+                 'CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED'
+             )
              AND balance."captured_amount_minor" = balance."requested_amount_minor"
+             AND balance."captured_amount_minor" - coalesce((
+                 SELECT sum(refund."amount_minor")
+                 FROM "refund_transactions" refund
+                 WHERE refund."payment_id" = balance."id"
+                   AND refund."status" = 'SUCCEEDED'
+             ), 0) = required_balance
              AND balance."captured_at" IS NOT NULL
              AND balance."balance_due_at" IS NOT NULL
              AND balance."captured_at" < balance."balance_due_at"

@@ -2098,13 +2098,43 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetId } }),
     ).resolves.toMatchObject({ retentionHold: "NONE" });
 
+    expect(() =>
+      orders.createClaim(
+        fixture.foundation.orderId,
+        {
+          origin: "POST_DELIVERY_QUALITY",
+          reason: "quality reports cannot consume a Shipment incident scope",
+          fulfilmentSlotIds: [fixture.foundation.fulfilmentSlotIds[0]!],
+          incidentShipmentId: fixture.foundation.shipmentId,
+        },
+        "post-delivery-quality-incident-rejected",
+      ),
+    ).toThrow(
+      "incidentShipmentId is not allowed for a post-delivery quality Claim",
+    );
+    await expect(
+      prisma.claim.create({
+        data: {
+          orderId: fixture.foundation.orderId,
+          orderPhaseId: fixture.foundation.orderPhaseId,
+          incidentShipmentId: fixture.foundation.shipmentId,
+          origin: "POST_DELIVERY_QUALITY",
+          reason: "invalid direct quality incident scope",
+        },
+      }),
+    ).rejects.toThrow("claims_origin_scope_check");
+    await expect(
+      prisma.claim.count({
+        where: { incidentShipmentId: fixture.foundation.shipmentId },
+      }),
+    ).resolves.toBe(0);
+
     const opened = await orders.createClaim(
       fixture.foundation.orderId,
       {
         origin: "POST_DELIVERY_QUALITY",
         reason: "retain the exact production evidence during investigation",
         fulfilmentSlotIds: [fixture.foundation.fulfilmentSlotIds[0]!],
-        incidentShipmentId: fixture.foundation.shipmentId,
       },
       "post-delivery-claim-retention-open",
     );
@@ -5000,30 +5030,24 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       },
     });
 
-    const client = await pool.connect();
-    await client.query("BEGIN");
-    try {
-      await client.query("SET LOCAL session_replication_role = 'replica'");
-      await client.query(
-        `UPDATE payments
-         SET status = 'CAPTURED', captured_amount_minor = requested_amount_minor,
-             provider_intent_id = $3,
-             provider_capture_id = $2, captured_at = clock_timestamp(),
-             updated_at = clock_timestamp()
-         WHERE id = $1`,
-        [
-          balance.id,
-          `split-capture-${balance.id}`,
-          `split-intent-${balance.id}`,
-        ],
-      );
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    } finally {
-      client.release();
-    }
+    const pendingBalance = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "split-payment-adjustment-balance-link",
+    );
+    expect(pendingBalance.paymentId).toBe(balance.id);
+    await payments.consumeProviderEvent(
+      "test",
+      {},
+      {
+        providerEventId: `split-payment-captured-${balance.id}`,
+        providerTransactionId: `balance-intent-${balance.id}`,
+        merchantReference: balance.id,
+        status: "CAPTURED",
+        amountMinor: balance.requestedAmountMinor,
+        currency: balance.currency,
+      },
+    );
 
     const exhausted = await orders.createPriceAdjustment(
       fixture.foundation.orderId,
@@ -5111,6 +5135,16 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         where: { id: unboundRefundId },
       }),
     ).resolves.toMatchObject({ paymentId: balance.id, amountMinor: 1n });
+    await succeedRefund(unboundRefundId);
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: balance.id } }),
+    ).resolves.toMatchObject({ status: "PARTIALLY_REFUNDED" });
+    await labelAndPack(fixture, 0);
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "READY_TO_SHIP" });
   });
 
   it("caps cumulative manual credits at each fulfilment Slot settlement", async () => {
@@ -5320,7 +5354,6 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         origin: "POST_DELIVERY_QUALITY",
         reason: "customer supplied verified evidence of a quality defect",
         fulfilmentSlotIds: [fixture.foundation.fulfilmentSlotIds[0]!],
-        incidentShipmentId: fixture.foundation.shipmentId,
       },
       "post-delivery-claim-key",
     );
