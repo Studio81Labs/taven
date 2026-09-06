@@ -37,7 +37,7 @@ export class AuditController {
   @Get("admin/audit-events")
   @ApiOperation({ summary: "Read redacted immutable operator audit events" })
   @ApiOkResponse({ type: AuditEventPageDto })
-  @ApiQuery({ name: "cursor", required: false })
+  @ApiQuery({ name: "cursor", required: false, type: String })
   @ApiQuery({
     name: "limit",
     required: false,
@@ -45,7 +45,7 @@ export class AuditController {
     minimum: 1,
     maximum: 100,
   })
-  @ApiQuery({ name: "eventType", required: false })
+  @ApiQuery({ name: "eventType", required: false, type: String })
   @ApiQuery({ name: "nodeId", required: false, type: String, format: "uuid" })
   @ApiQuery({
     name: "operatorIdentityId",

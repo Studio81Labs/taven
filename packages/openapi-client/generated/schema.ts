@@ -1929,9 +1929,9 @@ export interface operations {
                 orderId?: string;
                 operatorIdentityId?: string;
                 nodeId?: string;
-                eventType?: unknown;
+                eventType?: string;
                 limit?: number;
-                cursor?: unknown;
+                cursor?: string;
             };
             header?: {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */

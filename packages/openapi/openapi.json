@@ -3183,7 +3183,9 @@
             "in": "query",
             "name": "eventType",
             "required": false,
-            "schema": {}
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "in": "query",
@@ -3199,7 +3201,9 @@
             "in": "query",
             "name": "cursor",
             "required": false,
-            "schema": {}
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {

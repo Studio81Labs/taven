@@ -34,7 +34,7 @@ export class AuditService {
       orderId?: string;
       paymentId?: string;
       quoteRequestId?: string;
-      nodeId?: string;
+      nodeId: string;
       correlationId?: string;
       idempotencyKey?: string;
       reasonCode?: string;
@@ -42,7 +42,7 @@ export class AuditService {
       payload: Prisma.InputJsonObject;
     }>,
   ): Promise<void> {
-    if (input.nodeId && !operator.nodeIds.includes(input.nodeId)) {
+    if (!operator.nodeIds.includes(input.nodeId)) {
       throw new BadRequestException("Operator is not granted the audit node");
     }
     const reason = input.reason?.trim();
@@ -57,7 +57,7 @@ export class AuditService {
         actorKind: AuditActorKind.OPERATOR,
         actorId: operator.operatorId,
         operatorIdentityId: operator.operatorId,
-        nodeId: input.nodeId ?? null,
+        nodeId: input.nodeId,
         schemaVersion: 2,
         reasonCode: input.reasonCode ?? null,
         reason: reason ?? null,
