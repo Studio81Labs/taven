@@ -14,6 +14,41 @@ const operator: OperatorContext = {
 };
 
 describe("MeasurementService command boundaries", () => {
+  it("fingerprints parsed bigint timer evidence without throwing", async () => {
+    const now = new Date("2026-09-06T10:00:00.000Z");
+    const transaction = {
+      $queryRaw: async () => [{ now }],
+      idempotencyRecord: {
+        findFirst: async () => null,
+        create: async () => ({ id: "record" }),
+        update: async () => undefined,
+      },
+      handlingSession: {
+        create: async () => ({ id: "session", lifecycle: "OPEN" }),
+      },
+    };
+    const service = new MeasurementService(
+      {
+        $transaction: async (operation: (tx: typeof transaction) => unknown) =>
+          operation(transaction),
+      } as never,
+      { recordOperator: async () => undefined } as never,
+    );
+
+    await expect(
+      service.start(
+        operator,
+        {
+          component: "HANDLING_PACK",
+          laborRateNumerator: "300",
+          laborRateDenominator: "1",
+          currency: "CZK",
+        },
+        "valid-key",
+      ),
+    ).resolves.toEqual({ id: "session", status: "OPEN" });
+  });
+
   it("rejects malformed timer evidence before persistence", () => {
     const service = new MeasurementService({} as never, {} as never);
     expect(() =>

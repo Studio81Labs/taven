@@ -467,14 +467,50 @@ export class MeasurementService {
     component: HandlingComponent,
     inputs: AllocationInput[],
   ): Promise<void> {
+    if (
+      component === HandlingComponent.HANDLING_ORDER_FIX &&
+      inputs.length !== 1
+    ) {
+      throw new BadRequestException(
+        "Order-fix handling requires exactly one order allocation",
+      );
+    }
     for (const input of inputs) {
-      if (component === HandlingComponent.SHIPPING_TRIP && !input.shipmentId)
+      if (
+        component === HandlingComponent.HANDLING_ORDER_FIX &&
+        (input.orderItemId ||
+          input.jobId ||
+          input.shipmentId ||
+          input.servedUnits !== 1n)
+      )
+        throw new BadRequestException(
+          "Order-fix handling must target one order once",
+        );
+      if (
+        (component === HandlingComponent.HANDLING_PLATE ||
+          component === HandlingComponent.HANDLING_PIECE) &&
+        (!input.orderItemId || input.shipmentId)
+      )
+        throw new BadRequestException(
+          "Plate and piece handling require an order item",
+        );
+      if (
+        component === HandlingComponent.HANDLING_PACK &&
+        (!input.shipmentId || input.servedUnits !== 1n)
+      )
+        throw new BadRequestException(
+          "Pack handling requires one actual shipment per allocation",
+        );
+      if (
+        component === HandlingComponent.SHIPPING_TRIP &&
+        (!input.shipmentId || input.servedUnits !== 1n)
+      )
         throw new BadRequestException(
           "Shipping trip allocations require a shipment",
         );
       if (
         component === HandlingComponent.POSTPROCESSING_ITEM &&
-        !input.orderItemId
+        (!input.orderItemId || input.servedUnits !== 1n)
       )
         throw new BadRequestException(
           "Postprocessing allocations require an order item",
@@ -575,7 +611,7 @@ export class MeasurementService {
   ): Promise<T> {
     const idempotencyKey = requiredKey(key);
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
+      .update(canonicalCommandInput(input))
       .digest("hex");
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${namespace}:${idempotencyKey}`}, 0))::text`;
@@ -702,6 +738,9 @@ function parseAcquisitionSpend(body: RecordAcquisitionSpendDto) {
   const end = parseTimestamp(body.periodEnd, "periodEnd");
   if (end <= start)
     throw new BadRequestException("periodEnd must be after periodStart");
+  const reason = optionalText(body.reason, "reason", 1000);
+  if (body.supersedesId && !reason)
+    throw new BadRequestException("Spend corrections require a reason");
   return {
     channel: body.channel as AcquisitionChannel,
     periodStart: start,
@@ -717,11 +756,16 @@ function parseAcquisitionSpend(body: RecordAcquisitionSpendDto) {
     supersedesId: body.supersedesId
       ? uuid(body.supersedesId, "supersedesId")
       : null,
-    reason: optionalText(body.reason, "reason", 1000) ?? null,
+    reason: reason ?? null,
   };
 }
 function allocationTargetKey(input: AllocationInput): string {
-  return input.jobId ?? input.shipmentId ?? input.orderItemId ?? input.orderId;
+  return [
+    input.orderId,
+    input.orderItemId ?? "",
+    input.jobId ?? "",
+    input.shipmentId ?? "",
+  ].join(":");
 }
 function operatorNode(operator: OperatorContext): string {
   if (operator.nodeIds.length !== 1)
@@ -806,4 +850,22 @@ async function allocateSession(
 ) {
   const { allocateHandlingSession } = await import("@taven/core");
   return allocateHandlingSession(duration, cost, targets);
+}
+
+function canonicalCommandInput(value: unknown): string {
+  return JSON.stringify(canonicalize(value));
+}
+
+function canonicalize(value: unknown): unknown {
+  if (typeof value === "bigint") return { $bigint: value.toString() };
+  if (value instanceof Date) return { $date: value.toISOString() };
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalize(nested)]),
+    );
+  }
+  return value;
 }

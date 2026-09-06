@@ -239,6 +239,14 @@ BEGIN
   IF OLD."lifecycle" = 'COMPLETED' AND NEW."lifecycle" <> 'VOIDED' THEN
     RAISE EXCEPTION 'completed handling sessions can only be voided';
   END IF;
+  IF OLD."lifecycle" = 'COMPLETED' AND (
+    NEW."ended_at" IS DISTINCT FROM OLD."ended_at"
+    OR NEW."duration_milliseconds" IS DISTINCT FROM OLD."duration_milliseconds"
+    OR NEW."total_cost_minor" IS DISTINCT FROM OLD."total_cost_minor"
+    OR NEW."completed_at" IS DISTINCT FROM OLD."completed_at"
+  ) THEN
+    RAISE EXCEPTION 'completed handling measurements are immutable';
+  END IF;
   IF OLD."lifecycle" = 'OPEN' AND NEW."lifecycle" NOT IN ('COMPLETED', 'VOIDED') THEN
     RAISE EXCEPTION 'open handling session has an invalid transition';
   END IF;
