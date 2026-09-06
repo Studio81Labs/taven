@@ -914,6 +914,314 @@ AS $$
     WHERE active."order_id" = target_order_id;
 $$;
 
+-- Balance-timeout settlement is based on the active contract revision, not the
+-- superseded quote total. Generic slot credits conservatively consume earned
+-- value first because their public contract does not identify a component kind.
+-- Express credits consume earned value only when EXPRESS is explicitly listed
+-- by the accepted earned-value policy.
+CREATE OR REPLACE FUNCTION taven_balance_timeout_earned_amount(
+    target_order_id uuid,
+    target_phase_id uuid,
+    target_binding_id uuid,
+    target_snapshot_id uuid
+)
+RETURNS bigint
+LANGUAGE sql
+STABLE
+AS $$
+    WITH accepted_policy AS (
+        SELECT list."parameters" -> 'balance_timeout_earned_component_kinds' AS kinds
+        FROM "orders" target_order
+        JOIN "order_price_bindings" binding
+          ON binding."id" = target_binding_id
+         AND binding."order_id" = target_order_id
+         AND binding."price_snapshot_id" = target_snapshot_id
+        JOIN "price_snapshots" snapshot ON snapshot."id" = binding."price_snapshot_id"
+        JOIN "price_lists" list ON list."id" = snapshot."price_list_id"
+        WHERE target_order."id" = target_order_id
+          AND target_order."accepted_order_price_binding_id" = binding."id"
+          AND target_order."accepted_terms_revision" = list."terms_revision"
+    ),
+    earned_by_slot AS (
+        SELECT allocation."fulfilment_slot_id" AS slot_id,
+               sum(allocation."amount_minor")::bigint AS amount_minor
+        FROM "price_snapshot_components" component
+        JOIN "price_component_fulfilment_allocations" allocation
+          ON allocation."price_snapshot_component_id" = component."id"
+        JOIN "fulfilment_slots" slot
+          ON slot."id" = allocation."fulfilment_slot_id"
+         AND slot."order_id" = target_order_id
+         AND slot."order_phase_id" = target_phase_id
+        CROSS JOIN accepted_policy policy
+        WHERE component."price_snapshot_id" = target_snapshot_id
+          AND component."kind"::text IN (
+              SELECT jsonb_array_elements_text(policy.kinds)
+          )
+        GROUP BY allocation."fulfilment_slot_id"
+    ),
+    earned_credits_by_slot AS (
+        SELECT (credit.value ->> 'fulfilmentSlotId')::uuid AS slot_id,
+               sum((credit.value ->> 'amountMinor')::bigint)::bigint AS amount_minor
+        FROM "price_adjustments" adjustment
+        CROSS JOIN LATERAL jsonb_array_elements(
+            adjustment."allocation" -> 'slotCredits'
+        ) credit(value)
+        CROSS JOIN accepted_policy policy
+        WHERE adjustment."order_id" = target_order_id
+          AND (
+              adjustment."reason" <> 'EXPRESS_BREACH'
+              OR 'EXPRESS' IN (
+                  SELECT jsonb_array_elements_text(policy.kinds)
+              )
+          )
+        GROUP BY (credit.value ->> 'fulfilmentSlotId')::uuid
+    ),
+    active_contract AS (
+        SELECT revision."contract_total_minor"
+        FROM "order_active_contract_prices" active
+        JOIN "order_contract_price_revisions" revision
+          ON revision."id" = active."contract_price_revision_id"
+         AND revision."order_id" = active."order_id"
+         AND revision."base_price_snapshot_id" = target_snapshot_id
+        WHERE active."order_id" = target_order_id
+    )
+    SELECT least(
+        active_contract."contract_total_minor",
+        coalesce(sum(greatest(
+            earned."amount_minor" - coalesce(credits."amount_minor", 0),
+            0
+        )), 0)::bigint
+    )
+    FROM active_contract
+    LEFT JOIN earned_by_slot earned ON true
+    LEFT JOIN earned_credits_by_slot credits ON credits.slot_id = earned.slot_id
+    GROUP BY active_contract."contract_total_minor";
+$$;
+
+CREATE OR REPLACE FUNCTION taven_close_expired_balance_payment(
+    target_payment_id uuid,
+    target_cutoff_at timestamptz DEFAULT clock_timestamp()
+)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE
+    target_order_id uuid;
+    target_order_status "order_status";
+    target_phase_id uuid;
+    target_binding_id uuid;
+    target_snapshot_id uuid;
+    target_currency char(3);
+    target_balance_due_at timestamptz;
+    target_balance_status "payment_status";
+    target_deposit_id uuid;
+    target_deposit_amount bigint;
+    target_deposit_provider varchar(100);
+    target_contract_total bigint;
+    target_earned_amount bigint;
+    target_retained_amount bigint;
+    target_refund_amount bigint;
+    target_refund_id uuid;
+    target_settlement_id uuid := gen_random_uuid();
+BEGIN
+    SELECT payment."order_id"
+    INTO target_order_id
+    FROM "payments" payment
+    WHERE payment."id" = target_payment_id;
+
+    IF target_order_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT target_order."status"
+    INTO target_order_status
+    FROM "orders" target_order
+    WHERE target_order."id" = target_order_id
+    FOR UPDATE;
+
+    IF target_order_status = 'CANCELLED_SETTLED' THEN
+        RETURN (
+            SELECT settlement."id"
+            FROM "order_settlements" settlement
+            WHERE settlement."order_id" = target_order_id
+              AND settlement."kind" = 'BALANCE_SETTLEMENT'
+        );
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM "order_settlements" settlement
+        WHERE settlement."order_id" = target_order_id
+          AND settlement."kind" = 'BALANCE_SETTLEMENT'
+    ) THEN
+        RETURN (
+            SELECT settlement."id"
+            FROM "order_settlements" settlement
+            WHERE settlement."order_id" = target_order_id
+              AND settlement."kind" = 'BALANCE_SETTLEMENT'
+        );
+    END IF;
+
+    SELECT phase."id"
+    INTO target_phase_id
+    FROM "order_phases" phase
+    WHERE phase."order_id" = target_order_id
+      AND phase."kind" = 'SINGLE'
+    ORDER BY phase."id"
+    FOR UPDATE;
+
+    SELECT balance."order_price_binding_id", balance."price_snapshot_id",
+           balance."currency", balance."balance_due_at", balance."status"
+    INTO target_binding_id, target_snapshot_id, target_currency,
+         target_balance_due_at, target_balance_status
+    FROM "payments" balance
+    WHERE balance."id" = target_payment_id
+      AND balance."order_id" = target_order_id
+      AND balance."role" = 'BALANCE'
+    FOR UPDATE;
+
+    IF target_order_status NOT IN ('QC_PASSED', 'AWAITING_BALANCE')
+       OR target_phase_id IS NULL
+       OR NOT (
+           target_balance_status IN ('CREATED', 'PENDING')
+           OR (
+               target_balance_status = 'FAILED'
+               AND taven_balance_payment_is_closed_for_timeout(
+                   target_payment_id, target_cutoff_at
+               )
+           )
+       )
+       OR target_balance_due_at IS NULL
+       OR target_balance_due_at > target_cutoff_at
+       OR target_cutoff_at > clock_timestamp() + interval '5 seconds' THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT deposit."id", deposit."captured_amount_minor", deposit."provider",
+           revision."contract_total_minor"
+    INTO target_deposit_id, target_deposit_amount, target_deposit_provider,
+         target_contract_total
+    FROM "payments" deposit
+    JOIN "order_active_contract_prices" active
+      ON active."order_id" = deposit."order_id"
+    JOIN "order_contract_price_revisions" revision
+      ON revision."id" = active."contract_price_revision_id"
+     AND revision."order_id" = active."order_id"
+     AND revision."base_price_snapshot_id" = target_snapshot_id
+     AND revision."currency" = target_currency
+    WHERE deposit."order_id" = target_order_id
+      AND deposit."order_price_binding_id" = target_binding_id
+      AND deposit."price_snapshot_id" = target_snapshot_id
+      AND deposit."role" = 'DEPOSIT'
+      AND deposit."status" = 'CAPTURED'
+      AND deposit."captured_amount_minor" = deposit."requested_amount_minor"
+    FOR UPDATE OF deposit, active, revision;
+
+    IF target_deposit_id IS NULL OR target_deposit_amount IS NULL
+       OR target_contract_total IS NULL THEN
+        RAISE EXCEPTION 'expired balance requires its captured deposit and active contract'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
+    END IF;
+
+    IF NOT taven_price_snapshot_balance_earned_policy_is_valid(target_snapshot_id) THEN
+        RAISE EXCEPTION 'expired balance requires an accepted earned-value policy'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_earned_policy_check';
+    END IF;
+
+    target_earned_amount := taven_balance_timeout_earned_amount(
+        target_order_id, target_phase_id, target_binding_id, target_snapshot_id
+    );
+    IF target_earned_amount IS NULL
+       OR target_earned_amount < 0
+       OR target_earned_amount > target_contract_total THEN
+        RAISE EXCEPTION 'earned balance settlement amount is outside the active contract'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
+    END IF;
+    target_retained_amount := least(target_deposit_amount, target_earned_amount);
+    target_refund_amount := target_deposit_amount - target_retained_amount;
+
+    UPDATE "payments"
+    SET "status" = 'VOIDED', "capture_authorized" = false,
+        "capture_cutoff_at" = target_cutoff_at, "updated_at" = target_cutoff_at
+    WHERE "id" = target_payment_id
+      AND "status" IN ('CREATED', 'PENDING');
+
+    UPDATE "phase_reservation_sets" reservation_set
+    SET "status" = 'SETTLED', "updated_at" = target_cutoff_at
+    FROM "phase_resource_plans" resource_plan
+    WHERE reservation_set."phase_resource_plan_id" = resource_plan."id"
+      AND reservation_set."node_id" = resource_plan."node_id"
+      AND resource_plan."order_phase_id" = target_phase_id
+      AND reservation_set."status" = 'HELD';
+
+    UPDATE "jobs"
+    SET "status" = 'CANCELLED', "cancelled_at" = target_cutoff_at,
+        "cancellation_reason" = 'ORDER_CANCELLED', "updated_at" = target_cutoff_at
+    WHERE "order_id" = target_order_id
+      AND "status" = 'QC_APPROVED';
+
+    UPDATE "shipments"
+    SET "status" = 'CANCELLED', "cancelled_at" = target_cutoff_at,
+        "updated_at" = target_cutoff_at
+    WHERE "order_id" = target_order_id
+      AND "status" = 'PLANNED';
+
+    UPDATE "fulfilment_slots"
+    SET "outcome" = 'CANCELLED', "updated_at" = target_cutoff_at
+    WHERE "order_id" = target_order_id
+      AND "outcome" = 'PENDING';
+
+    UPDATE "order_phases"
+    SET "status" = 'CANCELLED', "cancelled_at" = target_cutoff_at,
+        "updated_at" = target_cutoff_at
+    WHERE "id" = target_phase_id
+      AND "status" = 'QC_PASSED';
+
+    IF target_refund_amount > 0 THEN
+        target_refund_id := gen_random_uuid();
+        INSERT INTO "refund_transactions" (
+            "id", "payment_id", "idempotency_key", "provider", "amount_minor",
+            "reason", "status", "requested_at", "created_at", "updated_at"
+        ) VALUES (
+            target_refund_id, target_deposit_id,
+            'balance_settlement:' || target_order_id::text,
+            target_deposit_provider, target_refund_amount,
+            'BALANCE_SETTLEMENT', 'PENDING', target_cutoff_at,
+            target_cutoff_at, target_cutoff_at
+        );
+
+        UPDATE "payments"
+        SET "status" = 'REFUND_PENDING', "updated_at" = target_cutoff_at
+        WHERE "id" = target_deposit_id;
+    END IF;
+
+    INSERT INTO "order_settlements" (
+        "id", "order_id", "order_phase_id", "order_price_binding_id",
+        "price_snapshot_id", "payment_id", "balance_payment_id", "refund_transaction_id", "kind",
+        "currency", "contract_total_minor", "captured_total_minor",
+        "earned_amount_minor", "retained_amount_minor", "refund_amount_minor",
+        "written_off_amount_minor", "unearned_cancelled_amount_minor",
+        "amount_due_minor", "refundable_balance_minor", "cutoff_at", "settled_at"
+    ) VALUES (
+        target_settlement_id, target_order_id, target_phase_id,
+        target_binding_id, target_snapshot_id, target_deposit_id, target_payment_id,
+        target_refund_id, 'BALANCE_SETTLEMENT', target_currency,
+        target_contract_total, target_deposit_amount, target_earned_amount,
+        target_retained_amount, target_refund_amount,
+        greatest(0, target_earned_amount - target_deposit_amount),
+        target_contract_total - target_earned_amount, 0,
+        target_refund_amount, target_cutoff_at, target_cutoff_at
+    );
+
+    UPDATE "orders"
+    SET "status" = 'AWAITING_BALANCE', "updated_at" = target_cutoff_at
+    WHERE "id" = target_order_id
+      AND "status" = 'QC_PASSED';
+
+    PERFORM taven_finalize_balance_timeout_settlement(target_order_id, target_cutoff_at);
+
+    RETURN target_settlement_id;
+END;
+$$;
+
 CREATE FUNCTION taven_validate_payment_schedule_contract()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -987,12 +1295,16 @@ $$;
 
 -- The first balance attempt is durable at final QC. Provider dispatch remains
 -- outside the transaction, but it now charges the reduced contractual amount.
+-- A post-QC recovery creates a new attempt and anchors its own fresh deadline
+-- to the replacement QC approval without rewriting the phase's first-QC audit
+-- evidence.
 CREATE OR REPLACE FUNCTION taven_create_post_qc_balance_payment()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
     requested_balance bigint;
+    balance_created_at timestamptz;
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM "individual_order_origins" origin
@@ -1020,6 +1332,16 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    balance_created_at := CASE
+        WHEN OLD."status" = 'RECOVERY_PENDING' THEN NEW."updated_at"
+        ELSE (
+            SELECT phase."qc_passed_at"
+            FROM "order_phases" phase
+            WHERE phase."order_id" = NEW."id"
+              AND phase."kind" = 'SINGLE'
+        )
+    END;
+
     INSERT INTO "payments" (
         "id", "order_id", "price_snapshot_id", "order_price_binding_id",
         "payment_schedule_id", "role", "provider", "requested_amount_minor",
@@ -1028,9 +1350,9 @@ BEGIN
     SELECT gen_random_uuid(), target_order."id", snapshot."id", binding."id",
            balance_schedule."id", 'BALANCE', deposit."provider",
            requested_balance, snapshot."currency", 'CREATED',
-           phase."qc_passed_at" + make_interval(
+           balance_created_at + make_interval(
                days => (list."parameters" ->> 'balance_payment_days')::integer
-           ), phase."qc_passed_at", phase."qc_passed_at"
+           ), balance_created_at, balance_created_at
     FROM "orders" target_order
     JOIN "order_phases" phase
       ON phase."order_id" = target_order."id"
@@ -1073,6 +1395,184 @@ BEGIN
     RETURN NULL;
 END;
 $$;
+
+DROP TRIGGER "orders_qc_balance_payment_created" ON "orders";
+CREATE TRIGGER "orders_qc_balance_payment_created"
+AFTER UPDATE OF "status" ON "orders"
+FOR EACH ROW
+WHEN (
+    OLD."status" IN ('IN_PRODUCTION', 'RECOVERY_PENDING')
+    AND NEW."status" = 'QC_PASSED'
+)
+EXECUTE FUNCTION taven_create_post_qc_balance_payment();
+
+-- Initial and recovery BALANCE attempts share the accepted topology, while
+-- each attempt derives its deadline from its own final-QC creation timestamp.
+-- Provider retries inherit the deadline of that durable root attempt instead
+-- of extending the customer's payment window.
+CREATE FUNCTION taven_balance_deadline_is_anchored(
+    target_order_id uuid,
+    target_created_at timestamptz,
+    target_balance_due_at timestamptz,
+    target_phase_qc_passed_at timestamptz,
+    target_balance_payment_days integer
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT target_created_at >= target_phase_qc_passed_at
+       AND target_created_at <= clock_timestamp() + interval '5 seconds'
+       AND EXISTS (
+           SELECT 1
+           FROM (
+               SELECT target_created_at AS anchor_created_at
+               UNION
+               SELECT payment."created_at"
+               FROM "payments" payment
+               WHERE payment."order_id" = target_order_id
+                 AND payment."role" = 'BALANCE'
+                 AND payment."balance_due_at" = target_balance_due_at
+                 AND payment."created_at" <= target_created_at
+           ) anchor
+           WHERE target_balance_due_at = anchor.anchor_created_at
+                 + make_interval(days => target_balance_payment_days)
+             AND (
+                 anchor.anchor_created_at = target_phase_qc_passed_at
+                 OR EXISTS (
+                     SELECT 1
+                     FROM "jobs" recovery_job
+                     WHERE recovery_job."order_id" = target_order_id
+                       AND recovery_job."replaces_job_id" IS NOT NULL
+                       AND recovery_job."status" IN ('QC_APPROVED', 'PACKED')
+                       AND recovery_job."qc_approved_at" = anchor.anchor_created_at
+                 )
+             )
+       );
+$$;
+
+CREATE FUNCTION taven_require_balance_payment_fulfilment_topology()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    phase_qc_passed_at timestamptz;
+    balance_payment_days integer;
+BEGIN
+    IF NEW."role" <> 'BALANCE' OR NEW."status" <> 'CREATED' THEN
+        RAISE EXCEPTION 'new balance payments must begin created'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_initial_status_check';
+    END IF;
+
+    IF NOT NEW."capture_authorized"
+       OR NEW."capture_cutoff_at" IS NOT NULL
+       OR NEW."checkout_capture_expires_at" IS NOT NULL
+       OR NEW."balance_due_at" IS NULL
+       OR NEW."balance_due_at" <= clock_timestamp() THEN
+        RAISE EXCEPTION 'new balance payment requires an open post-QC business deadline'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+    END IF;
+
+    PERFORM 1
+    FROM "orders"
+    WHERE "id" = NEW."order_id"
+    FOR UPDATE;
+
+    SELECT phase."qc_passed_at",
+           CASE
+               WHEN jsonb_typeof(list."parameters" -> 'balance_payment_days') = 'number'
+                AND (list."parameters" ->> 'balance_payment_days') ~ '^[1-9][0-9]*$'
+               THEN (list."parameters" ->> 'balance_payment_days')::integer
+           END
+    INTO phase_qc_passed_at, balance_payment_days
+    FROM "orders" target_order
+    JOIN "individual_order_origins" origin
+      ON origin."order_id" = target_order."id"
+    JOIN "order_active_price_bindings" active
+      ON active."order_id" = target_order."id"
+    JOIN "order_price_bindings" binding
+      ON binding."id" = active."order_price_binding_id"
+     AND binding."order_id" = target_order."id"
+    JOIN "price_snapshots" snapshot
+      ON snapshot."id" = binding."price_snapshot_id"
+    JOIN "price_lists" list
+      ON list."id" = snapshot."price_list_id"
+    JOIN "payment_schedules" schedule
+      ON schedule."id" = NEW."payment_schedule_id"
+     AND schedule."price_snapshot_id" = snapshot."id"
+     AND schedule."role" = 'BALANCE'
+    JOIN "order_phases" phase
+      ON phase."order_id" = target_order."id"
+     AND phase."kind" = 'SINGLE'
+     AND phase."status" = 'QC_PASSED'
+     AND phase."qc_passed_at" IS NOT NULL
+    WHERE target_order."id" = NEW."order_id"
+      AND target_order."status" IN ('QC_PASSED', 'AWAITING_BALANCE')
+      AND target_order."customer_id" IS NOT NULL
+      AND target_order."accepted_order_price_binding_id" = binding."id"
+      AND target_order."accepted_terms_revision" IS NOT NULL
+      AND taven_order_accepts_bound_price_list_terms(
+          target_order."id", binding."id"
+      )
+      AND target_order."accepted_claim_policy_revision" IS NOT NULL
+      AND target_order."withdrawal_exception_acknowledged_at" IS NOT NULL
+      AND binding."id" = NEW."order_price_binding_id"
+      AND binding."price_snapshot_id" = NEW."price_snapshot_id"
+      AND binding."invalidated_at" IS NULL
+      AND snapshot."currency" = NEW."currency"
+      AND (
+          SELECT count(*)
+          FROM "order_phases" single_phase
+          WHERE single_phase."order_id" = target_order."id"
+            AND single_phase."kind" = 'SINGLE'
+      ) = 1
+      AND EXISTS (
+          SELECT 1
+          FROM "payments" deposit
+          JOIN "payment_schedules" deposit_schedule
+            ON deposit_schedule."id" = deposit."payment_schedule_id"
+           AND deposit_schedule."price_snapshot_id" = deposit."price_snapshot_id"
+           AND deposit_schedule."role" = 'DEPOSIT'
+          WHERE deposit."order_id" = target_order."id"
+            AND deposit."order_price_binding_id" = binding."id"
+            AND deposit."price_snapshot_id" = snapshot."id"
+            AND deposit."status" = 'CAPTURED'
+            AND deposit."captured_amount_minor" = deposit."requested_amount_minor"
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM "order_settlements" settlement
+          WHERE settlement."order_id" = target_order."id"
+      );
+
+    IF phase_qc_passed_at IS NULL OR balance_payment_days IS NULL THEN
+        RAISE EXCEPTION 'balance payment requires the accepted post-QC split-payment topology'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_fulfilment_topology_check';
+    END IF;
+
+    IF NOT taven_balance_deadline_is_anchored(
+        NEW."order_id", NEW."created_at", NEW."balance_due_at",
+        phase_qc_passed_at, balance_payment_days
+    ) THEN
+        RAISE EXCEPTION 'balance deadline must derive from final QC and the accepted PriceList'
+            USING ERRCODE = '23514', CONSTRAINT = 'payment_capture_window_check';
+    END IF;
+
+    PERFORM taven_assert_order_fulfilment_money(NEW."order_id");
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER "payments_require_fulfilment_topology" ON "payments";
+CREATE TRIGGER "payments_require_fulfilment_topology"
+BEFORE INSERT ON "payments"
+FOR EACH ROW
+WHEN (NEW."role" <> 'BALANCE')
+EXECUTE FUNCTION taven_require_payment_fulfilment_topology();
+CREATE TRIGGER "payments_require_balance_fulfilment_topology"
+BEFORE INSERT ON "payments"
+FOR EACH ROW
+WHEN (NEW."role" = 'BALANCE')
+EXECUTE FUNCTION taven_require_balance_payment_fulfilment_topology();
 
 -- The durable QC-created balance row may receive its checkout identity exactly
 -- once when an operator dispatches the provider-neutral payment link.
@@ -1212,8 +1712,11 @@ BEGIN
              AND balance."role" = 'BALANCE'
              AND balance."requested_amount_minor" = required_balance
              AND balance."checkout_capture_expires_at" IS NULL
-             AND balance."balance_due_at" = phase."qc_passed_at"
-                 + make_interval(days => (list."parameters" ->> 'balance_payment_days')::integer)
+             AND taven_balance_deadline_is_anchored(
+                 target_order."id", balance."created_at", balance."balance_due_at",
+                 phase."qc_passed_at",
+                 (list."parameters" ->> 'balance_payment_days')::integer
+             )
             WHERE target_order."id" = target_order_id
               AND target_order."accepted_order_price_binding_id" = binding."id"
               AND (target_payment_id IS NULL OR balance."id" = target_payment_id)

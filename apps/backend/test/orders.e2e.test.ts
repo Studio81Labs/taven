@@ -1120,6 +1120,9 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       { method: "CARD" },
       "awaiting-balance-job-failure-link",
     );
+    const originalBalance = await prisma.payment.findUniqueOrThrow({
+      where: { id: balance.paymentId },
+    });
 
     await expect(
       orders.failJob(
@@ -1161,25 +1164,142 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       }),
       1,
     ]);
+
+    const candidateResourceEstimateId = await createFreshReplacementCandidate(
+      fixture,
+      0,
+    );
+    await orders.createReplacement(
+      fixture.foundation.orderId,
+      fixture.productions[0]!.jobId,
+      { candidateResourceEstimateId },
+      "awaiting-balance-job-failure-replacement",
+    );
+    const replacement = await prisma.job.findFirstOrThrow({
+      where: {
+        orderId: fixture.foundation.orderId,
+        replacesJobId: fixture.productions[0]!.jobId,
+      },
+    });
+    await orders.acceptJob(
+      fixture.foundation.orderId,
+      replacement.id,
+      "awaiting-balance-job-failure-replacement-accept",
+    );
+    await makeGcodeReady(replacement.id);
+    await orders.startPrinting(
+      fixture.foundation.orderId,
+      replacement.id,
+      "awaiting-balance-job-failure-replacement-printing",
+    );
+    await orders.finishPrinting(
+      fixture.foundation.orderId,
+      replacement.id,
+      { actualMaterialMilligrams: "50" },
+      "awaiting-balance-job-failure-replacement-printed",
+    );
+    await orders.submitQc(
+      fixture.foundation.orderId,
+      replacement.id,
+      { omissionReason: "replacement passed v0 visual inspection" },
+      "awaiting-balance-job-failure-replacement-qc-submit",
+    );
+    const replacementQcKey =
+      "awaiting-balance-job-failure-replacement-qc-approve";
+    const replacementQc = await orders.approveQc(
+      fixture.foundation.orderId,
+      replacement.id,
+      replacementQcKey,
+    );
+
+    const balancesAfterRecovery = await prisma.payment.findMany({
+      where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(balancesAfterRecovery).toHaveLength(2);
+    expect(balancesAfterRecovery[0]).toMatchObject({
+      id: balance.paymentId,
+      status: "VOIDED",
+      balanceDueAt: originalBalance.balanceDueAt,
+      providerIntentId: expect.any(String),
+    });
+    expect(balancesAfterRecovery[1]).toMatchObject({
+      status: "CREATED",
+      requestedAmountMinor: originalBalance.requestedAmountMinor,
+      providerIntentId: null,
+      checkoutCommandId: null,
+    });
+    expect(balancesAfterRecovery[1]!.balanceDueAt!.getTime()).toBeGreaterThan(
+      originalBalance.balanceDueAt!.getTime(),
+    );
+    expect(balancesAfterRecovery[1]!.createdAt.getTime()).toBeGreaterThan(
+      originalBalance.createdAt.getTime(),
+    );
+
+    const freshBalance = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "awaiting-balance-job-failure-replacement-link",
+    );
+    expect(freshBalance.paymentId).toBe(balancesAfterRecovery[1]!.id);
+    await expect(
+      orders.approveQc(
+        fixture.foundation.orderId,
+        replacement.id,
+        replacementQcKey,
+      ),
+    ).resolves.toEqual(replacementQc);
+    await expect(
+      prisma.payment.count({
+        where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+      }),
+    ).resolves.toBe(2);
   });
 
-  it("derives the post-QC balance from the reduced active contract", async () => {
+  it("settles an adjusted post-QC balance against the active contract", async () => {
     const fixture = await preparePaidOrder(
       "reduced-post-qc-balance",
       1,
       "DEPOSIT_BALANCE",
     );
+    const baseEarned = BigInt(
+      (
+        await pool.query<{ amount_minor: string }>(
+          `SELECT coalesce(sum(allocation.amount_minor), 0)::text AS amount_minor
+           FROM orders target_order
+           JOIN order_price_bindings binding
+             ON binding.id = target_order.accepted_order_price_binding_id
+           JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
+           JOIN price_lists list ON list.id = snapshot.price_list_id
+           JOIN price_snapshot_components component
+             ON component.price_snapshot_id = snapshot.id
+           JOIN price_component_fulfilment_allocations allocation
+             ON allocation.price_snapshot_component_id = component.id
+           JOIN fulfilment_slots slot
+             ON slot.id = allocation.fulfilment_slot_id
+            AND slot.order_id = target_order.id
+           WHERE target_order.id = $1
+             AND component.kind::text IN (
+               SELECT jsonb_array_elements_text(
+                 list.parameters -> 'balance_timeout_earned_component_kinds'
+               )
+             )`,
+          [fixture.foundation.orderId],
+        )
+      ).rows[0]!.amount_minor,
+    );
+    const creditAmount = 1n;
     await orders.createPriceAdjustment(
       fixture.foundation.orderId,
       {
         reason: "PRODUCTION_FAILURE",
-        amountMinor: "1",
+        amountMinor: creditAmount.toString(),
         allocation: {
           reason: "one-unit contractual credit",
           slotCredits: [
             {
               fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
-              amountMinor: "1",
+              amountMinor: creditAmount.toString(),
             },
           ],
         },
@@ -1192,8 +1312,89 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       include: { paymentSchedule: true },
     });
     expect(balance.requestedAmountMinor).toBe(
-      balance.paymentSchedule.grossAmountMinor - 1n,
+      balance.paymentSchedule.grossAmountMinor - creditAmount,
     );
+
+    const activeContract =
+      await prisma.orderActiveContractPrice.findUniqueOrThrow({
+        where: { orderId: fixture.foundation.orderId },
+        include: { contractPriceRevision: true },
+      });
+    const deposit = await prisma.payment.findUniqueOrThrow({
+      where: { id: fixture.foundation.paymentId },
+    });
+    const expectedEarned = baseEarned - creditAmount;
+    expect(expectedEarned).toBeGreaterThanOrEqual(0n);
+
+    const deadlineClient = await pool.connect();
+    await deadlineClient.query("BEGIN");
+    try {
+      await deadlineClient.query(
+        `SET LOCAL session_replication_role = 'replica'`,
+      );
+      await deadlineClient.query(
+        `UPDATE payments
+         SET balance_due_at = clock_timestamp() - interval '1 second'
+         WHERE id = $1`,
+        [balance.id],
+      );
+      await deadlineClient.query(
+        `SET LOCAL session_replication_role = 'origin'`,
+      );
+      const closed = await deadlineClient.query<{
+        payment_id: string;
+        settlement_id: string;
+      }>(
+        `SELECT payment_id, settlement_id
+         FROM taven_close_expired_balance_payments(10)`,
+      );
+      expect(closed.rows).toEqual([
+        { payment_id: balance.id, settlement_id: expect.any(String) },
+      ]);
+      await deadlineClient.query("COMMIT");
+    } catch (error) {
+      await deadlineClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      deadlineClient.release();
+    }
+
+    const retained =
+      deposit.capturedAmountMinor! < expectedEarned
+        ? deposit.capturedAmountMinor!
+        : expectedEarned;
+    const refund = deposit.capturedAmountMinor! - retained;
+    await expect(
+      prisma.orderSettlement.findFirstOrThrow({
+        where: {
+          orderId: fixture.foundation.orderId,
+          kind: "BALANCE_SETTLEMENT",
+        },
+      }),
+    ).resolves.toMatchObject({
+      balancePaymentId: balance.id,
+      contractTotalMinor:
+        activeContract.contractPriceRevision.contractTotalMinor,
+      capturedTotalMinor: deposit.capturedAmountMinor,
+      earnedAmountMinor: expectedEarned,
+      retainedAmountMinor: retained,
+      refundAmountMinor: refund,
+      writtenOffAmountMinor:
+        expectedEarned > deposit.capturedAmountMinor!
+          ? expectedEarned - deposit.capturedAmountMinor!
+          : 0n,
+      unearnedCancelledAmountMinor:
+        activeContract.contractPriceRevision.contractTotalMinor -
+        expectedEarned,
+      amountDueMinor: 0n,
+      refundableBalanceMinor: refund,
+    });
+    await expect(
+      pool.query(
+        `SELECT payment_id, settlement_id
+         FROM taven_close_expired_balance_payments(10)`,
+      ),
+    ).resolves.toMatchObject({ rows: [] });
   });
 
   it("applies a credit larger than the deposit only to the remaining balance", async () => {
