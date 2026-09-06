@@ -1,4 +1,10 @@
-import { Get, Query, UseGuards } from "@nestjs/common";
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Query,
+  UseGuards,
+} from "@nestjs/common";
 import {
   ApiHeader,
   ApiOkResponse,
@@ -16,11 +22,15 @@ import { RequireOperatorPermissions } from "../admin-access/require-operator-per
 import { AuditEventPageDto } from "./audit.dto";
 import { AuditService } from "./audit.service";
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 @ApiTags("operator audit")
 @ApiSecurity("operatorSession")
 @ApiHeader(OPERATOR_CSRF_HEADER)
 @UseGuards(OperatorAccessGuard)
 @RequireOperatorPermissions(OPERATOR_PERMISSIONS.AUDIT_READ)
+@Controller()
 export class AuditController {
   constructor(private readonly audit: AuditService) {}
 
@@ -68,6 +78,17 @@ export class AuditController {
     @Query("quoteRequestId") quoteRequestId?: string,
   ): Promise<AuditEventPageDto> {
     const parsedLimit = limit === undefined ? undefined : Number(limit);
+    for (const [name, value] of Object.entries({
+      nodeId,
+      operatorIdentityId,
+      orderId,
+      paymentId,
+      quoteRequestId,
+    })) {
+      if (value && !UUID_PATTERN.test(value)) {
+        throw new BadRequestException(`${name} is invalid`);
+      }
+    }
     return this.audit.list(
       operator,
       {

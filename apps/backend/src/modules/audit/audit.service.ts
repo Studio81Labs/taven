@@ -19,6 +19,9 @@ type AuditFilters = Readonly<{
   quoteRequestId?: string;
 }>;
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
@@ -84,15 +87,20 @@ export class AuditService {
     const filterHash = digest(filters);
     const keyset = cursor ? parseCursor(cursor, filterHash) : undefined;
     const where: Prisma.AuditEventWhereInput = {
-      ...filters,
-      ...(keyset
-        ? {
-            OR: [
-              { createdAt: { lt: keyset.createdAt } },
-              { createdAt: keyset.createdAt, id: { lt: keyset.id } },
-            ],
-          }
-        : {}),
+      AND: [
+        { nodeId: { in: [...operator.nodeIds] } },
+        filters,
+        ...(keyset
+          ? [
+              {
+                OR: [
+                  { createdAt: { lt: keyset.createdAt } },
+                  { createdAt: keyset.createdAt, id: { lt: keyset.id } },
+                ],
+              },
+            ]
+          : []),
+      ],
     };
     const rows = await this.prisma.auditEvent.findMany({
       where,
@@ -175,6 +183,7 @@ function parseCursor(
       !createdAt ||
       Number.isNaN(createdAt.getTime()) ||
       !value.id ||
+      !UUID_PATTERN.test(value.id) ||
       value.filterHash !== filterHash
     )
       throw new Error();
