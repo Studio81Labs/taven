@@ -33,6 +33,7 @@ ALTER TABLE "audit_events"
                     ("actor_kind" = 'OPERATOR'
                         AND "operator_identity_id" IS NOT NULL
                         AND "actor_id" IS NOT NULL
+                        AND "node_id" IS NOT NULL
                         AND "actor_id" = "operator_identity_id")
                     OR ("actor_kind" <> 'OPERATOR' AND "operator_identity_id" IS NULL)
                 )
