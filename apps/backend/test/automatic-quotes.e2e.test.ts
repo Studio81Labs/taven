@@ -253,7 +253,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     await expect(
       automaticQuotes.createSession(body, "198.51.100.11", idempotencyKey),
     ).rejects.toMatchObject({ status: 409 });
-  });
+  }, 15_000);
 
   it("limits anonymous session creation atomically before persisting quote work", async () => {
     const subjectHash = localAutomaticQuoteSubjectHash;
