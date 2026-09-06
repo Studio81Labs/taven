@@ -983,6 +983,11 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       "credit-larger-than-deposit-adjustment",
     );
     const adjustmentId = adjustment.result.priceAdjustmentId as string;
+    const activeContract =
+      await prisma.orderActiveContractPrice.findUniqueOrThrow({
+        where: { orderId: fixture.foundation.orderId },
+        include: { contractPriceRevision: true },
+      });
     await expect(
       prisma.priceAdjustment.findUniqueOrThrow({
         where: { id: adjustmentId },
@@ -1026,6 +1031,34 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       },
     );
     await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN");
+    await orders.completeOrder(
+      fixture.foundation.orderId,
+      "credit-larger-than-deposit-complete",
+    );
+    const claim = await orders.createClaim(
+      fixture.foundation.orderId,
+      {
+        origin: "POST_DELIVERY_QUALITY",
+        reason: "quality defect after a credit reduced the unpaid balance",
+        fulfilmentSlotIds: [fixture.foundation.fulfilmentSlotIds[0]!],
+      },
+      "credit-larger-than-deposit-claim",
+    );
+    const claimRefund = await orders.refundClaim(
+      fixture.foundation.orderId,
+      claim.result.claimId as string,
+      "credit-larger-than-deposit-claim-refund",
+    );
+    expect(claimRefund).toMatchObject({
+      status: "CLAIM_REFUND_PENDING",
+      result: {
+        amountMinor:
+          activeContract.contractPriceRevision.contractTotalMinor.toString(),
+      },
+    });
+    expect(claimRefund.result.refundIds).not.toEqual([]);
   });
 
   it("voids a cancelled balance attempt and compensates a late capture", async () => {

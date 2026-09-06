@@ -3920,7 +3920,7 @@ export class OrdersService {
             (total, refund) => total + refund.amountMinor,
             0n,
           );
-          if (successfullyRefunded !== priorAdjustment.amountMinor) {
+          if (successfullyRefunded !== priorAdjustment.refundRequiredMinor) {
             throw new ConflictException(
               "Resolve existing price adjustments before refunding a Claim",
             );
