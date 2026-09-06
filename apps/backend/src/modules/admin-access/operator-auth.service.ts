@@ -40,6 +40,7 @@ const LOGIN_WINDOW_MILLISECONDS = 15 * 60 * 1_000;
 const SESSION_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const MAX_PASSWORD_FAILURES = 5;
 const MAX_LOGIN_STARTS = 100;
+const MAX_LOGIN_STARTS_PER_CLIENT = 10;
 const LAST_SEEN_WRITE_MILLISECONDS = 60 * 1_000;
 const GLOBAL_SUBJECT = "operator-login-global-subject";
 const GLOBAL_CLIENT = "operator-login-global-client";
@@ -401,11 +402,10 @@ export class OperatorAuthService {
       take: limit,
       select: { id: true },
     });
-    const remaining = limit - attempts.length;
     const events = await this.prisma.securityEvent.findMany({
       where: { expiresAt: { lt: now } },
       orderBy: { expiresAt: "asc" },
-      take: remaining,
+      take: limit,
       select: { id: true },
     });
     const deleted = await this.prisma.$transaction([
@@ -416,7 +416,6 @@ export class OperatorAuthService {
         where: { id: { in: events.map((event) => event.id) } },
       }),
     ]);
-    const sessionSlots = limit - deleted[0].count - deleted[1].count;
     const expiredSessions = await this.prisma.operatorSession.findMany({
       where: {
         absoluteExpiresAt: {
@@ -426,10 +425,9 @@ export class OperatorAuthService {
         securityEvents: { none: {} },
       },
       orderBy: { absoluteExpiresAt: "asc" },
-      take: sessionSlots,
+      take: limit,
       select: { id: true },
     });
-    const bucketSlots = sessionSlots - expiredSessions.length;
     const expiredBuckets = await this.prisma.operatorLoginRateBucket.findMany({
       where: {
         windowStart: {
@@ -437,7 +435,7 @@ export class OperatorAuthService {
         },
       },
       orderBy: { windowStart: "asc" },
-      take: bucketSlots,
+      take: limit,
       select: { id: true },
     });
     const [sessions, buckets] = await this.prisma.$transaction([
@@ -589,20 +587,19 @@ export class OperatorAuthService {
         false,
         windowStart,
       );
-      const scoped = subjectHash
-        ? await this.incrementBucket(
-            transaction,
-            subjectHash,
-            clientHash,
-            false,
-            windowStart,
-          )
-        : undefined;
+      const scoped = await this.incrementBucket(
+        transaction,
+        subjectHash ?? globalSubjectHash,
+        clientHash,
+        false,
+        windowStart,
+      );
       return { global, scoped };
     });
     if (
       result.global.attempts > MAX_LOGIN_STARTS ||
-      (result.scoped && result.scoped.failures >= MAX_PASSWORD_FAILURES)
+      (!subjectHash && result.scoped.attempts > MAX_LOGIN_STARTS_PER_CLIENT) ||
+      (subjectHash && result.scoped.failures >= MAX_PASSWORD_FAILURES)
     ) {
       throw new HttpException(
         "Operator login is temporarily limited",
@@ -780,7 +777,10 @@ function derivePassword(password: string, salt: Buffer): Promise<Buffer> {
   });
 }
 
-function normalizeEmail(value: string): string {
+function normalizeEmail(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new UnauthorizedException("Operator authentication was not accepted");
+  }
   const email = value.trim().toLowerCase();
   if (
     email.length === 0 ||
