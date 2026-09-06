@@ -25,6 +25,10 @@ let payments: PaymentsService;
 let createdBalanceIntent:
   | { paymentId: string; amountMinor: bigint; merchantReference: string }
   | undefined;
+let balanceProviderCapabilityCalls = 0;
+let balanceProviderIntentCalls = 0;
+let pauseBalanceIntentBeforeReturn: (() => Promise<void>) | undefined;
+let previousCheckoutEnvironment: Record<string, string | undefined>;
 
 type FulfilmentFixture = {
   foundation: PersistenceFoundation;
@@ -579,23 +583,39 @@ async function markSlotPriceComponentExpress(slotId: string): Promise<void> {
 
 describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
   beforeAll(async () => {
+    previousCheckoutEnvironment = {
+      TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED:
+        process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED,
+      TAVEN_CLAIM_POLICY_REVISION: process.env.TAVEN_CLAIM_POLICY_REVISION,
+      TAVEN_CLAIM_WINDOW_DAYS: process.env.TAVEN_CLAIM_WINDOW_DAYS,
+      TAVEN_TERMS_REVISION: process.env.TAVEN_TERMS_REVISION,
+    };
+    process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
+    process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
+    process.env.TAVEN_CLAIM_WINDOW_DAYS = "30";
+    process.env.TAVEN_TERMS_REVISION = "terms-v1";
     pool = new Pool({ connectionString: databaseUrl });
     prisma = new PrismaService();
     await prisma.onModuleInit();
     orders = new OrdersService(prisma);
     const provider: PaymentProviderPort = {
       providerName: () => "test",
-      capabilities: async () => ({
-        provider: "test",
-        methods: ["CARD", "BANK_TRANSFER"],
-      }),
+      capabilities: async () => {
+        balanceProviderCapabilityCalls += 1;
+        return {
+          provider: "test",
+          methods: ["CARD", "BANK_TRANSFER"],
+        };
+      },
       refundRetrySafety: () => "IDEMPOTENT",
       createIntent: async (input) => {
+        balanceProviderIntentCalls += 1;
         createdBalanceIntent = {
           paymentId: input.paymentId,
           amountMinor: input.amountMinor,
           merchantReference: input.merchantReference,
         };
+        await pauseBalanceIntentBeforeReturn?.();
         return {
           providerIntentId: `balance-intent-${input.paymentId}`,
           checkoutUrl: `https://payments.example.test/${input.paymentId}`,
@@ -643,6 +663,9 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
   afterAll(async () => {
     await prisma.onModuleDestroy();
     await pool.end();
+    for (const [name, value] of Object.entries(previousCheckoutEnvironment)) {
+      restoreEnvironment(name, value);
+    }
   });
 
   it("freezes the platform-owned payout tuple and replays acceptance", async () => {
@@ -840,6 +863,169 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({ status: "READY_TO_SHIP" });
   });
 
+  it("keeps balance intent creation behind the checkout launch gate", async () => {
+    const fixture = await preparePaidOrder(
+      "post-qc-balance-launch-gate",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    const paymentBefore = await prisma.payment.findFirstOrThrow({
+      where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+      select: {
+        status: true,
+        checkoutMethod: true,
+        checkoutCommandId: true,
+        merchantReference: true,
+      },
+    });
+    const capabilityCallsBefore = balanceProviderCapabilityCalls;
+    const intentCallsBefore = balanceProviderIntentCalls;
+
+    process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "false";
+    try {
+      await expect(
+        payments.createBalancePayment(
+          fixture.foundation.orderId,
+          { method: "CARD" },
+          "post-qc-balance-disabled-link",
+        ),
+      ).rejects.toThrow(
+        "Checkout payment flows are unavailable until legal documents and provider launch inputs are approved",
+      );
+    } finally {
+      process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
+    }
+
+    expect(balanceProviderCapabilityCalls).toBe(capabilityCallsBefore);
+    expect(balanceProviderIntentCalls).toBe(intentCallsBefore);
+    await expect(
+      prisma.payment.findFirstOrThrow({
+        where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+        select: {
+          status: true,
+          checkoutMethod: true,
+          checkoutCommandId: true,
+          merchantReference: true,
+        },
+      }),
+    ).resolves.toEqual(paymentBefore);
+    await expect(
+      prisma.idempotencyRecord.count({
+        where: {
+          namespace: `balance-payment:${fixture.foundation.orderId}`,
+          idempotencyKey: "post-qc-balance-disabled-link",
+        },
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("records a failed balance callback that arrives before intent finalization", async () => {
+    const fixture = await preparePaidOrder(
+      "post-qc-balance-early-failure",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    let markIntentCreated!: () => void;
+    const intentCreated = new Promise<void>((resolve) => {
+      markIntentCreated = resolve;
+    });
+    let releaseIntent!: () => void;
+    const intentReleased = new Promise<void>((resolve) => {
+      releaseIntent = resolve;
+    });
+    pauseBalanceIntentBeforeReturn = async () => {
+      markIntentCreated();
+      await intentReleased;
+    };
+    const idempotencyKey = "post-qc-balance-early-failure-link";
+    const creation = payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      idempotencyKey,
+    );
+
+    try {
+      await intentCreated;
+      const staged = await prisma.payment.findFirstOrThrow({
+        where: {
+          orderId: fixture.foundation.orderId,
+          role: "BALANCE",
+          checkoutCommandId: { not: null },
+        },
+      });
+      await expect(
+        payments.consumeProviderEvent(
+          "test",
+          {},
+          {
+            providerEventId: `balance-failed-${staged.id}`,
+            providerTransactionId: `balance-intent-${staged.id}`,
+            merchantReference: staged.merchantReference!,
+            status: "FAILED",
+            amountMinor: staged.requestedAmountMinor,
+            currency: staged.currency,
+          },
+        ),
+      ).resolves.toEqual({ outcome: "FAILED" });
+      const intentCallsAfterFailure = balanceProviderIntentCalls;
+      const recovered = await payments.createBalancePayment(
+        fixture.foundation.orderId,
+        { method: "CARD" },
+        idempotencyKey,
+      );
+      expect(recovered).toMatchObject({
+        paymentId: staged.id,
+        status: "FAILED",
+        checkoutUrl: null,
+      });
+      expect(balanceProviderIntentCalls).toBe(intentCallsAfterFailure);
+      releaseIntent();
+
+      const failed = await creation;
+      expect(failed).toEqual(recovered);
+      await expect(
+        payments.createBalancePayment(
+          fixture.foundation.orderId,
+          { method: "CARD" },
+          idempotencyKey,
+        ),
+      ).resolves.toEqual(failed);
+      await expect(
+        Promise.all([
+          prisma.payment.findUniqueOrThrow({ where: { id: staged.id } }),
+          prisma.order.findUniqueOrThrow({
+            where: { id: fixture.foundation.orderId },
+          }),
+          prisma.paymentProviderEvent.count({
+            where: { paymentId: staged.id, kind: "PAYMENT_FAILED" },
+          }),
+          prisma.idempotencyRecord.findUniqueOrThrow({
+            where: { id: staged.checkoutCommandId! },
+          }),
+        ]),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          status: "FAILED",
+          providerIntentId: `balance-intent-${staged.id}`,
+          providerCheckoutUrl: null,
+          captureAuthorized: false,
+          captureCutoffAt: expect.any(Date),
+        }),
+        expect.objectContaining({ status: "QC_PASSED" }),
+        1,
+        expect.objectContaining({
+          status: "COMPLETED",
+          responseBody: expect.objectContaining({ status: "FAILED" }),
+        }),
+      ]);
+    } finally {
+      releaseIntent();
+      pauseBalanceIntentBeforeReturn = undefined;
+    }
+  });
+
   it("keeps cancellation-race handoff blocked until the split balance is settled", async () => {
     const fixture = await preparePaidOrder(
       "balance-cancellation-handoff-race",
@@ -919,6 +1105,62 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       captureAuthorized: false,
       captureCutoffAt: expect.any(Date),
     });
+  });
+
+  it("moves an awaiting-balance job failure into recovery and voids the attempt", async () => {
+    const fixture = await preparePaidOrder(
+      "awaiting-balance-job-failure",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    const balance = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "awaiting-balance-job-failure-link",
+    );
+
+    await expect(
+      orders.failJob(
+        fixture.foundation.orderId,
+        fixture.productions[0]!.jobId,
+        {
+          stage: "PACKING",
+          reason: "packed part failed final inspection",
+          recovery: "REPLACE",
+        },
+        "awaiting-balance-job-failure-command",
+      ),
+    ).resolves.toMatchObject({ status: "FAILED" });
+    await expect(
+      Promise.all([
+        prisma.order.findUniqueOrThrow({
+          where: { id: fixture.foundation.orderId },
+        }),
+        prisma.orderPhase.findUniqueOrThrow({
+          where: { id: fixture.foundation.orderPhaseId },
+        }),
+        prisma.payment.findUniqueOrThrow({
+          where: { id: balance.paymentId },
+        }),
+        prisma.outboxMessage.count({
+          where: {
+            aggregateId: balance.paymentId,
+            messageType: "void_payment",
+          },
+        }),
+      ]),
+    ).resolves.toEqual([
+      expect.objectContaining({ status: "RECOVERY_PENDING" }),
+      expect.objectContaining({ status: "RECOVERY_PENDING" }),
+      expect.objectContaining({
+        status: "VOIDED",
+        captureAuthorized: false,
+        captureCutoffAt: expect.any(Date),
+      }),
+      1,
+    ]);
   });
 
   it("derives the post-QC balance from the reduced active contract", async () => {
@@ -4710,3 +4952,11 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({ status: "CANCELLED" });
   });
 });
+
+function restoreEnvironment(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}

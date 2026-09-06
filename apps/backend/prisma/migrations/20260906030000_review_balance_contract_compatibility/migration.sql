@@ -821,7 +821,9 @@ BEGIN
     IF NOT (
         (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
         OR (OLD."status" = 'AWAITING_BALANCE'
-            AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED', 'CANCELLED_SETTLED'))
+            AND NEW."status" IN (
+                'READY_TO_SHIP', 'RECOVERY_PENDING', 'CANCELLED', 'CANCELLED_SETTLED'
+            ))
     ) THEN
         RAISE EXCEPTION 'order balance status transition is not allowed'
             USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
@@ -852,7 +854,9 @@ WHEN (
     NOT (
         (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
         OR (OLD."status" = 'AWAITING_BALANCE'
-            AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED', 'CANCELLED_SETTLED'))
+            AND NEW."status" IN (
+                'READY_TO_SHIP', 'RECOVERY_PENDING', 'CANCELLED', 'CANCELLED_SETTLED'
+            ))
     )
 )
 EXECUTE FUNCTION taven_validate_order_status_transition();
@@ -866,7 +870,9 @@ FOR EACH ROW
 WHEN (
     (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
     OR (OLD."status" = 'AWAITING_BALANCE'
-        AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED', 'CANCELLED_SETTLED'))
+        AND NEW."status" IN (
+            'READY_TO_SHIP', 'RECOVERY_PENDING', 'CANCELLED', 'CANCELLED_SETTLED'
+        ))
 )
 EXECUTE FUNCTION taven_validate_balance_order_status_transition();
 
@@ -1461,13 +1467,19 @@ BEGIN
     END IF;
 
     IF target_payment."status" = 'CREATED' THEN
+        -- A failure callback can win the payment-envelope lock before the
+        -- creator stores its provider response. Assign the provider identity
+        -- through the permitted transition, but keep the Order at QC_PASSED so
+        -- the deferred waiting check observes the final FAILED attempt.
         UPDATE "payments"
         SET "status" = 'PENDING', "provider_intent_id" = event_transaction_id,
             "updated_at" = verified_at
         WHERE "id" = target_payment."id";
-        UPDATE "orders"
-        SET "status" = 'AWAITING_BALANCE', "updated_at" = verified_at
-        WHERE "id" = target_payment."order_id" AND "status" = 'QC_PASSED';
+        IF event_kind <> 'PAYMENT_FAILED' THEN
+            UPDATE "orders"
+            SET "status" = 'AWAITING_BALANCE', "updated_at" = verified_at
+            WHERE "id" = target_payment."order_id" AND "status" = 'QC_PASSED';
+        END IF;
         SELECT * INTO target_payment FROM "payments"
         WHERE "id" = matched_payment_id FOR UPDATE;
     END IF;

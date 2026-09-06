@@ -108,6 +108,35 @@ export class PaymentsService {
     const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
     const namespace = balanceNamespace(orderId);
     const fingerprint = fingerprintOf({ orderId, method });
+    const initialIdempotency = await this.prisma.$transaction(
+      async (transaction) => {
+        await lockNamedIdempotencyKey(transaction, namespace, idempotencyKey);
+        return balanceIdempotencyAfterLock(
+          transaction,
+          namespace,
+          idempotencyKey,
+          fingerprint,
+        );
+      },
+    );
+    if (initialIdempotency.replay) return initialIdempotency.replay;
+    const initialOrder = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        acceptedTermsRevision: true,
+        acceptedClaimPolicyRevision: true,
+        acceptedClaimWindowDays: true,
+        acceptedPriceBinding: {
+          select: {
+            priceSnapshot: {
+              select: { priceList: { select: { termsRevision: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!initialOrder) throw new NotFoundException("Order was not found");
+    assertBalancePaymentLaunchApproved(initialOrder);
     const capabilities = await this.provider.capabilities();
     if (
       capabilities.provider !== this.provider.providerName() ||
@@ -138,9 +167,20 @@ export class PaymentsService {
           publicReference: true,
           status: true,
           checkoutContactSnapshot: true,
+          acceptedTermsRevision: true,
+          acceptedClaimPolicyRevision: true,
+          acceptedClaimWindowDays: true,
+          acceptedPriceBinding: {
+            select: {
+              priceSnapshot: {
+                select: { priceList: { select: { termsRevision: true } } },
+              },
+            },
+          },
         },
       });
       if (!order) throw new NotFoundException("Order was not found");
+      assertBalancePaymentLaunchApproved(order);
       if (order.status !== "QC_PASSED" && order.status !== "AWAITING_BALANCE") {
         throw new ConflictException(
           "Order is not awaiting its balance payment",
@@ -314,6 +354,17 @@ export class PaymentsService {
             where: { id: payment.id },
             data: { providerCheckoutUrl: intent.checkoutUrl },
           });
+        } else if (
+          payment.status === PaymentStatus.FAILED &&
+          payment.providerIntentId === intent.providerIntentId
+        ) {
+          const response = paymentDto(payment);
+          await completeIdempotency(
+            transaction,
+            staged.idempotencyRecordId,
+            response,
+          );
+          return response;
         } else if (
           payment.status !== PaymentStatus.CAPTURED ||
           payment.providerIntentId !== intent.providerIntentId
@@ -1374,17 +1425,24 @@ export class PaymentsService {
       },
     });
     const committedResponse = asRecord(payment?.checkoutCommand?.responseBody);
+    const committedPending =
+      committedResponse?.status === PaymentStatus.PENDING &&
+      committedResponse.checkoutUrl === checkoutUrl &&
+      payment?.providerCheckoutUrl === checkoutUrl;
+    const committedEarlyFailure =
+      committedResponse?.status === PaymentStatus.FAILED &&
+      committedResponse.checkoutUrl === null &&
+      payment?.status === PaymentStatus.FAILED &&
+      payment.providerCheckoutUrl === null;
     if (
       !payment ||
       payment.checkoutCommandId !== idempotencyRecordId ||
       payment.checkoutCommand?.id !== idempotencyRecordId ||
       payment.checkoutCommand.status !== IdempotencyStatus.COMPLETED ||
       payment.providerIntentId !== providerIntentId ||
-      payment.providerCheckoutUrl !== checkoutUrl ||
       !committedResponse ||
       committedResponse.paymentId !== paymentId ||
-      committedResponse.status !== PaymentStatus.PENDING ||
-      committedResponse.checkoutUrl !== checkoutUrl
+      (!committedPending && !committedEarlyFailure)
     ) {
       return null;
     }
@@ -1705,6 +1763,32 @@ function paymentDto(payment: {
   };
 }
 
+function assertBalancePaymentLaunchApproved(order: {
+  acceptedTermsRevision: string | null;
+  acceptedClaimPolicyRevision: string | null;
+  acceptedClaimWindowDays: number | null;
+  acceptedPriceBinding: {
+    priceSnapshot: { priceList: { termsRevision: string } };
+  } | null;
+}): void {
+  const boundTermsRevision =
+    order.acceptedPriceBinding?.priceSnapshot.priceList.termsRevision;
+  if (!boundTermsRevision) {
+    throw new ConflictException(
+      "Balance payment has no accepted price binding",
+    );
+  }
+  const legalRevisions = assertCheckoutPaymentFlowsEnabled(boundTermsRevision);
+  assertCheckoutAcceptanceRevisionsCurrent(
+    {
+      termsRevision: order.acceptedTermsRevision,
+      claimPolicyRevision: order.acceptedClaimPolicyRevision,
+      claimWindowDays: order.acceptedClaimWindowDays,
+    },
+    legalRevisions,
+  );
+}
+
 async function balanceIdempotencyAfterLock(
   transaction: Transaction,
   namespace: string,
@@ -1735,6 +1819,17 @@ async function balanceIdempotencyAfterLock(
       replay: existing.responseBody as unknown as CheckoutPaymentDto,
       nextGeneration: existing.generation,
     };
+  }
+  const earlyFailure = await transaction.payment.findUnique({
+    where: { checkoutCommandId: existing.id },
+  });
+  if (
+    earlyFailure?.status === PaymentStatus.FAILED &&
+    earlyFailure.providerIntentId
+  ) {
+    const response = paymentDto(earlyFailure);
+    await completeIdempotency(transaction, existing.id, response);
+    return { replay: response, nextGeneration: existing.generation };
   }
   throw new ConflictException("Balance payment intent creation is incomplete");
 }

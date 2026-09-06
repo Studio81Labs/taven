@@ -646,6 +646,7 @@ export class OrdersService {
               | typeof JobStatus.PACKED,
           )
         ) {
+          await this.voidOpenBalancePayments(tx, orderId, failedAt);
           await tx.orderPhase.updateMany({
             where: {
               id: job.orderPhaseId,
@@ -665,6 +666,7 @@ export class OrdersService {
                 in: [
                   OrderStatus.IN_PRODUCTION,
                   OrderStatus.QC_PASSED,
+                  OrderStatus.AWAITING_BALANCE,
                   OrderStatus.READY_TO_SHIP,
                 ],
               },
@@ -5471,52 +5473,7 @@ export class OrdersService {
     printingConsumptions = new Map<string, bigint>(),
     allowSettledConsumptions = false,
   ): Promise<string[]> {
-    const openBalancePayments = await tx.$queryRaw<
-      Array<{ id: string; provider: string; provider_intent_id: string | null }>
-    >`
-      SELECT payment.id, payment.provider, payment.provider_intent_id
-      FROM payments payment
-      WHERE payment.order_id = ${orderId}::uuid
-        AND payment.role = 'BALANCE'
-        AND payment.status IN ('CREATED', 'PENDING')
-        AND payment.captured_amount_minor IS NULL
-      ORDER BY payment.id
-      FOR UPDATE
-    `;
-    if (openBalancePayments.length > 0) {
-      await tx.payment.updateMany({
-        where: { id: { in: openBalancePayments.map(({ id }) => id) } },
-        data: {
-          status: "VOIDED",
-          captureAuthorized: false,
-          captureCutoffAt: at,
-          updatedAt: at,
-        },
-      });
-      await tx.outboxMessage.createMany({
-        data: openBalancePayments.flatMap((payment) =>
-          payment.provider_intent_id
-            ? [
-                {
-                  deduplicationKey: `void_payment:v1:${payment.id}`,
-                  aggregateType: "Payment",
-                  aggregateId: payment.id,
-                  messageType: "void_payment",
-                  schemaVersion: 1,
-                  payload: jsonSafe({
-                    paymentId: payment.id,
-                    provider: payment.provider,
-                    providerIntentId: payment.provider_intent_id,
-                    action: "void_payment",
-                  }) as Prisma.InputJsonObject,
-                  availableAt: at,
-                },
-              ]
-            : [],
-        ),
-        skipDuplicates: true,
-      });
-    }
+    await this.voidOpenBalancePayments(tx, orderId, at);
     await tx.shipment.updateMany({
       where: { orderId, status: ShipmentStatus.PLANNED },
       data: { status: ShipmentStatus.CANCELLED, cancelledAt: at },
@@ -5643,6 +5600,59 @@ export class OrdersService {
       });
     }
     return refundIds;
+  }
+
+  private async voidOpenBalancePayments(
+    tx: Transaction,
+    orderId: string,
+    at: Date,
+  ): Promise<void> {
+    const openBalancePayments = await tx.$queryRaw<
+      Array<{ id: string; provider: string; provider_intent_id: string | null }>
+    >`
+      SELECT payment.id, payment.provider, payment.provider_intent_id
+      FROM payments payment
+      WHERE payment.order_id = ${orderId}::uuid
+        AND payment.role = 'BALANCE'
+        AND payment.status IN ('CREATED', 'PENDING')
+        AND payment.captured_amount_minor IS NULL
+      ORDER BY payment.id
+      FOR UPDATE
+    `;
+    if (openBalancePayments.length > 0) {
+      await tx.payment.updateMany({
+        where: { id: { in: openBalancePayments.map(({ id }) => id) } },
+        data: {
+          status: "VOIDED",
+          captureAuthorized: false,
+          captureCutoffAt: at,
+          updatedAt: at,
+        },
+      });
+      await tx.outboxMessage.createMany({
+        data: openBalancePayments.flatMap((payment) =>
+          payment.provider_intent_id
+            ? [
+                {
+                  deduplicationKey: `void_payment:v1:${payment.id}`,
+                  aggregateType: "Payment",
+                  aggregateId: payment.id,
+                  messageType: "void_payment",
+                  schemaVersion: 1,
+                  payload: jsonSafe({
+                    paymentId: payment.id,
+                    provider: payment.provider,
+                    providerIntentId: payment.provider_intent_id,
+                    action: "void_payment",
+                  }) as Prisma.InputJsonObject,
+                  availableAt: at,
+                },
+              ]
+            : [],
+        ),
+        skipDuplicates: true,
+      });
+    }
   }
 
   private activePrintingReservations(tx: Transaction, orderId: string) {
