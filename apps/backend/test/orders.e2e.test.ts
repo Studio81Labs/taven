@@ -680,11 +680,24 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     await labelAndPack(fixture, 0);
     await handoff(fixture, 0);
     await carrierEvent(fixture, 0, "DELIVERY_SCAN", "legacy-claim-delivery");
+    const deliveredShipment = await prisma.shipment.findUniqueOrThrow({
+      where: { id: fixture.foundation.shipmentIds[0]! },
+      select: { deliveredAt: true },
+    });
+    if (!deliveredShipment.deliveredAt) {
+      throw new Error("legacy delivery evidence was not recorded");
+    }
     const client = await pool.connect();
     try {
       await client.query("SET session_replication_role = 'replica'");
       await client.query(
         `UPDATE orders SET accepted_claim_window_days = NULL WHERE id = $1`,
+        [orderId],
+      );
+      await client.query(
+        `UPDATE fulfilment_slots
+         SET delivered_at = NULL, claim_until = NULL
+         WHERE order_id = $1 AND outcome = 'DELIVERED'`,
         [orderId],
       );
     } finally {
@@ -707,6 +720,13 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     await expect(
       prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
     ).resolves.toMatchObject({ acceptedClaimWindowDays: 30 });
+    const repairedSlot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
+    });
+    expect(repairedSlot.deliveredAt).toEqual(deliveredShipment.deliveredAt);
+    expect(repairedSlot.claimUntil).toEqual(
+      new Date(deliveredShipment.deliveredAt.getTime() + 30 * 86_400_000),
+    );
     await expect(
       prisma.claimWindowMigrationApproval.findUniqueOrThrow({
         where: { orderId },
@@ -781,12 +801,20 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       "DEPOSIT_BALANCE",
     );
     await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "QC_PASSED" });
+    await expect(handoff(fixture, 0)).rejects.toThrow(
+      "Shipment packing or financial handoff barriers are not satisfied",
+    );
     const pending = await payments.createBalancePayment(
       fixture.foundation.orderId,
       { method: "BANK_TRANSFER" },
       "post-qc-balance-after-packing-link",
     );
-    await labelAndPack(fixture, 0);
     await expect(
       prisma.order.findUniqueOrThrow({
         where: { id: fixture.foundation.orderId },
@@ -843,6 +871,166 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(balance.requestedAmountMinor).toBe(
       balance.paymentSchedule.grossAmountMinor - 1n,
     );
+  });
+
+  it("applies a credit larger than the deposit only to the remaining balance", async () => {
+    const fixture = await preparePaidOrder(
+      "credit-larger-than-deposit",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    const deposit = await prisma.payment.findUniqueOrThrow({
+      where: { id: fixture.foundation.paymentId },
+    });
+    const creditAmount = deposit.capturedAmountMinor! + 1n;
+    const adjustment = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "PRODUCTION_FAILURE",
+        amountMinor: creditAmount.toString(),
+        paymentId: deposit.id,
+        allocation: {
+          reason: "credit reduces the unpaid contract balance",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: creditAmount.toString(),
+            },
+          ],
+        },
+      },
+      "credit-larger-than-deposit-adjustment",
+    );
+    const adjustmentId = adjustment.result.priceAdjustmentId as string;
+    await expect(
+      prisma.priceAdjustment.findUniqueOrThrow({
+        where: { id: adjustmentId },
+      }),
+    ).resolves.toMatchObject({ refundRequiredMinor: 0n });
+    await expect(
+      orders.refundAdjustment(
+        fixture.foundation.orderId,
+        adjustmentId,
+        "credit-larger-than-deposit-refund",
+      ),
+    ).resolves.toMatchObject({
+      status: "PRICE_ADJUSTMENT_ACTIVATED",
+      result: { refundIds: [], refundAmountMinor: "0" },
+    });
+
+    await advanceThroughQc(fixture, 0);
+    const balance = await prisma.payment.findFirstOrThrow({
+      where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+      include: { paymentSchedule: true },
+    });
+    expect(balance.requestedAmountMinor).toBe(
+      balance.paymentSchedule.grossAmountMinor - creditAmount,
+    );
+    await labelAndPack(fixture, 0);
+    const pending = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "credit-larger-than-deposit-link",
+    );
+    await payments.consumeProviderEvent(
+      "test",
+      {},
+      {
+        providerEventId: `credit-balance-captured-${pending.paymentId}`,
+        providerTransactionId: `balance-intent-${pending.paymentId}`,
+        merchantReference: pending.paymentId,
+        status: "CAPTURED",
+        amountMinor: BigInt(pending.amountMinor),
+        currency: pending.currency,
+      },
+    );
+    await handoff(fixture, 0);
+  });
+
+  it("voids a cancelled balance attempt and compensates a late capture", async () => {
+    const fixture = await preparePaidOrder(
+      "cancelled-balance-late-capture",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    const pending = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "cancelled-balance-payment-link",
+    );
+
+    const cancelled = await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "customer cancelled before final payment" },
+      "cancelled-balance-order",
+    );
+    const cancelledReplay = await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "customer cancelled before final payment" },
+      "cancelled-balance-order",
+    );
+    expect(cancelled.status).toBe("ORDER_CANCELLED");
+    expect(cancelledReplay).toEqual(cancelled);
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: pending.paymentId } }),
+    ).resolves.toMatchObject({
+      status: "VOIDED",
+      captureAuthorized: false,
+      captureCutoffAt: expect.any(Date),
+    });
+    await expect(
+      prisma.outboxMessage.findUniqueOrThrow({
+        where: { deduplicationKey: `void_payment:v1:${pending.paymentId}` },
+      }),
+    ).resolves.toMatchObject({
+      aggregateType: "Payment",
+      aggregateId: pending.paymentId,
+      messageType: "void_payment",
+    });
+
+    const event = {
+      providerEventId: `cancelled-late-capture-${pending.paymentId}`,
+      providerTransactionId: `balance-intent-${pending.paymentId}`,
+      merchantReference: pending.paymentId,
+      status: "CAPTURED" as const,
+      amountMinor: BigInt(pending.amountMinor),
+      currency: pending.currency,
+    };
+    await expect(
+      payments.consumeProviderEvent("test", {}, event),
+    ).resolves.toEqual({ outcome: "REFUND_PENDING" });
+    await expect(
+      payments.consumeProviderEvent("test", {}, event),
+    ).resolves.toEqual({ outcome: "DUPLICATE" });
+    await expect(
+      prisma.refundTransaction.findFirstOrThrow({
+        where: {
+          paymentId: pending.paymentId,
+          reason: "LATE_CAPTURE_COMPENSATION",
+        },
+      }),
+    ).resolves.toMatchObject({
+      amountMinor: BigInt(pending.amountMinor),
+      status: "PENDING",
+    });
+    await expect(
+      prisma.refundTransaction.count({
+        where: {
+          paymentId: pending.paymentId,
+          reason: "LATE_CAPTURE_COMPENSATION",
+        },
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.outboxMessage.count({
+        where: {
+          aggregateType: "Payment",
+          aggregateId: pending.paymentId,
+          messageType: "void_payment",
+        },
+      }),
+    ).resolves.toBe(1);
   });
 
   it("creates a replacement only after acquiring a fresh reservation", async () => {
@@ -3898,7 +4086,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         "split-explicit-exhausted-key",
       ),
     ).rejects.toThrow(
-      "Price adjustment exceeds the selected Payment refundable balance",
+      "Selected Payment cannot fund the active contract refund",
     );
 
     const unbound = await orders.createPriceAdjustment(

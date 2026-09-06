@@ -2459,6 +2459,7 @@ model PriceAdjustment {
   idempotencyKey        String                @unique @map("idempotency_key") @db.VarChar(255)
   reason                PriceAdjustmentReason
   amountMinor           BigInt                @map("amount_minor")
+  refundRequiredMinor   BigInt                @map("refund_required_minor")
   currency              String                @db.Char(3)
   allocation            Json                  @db.JsonB
   createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)

@@ -55,7 +55,8 @@ CREATE UNIQUE INDEX "order_active_contract_prices_revision_scope_key"
     ON "order_active_contract_prices"("contract_price_revision_id", "order_id");
 
 ALTER TABLE "price_adjustments"
-    ADD COLUMN "source_contract_price_id" uuid;
+    ADD COLUMN "source_contract_price_id" uuid,
+    ADD COLUMN "refund_required_minor" bigint;
 
 -- No released application version could have written PriceAdjustment rows
 -- between the immediately preceding migration and this one. Abort rather than
@@ -71,6 +72,11 @@ $$;
 
 ALTER TABLE "price_adjustments"
     ALTER COLUMN "source_contract_price_id" SET NOT NULL,
+    ALTER COLUMN "refund_required_minor" SET NOT NULL,
+    ADD CONSTRAINT "price_adjustments_refund_required_check" CHECK (
+        "refund_required_minor" >= 0
+        AND "refund_required_minor" <= "amount_minor"
+    ),
     ADD CONSTRAINT "price_adjustments_source_contract_price_id_fkey"
         FOREIGN KEY ("source_contract_price_id")
         REFERENCES "order_contract_price_revisions"("id") ON DELETE RESTRICT;
@@ -328,6 +334,8 @@ CREATE FUNCTION taven_require_activated_adjustment_before_refund()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    required_refund bigint;
 BEGIN
     IF NEW."price_adjustment_id" IS NOT NULL
        AND NOT EXISTS (
@@ -352,12 +360,30 @@ BEGIN
         RAISE EXCEPTION 'adjustment refund requires an activated contract-price revision'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_adjustment_contract_price_check';
     END IF;
+    IF NEW."price_adjustment_id" IS NOT NULL
+       AND NEW."status" IN ('PENDING', 'SUSPENDED', 'SUCCEEDED') THEN
+        SELECT adjustment."refund_required_minor"
+        INTO required_refund
+        FROM "price_adjustments" adjustment
+        WHERE adjustment."id" = NEW."price_adjustment_id";
+        IF coalesce((
+            SELECT sum(refund."amount_minor")
+            FROM "refund_transactions" refund
+            WHERE refund."price_adjustment_id" = NEW."price_adjustment_id"
+              AND refund."id" <> NEW."id"
+              AND refund."status" IN ('PENDING', 'SUSPENDED', 'SUCCEEDED')
+        ), 0) + NEW."amount_minor" > required_refund THEN
+            RAISE EXCEPTION 'adjustment refund work exceeds its recorded cash obligation'
+                USING ERRCODE = '23514', CONSTRAINT = 'refund_adjustment_required_amount_check';
+        END IF;
+    END IF;
     RETURN NEW;
 END;
 $$;
 
 CREATE TRIGGER "refund_transactions_adjustment_contract_price_valid"
-BEFORE INSERT OR UPDATE OF "price_adjustment_id" ON "refund_transactions"
+BEFORE INSERT OR UPDATE OF "price_adjustment_id", "status", "amount_minor"
+ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_require_activated_adjustment_before_refund();
 
 CREATE FUNCTION taven_create_price_adjustment_with_revision(
@@ -379,6 +405,10 @@ DECLARE
     result_revision_id uuid := gen_random_uuid();
     result_total bigint;
     result_vat bigint;
+    net_captured bigint;
+    source_overpayment bigint;
+    refund_required bigint;
+    selected_payment_available bigint;
     adjustment_created_at timestamptz := clock_timestamp();
 BEGIN
     PERFORM 1 FROM "orders" WHERE "id" = target_order_id FOR UPDATE;
@@ -402,18 +432,58 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_contract_source_check';
     END IF;
 
+    result_total := source_revision."contract_total_minor" - target_amount_minor;
+    SELECT greatest(
+        coalesce(sum(payment."captured_amount_minor"), 0)
+        - coalesce((
+            SELECT sum(refund."amount_minor")
+            FROM "refund_transactions" refund
+            JOIN "payments" refund_payment
+              ON refund_payment."id" = refund."payment_id"
+            WHERE refund_payment."order_id" = target_order_id
+              AND refund."status" IN ('PENDING', 'SUSPENDED', 'SUCCEEDED')
+        ), 0),
+        0
+    ) INTO net_captured
+    FROM "payments" payment
+    WHERE payment."order_id" = target_order_id
+      AND payment."captured_amount_minor" IS NOT NULL;
+    source_overpayment := greatest(
+        net_captured - source_revision."contract_total_minor", 0
+    );
+    refund_required := greatest(net_captured - result_total, 0) - source_overpayment;
+
+    IF target_payment_id IS NOT NULL THEN
+        SELECT payment."captured_amount_minor" - coalesce((
+            SELECT sum(refund."amount_minor")
+            FROM "refund_transactions" refund
+            WHERE refund."payment_id" = payment."id"
+              AND refund."status" IN ('PENDING', 'SUSPENDED', 'SUCCEEDED')
+        ), 0)
+        INTO selected_payment_available
+        FROM "payments" payment
+        WHERE payment."id" = target_payment_id
+          AND payment."order_id" = target_order_id
+          AND payment."currency" = target_currency
+          AND payment."captured_amount_minor" IS NOT NULL
+        FOR UPDATE;
+        IF NOT FOUND OR selected_payment_available < refund_required THEN
+            RAISE EXCEPTION 'selected Payment cannot fund the incremental contract refund'
+                USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_payment_refund_check';
+        END IF;
+    END IF;
+
     INSERT INTO "price_adjustments" (
         "id", "order_id", "payment_id", "claim_id",
         "source_contract_price_id", "idempotency_key", "reason",
-        "amount_minor", "currency", "allocation", "created_at"
+        "amount_minor", "refund_required_minor", "currency", "allocation", "created_at"
     ) VALUES (
         target_adjustment_id, target_order_id, target_payment_id,
         target_claim_id, source_revision."id", target_idempotency_key,
-        target_reason, target_amount_minor, target_currency,
+        target_reason, target_amount_minor, refund_required, target_currency,
         target_allocation, adjustment_created_at
     );
 
-    result_total := source_revision."contract_total_minor" - target_amount_minor;
     result_vat := CASE
         WHEN source_revision."tax_regime" = 'NON_VAT_PAYER' THEN 0
         ELSE floor(
@@ -538,6 +608,267 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+CREATE FUNCTION taven_legacy_claim_slot_repair_is_authorized(
+    target_slot_id uuid,
+    target_delivered_at timestamptz,
+    target_claim_until timestamptz
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "fulfilment_slots" slot
+        JOIN "orders" target_order ON target_order."id" = slot."order_id"
+        JOIN "claim_window_migration_approvals" approval
+          ON approval."order_id" = target_order."id"
+         AND approval."claim_policy_revision" = target_order."accepted_claim_policy_revision"
+         AND approval."claim_window_days" = target_order."accepted_claim_window_days"
+        JOIN "shipment_plan_fulfilment_slots" allocation
+          ON allocation."fulfilment_slot_id" = slot."id"
+        JOIN "shipments" shipment
+          ON shipment."shipment_plan_id" = allocation."shipment_plan_id"
+         AND shipment."order_id" = slot."order_id"
+         AND shipment."order_phase_id" = slot."order_phase_id"
+        JOIN "shipment_provider_events" delivery_event
+          ON delivery_event."shipment_id" = shipment."id"
+         AND delivery_event."kind" = 'DELIVERY_SCAN'
+         AND delivery_event."outbox_message_id" IS NULL
+         AND delivery_event."carrier" = shipment."carrier"
+         AND delivery_event."carrier_label_id" = shipment."carrier_label_id"
+         AND delivery_event."verified_at" = shipment."delivered_at"
+        WHERE slot."id" = target_slot_id
+          AND slot."outcome" = 'DELIVERED'
+          AND shipment."status" = 'DELIVERED'
+          AND shipment."delivered_at" = target_delivered_at
+          AND target_claim_until = target_delivered_at
+              + make_interval(days => approval."claim_window_days")
+          AND NOT EXISTS (
+              SELECT 1 FROM "shipments" successor
+              WHERE successor."replaces_shipment_id" = shipment."id"
+          )
+          AND (
+              SELECT count(*)
+              FROM "shipments" leaf
+              WHERE leaf."shipment_plan_id" = allocation."shipment_plan_id"
+                AND leaf."status" = 'DELIVERED'
+                AND leaf."delivered_at" IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM "shipments" successor
+                    WHERE successor."replaces_shipment_id" = leaf."id"
+                )
+          ) = 1
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION taven_protect_fulfilment_slot_topology()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid := CASE WHEN TG_OP = 'INSERT' THEN NEW."order_id" ELSE OLD."order_id" END;
+    target_order_status "order_status";
+    target_claim_window_days integer;
+BEGIN
+    IF TG_OP = 'INSERT'
+       OR (TG_OP = 'UPDATE'
+           AND NEW."settlement_amount_minor" IS DISTINCT FROM OLD."settlement_amount_minor") THEN
+        PERFORM taven_lock_automatic_order_session(target_order_id);
+    END IF;
+
+    SELECT "status", "accepted_claim_window_days"
+    INTO target_order_status, target_claim_window_days
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    IF TG_OP = 'INSERT' THEN
+        IF target_order_status IS DISTINCT FROM 'DRAFT'::"order_status" THEN
+            RAISE EXCEPTION 'fulfilment slots can be inserted only while the order is draft'
+                USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
+        END IF;
+        IF NEW."outcome" <> 'PENDING'
+           OR NEW."delivered_at" IS NOT NULL
+           OR NEW."claim_until" IS NOT NULL THEN
+            RAISE EXCEPTION 'new fulfilment slots must begin pending without delivery evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_initial_outcome_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'fulfilment slots are stable topology and cannot be deleted'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
+    END IF;
+
+    IF (to_jsonb(NEW) - 'outcome' - 'updated_at' - 'settlement_amount_minor' - 'delivered_at' - 'claim_until')
+       IS DISTINCT FROM (to_jsonb(OLD) - 'outcome' - 'updated_at' - 'settlement_amount_minor' - 'delivered_at' - 'claim_until') THEN
+        RAISE EXCEPTION 'fulfilment slot identity and packing topology cannot be changed'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
+    END IF;
+
+    IF NEW."settlement_amount_minor" IS DISTINCT FROM OLD."settlement_amount_minor"
+       AND EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = OLD."order_id") THEN
+        RAISE EXCEPTION 'fulfilment slot settlement cannot change after payment intent creation'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_settlement_payment_guard';
+    END IF;
+
+    IF NEW."outcome" IS DISTINCT FROM OLD."outcome"
+       AND NOT (
+           (OLD."outcome" = 'PENDING'
+            AND NEW."outcome" IN ('DELIVERED', 'CANCELLED', 'CANCELLED_REFUNDED'))
+           OR (OLD."outcome" = 'CANCELLED'
+               AND NEW."outcome" = 'CANCELLED_REFUNDED')
+           OR (OLD."outcome" = 'CANCELLED'
+               AND NEW."outcome" = 'PENDING'
+               AND taven_has_reconciled_post_void_handoff(
+                   NEW."order_id", NEW."order_phase_id", NULL,
+                   NEW."id", NULL, NEW."updated_at"
+               ))
+           OR (OLD."outcome" = 'CANCELLED_REFUNDED'
+               AND NEW."outcome" = 'PENDING'
+               AND target_order_status IN ('REFUNDED', 'SHIPPED')
+               AND taven_has_refunded_post_void_handoff_reconciliation(
+                   NEW."order_id", NEW."order_phase_id", NULL,
+                   NEW."id", NULL, NEW."updated_at"
+               ))
+           OR (OLD."outcome" = 'CANCELLED_REFUNDED'
+               AND NEW."outcome" = 'CANCELLED'
+               AND taven_order_has_newer_refund_failure(NEW."order_id"))
+       ) THEN
+        RAISE EXCEPTION 'fulfilment slot outcome is terminal once recorded'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_outcome_transition_check';
+    END IF;
+
+    IF OLD."delivered_at" IS NOT NULL
+       AND (
+           NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+           OR NEW."claim_until" IS DISTINCT FROM OLD."claim_until"
+       ) THEN
+        RAISE EXCEPTION 'fulfilment slot delivery and Claim deadline are immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_claim_window_immutable_check';
+    END IF;
+
+    IF OLD."outcome" = 'PENDING'
+       AND NEW."outcome" = 'DELIVERED'
+       AND (
+           NEW."delivered_at" IS NULL
+           OR NEW."claim_until" IS NULL
+           OR target_claim_window_days IS NULL
+           OR NEW."claim_until" <> NEW."delivered_at" + make_interval(days => target_claim_window_days)
+       ) THEN
+        RAISE EXCEPTION 'delivered fulfilment slot requires its snapshotted Claim deadline'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_claim_window_snapshot_check';
+    END IF;
+
+    IF (
+        NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+        OR NEW."claim_until" IS DISTINCT FROM OLD."claim_until"
+       ) AND NOT (
+        (
+            OLD."outcome" = 'PENDING'
+            AND NEW."outcome" = 'DELIVERED'
+            AND OLD."delivered_at" IS NULL
+            AND OLD."claim_until" IS NULL
+            AND NEW."delivered_at" IS NOT NULL
+            AND target_claim_window_days IS NOT NULL
+            AND NEW."claim_until" = NEW."delivered_at" + make_interval(days => target_claim_window_days)
+        ) OR (
+            OLD."outcome" = 'DELIVERED'
+            AND NEW."outcome" = 'DELIVERED'
+            AND OLD."delivered_at" IS NULL
+            AND OLD."claim_until" IS NULL
+            AND NEW."delivered_at" IS NOT NULL
+            AND NEW."claim_until" IS NOT NULL
+            AND taven_legacy_claim_slot_repair_is_authorized(
+                NEW."id", NEW."delivered_at", NEW."claim_until"
+            )
+        )
+       ) THEN
+        RAISE EXCEPTION 'delivery must derive the Claim deadline from accepted policy and delivery evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_claim_window_snapshot_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+-- Customer cancellation is also valid while a dispatched balance attempt is
+-- open. Keep that edge in the dedicated split-payment validator so the same
+-- immutable acceptance fields remain protected.
+DROP TRIGGER "orders_status_transitions_valid_update" ON "orders";
+DROP TRIGGER "orders_balance_status_transitions_valid" ON "orders";
+
+CREATE OR REPLACE FUNCTION taven_validate_balance_order_status_transition()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW."id" IS DISTINCT FROM OLD."id"
+       OR NEW."public_reference" IS DISTINCT FROM OLD."public_reference"
+       OR NEW."customer_id" IS DISTINCT FROM OLD."customer_id"
+       OR NEW."quoted_at" IS DISTINCT FROM OLD."quoted_at"
+       OR NEW."confirmed_at" IS DISTINCT FROM OLD."confirmed_at"
+       OR NEW."accepted_order_price_binding_id" IS DISTINCT FROM OLD."accepted_order_price_binding_id"
+       OR NEW."accepted_terms_revision" IS DISTINCT FROM OLD."accepted_terms_revision"
+       OR NEW."accepted_claim_policy_revision" IS DISTINCT FROM OLD."accepted_claim_policy_revision"
+       OR NEW."withdrawal_exception_acknowledged_at" IS DISTINCT FROM OLD."withdrawal_exception_acknowledged_at"
+       OR NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
+        RAISE EXCEPTION 'balance lifecycle transitions cannot change order identity or acceptance evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_balance_transition_identity_check';
+    END IF;
+
+    IF NOT (
+        (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
+        OR (OLD."status" = 'AWAITING_BALANCE'
+            AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED', 'CANCELLED_SETTLED'))
+    ) THEN
+        RAISE EXCEPTION 'order balance status transition is not allowed'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
+    END IF;
+
+    IF OLD."status" = 'AWAITING_BALANCE'
+       AND NEW."status" = 'CANCELLED_SETTLED'
+       AND NOT EXISTS (
+           SELECT 1 FROM "order_settlements" settlement
+           WHERE settlement."order_id" = NEW."id"
+             AND settlement."kind" = 'BALANCE_SETTLEMENT'
+       ) THEN
+        RAISE EXCEPTION 'cancelled-settled balance order requires its immutable settlement'
+            USING ERRCODE = '23514', CONSTRAINT = 'balance_timeout_settlement_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "orders_status_transitions_valid_update"
+BEFORE UPDATE OF "id", "public_reference", "status", "quoted_at", "confirmed_at",
+    "accepted_order_price_binding_id", "accepted_terms_revision",
+    "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at", "created_at"
+ON "orders"
+FOR EACH ROW
+WHEN (
+    NOT (
+        (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
+        OR (OLD."status" = 'AWAITING_BALANCE'
+            AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED', 'CANCELLED_SETTLED'))
+    )
+)
+EXECUTE FUNCTION taven_validate_order_status_transition();
+
+CREATE TRIGGER "orders_balance_status_transitions_valid"
+BEFORE UPDATE OF "id", "customer_id", "public_reference", "status", "quoted_at", "confirmed_at",
+    "accepted_order_price_binding_id", "accepted_terms_revision",
+    "accepted_claim_policy_revision", "withdrawal_exception_acknowledged_at", "created_at"
+ON "orders"
+FOR EACH ROW
+WHEN (
+    (OLD."status" = 'QC_PASSED' AND NEW."status" = 'AWAITING_BALANCE')
+    OR (OLD."status" = 'AWAITING_BALANCE'
+        AND NEW."status" IN ('READY_TO_SHIP', 'CANCELLED', 'CANCELLED_SETTLED'))
+)
+EXECUTE FUNCTION taven_validate_balance_order_status_transition();
 
 -- BALANCE is the amount still due against the active contractual revision;
 -- FULL and DEPOSIT remain exact immutable schedule amounts.
@@ -1234,6 +1565,16 @@ BEGIN
        AND (
            taven_balance_payment_has_verified_provider_failure(target_payment."id")
            OR settlement_id IS NOT NULL
+           OR (
+               target_payment."status" = 'VOIDED'
+               AND target_payment."capture_authorized" = false
+               AND target_payment."capture_cutoff_at" IS NOT NULL
+               AND EXISTS (
+                   SELECT 1 FROM "orders" cancelled_order
+                   WHERE cancelled_order."id" = target_payment."order_id"
+                     AND cancelled_order."status" = 'CANCELLED'
+               )
+           )
            OR EXISTS (
                SELECT 1 FROM "order_settlements" settlement
                WHERE settlement."order_id" = target_payment."order_id"

@@ -177,11 +177,69 @@ export class OrdersService {
           where: { id: orderId },
           data: { acceptedClaimWindowDays: claimWindowDays },
         });
+        const repairedSlotCount = await tx.$executeRaw`
+          WITH delivery_evidence AS (
+            SELECT allocation.fulfilment_slot_id,
+                   min(shipment.delivered_at) AS delivered_at
+            FROM shipment_plan_fulfilment_slots allocation
+            JOIN fulfilment_slots slot
+              ON slot.id = allocation.fulfilment_slot_id
+            JOIN shipments shipment
+              ON shipment.shipment_plan_id = allocation.shipment_plan_id
+             AND shipment.order_id = slot.order_id
+             AND shipment.order_phase_id = slot.order_phase_id
+            WHERE slot.order_id = ${orderId}::uuid
+              AND slot.outcome = 'DELIVERED'
+              AND slot.delivered_at IS NULL
+              AND slot.claim_until IS NULL
+              AND shipment.status = 'DELIVERED'
+              AND shipment.delivered_at IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM shipments successor
+                WHERE successor.replaces_shipment_id = shipment.id
+              )
+              AND EXISTS (
+                SELECT 1 FROM shipment_provider_events delivery_event
+                WHERE delivery_event.shipment_id = shipment.id
+                  AND delivery_event.kind = 'DELIVERY_SCAN'
+                  AND delivery_event.outbox_message_id IS NULL
+                  AND delivery_event.carrier = shipment.carrier
+                  AND delivery_event.carrier_label_id = shipment.carrier_label_id
+                  AND delivery_event.verified_at = shipment.delivered_at
+              )
+            GROUP BY allocation.fulfilment_slot_id
+            HAVING count(DISTINCT shipment.id) = 1
+          )
+          UPDATE fulfilment_slots slot
+          SET delivered_at = evidence.delivered_at,
+              claim_until = evidence.delivered_at
+                + make_interval(days => ${claimWindowDays}),
+              updated_at = ${approvedAt}
+          FROM delivery_evidence evidence
+          WHERE slot.id = evidence.fulfilment_slot_id
+            AND slot.order_id = ${orderId}::uuid
+            AND slot.outcome = 'DELIVERED'
+            AND slot.delivered_at IS NULL
+            AND slot.claim_until IS NULL
+        `;
+        const unresolvedSlots = await tx.fulfilmentSlot.count({
+          where: {
+            orderId,
+            outcome: "DELIVERED",
+            OR: [{ deliveredAt: null }, { claimUntil: null }],
+          },
+        });
+        if (unresolvedSlots > 0) {
+          throw new ConflictException(
+            "Legacy delivered Slots lack exact verified delivery evidence",
+          );
+        }
         return result(orderId, "CLAIM_WINDOW_MIGRATION_APPROVED", {
           claimPolicyRevision,
           claimWindowDays,
           approvalReference,
           approvedAt,
+          repairedSlotCount,
         });
       },
     );
@@ -1658,17 +1716,25 @@ export class OrdersService {
                 )
               )
           ) AS "packingReady",
-          NOT EXISTS (
+          EXISTS (
             SELECT 1
-            FROM price_adjustments adjustment
-            LEFT JOIN LATERAL (
-              SELECT coalesce(sum(refund.amount_minor), 0) AS refunded
-              FROM refund_transactions refund
-              WHERE refund.price_adjustment_id = adjustment.id
-                AND refund.status = 'SUCCEEDED'
-            ) settled ON true
-            WHERE adjustment.order_id = ${orderId}::uuid
-              AND settled.refunded < adjustment.amount_minor
+            FROM order_active_contract_prices active_contract
+            JOIN order_contract_price_revisions revision
+              ON revision.id = active_contract.contract_price_revision_id
+             AND revision.order_id = active_contract.order_id
+            WHERE active_contract.order_id = ${orderId}::uuid
+              AND coalesce((
+                SELECT sum(payment.captured_amount_minor)
+                FROM payments payment
+                WHERE payment.order_id = ${orderId}::uuid
+                  AND payment.captured_amount_minor IS NOT NULL
+              ), 0) - coalesce((
+                SELECT sum(refund.amount_minor)
+                FROM refund_transactions refund
+                JOIN payments payment ON payment.id = refund.payment_id
+                WHERE payment.order_id = ${orderId}::uuid
+                  AND refund.status = 'SUCCEEDED'
+              ), 0) = revision.contract_total_minor
           ) AND NOT EXISTS (
             SELECT 1
             FROM refund_transactions refund
@@ -3441,16 +3507,6 @@ export class OrdersService {
                 },
                 select: { amountMinor: true },
               },
-              priceAdjustments: {
-                include: {
-                  refunds: {
-                    where: {
-                      status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
-                    },
-                    select: { amountMinor: true },
-                  },
-                },
-              },
             },
           });
           if (!selectedPayment) {
@@ -3460,33 +3516,35 @@ export class OrdersService {
             (total, refund) => total + refund.amountMinor,
             0n,
           );
-          const reserved = selectedPayment.priceAdjustments.reduce(
-            (total, adjustment) => {
-              const committed = adjustment.refunds.reduce(
-                (sum, refund) => sum + refund.amountMinor,
-                0n,
-              );
-              const outstanding = adjustment.amountMinor - committed;
-              return total + (outstanding > 0n ? outstanding : 0n);
-            },
-            0n,
-          );
           selectedPaymentAvailable =
-            selectedPayment.capturedAmountMinor! - refunded - reserved;
+            selectedPayment.capturedAmountMinor! - refunded;
         }
-        const currencyRows = await tx.$queryRaw<Array<{ currency: string }>>`
-          SELECT snapshot.currency
-          FROM order_active_price_bindings active_binding
-          JOIN order_price_bindings binding
-            ON binding.id = active_binding.order_price_binding_id
-          JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
-          WHERE active_binding.order_id = ${orderId}::uuid
+        const contractRows = await tx.$queryRaw<
+          Array<{ currency: string; contract_total_minor: bigint }>
+        >`
+          SELECT revision.currency, revision.contract_total_minor
+          FROM order_active_contract_prices active_contract
+          JOIN order_contract_price_revisions revision
+            ON revision.id = active_contract.contract_price_revision_id
+           AND revision.order_id = active_contract.order_id
+          WHERE active_contract.order_id = ${orderId}::uuid
         `;
-        const currency = currencyRows[0]?.currency;
+        const currency = contractRows[0]?.currency;
+        const sourceContractTotal = contractRows[0]?.contract_total_minor;
         if (!currency)
           throw new ConflictException("Order price is unavailable");
-        const availableRows = await tx.$queryRaw<Array<{ available: bigint }>>`
-          SELECT greatest(
+        if (
+          sourceContractTotal === undefined ||
+          amountMinor > sourceContractTotal
+        ) {
+          throw new ConflictException(
+            "Price adjustment exceeds the active contract total",
+          );
+        }
+        const capturedRows = await tx.$queryRaw<
+          Array<{ net_captured_minor: bigint }>
+        >`
+          SELECT (
             coalesce((
               SELECT sum(payment.captured_amount_minor)
               FROM payments payment
@@ -3500,34 +3558,25 @@ export class OrdersService {
               WHERE payment.order_id = ${orderId}::uuid
                 AND refund.status IN ('PENDING', 'SUSPENDED', 'SUCCEEDED')
             ), 0)
-            - coalesce((
-              SELECT sum(greatest(
-                adjustment.amount_minor - coalesce(committed.amount_minor, 0),
-                0
-              ))
-              FROM price_adjustments adjustment
-              LEFT JOIN LATERAL (
-                SELECT sum(refund.amount_minor) AS amount_minor
-                FROM refund_transactions refund
-                WHERE refund.price_adjustment_id = adjustment.id
-                  AND refund.status IN ('PENDING', 'SUSPENDED', 'SUCCEEDED')
-              ) committed ON true
-              WHERE adjustment.order_id = ${orderId}::uuid
-            ), 0),
-            0
-          )::bigint AS available
+          )::bigint AS net_captured_minor
         `;
-        if ((availableRows[0]?.available ?? 0n) < amountMinor) {
-          throw new ConflictException(
-            "Price adjustment exceeds the uncredited captured amount",
-          );
-        }
+        const netCaptured = capturedRows[0]?.net_captured_minor ?? 0n;
+        const resultContractTotal = sourceContractTotal - amountMinor;
+        const sourceOverpayment =
+          netCaptured > sourceContractTotal
+            ? netCaptured - sourceContractTotal
+            : 0n;
+        const resultOverpayment =
+          netCaptured > resultContractTotal
+            ? netCaptured - resultContractTotal
+            : 0n;
+        const incrementalRefundRequired = resultOverpayment - sourceOverpayment;
         if (
           selectedPaymentAvailable !== undefined &&
-          selectedPaymentAvailable < amountMinor
+          selectedPaymentAvailable < incrementalRefundRequired
         ) {
           throw new ConflictException(
-            "Price adjustment exceeds the selected Payment refundable balance",
+            "Selected Payment cannot fund the active contract refund",
           );
         }
         const adjustment = await createPriceAdjustmentWithRevision(tx, {
@@ -3598,38 +3647,7 @@ export class OrdersService {
           },
           orderBy: [{ capturedAt: "asc" }, { id: "asc" }],
         });
-        const activeContractRows = await tx.$queryRaw<
-          Array<{ contract_total_minor: bigint }>
-        >`
-          SELECT revision.contract_total_minor
-          FROM order_active_contract_prices active
-          JOIN order_contract_price_revisions revision
-            ON revision.id = active.contract_price_revision_id
-           AND revision.order_id = active.order_id
-          WHERE active.order_id = ${orderId}::uuid
-        `;
-        const activeContractTotal = activeContractRows[0]?.contract_total_minor;
-        if (activeContractTotal === undefined) {
-          throw new ConflictException("Active contract price is unavailable");
-        }
-        const netCaptured = allPayments.reduce(
-          (total, payment) =>
-            total +
-            payment.capturedAmountMinor! -
-            payment.refunds.reduce(
-              (allocated, refund) => allocated + refund.amountMinor,
-              0n,
-            ),
-          0n,
-        );
-        const refundableBalance =
-          netCaptured > activeContractTotal
-            ? netCaptured - activeContractTotal
-            : 0n;
-        const refundTarget =
-          refundableBalance < adjustment.amountMinor
-            ? refundableBalance
-            : adjustment.amountMinor;
+        const refundTarget = adjustment.refundRequiredMinor;
         const payments = allPayments.filter(
           (payment) =>
             !adjustment.paymentId || payment.id === adjustment.paymentId,
@@ -4175,13 +4193,25 @@ export class OrdersService {
     orderId: string,
     readyAt: Date,
   ): Promise<void> {
-    const capturedBalance = await tx.payment.count({
-      where: { orderId, role: "BALANCE", status: "CAPTURED" },
-    });
-    const sourceStatuses: OrderStatus[] = [OrderStatus.QC_PASSED];
-    if (capturedBalance > 0) {
+    const financial = await tx.$queryRaw<
+      Array<{ balance_due_minor: bigint | null; balance_captured: boolean }>
+    >`
+      SELECT taven_balance_requested_amount(${orderId}::uuid) AS balance_due_minor,
+             EXISTS (
+               SELECT 1 FROM payments payment
+               WHERE payment.order_id = ${orderId}::uuid
+                 AND payment.role = 'BALANCE'
+                 AND payment.status = 'CAPTURED'
+             ) AS balance_captured
+    `;
+    const sourceStatuses: OrderStatus[] = [];
+    if (financial[0]?.balance_due_minor === 0n) {
+      sourceStatuses.push(OrderStatus.QC_PASSED);
+    }
+    if (financial[0]?.balance_captured) {
       sourceStatuses.push(OrderStatus.AWAITING_BALANCE);
     }
+    if (sourceStatuses.length === 0) return;
     await tx.order.updateMany({
       where: { id: orderId, status: { in: sourceStatuses } },
       data: { status: OrderStatus.READY_TO_SHIP, updatedAt: readyAt },
@@ -5401,6 +5431,52 @@ export class OrdersService {
     printingConsumptions = new Map<string, bigint>(),
     allowSettledConsumptions = false,
   ): Promise<string[]> {
+    const openBalancePayments = await tx.$queryRaw<
+      Array<{ id: string; provider: string; provider_intent_id: string | null }>
+    >`
+      SELECT payment.id, payment.provider, payment.provider_intent_id
+      FROM payments payment
+      WHERE payment.order_id = ${orderId}::uuid
+        AND payment.role = 'BALANCE'
+        AND payment.status IN ('CREATED', 'PENDING')
+        AND payment.captured_amount_minor IS NULL
+      ORDER BY payment.id
+      FOR UPDATE
+    `;
+    if (openBalancePayments.length > 0) {
+      await tx.payment.updateMany({
+        where: { id: { in: openBalancePayments.map(({ id }) => id) } },
+        data: {
+          status: "VOIDED",
+          captureAuthorized: false,
+          captureCutoffAt: at,
+          updatedAt: at,
+        },
+      });
+      await tx.outboxMessage.createMany({
+        data: openBalancePayments.flatMap((payment) =>
+          payment.provider_intent_id
+            ? [
+                {
+                  deduplicationKey: `void_payment:v1:${payment.id}`,
+                  aggregateType: "Payment",
+                  aggregateId: payment.id,
+                  messageType: "void_payment",
+                  schemaVersion: 1,
+                  payload: jsonSafe({
+                    paymentId: payment.id,
+                    provider: payment.provider,
+                    providerIntentId: payment.provider_intent_id,
+                    action: "void_payment",
+                  }) as Prisma.InputJsonObject,
+                  availableAt: at,
+                },
+              ]
+            : [],
+        ),
+        skipDuplicates: true,
+      });
+    }
     await tx.shipment.updateMany({
       where: { orderId, status: ShipmentStatus.PLANNED },
       data: { status: ShipmentStatus.CANCELLED, cancelledAt: at },

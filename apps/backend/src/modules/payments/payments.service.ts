@@ -1271,6 +1271,29 @@ export class PaymentsService {
       const payment = await transaction.payment.findUniqueOrThrow({
         where: { id: paymentId },
       });
+      if (payment.status === PaymentStatus.VOIDED) {
+        await transaction.outboxMessage.createMany({
+          data: [
+            {
+              deduplicationKey: `void_payment:v1:${paymentId}`,
+              aggregateType: "Payment",
+              aggregateId: paymentId,
+              messageType: "void_payment",
+              schemaVersion: 1,
+              payload: jsonInput({
+                paymentId,
+                provider: payment.provider,
+                providerIntentId,
+                action: "void_payment",
+              }),
+            },
+          ],
+          skipDuplicates: true,
+        });
+        const response = paymentDto(payment);
+        await completeIdempotency(transaction, idempotencyRecordId, response);
+        return response;
+      }
       if (payment.status !== PaymentStatus.CREATED) return null;
       const failedAt = await databaseNow(transaction);
       const failure = await transaction.paymentIntentCreationFailure.create({
