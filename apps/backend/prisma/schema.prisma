@@ -528,6 +528,40 @@ enum AuditActorKind {
   @@map("audit_actor_kind")
 }
 
+enum OperatorRole {
+  ADMIN
+  OPERATOR
+  VIEWER
+
+  @@map("operator_role")
+}
+
+enum OperatorAuthenticationMethod {
+  DEVELOPMENT_PASSWORD
+  GITHUB
+
+  @@map("operator_authentication_method")
+}
+
+enum OperatorLoginAttemptStatus {
+  PENDING
+  EXCHANGING
+  COMPLETED
+  FAILED
+
+  @@map("operator_login_attempt_status")
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCEEDED
+  LOGIN_FAILED
+  LOGOUT
+  CREDENTIAL_RESET
+  OPERATOR_DISABLED
+
+  @@map("security_event_type")
+}
+
 enum AutomaticQuoteRiskDecision {
   ACKNOWLEDGED
   DECLINED
@@ -871,8 +905,140 @@ model Node {
   inventoryReservations      InventoryReservation[]
   capacityReservations       CapacityReservation[]
   jobs                       Job[]
+  operatorGrants             OperatorNodeGrant[]
 
   @@map("nodes")
+}
+
+model OperatorIdentity {
+  id                String                         @id @default(uuid()) @db.Uuid
+  email             String                         @unique @db.VarChar(320)
+  role              OperatorRole                   @default(OPERATOR)
+  active            Boolean                        @default(true)
+  credentialVersion Int                            @default(1) @map("credential_version")
+  createdAt         DateTime                       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime                       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  developmentCredential OperatorDevelopmentCredential?
+  githubIdentity        OperatorGithubIdentity?
+  nodeGrants            OperatorNodeGrant[]
+  sessions              OperatorSession[]
+  securityEvents        SecurityEvent[]
+
+  @@map("operator_identities")
+}
+
+model OperatorDevelopmentCredential {
+  operatorId   String   @id @map("operator_id") @db.Uuid
+  passwordHash String   @map("password_hash") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  operator OperatorIdentity @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+
+  @@map("operator_development_credentials")
+}
+
+model OperatorGithubIdentity {
+  operatorId     String   @unique @map("operator_id") @db.Uuid
+  issuer         String   @default("https://github.com") @db.VarChar(200)
+  githubUserId   String   @map("github_user_id") @db.VarChar(30)
+  displayLogin   String?  @map("display_login") @db.VarChar(100)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  operator OperatorIdentity @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+
+  @@id([issuer, githubUserId])
+  @@map("operator_github_identities")
+}
+
+model OperatorNodeGrant {
+  operatorId String   @map("operator_id") @db.Uuid
+  nodeId     String   @map("node_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  operator OperatorIdentity @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+  node     Node             @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+
+  @@id([operatorId, nodeId])
+  @@index([nodeId])
+  @@map("operator_node_grants")
+}
+
+model OperatorSession {
+  id                    String                       @id @default(uuid()) @db.Uuid
+  tokenHash             String                       @unique @map("token_hash") @db.Char(64)
+  csrfHash              String                       @map("csrf_hash") @db.Char(64)
+  operatorId            String                       @map("operator_id") @db.Uuid
+  authenticationMethod  OperatorAuthenticationMethod @map("authentication_method")
+  credentialVersion     Int                          @map("credential_version")
+  createdAt             DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt            DateTime                     @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  absoluteExpiresAt     DateTime                     @map("absolute_expires_at") @db.Timestamptz(3)
+  revokedAt             DateTime?                    @map("revoked_at") @db.Timestamptz(3)
+
+  operator      OperatorIdentity       @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+  loginAttempts OperatorLoginAttempt[]
+  securityEvents SecurityEvent[]
+
+  @@index([operatorId, absoluteExpiresAt])
+  @@index([absoluteExpiresAt, id])
+  @@index([revokedAt, id])
+  @@map("operator_sessions")
+}
+
+model OperatorLoginAttempt {
+  id                       String                     @id @default(uuid()) @db.Uuid
+  stateHash                String                     @unique @map("state_hash") @db.Char(64)
+  browserBindingHash       String                     @map("browser_binding_hash") @db.Char(64)
+  encryptedPkceVerifier    String?                    @map("encrypted_pkce_verifier") @db.Text
+  environment              String                     @db.VarChar(20)
+  githubClientId           String                     @map("github_client_id") @db.VarChar(200)
+  callbackUrl              String                     @map("callback_url") @db.Text
+  status                   OperatorLoginAttemptStatus @default(PENDING)
+  expiresAt                DateTime                   @map("expires_at") @db.Timestamptz(3)
+  sessionId                String?                    @map("session_id") @db.Uuid
+  createdAt                DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt              DateTime?                  @map("completed_at") @db.Timestamptz(3)
+
+  session OperatorSession? @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  @@index([expiresAt, id])
+  @@map("operator_login_attempts")
+}
+
+model OperatorLoginRateBucket {
+  id          String   @id @default(uuid()) @db.Uuid
+  subjectHash String   @map("subject_hash") @db.Char(64)
+  clientHash  String   @map("client_hash") @db.Char(64)
+  windowStart DateTime @map("window_start") @db.Timestamptz(3)
+  attempts    Int      @default(0)
+  failures    Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([subjectHash, clientHash, windowStart])
+  @@index([windowStart, id])
+  @@map("operator_login_rate_buckets")
+}
+
+model SecurityEvent {
+  id                String            @id @default(uuid()) @db.Uuid
+  eventType         SecurityEventType @map("event_type")
+  operatorId        String?           @map("operator_id") @db.Uuid
+  operatorSessionId String?           @map("operator_session_id") @db.Uuid
+  subjectHash       String?           @map("subject_hash") @db.Char(64)
+  outcome           String            @db.VarChar(100)
+  recordedAt        DateTime          @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  expiresAt         DateTime          @map("expires_at") @db.Timestamptz(3)
+
+  operator OperatorIdentity? @relation(fields: [operatorId], references: [id], onDelete: Restrict)
+  session  OperatorSession?  @relation(fields: [operatorSessionId], references: [id], onDelete: Restrict)
+
+  @@index([expiresAt, id])
+  @@index([operatorId, recordedAt])
+  @@map("security_events")
 }
 
 model Machine {

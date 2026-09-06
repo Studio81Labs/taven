@@ -22,6 +22,7 @@ import {
   ApiParam,
   ApiQuery,
   ApiServiceUnavailableResponse,
+  ApiSecurity,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
@@ -35,6 +36,8 @@ import {
 } from "./payments.dto";
 import { PaymentsService } from "./payments.service";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 
 const SESSION_ID = { name: "sessionId", type: String, format: "uuid" };
 const IDEMPOTENCY_HEADER = {
@@ -64,8 +67,9 @@ export class PaymentsController {
 
   @Post("admin/orders/:orderId/balance-payment")
   @HttpCode(200)
-  @ApiBearerAuth()
+  @ApiSecurity("operatorSession")
   @UseGuards(OperatorAccessGuard)
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @ApiParam({ name: "orderId", type: String, format: "uuid" })
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiBody({ type: CreateBalancePaymentDto })

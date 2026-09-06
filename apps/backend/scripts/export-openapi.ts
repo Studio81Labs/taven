@@ -37,6 +37,13 @@ async function exportContract(): Promise<void> {
     .setDescription("Canonical HTTP contract for Taven clients")
     .setVersion("0.0.0")
     .addBearerAuth({ type: "http", scheme: "bearer", bearerFormat: "opaque" })
+    .addSecurity("operatorSession", {
+      type: "apiKey",
+      in: "cookie",
+      name: "__Host-taven_admin",
+      description:
+        "Environment-specific HttpOnly operator session cookie; development uses a local cookie name.",
+    })
     .build();
   const document = SwaggerModule.createDocument(app, config);
   const outputPath = path.resolve("../../packages/openapi/openapi.json");

@@ -13,11 +13,10 @@ import { QuotesService } from "../src/modules/quotes/quotes.service";
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
 
-const operatorToken = "test-operator-token-with-at-least-32-characters";
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 const quoteCapabilityKey =
   "test-quote-capability-key-with-at-least-32-characters";
-process.env.TAVEN_OPERATOR_API_TOKEN ??= operatorToken;
+process.env.TAVEN_ENVIRONMENT ??= "development";
 process.env.TAVEN_QUOTE_CAPABILITY_KEY ??= quoteCapabilityKey;
 process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS ??= "[]";
 process.env.TAVEN_S3_ENDPOINT ??= "http://127.0.0.1:9010";
@@ -37,6 +36,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let quotes: QuotesService;
   let priceListId: string;
   let defaultOfferItem: Record<string, unknown>;
+  let operatorCookie: string;
+  let operatorCsrfToken: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -50,6 +51,34 @@ describe("QuoteRequest and tokenized individual offers", () => {
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
     quotes = app.get(QuotesService);
+    const node = await prisma.node.findFirstOrThrow({
+      where: { active: true },
+    });
+    const operator = await prisma.operatorIdentity.create({
+      data: {
+        email: `quotes-e2e-${randomUUID()}@example.test`,
+        role: "ADMIN",
+        nodeGrants: { create: { nodeId: node.id } },
+      },
+    });
+    const token = randomBytes(32).toString("base64url");
+    const csrfKey = createHash("sha256")
+      .update("openapi:TAVEN_ADMIN_CSRF_KEY")
+      .digest();
+    operatorCsrfToken = createHmac("sha256", csrfKey)
+      .update(token)
+      .digest("base64url");
+    await prisma.operatorSession.create({
+      data: {
+        tokenHash: createHash("sha256").update(token).digest("hex"),
+        csrfHash: createHash("sha256").update(operatorCsrfToken).digest("hex"),
+        operatorId: operator.id,
+        authenticationMethod: "DEVELOPMENT_PASSWORD",
+        credentialVersion: 1,
+        absoluteExpiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+      },
+    });
+    operatorCookie = `taven_admin=${token}`;
     const priceList = await prisma.priceList.findFirstOrThrow({
       where: { currency: "CZK" },
       orderBy: { createdAt: "asc" },
@@ -437,7 +466,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
 
     const crossRequestOperatorAttachment = await apiJson(
       `admin/quote-requests/${randomUUID()}/attachments/${referencePhotoId}/download`,
-      { method: "POST", headers: bearer(operatorToken) },
+      { method: "POST", headers: operatorHeaders(true) },
     );
     expect(crossRequestOperatorAttachment.response.status).toBe(404);
 
@@ -446,7 +475,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       expiresAt: string;
     }>(
       `admin/quote-requests/${created.body.requestId.toUpperCase()}/attachments/${referencePhotoId.toUpperCase()}/download`,
-      { method: "POST", headers: bearer(operatorToken) },
+      { method: "POST", headers: operatorHeaders(true) },
     );
     expect(operatorAttachment.response.status).toBe(200);
     expect(new URL(operatorAttachment.body.downloadUrl).protocol).toMatch(
@@ -801,7 +830,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
 
     const defaultQueue = await apiJson<Array<{ requestId: string }>>(
       "admin/quote-requests",
-      { headers: bearer(operatorToken) },
+      { headers: operatorHeaders(false) },
     );
     expect(defaultQueue.response.status).toBe(200);
     expect(defaultQueue.body).not.toContainEqual(
@@ -811,7 +840,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const acceptedHistory = await apiJson<
       Array<{ requestId: string; status: string }>
     >("admin/quote-requests?status=ACCEPTED", {
-      headers: bearer(operatorToken),
+      headers: operatorHeaders(false),
     });
     expect(acceptedHistory.response.status).toBe(200);
     expect(acceptedHistory.body).toContainEqual(
@@ -2026,9 +2055,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
     }>(`admin/quote-requests/${requestId}/offers`, {
       method: "POST",
       headers: {
-        ...bearer(operatorToken),
         "content-type": "application/json",
         "idempotency-key": idempotencyKey,
+        cookie: operatorCookie,
+        origin: "http://localhost:3002",
+        "x-csrf-token": operatorCsrfToken,
       },
       body: JSON.stringify({
         summary: "Custom modelling and production offer",
@@ -2180,12 +2211,26 @@ describe("QuoteRequest and tokenized individual offers", () => {
     return apiJson<{ requestId: string; status: string }>(path, {
       method: "POST",
       headers: {
-        ...bearer(operatorToken),
         "content-type": "application/json",
         "idempotency-key": idempotencyKey,
+        cookie: operatorCookie,
+        origin: "http://localhost:3002",
+        "x-csrf-token": operatorCsrfToken,
       },
       body: "{}",
     });
+  }
+
+  function operatorHeaders(unsafe: boolean): Record<string, string> {
+    return {
+      cookie: operatorCookie,
+      ...(unsafe
+        ? {
+            origin: "http://localhost:3002",
+            "x-csrf-token": operatorCsrfToken,
+          }
+        : {}),
+    };
   }
 
   async function apiJson<T = Record<string, unknown>>(
