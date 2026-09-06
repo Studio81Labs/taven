@@ -474,6 +474,7 @@ enum ClaimOrigin {
 enum ClaimStatus {
   OPEN
   ACTIVE
+  WITHDRAWN
   RESOLVED_REPLACEMENT
   RESOLVED_RESHIP
   RESOLVED_REFUND
@@ -491,6 +492,7 @@ enum ClaimSlotResolutionStatus {
   DELIVERED_RESHIP
   REFUNDED
   REJECTED
+  WITHDRAWN
 
   @@map("claim_slot_resolution_status")
 }

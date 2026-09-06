@@ -31,6 +31,7 @@ import {
   CreatePriceAdjustmentDto,
   CreateReplacementDto,
   CreateShipmentDto,
+  ExpireReplacementDto,
   FulfilmentCommandResultDto,
   FulfilmentProjectionDto,
   HandoffReshipmentDto,
@@ -42,6 +43,7 @@ import {
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
+  WithdrawClaimDto,
 } from "./orders.dto";
 
 type Transaction = Prisma.TransactionClient;
@@ -699,8 +701,15 @@ export class OrdersService {
         }
         const now = await databaseNow(tx);
         if (request.deadlineAt.getTime() <= now.getTime()) {
-          throw new ConflictException(
-            "Replacement request deadline has expired",
+          return this.finalizeExpiredReplacement(
+            tx,
+            orderId,
+            sourceJobId,
+            source.shipmentPlanId,
+            request.id,
+            now,
+            key!,
+            new Map(),
           );
         }
         const sourcePlanJob = await tx.phaseResourcePlanJob.findUnique({
@@ -867,6 +876,65 @@ export class OrdersService {
           replacementJobId: replacementJob.id,
           phaseReservationSetId: reservationSetId,
         });
+      },
+    );
+  }
+
+  expireReplacement(
+    orderId: string,
+    sourceJobId: string,
+    body: ExpireReplacementDto,
+    key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    const printingConsumptions = cancellationPrintingConsumptions(
+      body.printingConsumptions,
+    );
+    const commandInput = {
+      printingConsumptions: [...printingConsumptions]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([jobId, actualMaterialMilligrams]) => ({
+          jobId,
+          actualMaterialMilligrams: actualMaterialMilligrams.toString(),
+        })),
+    };
+    return this.command(
+      orderId,
+      `job:${sourceJobId}:replacement-expiry`,
+      key,
+      commandInput,
+      async (tx) => {
+        const source = await this.lockJob(tx, orderId, sourceJobId);
+        const request = await tx.replacementRequest.findUnique({
+          where: { sourceJobId },
+        });
+        if (
+          !request ||
+          request.status !== ReplacementRequestStatus.OPEN ||
+          ![
+            ReplacementRequestReason.JOB_FAILED,
+            ReplacementRequestReason.QC_REJECTED,
+          ].includes(
+            request.reason as
+              | typeof ReplacementRequestReason.JOB_FAILED
+              | typeof ReplacementRequestReason.QC_REJECTED,
+          )
+        ) {
+          throw new ConflictException("Replacement request is not open");
+        }
+        const expiredAt = await databaseNow(tx);
+        if (request.deadlineAt.getTime() > expiredAt.getTime()) {
+          throw new ConflictException("Replacement request has not expired");
+        }
+        return this.finalizeExpiredReplacement(
+          tx,
+          orderId,
+          sourceJobId,
+          source.shipmentPlanId,
+          request.id,
+          expiredAt,
+          key!,
+          printingConsumptions,
+        );
       },
     );
   }
@@ -2289,6 +2357,119 @@ export class OrdersService {
             ({ fulfilmentSlotId }) => fulfilmentSlotId,
           ),
           rejectedAt,
+        });
+      },
+    );
+  }
+
+  withdrawClaim(
+    orderId: string,
+    claimId: string,
+    body: WithdrawClaimDto,
+    key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    assertUuid(claimId, "claimId");
+    const reason = requiredText(body.reason, "reason", 2_000);
+    return this.command(
+      orderId,
+      `claim:${claimId}:withdrawal`,
+      key,
+      { reason },
+      async (tx) => {
+        await this.lockOrder(tx, orderId);
+        await tx.$queryRaw`
+          SELECT id FROM claims
+          WHERE id = ${claimId}::uuid AND order_id = ${orderId}::uuid
+          FOR UPDATE
+        `;
+        const claim = await tx.claim.findFirst({
+          where: { id: claimId, orderId },
+          include: {
+            resolutions: {
+              include: { fulfilmentSlot: true },
+              orderBy: { fulfilmentSlotId: "asc" },
+            },
+            replacementRequests: { select: { id: true } },
+            reprintShipments: { select: { id: true } },
+            reshipmentAuthorizations: { select: { id: true } },
+            priceAdjustments: { select: { id: true } },
+            refunds: { select: { id: true } },
+          },
+        });
+        if (!claim) throw new NotFoundException("Claim was not found");
+        await tx.$queryRaw`
+          SELECT id FROM claim_slot_resolutions
+          WHERE claim_id = ${claimId}::uuid
+          ORDER BY id
+          FOR UPDATE
+        `;
+        if (
+          claim.origin !== ClaimOrigin.POST_DELIVERY_QUALITY ||
+          claim.status !== ClaimStatus.OPEN ||
+          claim.resolutions.length === 0 ||
+          claim.resolutions.some(
+            ({
+              status,
+              replacementRequestId,
+              replacementShipmentId,
+              fulfilmentSlot,
+            }) =>
+              status !== ClaimSlotResolutionStatus.PENDING ||
+              replacementRequestId !== null ||
+              replacementShipmentId !== null ||
+              fulfilmentSlot.outcome !== "DELIVERED",
+          ) ||
+          claim.replacementRequests.length > 0 ||
+          claim.reprintShipments.length > 0 ||
+          claim.reshipmentAuthorizations.length > 0 ||
+          claim.priceAdjustments.length > 0 ||
+          claim.refunds.length > 0
+        ) {
+          throw new ConflictException(
+            "Only a clean post-delivery quality Claim can be withdrawn",
+          );
+        }
+        const withdrawnAt = await databaseNow(tx);
+        const withdrawn = await tx.claimSlotResolution.updateMany({
+          where: {
+            claimId,
+            status: ClaimSlotResolutionStatus.PENDING,
+            replacementRequestId: null,
+            replacementShipmentId: null,
+          },
+          data: {
+            status: ClaimSlotResolutionStatus.WITHDRAWN,
+            resolvedAt: withdrawnAt,
+            updatedAt: withdrawnAt,
+          },
+        });
+        const resolved = await tx.claim.updateMany({
+          where: {
+            id: claimId,
+            orderId,
+            origin: ClaimOrigin.POST_DELIVERY_QUALITY,
+            status: ClaimStatus.OPEN,
+          },
+          data: {
+            status: ClaimStatus.WITHDRAWN,
+            resolvedAt: withdrawnAt,
+            updatedAt: withdrawnAt,
+          },
+        });
+        if (
+          withdrawn.count !== claim.resolutions.length ||
+          resolved.count !== 1
+        ) {
+          throw new ConflictException(
+            "Claim withdrawal lost its complete pending resolution scope",
+          );
+        }
+        return result(orderId, "CLAIM_WITHDRAWN", {
+          claimId,
+          fulfilmentSlotIds: claim.resolutions.map(
+            ({ fulfilmentSlotId }) => fulfilmentSlotId,
+          ),
+          withdrawnAt,
         });
       },
     );
@@ -3891,6 +4072,163 @@ export class OrdersService {
     });
   }
 
+  private async finalizeExpiredReplacement(
+    tx: Transaction,
+    orderId: string,
+    sourceJobId: string,
+    shipmentPlanId: string,
+    replacementRequestId: string,
+    expiredAt: Date,
+    key: string,
+    printingConsumptions: Map<string, bigint>,
+  ): Promise<FulfilmentCommandResultDto> {
+    await tx.replacementRequest.update({
+      where: { id: replacementRequestId },
+      data: { status: ReplacementRequestStatus.REFUND_REQUIRED },
+    });
+
+    const custodyAlreadyTransferred = await tx.shipment.count({
+      where: {
+        orderId,
+        shipmentPlanId: { not: shipmentPlanId },
+        status: {
+          in: [
+            ShipmentStatus.HANDED_OVER,
+            ShipmentStatus.IN_TRANSIT,
+            ShipmentStatus.DELIVERED,
+            ShipmentStatus.LOST,
+            ShipmentStatus.RETURNED,
+            ShipmentStatus.RECOVERED,
+          ],
+        },
+        replacementShipment: null,
+      },
+    });
+    if (custodyAlreadyTransferred > 0) {
+      await this.cancelProductionFailureParcelSiblings(
+        tx,
+        orderId,
+        shipmentPlanId,
+        sourceJobId,
+        expiredAt,
+        printingConsumptions,
+      );
+      const shipment = await tx.shipment.findFirst({
+        where: {
+          orderId,
+          shipmentPlanId,
+          replacementShipment: null,
+        },
+      });
+      if (!shipment) {
+        throw new ConflictException(
+          "Expired replacement request requires its exact parcel",
+        );
+      }
+      if (
+        [
+          ShipmentStatus.LABEL_CREATED,
+          ShipmentStatus.CANCELLATION_PENDING,
+        ].includes(
+          shipment.status as
+            | typeof ShipmentStatus.LABEL_CREATED
+            | typeof ShipmentStatus.CANCELLATION_PENDING,
+        )
+      ) {
+        await tx.shipment.updateMany({
+          where: {
+            id: shipment.id,
+            status: ShipmentStatus.LABEL_CREATED,
+          },
+          data: {
+            status: ShipmentStatus.CANCELLATION_PENDING,
+            cancellationRequestedAt: expiredAt,
+          },
+        });
+        return result(
+          orderId,
+          "REPLACEMENT_EXPIRY_LABEL_CANCELLATION_PENDING",
+          { sourceJobId, shipmentId: shipment.id, replacementRequestId },
+        );
+      }
+      if (shipment.status !== ShipmentStatus.PLANNED) {
+        throw new ConflictException(
+          "Expired replacement parcel is not refundable before handoff",
+        );
+      }
+      await tx.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.CANCELLED, cancelledAt: expiredAt },
+      });
+      const refundIds = await this.finalizePostHandoffProductionFailureRefund(
+        tx,
+        orderId,
+        shipmentPlanId,
+        replacementRequestId,
+        expiredAt,
+        key,
+      );
+      return result(orderId, "REPLACEMENT_EXPIRED_REFUND_PENDING", {
+        sourceJobId,
+        shipmentId: shipment.id,
+        replacementRequestId,
+        refundIds,
+      });
+    }
+
+    const liveLabels = await tx.shipment.findMany({
+      where: {
+        orderId,
+        status: {
+          in: [
+            ShipmentStatus.LABEL_CREATED,
+            ShipmentStatus.CANCELLATION_PENDING,
+          ],
+        },
+      },
+      select: { id: true, status: true },
+    });
+    if (liveLabels.length > 0) {
+      const activePrinting = await this.activePrintingReservations(tx, orderId);
+      assertPrintingConsumptionCoverage(
+        activePrinting,
+        printingConsumptions,
+        false,
+      );
+      await tx.shipment.updateMany({
+        where: {
+          id: {
+            in: liveLabels
+              .filter(({ status }) => status === ShipmentStatus.LABEL_CREATED)
+              .map(({ id }) => id),
+          },
+          status: ShipmentStatus.LABEL_CREATED,
+        },
+        data: {
+          status: ShipmentStatus.CANCELLATION_PENDING,
+          cancellationRequestedAt: expiredAt,
+        },
+      });
+      return result(orderId, "REPLACEMENT_EXPIRY_LABEL_CANCELLATION_PENDING", {
+        sourceJobId,
+        shipmentIds: liveLabels.map(({ id }) => id),
+        replacementRequestId,
+      });
+    }
+    const refundIds = await this.finalizeCancellation(
+      tx,
+      orderId,
+      expiredAt,
+      key,
+      printingConsumptions,
+    );
+    return result(orderId, "REPLACEMENT_EXPIRED_REFUND_PENDING", {
+      sourceJobId,
+      replacementRequestId,
+      refundIds,
+    });
+  }
+
   private async cancelProductionFailureParcelSiblings(
     tx: Transaction,
     orderId: string,
@@ -5098,12 +5436,16 @@ export class OrdersService {
       FROM audit_events event
       WHERE event.order_id = ${orderId}::uuid
         AND event.event_type = 'fulfilment.command_completed'
-        AND event.payload ->> 'operation' = 'cancel'
-        AND event.payload #>> '{response,status}' = 'LABEL_CANCELLATION_PENDING'
+        AND event.payload #>> '{response,status}' IN (
+          'LABEL_CANCELLATION_PENDING',
+          'REPLACEMENT_EXPIRY_LABEL_CANCELLATION_PENDING'
+        )
       ORDER BY event.created_at DESC, event.id DESC
       LIMIT 1
     `;
-    return cancellationPrintingConsumptions(rows[0]?.printingConsumptions);
+    return cancellationPrintingConsumptions(
+      rows[0]?.printingConsumptions ?? undefined,
+    );
   }
 
   private async expressAdjustmentSlotCredits(

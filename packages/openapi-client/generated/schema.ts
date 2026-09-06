@@ -157,6 +157,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/withdrawal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw a clean post-delivery quality Claim */
+        post: operations["OrdersController_withdrawClaim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/complete": {
         parameters: {
             query?: never;
@@ -304,6 +321,23 @@ export interface paths {
         put?: never;
         /** Reserve fresh resources and create a replacement Job */
         post: operations["OrdersController_createReplacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-expiry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close an expired replacement request into refund recovery */
+        post: operations["OrdersController_expireReplacement"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1269,6 +1303,10 @@ export interface components {
             /** Format: uuid */
             shipmentPlanId: string;
         };
+        ExpireReplacementDto: {
+            /** @description Exact material consumption for every actively printing Job abandoned by the expired replacement request */
+            printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
+        };
         FulfilmentCommandResultDto: {
             /** Format: uuid */
             orderId: string;
@@ -1679,6 +1717,9 @@ export interface components {
             /** Format: uri */
             uploadUrl: string;
         };
+        WithdrawClaimDto: {
+            reason: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -1958,6 +1999,42 @@ export interface operations {
             };
         };
     };
+    OrdersController_withdrawClaim: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WithdrawClaimDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Claim has incident, remedy, or financial recovery history */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     OrdersController_complete: {
         parameters: {
             query?: never;
@@ -2208,6 +2285,42 @@ export interface operations {
                 };
             };
             /** @description Fresh resources cannot be reserved */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_expireReplacement: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpireReplacementDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Replacement request has not expired */
             409: {
                 headers: {
                     [name: string]: unknown;

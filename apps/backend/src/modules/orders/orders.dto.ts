@@ -73,6 +73,15 @@ export class CreateReplacementDto {
   planKey?: string;
 }
 
+export class ExpireReplacementDto {
+  @ApiPropertyOptional({
+    type: [CancellationPrintingConsumptionDto],
+    description:
+      "Exact material consumption for every actively printing Job abandoned by the expired replacement request",
+  })
+  printingConsumptions?: CancellationPrintingConsumptionDto[];
+}
+
 export class ClaimReprintJobDto {
   @ApiProperty(UUID)
   sourceJobId!: string;
@@ -206,6 +215,11 @@ export class CreateClaimDto {
 }
 
 export class RejectClaimDto {
+  @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
+  reason!: string;
+}
+
+export class WithdrawClaimDto {
   @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
   reason!: string;
 }

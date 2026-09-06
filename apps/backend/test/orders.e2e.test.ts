@@ -744,9 +744,71 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toMatchObject({ status: "COMPLETED" });
   }, 10_000);
 
-  it("rejects replacement creation after its database deadline", async () => {
+  it("closes an expired replacement request into refund recovery", async () => {
     const fixture = await preparePaidOrder("replacement-expired");
     const { orderId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "replacement-expired-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "source material cannot be prepared",
+        recovery: "REPLACE",
+      },
+      "replacement-expired-failure",
+    );
+    await expect(
+      orders.expireReplacement(
+        orderId,
+        sourceJobId,
+        {},
+        "replacement-not-expired",
+      ),
+    ).rejects.toThrow("Replacement request has not expired");
+    await prisma.replacementRequest.update({
+      where: { sourceJobId },
+      data: { deadlineAt: new Date(0) },
+    });
+
+    const expired = await orders.createReplacement(
+      orderId,
+      sourceJobId,
+      {
+        candidateResourceEstimateId:
+          fixture.productions[0]!.candidateResourceEstimateId,
+      },
+      "replacement-expired-refund",
+    );
+    const replay = await orders.createReplacement(
+      orderId,
+      sourceJobId,
+      {
+        candidateResourceEstimateId:
+          fixture.productions[0]!.candidateResourceEstimateId,
+      },
+      "replacement-expired-refund",
+    );
+    expect(replay).toEqual(expired);
+    expect(expired.status).toBe("REPLACEMENT_EXPIRED_REFUND_PENDING");
+    expect(expired.result.refundIds).toHaveLength(1);
+    await expect(
+      prisma.replacementRequest.findUniqueOrThrow({ where: { sourceJobId } }),
+    ).resolves.toMatchObject({
+      status: "RESOLVED",
+      replacementJobId: null,
+      phaseReservationSetId: null,
+    });
+    await expect(prisma.job.count({ where: { orderId } })).resolves.toBe(1);
+    await expect(
+      prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
+    ).resolves.toMatchObject({ status: "CANCELLED" });
+  });
+
+  it("waits for provider void before refunding an expired labelled replacement scope", async () => {
+    const fixture = await preparePaidOrder("replacement-expired-labelled");
+    const { orderId, shipmentId } = fixture.foundation;
     const sourceJobId = fixture.productions[0]!.jobId;
     await advanceThroughQc(fixture, 0);
     await labelAndPack(fixture, 0);
@@ -758,33 +820,47 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         reason: "packed part failed final dimensional inspection",
         recovery: "REPLACE",
       },
-      "replacement-expired-failure",
-    );
-    const candidateResourceEstimateId = await createFreshReplacementCandidate(
-      fixture,
-      0,
+      "replacement-expired-labelled-failure",
     );
     await prisma.replacementRequest.update({
       where: { sourceJobId },
       data: { deadlineAt: new Date(0) },
     });
 
-    await expect(
-      orders.createReplacement(
-        orderId,
-        sourceJobId,
-        { candidateResourceEstimateId },
-        "replacement-expired-create",
-      ),
-    ).rejects.toThrow("Replacement request deadline has expired");
+    const expired = await orders.createReplacement(
+      orderId,
+      sourceJobId,
+      {
+        candidateResourceEstimateId:
+          fixture.productions[0]!.candidateResourceEstimateId,
+      },
+      "replacement-expired-labelled-refund",
+    );
+    expect(expired.status).toBe(
+      "REPLACEMENT_EXPIRY_LABEL_CANCELLATION_PENDING",
+    );
     await expect(
       prisma.replacementRequest.findUniqueOrThrow({ where: { sourceJobId } }),
-    ).resolves.toMatchObject({
-      status: "OPEN",
-      replacementJobId: null,
-      phaseReservationSetId: null,
-    });
-    await expect(prisma.job.count({ where: { orderId } })).resolves.toBe(1);
+    ).resolves.toMatchObject({ status: "REFUND_REQUIRED" });
+
+    const voided = await orders.confirmLabelVoid(
+      orderId,
+      shipmentId,
+      {
+        providerEventId: `expired-replacement-void-${shipmentId}`,
+        providerTransactionId: `expired-replacement-void-tx-${shipmentId}`,
+        occurredAt: new Date().toISOString(),
+      },
+      "replacement-expired-labelled-void",
+    );
+    expect(voided.status).toBe("LABEL_VOID_CONFIRMED_AND_ORDER_CANCELLED");
+    expect(voided.result.refundIds).toHaveLength(1);
+    await expect(
+      prisma.replacementRequest.findUniqueOrThrow({ where: { sourceJobId } }),
+    ).resolves.toMatchObject({ status: "RESOLVED" });
+    await expect(
+      prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
+    ).resolves.toMatchObject({ status: "CANCELLED" });
   });
 
   it("records a QC rejection without invalid failure metadata", async () => {
@@ -1017,6 +1093,77 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         data: { status: "PENDING", resolvedAt: null },
       }),
     ).rejects.toThrow("rejected Claim resolution history is immutable");
+  }, 10_000);
+
+  it("withdraws a clean quality Claim atomically and releases its evidence", async () => {
+    const fixture = await preparePaidOrder("post-delivery-claim-withdrawal");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN");
+    await orders.completeOrder(
+      fixture.foundation.orderId,
+      "post-delivery-claim-withdrawal-complete",
+    );
+    const opened = await orders.createClaim(
+      fixture.foundation.orderId,
+      {
+        origin: "POST_DELIVERY_QUALITY",
+        reason: "customer reported a surface defect",
+        fulfilmentSlotIds: [fixture.foundation.fulfilmentSlotIds[0]!],
+      },
+      "post-delivery-claim-withdrawal-open",
+    );
+    const claimId = opened.result.claimId as string;
+    await expect(
+      prisma.claim.update({
+        where: { id: claimId },
+        data: { status: "WITHDRAWN", resolvedAt: new Date() },
+      }),
+    ).rejects.toThrow(
+      "Claim withdrawal must atomically close one clean quality Claim",
+    );
+
+    const withdrawn = await orders.withdrawClaim(
+      fixture.foundation.orderId,
+      claimId,
+      { reason: "customer confirmed that no remedy is required" },
+      "post-delivery-claim-withdrawal",
+    );
+    const replay = await orders.withdrawClaim(
+      fixture.foundation.orderId,
+      claimId,
+      { reason: "customer confirmed that no remedy is required" },
+      "post-delivery-claim-withdrawal",
+    );
+    expect(replay).toEqual(withdrawn);
+    expect(withdrawn.status).toBe("CLAIM_WITHDRAWN");
+    await expect(
+      prisma.claim.findUniqueOrThrow({
+        where: { id: claimId },
+        include: { resolutions: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "WITHDRAWN",
+      resolutions: [expect.objectContaining({ status: "WITHDRAWN" })],
+    });
+    await expect(
+      prisma.modelFile.findUniqueOrThrow({
+        where: { id: fixture.foundation.modelFileId },
+      }),
+    ).resolves.toMatchObject({ retentionHold: "NONE" });
+    await expect(
+      prisma.claimSlotResolution.update({
+        where: {
+          claimId_fulfilmentSlotId: {
+            claimId,
+            fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+          },
+        },
+        data: { status: "PENDING", resolvedAt: null },
+      }),
+    ).rejects.toThrow("withdrawn Claim resolution history is immutable");
   }, 10_000);
 
   it("settles a later-parcel loss as partial fulfilment without moving the first parcel", async () => {

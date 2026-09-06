@@ -1360,6 +1360,18 @@
         ],
         "type": "object"
       },
+      "ExpireReplacementDto": {
+        "properties": {
+          "printingConsumptions": {
+            "description": "Exact material consumption for every actively printing Job abandoned by the expired replacement request",
+            "items": {
+              "$ref": "#/components/schemas/CancellationPrintingConsumptionDto"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "FulfilmentCommandResultDto": {
         "properties": {
           "orderId": {
@@ -2871,6 +2883,19 @@
           "requiredHeaders"
         ],
         "type": "object"
+      },
+      "WithdrawClaimDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -3422,6 +3447,76 @@
           }
         ],
         "summary": "Re-QC and hand off a custody-confirmed incident reshipment",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/withdrawal": {
+      "post": {
+        "operationId": "OrdersController_withdrawClaim",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawClaimDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Claim has incident, remedy, or financial recovery history"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Withdraw a clean post-delivery quality Claim",
         "tags": [
           "operator fulfilment"
         ]
@@ -3982,6 +4077,76 @@
           }
         ],
         "summary": "Reserve fresh resources and create a replacement Job",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-expiry": {
+      "post": {
+        "operationId": "OrdersController_expireReplacement",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpireReplacementDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Replacement request has not expired"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Close an expired replacement request into refund recovery",
         "tags": [
           "operator fulfilment"
         ]

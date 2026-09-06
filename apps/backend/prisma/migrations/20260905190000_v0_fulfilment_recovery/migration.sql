@@ -924,12 +924,13 @@ CREATE TYPE "replacement_request_reason" AS ENUM (
 CREATE TYPE "replacement_request_status" AS ENUM ('OPEN', 'JOB_CREATED', 'REFUND_REQUIRED', 'RESOLVED');
 CREATE TYPE "claim_origin" AS ENUM ('SHIPMENT_INCIDENT', 'POST_DELIVERY_QUALITY');
 CREATE TYPE "claim_status" AS ENUM (
-    'OPEN', 'ACTIVE', 'RESOLVED_REPLACEMENT', 'RESOLVED_RESHIP',
+    'OPEN', 'ACTIVE', 'WITHDRAWN', 'RESOLVED_REPLACEMENT', 'RESOLVED_RESHIP',
     'RESOLVED_REFUND', 'RESOLVED_REJECTED'
 );
 CREATE TYPE "claim_slot_resolution_status" AS ENUM (
     'PENDING', 'REPLACEMENT_PENDING', 'RESHIP_PENDING', 'REFUND_PENDING',
-    'DELIVERED_REPLACEMENT', 'DELIVERED_RESHIP', 'REFUNDED', 'REJECTED'
+    'DELIVERED_REPLACEMENT', 'DELIVERED_RESHIP', 'REFUNDED', 'REJECTED',
+    'WITHDRAWN'
 );
 CREATE TYPE "price_adjustment_reason" AS ENUM (
     'EXPRESS_BREACH', 'PRODUCTION_FAILURE', 'SHIPMENT_INCIDENT',
@@ -1127,7 +1128,7 @@ CREATE TABLE "claim_slot_resolutions" (
     CONSTRAINT "claim_slot_resolutions_terminal_check" CHECK (
         ("status" IN ('PENDING', 'REPLACEMENT_PENDING', 'RESHIP_PENDING', 'REFUND_PENDING')
          AND "resolved_at" IS NULL)
-        OR ("status" IN ('DELIVERED_REPLACEMENT', 'DELIVERED_RESHIP', 'REFUNDED', 'REJECTED')
+        OR ("status" IN ('DELIVERED_REPLACEMENT', 'DELIVERED_RESHIP', 'REFUNDED', 'REJECTED', 'WITHDRAWN')
             AND "resolved_at" IS NOT NULL)
     )
 );
@@ -1538,6 +1539,18 @@ BEGIN
            (to_jsonb(OLD) - 'updated_at') THEN
         RAISE EXCEPTION 'rejected Claim resolution history is immutable'
             USING ERRCODE = '23514', CONSTRAINT = 'claim_rejection_terminal_immutable_check';
+    ELSIF TG_TABLE_NAME = 'claims'
+       AND prior_status = 'WITHDRAWN'
+       AND (to_jsonb(NEW) - 'updated_at') IS DISTINCT FROM
+           (to_jsonb(OLD) - 'updated_at') THEN
+        RAISE EXCEPTION 'withdrawn Claim history is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'claim_withdrawal_terminal_immutable_check';
+    ELSIF TG_TABLE_NAME = 'claim_slot_resolutions'
+       AND prior_status = 'WITHDRAWN'
+       AND (to_jsonb(NEW) - 'updated_at') IS DISTINCT FROM
+           (to_jsonb(OLD) - 'updated_at') THEN
+        RAISE EXCEPTION 'withdrawn Claim resolution history is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'claim_withdrawal_terminal_immutable_check';
     END IF;
     RETURN NEW;
 END;
@@ -1628,6 +1641,70 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Claim rejection must atomically close one clean quality Claim and all resolutions'
             USING ERRCODE = '23514', CONSTRAINT = 'claim_rejection_graph_check';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM "claims" claim
+        WHERE claim."id" = target_claim_id
+          AND claim."status" = 'WITHDRAWN'
+          AND (
+              claim."origin" <> 'POST_DELIVERY_QUALITY'
+              OR NOT EXISTS (
+                  SELECT 1 FROM "claim_slot_resolutions" resolution
+                  WHERE resolution."claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM "claim_slot_resolutions" resolution
+                  JOIN "fulfilment_slots" slot
+                    ON slot."id" = resolution."fulfilment_slot_id"
+                  WHERE resolution."claim_id" = claim."id"
+                    AND (
+                        resolution."status" <> 'WITHDRAWN'
+                        OR resolution."resolved_at" IS DISTINCT FROM claim."resolved_at"
+                        OR resolution."replacement_request_id" IS NOT NULL
+                        OR resolution."replacement_shipment_id" IS NOT NULL
+                        OR slot."outcome" <> 'DELIVERED'
+                    )
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "replacement_requests" request
+                  WHERE request."claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "shipments" shipment
+                  WHERE shipment."reprint_claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "reshipment_authorizations" auth_history
+                  WHERE auth_history."claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "price_adjustments" adjustment
+                  WHERE adjustment."claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "refund_transactions" refund
+                  WHERE refund."claim_id" = claim."id"
+              )
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM "claim_slot_resolutions" withdrawn
+        JOIN "claims" claim ON claim."id" = withdrawn."claim_id"
+        WHERE withdrawn."claim_id" = target_claim_id
+          AND withdrawn."status" = 'WITHDRAWN'
+          AND (
+              claim."status" <> 'WITHDRAWN'
+              OR EXISTS (
+                  SELECT 1 FROM "claim_slot_resolutions" sibling
+                  WHERE sibling."claim_id" = withdrawn."claim_id"
+                    AND sibling."status" <> 'WITHDRAWN'
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION 'Claim withdrawal must atomically close one clean quality Claim and all resolutions'
+            USING ERRCODE = '23514', CONSTRAINT = 'claim_withdrawal_graph_check';
     END IF;
     RETURN NULL;
 END;

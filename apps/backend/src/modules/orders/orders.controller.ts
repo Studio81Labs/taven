@@ -27,6 +27,7 @@ import {
   CreatePriceAdjustmentDto,
   CreateReplacementDto,
   CreateShipmentDto,
+  ExpireReplacementDto,
   FulfilmentCommandResultDto,
   FulfilmentProjectionDto,
   HandoffReshipmentDto,
@@ -38,6 +39,7 @@ import {
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
+  WithdrawClaimDto,
 } from "./orders.dto";
 import { OrdersService } from "./orders.service";
 
@@ -203,6 +205,26 @@ export class OrdersController {
     return this.orders.createReplacement(orderId, jobId, body, key);
   }
 
+  @Post("jobs/:jobId/replacement-expiry")
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Close an expired replacement request into refund recovery",
+  })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(JOB_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ExpireReplacementDto })
+  @ApiConflictResponse({ description: "Replacement request has not expired" })
+  @ApiOkResponse({ type: FulfilmentCommandResultDto })
+  expireReplacement(
+    @Param("orderId") orderId: string,
+    @Param("jobId") jobId: string,
+    @Body() body: ExpireReplacementDto,
+    @Headers("idempotency-key") key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    return this.orders.expireReplacement(orderId, jobId, body, key);
+  }
+
   @Post("jobs/:jobId/packing")
   @HttpCode(200)
   @ApiOperation({ summary: "Pack and bind a Job to exactly one Shipment" })
@@ -366,6 +388,26 @@ export class OrdersController {
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
     return this.orders.rejectClaim(orderId, claimId, body, key);
+  }
+
+  @Post("claims/:claimId/withdrawal")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Withdraw a clean post-delivery quality Claim" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(CLAIM_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: WithdrawClaimDto })
+  @ApiConflictResponse({
+    description: "Claim has incident, remedy, or financial recovery history",
+  })
+  @ApiOkResponse({ type: FulfilmentCommandResultDto })
+  withdrawClaim(
+    @Param("orderId") orderId: string,
+    @Param("claimId") claimId: string,
+    @Body() body: WithdrawClaimDto,
+    @Headers("idempotency-key") key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    return this.orders.withdrawClaim(orderId, claimId, body, key);
   }
 
   @Post("claims/:claimId/reshipment-handoff")
