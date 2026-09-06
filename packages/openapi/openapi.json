@@ -3184,6 +3184,7 @@
             "name": "eventType",
             "required": false,
             "schema": {
+              "minLength": 1,
               "type": "string"
             }
           },

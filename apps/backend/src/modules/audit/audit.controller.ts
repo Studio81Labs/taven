@@ -45,7 +45,7 @@ export class AuditController {
     minimum: 1,
     maximum: 100,
   })
-  @ApiQuery({ name: "eventType", required: false, type: String })
+  @ApiQuery({ name: "eventType", required: false, type: String, minLength: 1 })
   @ApiQuery({ name: "nodeId", required: false, type: String, format: "uuid" })
   @ApiQuery({
     name: "operatorIdentityId",
@@ -78,6 +78,9 @@ export class AuditController {
     @Query("quoteRequestId") quoteRequestId?: string,
   ): Promise<AuditEventPageDto> {
     const parsedLimit = limit === undefined ? undefined : Number(limit);
+    if (eventType === "") {
+      throw new BadRequestException("eventType is invalid");
+    }
     for (const [name, value] of Object.entries({
       nodeId,
       operatorIdentityId,
@@ -92,7 +95,7 @@ export class AuditController {
     return this.audit.list(
       operator,
       {
-        ...(eventType ? { eventType } : {}),
+        ...(eventType !== undefined ? { eventType } : {}),
         ...(nodeId ? { nodeId } : {}),
         ...(operatorIdentityId ? { operatorIdentityId } : {}),
         ...(orderId ? { orderId } : {}),
