@@ -43,7 +43,8 @@ export class AuditService {
       payload: Prisma.InputJsonObject;
     }>,
   ): Promise<void> {
-    if (!operator.nodeIds.includes(input.nodeId)) {
+    const nodeId = canonicalUuid(input.nodeId);
+    if (!operator.nodeIds.includes(nodeId)) {
       throw new BadRequestException("Operator is not granted the audit node");
     }
     const reason = input.reason?.trim();
@@ -58,7 +59,7 @@ export class AuditService {
         actorKind: AuditActorKind.OPERATOR,
         actorId: operator.operatorId,
         operatorIdentityId: operator.operatorId,
-        nodeId: input.nodeId,
+        nodeId,
         schemaVersion: 2,
         reasonCode: input.reasonCode ?? null,
         reason: reason ?? null,
@@ -81,16 +82,20 @@ export class AuditService {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw new BadRequestException("Audit limit is invalid");
     }
-    if (filters.nodeId && !operator.nodeIds.includes(filters.nodeId)) {
+    const normalizedFilters = normalizeFilters(filters);
+    if (
+      normalizedFilters.nodeId &&
+      !operator.nodeIds.includes(normalizedFilters.nodeId)
+    ) {
       throw new NotFoundException("Audit node was not found");
     }
-    const filterHash = digest(filters);
+    const filterHash = digest(normalizedFilters);
     const keyset =
       cursor !== undefined ? parseCursor(cursor, filterHash) : undefined;
     const where: Prisma.AuditEventWhereInput = {
       AND: [
         { nodeId: { in: [...operator.nodeIds] } },
-        filters,
+        normalizedFilters,
         ...(keyset
           ? [
               {
@@ -193,4 +198,28 @@ function parseCursor(
   } catch {
     throw new BadRequestException("Audit cursor is invalid");
   }
+}
+
+function normalizeFilters(filters: AuditFilters): AuditFilters {
+  return {
+    ...filters,
+    ...(filters.nodeId ? { nodeId: canonicalUuid(filters.nodeId) } : {}),
+    ...(filters.operatorIdentityId
+      ? { operatorIdentityId: canonicalUuid(filters.operatorIdentityId) }
+      : {}),
+    ...(filters.orderId ? { orderId: canonicalUuid(filters.orderId) } : {}),
+    ...(filters.paymentId
+      ? { paymentId: canonicalUuid(filters.paymentId) }
+      : {}),
+    ...(filters.quoteRequestId
+      ? { quoteRequestId: canonicalUuid(filters.quoteRequestId) }
+      : {}),
+  };
+}
+
+function canonicalUuid(value: string): string {
+  if (!UUID_PATTERN.test(value)) {
+    throw new BadRequestException("Audit UUID is invalid");
+  }
+  return value.toLowerCase();
 }
