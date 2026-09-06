@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/admin/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read redacted immutable operator audit events */
+        get: operations["AuditController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/auth/github/callback": {
         parameters: {
             query?: never;
@@ -1104,6 +1121,26 @@ export interface components {
             /** @description Capability returned for the confirmed source upload */
             uploadToken: string;
         };
+        AuditEventPageDto: {
+            items: components["schemas"]["AuditEventSummaryDto"][];
+            nextCursor?: string;
+        };
+        AuditEventSummaryDto: {
+            /** Format: date-time */
+            createdAt: string;
+            eventType: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            nodeId?: string;
+            /** Format: uuid */
+            operatorIdentityId?: string;
+            payload: {
+                [key: string]: unknown;
+            };
+            reason?: string;
+            reasonCode?: string;
+        };
         AutomaticQuoteConfigurationOptionDto: {
             color?: string | null;
             /** @enum {string} */
@@ -1884,6 +1921,37 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    AuditController_list: {
+        parameters: {
+            query?: {
+                quoteRequestId?: string;
+                paymentId?: string;
+                orderId?: string;
+                operatorIdentityId?: string;
+                nodeId?: string;
+                eventType?: string;
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventPageDto"];
+                };
+            };
+        };
+    };
     OperatorAuthController_completeGithub: {
         parameters: {
             query: {

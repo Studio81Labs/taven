@@ -906,6 +906,7 @@ model Node {
   capacityReservations       CapacityReservation[]
   jobs                       Job[]
   operatorGrants             OperatorNodeGrant[]
+  auditEvents                AuditEvent[]
 
   @@map("nodes")
 }
@@ -924,6 +925,7 @@ model OperatorIdentity {
   nodeGrants            OperatorNodeGrant[]
   sessions              OperatorSession[]
   securityEvents        SecurityEvent[]
+  auditEvents           AuditEvent[]
 
   @@map("operator_identities")
 }
@@ -2793,6 +2795,11 @@ model AuditEvent {
   eventType           String         @map("event_type") @db.VarChar(150)
   actorKind           AuditActorKind @default(SYSTEM) @map("actor_kind")
   actorId             String?        @map("actor_id") @db.Uuid
+  operatorIdentityId  String?        @map("operator_identity_id") @db.Uuid
+  nodeId              String?        @map("node_id") @db.Uuid
+  schemaVersion       Int            @default(1) @map("schema_version")
+  reasonCode          String?        @map("reason_code") @db.VarChar(100)
+  reason              String?        @db.Text
   correlationId       String?        @map("correlation_id") @db.Uuid
   idempotencyKey      String?        @map("idempotency_key") @db.VarChar(255)
   payload             Json           @db.JsonB
@@ -2803,11 +2810,16 @@ model AuditEvent {
   order             Order?             @relation(fields: [orderId], references: [id], onDelete: Restrict)
   payment           Payment?           @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   refundTransaction RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
+  operatorIdentity  OperatorIdentity?  @relation(fields: [operatorIdentityId], references: [id], onDelete: Restrict)
+  node              Node?              @relation(fields: [nodeId], references: [id], onDelete: Restrict)
 
   @@index([quoteRequestId, createdAt])
   @@index([quoteId, createdAt])
   @@index([orderId, createdAt])
   @@index([paymentId, createdAt])
   @@index([refundTransactionId, createdAt])
+  @@index([operatorIdentityId, createdAt, id])
+  @@index([eventType, createdAt, id])
+  @@index([nodeId, createdAt, id])
   @@map("audit_events")
 }
