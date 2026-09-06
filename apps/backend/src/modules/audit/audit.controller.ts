@@ -41,7 +41,7 @@ export class AuditController {
   @ApiQuery({
     name: "limit",
     required: false,
-    type: Number,
+    type: "integer",
     minimum: 1,
     maximum: 100,
   })

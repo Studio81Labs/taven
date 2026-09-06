@@ -3194,7 +3194,7 @@
             "schema": {
               "maximum": 100,
               "minimum": 1,
-              "type": "number"
+              "type": "integer"
             }
           },
           {
