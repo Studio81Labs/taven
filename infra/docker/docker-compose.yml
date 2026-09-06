@@ -385,6 +385,27 @@ services:
       minio-init:
         condition: service_completed_successfully
 
+  operator-auth-expiry-worker:
+    profiles: ["app", "worker"]
+    image: taven/backend:local
+    build:
+      <<: *backend-build
+      target: runtime
+    init: true
+    restart: unless-stopped
+    command: ["node", "dist/operator-auth-expiry-worker.js"]
+    environment:
+      <<: *backend-environment
+      TAVEN_S3_ENDPOINT: http://minio:9000
+      TAVEN_S3_PUBLIC_ENDPOINT: http://minio:9000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
   storage-contract-minio:
     <<: *storage-contract
     profiles: ["contract"]
