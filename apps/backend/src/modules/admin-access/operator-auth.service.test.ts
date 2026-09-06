@@ -127,10 +127,10 @@ describe("OperatorAuthService expiry cleanup", () => {
     vi.stubEnv("TAVEN_ADMIN_COMPLETION_URL", "https://admin.example.test/");
     vi.stubEnv("TAVEN_GITHUB_LOGIN_ATTEMPT_ENCRYPTION_KEY", KEY);
 
-    let calls = 0;
+    const upsert = vi.fn(async () => ({ attempts: 11, failures: 0 }));
     const transaction = {
       operatorLoginRateBucket: {
-        upsert: async () => ({ attempts: ++calls === 1 ? 1 : 11, failures: 0 }),
+        upsert,
       },
     };
     const service = new OperatorAuthService(
@@ -153,11 +153,11 @@ describe("OperatorAuthService expiry cleanup", () => {
           claimLoginBudget: (
             subjectHash: undefined,
             clientHash: string,
-          ) => Promise<void>;
+          ) => Promise<Date>;
         }
       ).claimLoginBudget(undefined, "client"),
     ).rejects.toMatchObject({ status: 429 });
-    expect(calls).toBe(2);
+    expect(upsert).toHaveBeenCalledOnce();
   });
 
   it("limits password attempts before an additional password verification runs", async () => {
@@ -189,10 +189,47 @@ describe("OperatorAuthService expiry cleanup", () => {
           claimLoginBudget: (
             subjectHash: string,
             clientHash: string,
-          ) => Promise<void>;
+          ) => Promise<Date>;
         }
       ).claimLoginBudget("subject", "client"),
     ).rejects.toMatchObject({ status: 429 });
     expect(calls).toBe(2);
+  });
+
+  it("records a rejected password without claiming another attempt", async () => {
+    vi.stubEnv("TAVEN_ENVIRONMENT", "development");
+    vi.stubEnv("TAVEN_ADMIN_CSRF_KEY", KEY);
+    vi.stubEnv("TAVEN_ADMIN_CLIENT_HASH_KEY", KEY);
+
+    const upsert = vi.fn(async () => ({ attempts: 1, failures: 1 }));
+    const securityEvent = { create: vi.fn(async () => ({})) };
+    const transaction = {
+      operatorLoginRateBucket: { upsert },
+      securityEvent,
+    };
+    const service = new OperatorAuthService(
+      {
+        $transaction: async <T>(callback: (tx: typeof transaction) => T) =>
+          callback(transaction),
+      } as never,
+      { exchangeCode: async () => ({ id: "github-id", login: "operator" }) },
+    );
+
+    await (
+      service as unknown as {
+        recordFailedLogin: (
+          subjectHash: string,
+          clientHash: string,
+          windowStart: Date,
+        ) => Promise<void>;
+      }
+    ).recordFailedLogin("subject", "client", new Date("2026-09-06T12:00Z"));
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ attempts: 0, failures: 1 }),
+        update: { failures: { increment: 1 } },
+      }),
+    );
   });
 });

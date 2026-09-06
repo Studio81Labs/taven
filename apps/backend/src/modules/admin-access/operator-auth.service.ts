@@ -91,7 +91,11 @@ export class OperatorAuthService {
     const email = normalizeEmail(input.email);
     validatePassword(input.password);
     const subjectHash = digest(email);
-    await this.claimLoginBudget(subjectHash, this.clientHash(request));
+    const clientHash = this.clientHash(request);
+    const loginWindowStart = await this.claimLoginBudget(
+      subjectHash,
+      clientHash,
+    );
 
     const credential =
       await this.prisma.operatorDevelopmentCredential.findFirst({
@@ -105,7 +109,7 @@ export class OperatorAuthService {
       credential?.passwordHash ?? DUMMY_PASSWORD_HASH,
     );
     if (!credential || !valid) {
-      await this.recordFailedLogin(subjectHash, this.clientHash(request));
+      await this.recordFailedLogin(subjectHash, clientHash, loginWindowStart);
       throw new UnauthorizedException(
         "Operator authentication was not accepted",
       );
@@ -573,9 +577,17 @@ export class OperatorAuthService {
   private async recordFailedLogin(
     subjectHash: string,
     clientHash: string,
+    windowStart: Date,
   ): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
-      await this.incrementBucket(transaction, subjectHash, clientHash, true);
+      await this.incrementBucket(
+        transaction,
+        subjectHash,
+        clientHash,
+        false,
+        true,
+        windowStart,
+      );
       await this.recordSecurityEvent(
         transaction,
         SecurityEventType.LOGIN_FAILED,
@@ -590,7 +602,7 @@ export class OperatorAuthService {
   private async claimLoginBudget(
     subjectHash: string | undefined,
     clientHash: string,
-  ): Promise<void> {
+  ): Promise<Date> {
     const now = new Date();
     const windowStart = new Date(
       Math.floor(now.getTime() / LOGIN_WINDOW_MILLISECONDS) *
@@ -598,41 +610,63 @@ export class OperatorAuthService {
     );
     const globalSubjectHash = digest(GLOBAL_SUBJECT);
     const globalClientHash = digest(GLOBAL_CLIENT);
-    const result = await this.prisma.$transaction(async (transaction) => {
+    await this.prisma.$transaction(async (transaction) => {
+      if (!subjectHash) {
+        const scoped = await this.incrementBucket(
+          transaction,
+          globalSubjectHash,
+          clientHash,
+          true,
+          false,
+          windowStart,
+        );
+        if (scoped.attempts > MAX_LOGIN_STARTS_PER_CLIENT) {
+          throw new HttpException(
+            "Operator login is temporarily limited",
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+        }
+      }
       const global = await this.incrementBucket(
         transaction,
         globalSubjectHash,
         globalClientHash,
+        true,
         false,
         windowStart,
       );
-      const scoped = await this.incrementBucket(
-        transaction,
-        subjectHash ?? globalSubjectHash,
-        clientHash,
-        false,
-        windowStart,
-      );
-      return { global, scoped };
+      if (global.attempts > MAX_LOGIN_STARTS) {
+        throw new HttpException(
+          "Operator login is temporarily limited",
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      if (subjectHash) {
+        const scoped = await this.incrementBucket(
+          transaction,
+          subjectHash,
+          clientHash,
+          true,
+          false,
+          windowStart,
+        );
+        if (scoped.attempts > MAX_PASSWORD_FAILURES) {
+          throw new HttpException(
+            "Operator login is temporarily limited",
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+        }
+      }
     });
-    if (
-      result.global.attempts > MAX_LOGIN_STARTS ||
-      (!subjectHash && result.scoped.attempts > MAX_LOGIN_STARTS_PER_CLIENT) ||
-      (subjectHash && result.scoped.attempts > MAX_PASSWORD_FAILURES) ||
-      (subjectHash && result.scoped.failures >= MAX_PASSWORD_FAILURES)
-    ) {
-      throw new HttpException(
-        "Operator login is temporarily limited",
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
+    return windowStart;
   }
 
   private async incrementBucket(
     transaction: Transaction,
     subjectHash: string,
     clientHash: string,
-    failure: boolean,
+    countAttempt: boolean,
+    countFailure: boolean,
     windowStart = new Date(
       Math.floor(Date.now() / LOGIN_WINDOW_MILLISECONDS) *
         LOGIN_WINDOW_MILLISECONDS,
@@ -650,12 +684,13 @@ export class OperatorAuthService {
         subjectHash,
         clientHash,
         windowStart,
-        attempts: 1,
-        failures: failure ? 1 : 0,
+        attempts: countAttempt ? 1 : 0,
+        failures: countFailure ? 1 : 0,
       },
-      update: failure
-        ? { attempts: { increment: 1 }, failures: { increment: 1 } }
-        : { attempts: { increment: 1 } },
+      update: {
+        ...(countAttempt ? { attempts: { increment: 1 } } : {}),
+        ...(countFailure ? { failures: { increment: 1 } } : {}),
+      },
       select: { attempts: true, failures: true },
     });
     return row;
