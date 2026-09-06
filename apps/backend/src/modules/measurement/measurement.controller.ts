@@ -36,7 +36,11 @@ import { MeasurementService } from "./measurement.service";
 const IDEMPOTENCY_HEADER = {
   name: "Idempotency-Key",
   required: true,
-  schema: { type: "string", minLength: 8 },
+  schema: {
+    type: "string",
+    minLength: 8,
+    pattern: "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+  },
 };
 const SESSION_ID = { name: "sessionId", type: String, format: "uuid" };
 const ORDER_ID = { name: "orderId", type: String, format: "uuid" };
