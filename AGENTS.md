@@ -192,6 +192,31 @@ parent agent owns the decision and any resulting write.
 - Do not describe a delegation as tiered when the harness did not actually
   expose control over its model or effort.
 
+## Agent Development Workflow
+
+Complex features and epics use a staged workflow:
+
+1. Planning / reasoning
+   - A high-reasoning agent analyzes the epic or issue and produces an approved implementation plan.
+   - The plan must cover architecture, dependencies, execution order, PR boundaries, validation, and escalation criteria.
+   - Planning agents do not implement production code unless explicitly requested.
+
+2. Implementation / orchestration
+   - An implementation orchestrator executes the approved plan.
+   - It may delegate work to subagents.
+   - The orchestrator must respect approved architectural decisions and GitHub issue boundaries.
+   - Execution may be serial, parallel, or hybrid based on dependencies, coupling, merge risk, and compute budget.
+
+3. Escalation
+   - If implementation reveals a gap that changes architecture, persistence, public contracts, security boundaries, or invalidates the approved plan, do not resolve it implicitly.
+   - Document the gap and pause the affected work.
+   - A high-reasoning architect resolves the escalation and updates the implementation plan or decision record.
+   - Implementation resumes only after the escalation is resolved.
+
+4. Review
+   - Completed work requires independent review.
+   - Review findings are returned to the implementation orchestrator until no blocking findings remain.
+
 ## Architecture boundaries
 
 ### `apps/backend`
