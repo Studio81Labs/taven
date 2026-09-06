@@ -38,6 +38,17 @@ ALTER TABLE "audit_events"
             )
         );
 
+ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_scope_check";
+ALTER TABLE "audit_events"
+    ADD CONSTRAINT "audit_events_scope_check" CHECK (
+        "quote_request_id" IS NOT NULL
+        OR "quote_id" IS NOT NULL
+        OR "order_id" IS NOT NULL
+        OR "payment_id" IS NOT NULL
+        OR "refund_transaction_id" IS NOT NULL
+        OR "node_id" IS NOT NULL
+    );
+
 CREATE INDEX "audit_events_operator_identity_created_at_id_idx"
     ON "audit_events"("operator_identity_id", "created_at", "id");
 CREATE INDEX "audit_events_event_type_created_at_id_idx"
