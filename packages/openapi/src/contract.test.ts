@@ -113,7 +113,7 @@ describe("OpenAPI artifact", () => {
       ),
     );
 
-    expect(idempotencyHeaders).toHaveLength(38);
+    expect(idempotencyHeaders).toHaveLength(40);
     expect(idempotencyHeaders).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -182,6 +182,8 @@ describe("OpenAPI artifact", () => {
       [`${fulfilmentPrefix}/jobs/{jobId}/qc-submission`]: "JobQcSubmissionDto",
       [`${fulfilmentPrefix}/jobs/{jobId}/failure`]: "JobFailureDto",
       [`${fulfilmentPrefix}/jobs/{jobId}/replacement`]: "CreateReplacementDto",
+      [`${fulfilmentPrefix}/jobs/{jobId}/replacement-expiry`]:
+        "ExpireReplacementDto",
       [`${fulfilmentPrefix}/jobs/{jobId}/packing`]: "PackJobDto",
       [`${fulfilmentPrefix}/shipments`]: "CreateShipmentDto",
       [`${fulfilmentPrefix}/shipments/{shipmentId}/label`]: "ShipmentLabelDto",
@@ -192,6 +194,8 @@ describe("OpenAPI artifact", () => {
       [`${fulfilmentPrefix}/shipments/{shipmentId}/events`]: "ShipmentEventDto",
       [`${fulfilmentPrefix}/adjustments`]: "CreatePriceAdjustmentDto",
       [`${fulfilmentPrefix}/claims`]: "CreateClaimDto",
+      [`${fulfilmentPrefix}/claims/{claimId}/rejection`]: "RejectClaimDto",
+      [`${fulfilmentPrefix}/claims/{claimId}/withdrawal`]: "WithdrawClaimDto",
       [`${fulfilmentPrefix}/claims/{claimId}/reshipment-handoff`]:
         "HandoffReshipmentDto",
       [`${fulfilmentPrefix}/claims/{claimId}/reprint`]: "CreateClaimReprintDto",
