@@ -1,5 +1,5 @@
 import { Module } from "@nestjs/common";
-import { Queue } from "bullmq";
+import type { Queue } from "bullmq";
 import { PrismaModule } from "../../prisma/prisma.module";
 import { ResourcesModule } from "../resources/resources.module";
 import { StorageModule } from "../storage/storage.module";
@@ -28,6 +28,10 @@ import { SLICING_QUEUE, SLICING_QUEUE_CONFIG } from "./slicing.tokens";
       provide: SLICING_QUEUE,
       inject: [SLICING_QUEUE_CONFIG],
       useFactory: async (config: SlicingQueueConfig) => {
+        if (process.env.TAVEN_OPENAPI_EXPORT === "true") {
+          return { close: async () => undefined } as Queue;
+        }
+        const { Queue } = await import("bullmq");
         const { SLICING_QUEUE_NAME } = await import("@taven/slicer-contracts");
         return new Queue(SLICING_QUEUE_NAME, { connection: config.connection });
       },

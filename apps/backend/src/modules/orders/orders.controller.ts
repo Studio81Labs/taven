@@ -9,7 +9,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import {
-  ApiBearerAuth,
+  ApiSecurity,
   ApiBody,
   ApiConflictResponse,
   ApiHeader,
@@ -20,6 +20,9 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import {
   ApproveLegacyClaimWindowDto,
   CancelOrderDto,
@@ -70,13 +73,16 @@ const ADJUSTMENT_ID_PARAM = {
 const CLAIM_ID_PARAM = { name: "claimId", type: String, format: "uuid" };
 
 @ApiTags("operator fulfilment")
-@ApiBearerAuth()
+@ApiSecurity("operatorSession")
+@ApiHeader(OPERATOR_CSRF_HEADER)
 @UseGuards(OperatorAccessGuard)
+@RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_WRITE)
 @Controller("admin/orders/:orderId/fulfilment")
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
 
   @Get()
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_READ)
   @ApiOperation({ summary: "Read the fulfilment and recovery projection" })
   @ApiParam(ORDER_ID_PARAM)
   @ApiOkResponse({ type: FulfilmentProjectionDto })
@@ -86,6 +92,7 @@ export class OrdersController {
   }
 
   @Post("claim-window-migration")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @HttpCode(200)
   @ApiOperation({
     summary: "Approve the exact Claim window for a legacy accepted Order",
@@ -344,6 +351,7 @@ export class OrdersController {
   }
 
   @Post("adjustments")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @HttpCode(200)
   @ApiOperation({ summary: "Record an immutable manual price adjustment" })
   @ApiParam(ORDER_ID_PARAM)
@@ -359,6 +367,7 @@ export class OrdersController {
   }
 
   @Post("adjustments/:adjustmentId/refund")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @HttpCode(200)
   @ApiOperation({ summary: "Request the refund for a manual price adjustment" })
   @ApiParam(ORDER_ID_PARAM)
@@ -389,6 +398,7 @@ export class OrdersController {
   }
 
   @Post("claims/:claimId/rejection")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @HttpCode(200)
   @ApiOperation({ summary: "Reject a clean post-delivery quality Claim" })
   @ApiParam(ORDER_ID_PARAM)
@@ -429,6 +439,7 @@ export class OrdersController {
   }
 
   @Post("claims/:claimId/reshipment-handoff")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @HttpCode(200)
   @ApiOperation({
     summary: "Re-QC and hand off a custody-confirmed incident reshipment",
@@ -451,6 +462,7 @@ export class OrdersController {
   }
 
   @Post("claims/:claimId/reprint")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @HttpCode(200)
   @ApiOperation({
     summary: "Reserve and create a whole-parcel reprint for a LOST Claim",
@@ -473,6 +485,7 @@ export class OrdersController {
   }
 
   @Post("claims/:claimId/refund")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @HttpCode(200)
   @ApiOperation({
     summary: "Credit and refund every unresolved slot in a Claim",
@@ -503,6 +516,7 @@ export class OrdersController {
   }
 
   @Post("cancel")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @HttpCode(200)
   @ApiOperation({
     summary: "Cancel an order before physical handoff and request refunds",

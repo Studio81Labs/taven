@@ -23,11 +23,15 @@ import {
   ApiParam,
   ApiQuery,
   ApiServiceUnavailableResponse,
+  ApiSecurity,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import { SignedDownloadResponseDto } from "../storage/storage.dto";
 import { UploadService } from "../storage/upload.service";
 import {
@@ -165,8 +169,10 @@ export class OffersController {
 }
 
 @ApiTags("operator quote requests")
-@ApiBearerAuth()
+@ApiSecurity("operatorSession")
+@ApiHeader(OPERATOR_CSRF_HEADER)
 @UseGuards(OperatorAccessGuard)
+@RequireOperatorPermissions(OPERATOR_PERMISSIONS.QUOTES_WRITE)
 @Controller("admin/quote-requests")
 export class OperatorQuoteRequestsController {
   constructor(
@@ -175,6 +181,7 @@ export class OperatorQuoteRequestsController {
   ) {}
 
   @Get()
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_READ)
   @ApiOperation({ summary: "List the operator quote-request queue" })
   @ApiQuery({
     name: "status",
@@ -189,6 +196,7 @@ export class OperatorQuoteRequestsController {
   }
 
   @Get(":requestId")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_READ)
   @ApiOperation({ summary: "Read one operator quote-request detail" })
   @ApiParam({ name: "requestId", type: String, format: "uuid" })
   @ApiOkResponse({ type: QuoteRequestDetailDto })

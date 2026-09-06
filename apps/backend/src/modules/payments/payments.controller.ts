@@ -22,10 +22,12 @@ import {
   ApiParam,
   ApiQuery,
   ApiServiceUnavailableResponse,
+  ApiSecurity,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
+import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
 import {
   CreateBalancePaymentDto,
   CheckoutPaymentDto,
@@ -35,6 +37,8 @@ import {
 } from "./payments.dto";
 import { PaymentsService } from "./payments.service";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 
 const SESSION_ID = { name: "sessionId", type: String, format: "uuid" };
 const IDEMPOTENCY_HEADER = {
@@ -64,9 +68,11 @@ export class PaymentsController {
 
   @Post("admin/orders/:orderId/balance-payment")
   @HttpCode(200)
-  @ApiBearerAuth()
+  @ApiSecurity("operatorSession")
   @UseGuards(OperatorAccessGuard)
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiHeader({ ...OPERATOR_CSRF_HEADER, required: true })
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiBody({ type: CreateBalancePaymentDto })
   @ApiOperation({ summary: "Create the post-QC balance payment intent" })
