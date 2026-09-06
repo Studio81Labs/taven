@@ -1052,6 +1052,21 @@
         ],
         "type": "object"
       },
+      "CompleteHandlingSessionDto": {
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/HandlingAllocationInputDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "allocations"
+        ],
+        "type": "object"
+      },
       "ConfigureAutomaticQuoteDraftItemDto": {
         "properties": {
           "bodyIds": {
@@ -1583,6 +1598,35 @@
         ],
         "type": "object"
       },
+      "HandlingAllocationInputDto": {
+        "properties": {
+          "jobId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderItemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "servedUnitCount": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "shipmentId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "servedUnitCount"
+        ],
+        "type": "object"
+      },
       "HandoffReshipmentDto": {
         "properties": {
           "carrier": {
@@ -1943,6 +1987,22 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "MeasurementCommandResultDto": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
         "type": "object"
       },
       "ModelOfferItemDto": {
@@ -2828,6 +2888,194 @@
         ],
         "type": "object"
       },
+      "RecordAcquisitionSpendDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "channel": {
+            "enum": [
+              "DIRECT",
+              "ORGANIC",
+              "PAID",
+              "REFERRAL",
+              "UNKNOWN"
+            ],
+            "type": "string"
+          },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "periodEnd": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "periodStart": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "sourceEntityType": {
+            "maxLength": 80,
+            "minLength": 1,
+            "type": "string"
+          },
+          "sourceKey": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "supersedesId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "periodStart",
+          "periodEnd",
+          "amountMinor",
+          "currency",
+          "sourceKey",
+          "sourceEntityType"
+        ],
+        "type": "object"
+      },
+      "RecordActualCostDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "category": {
+            "enum": [
+              "MATERIAL",
+              "VARIABLE_MACHINE",
+              "CARRIER",
+              "PACKAGING",
+              "PAYMENT_FEE"
+            ],
+            "type": "string"
+          },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "MEASURED",
+              "MANUAL"
+            ],
+            "type": "string"
+          },
+          "sourceEntityId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sourceEntityType": {
+            "maxLength": 80,
+            "minLength": 1,
+            "type": "string"
+          },
+          "sourceKey": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "supersedesId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "amountMinor",
+          "currency",
+          "occurredAt",
+          "source",
+          "sourceKey",
+          "sourceEntityType"
+        ],
+        "type": "object"
+      },
+      "RecordManualHandlingSessionDto": {
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/HandlingAllocationInputDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "component": {
+            "enum": [
+              "HANDLING_ORDER_FIX",
+              "HANDLING_PLATE",
+              "HANDLING_PIECE",
+              "HANDLING_PACK",
+              "SHIPPING_TRIP",
+              "POSTPROCESSING_ITEM"
+            ],
+            "type": "string"
+          },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "durationMilliseconds": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "endedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "laborRateDenominator": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "laborRateNumerator": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "component",
+          "laborRateNumerator",
+          "laborRateDenominator",
+          "currency",
+          "startedAt",
+          "endedAt",
+          "durationMilliseconds",
+          "reason",
+          "allocations"
+        ],
+        "type": "object"
+      },
       "RejectClaimDto": {
         "properties": {
           "reason": {
@@ -3040,6 +3288,40 @@
         ],
         "type": "object"
       },
+      "StartHandlingSessionDto": {
+        "properties": {
+          "component": {
+            "enum": [
+              "HANDLING_ORDER_FIX",
+              "HANDLING_PLATE",
+              "HANDLING_PIECE",
+              "HANDLING_PACK",
+              "SHIPPING_TRIP",
+              "POSTPROCESSING_ITEM"
+            ],
+            "type": "string"
+          },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "laborRateDenominator": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "laborRateNumerator": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "component",
+          "laborRateNumerator",
+          "laborRateDenominator",
+          "currency"
+        ],
+        "type": "object"
+      },
       "UploadIntentResponseDto": {
         "properties": {
           "accessToken": {
@@ -3083,6 +3365,19 @@
         ],
         "type": "object"
       },
+      "VoidHandlingSessionDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "WithdrawClaimDto": {
         "properties": {
           "reason": {
@@ -3119,6 +3414,64 @@
   },
   "openapi": "3.0.0",
   "paths": {
+    "/admin/acquisition-spend": {
+      "post": {
+        "operationId": "MeasurementController_acquisitionSpend",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordAcquisitionSpendDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record append-only acquisition spend evidence",
+        "tags": [
+          "operator measurement"
+        ]
+      }
+    },
     "/admin/audit-events": {
       "get": {
         "operationId": "AuditController_list",
@@ -3440,6 +3793,323 @@
         "summary": "Read the current authenticated operator session and CSRF token",
         "tags": [
           "operator authentication"
+        ]
+      }
+    },
+    "/admin/handling-sessions/{sessionId}/stop": {
+      "post": {
+        "operationId": "MeasurementController_stop",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteHandlingSessionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Complete a handling timer and allocate its measured cost",
+        "tags": [
+          "operator measurement"
+        ]
+      }
+    },
+    "/admin/handling-sessions/{sessionId}/void": {
+      "post": {
+        "operationId": "MeasurementController_void",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoidHandlingSessionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Void immutable handling evidence with a correction reason",
+        "tags": [
+          "operator measurement"
+        ]
+      }
+    },
+    "/admin/handling-sessions/manual": {
+      "post": {
+        "operationId": "MeasurementController_manual",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordManualHandlingSessionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record a completed manual handling measurement",
+        "tags": [
+          "operator measurement"
+        ]
+      }
+    },
+    "/admin/handling-sessions/start": {
+      "post": {
+        "operationId": "MeasurementController_start",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartHandlingSessionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Start an operator handling timer",
+        "tags": [
+          "operator measurement"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/actual-costs": {
+      "post": {
+        "operationId": "MeasurementController_actualCost",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordActualCostDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasurementCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record append-only actual order-cost evidence",
+        "tags": [
+          "operator measurement"
         ]
       }
     },

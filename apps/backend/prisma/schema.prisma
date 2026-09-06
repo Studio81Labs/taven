@@ -569,6 +569,67 @@ enum AutomaticQuoteRiskDecision {
   @@map("automatic_quote_risk_decision")
 }
 
+enum HandlingComponent {
+  HANDLING_ORDER_FIX
+  HANDLING_PLATE
+  HANDLING_PIECE
+  HANDLING_PACK
+  SHIPPING_TRIP
+  POSTPROCESSING_ITEM
+
+  @@map("handling_component")
+}
+
+enum HandlingSource {
+  TIMER
+  MANUAL
+
+  @@map("handling_source")
+}
+
+enum HandlingSessionLifecycle {
+  OPEN
+  COMPLETED
+  VOIDED
+
+  @@map("handling_session_lifecycle")
+}
+
+enum ActualCostCategory {
+  MATERIAL
+  VARIABLE_MACHINE
+  CARRIER
+  PACKAGING
+  PAYMENT_FEE
+
+  @@map("actual_cost_category")
+}
+
+enum ActualCostSource {
+  MEASURED
+  MANUAL
+
+  @@map("actual_cost_source")
+}
+
+enum AcquisitionChannel {
+  DIRECT
+  ORGANIC
+  PAID
+  REFERRAL
+  UNKNOWN
+
+  @@map("acquisition_channel")
+}
+
+enum BusinessEventSource {
+  SERVER
+  CLIENT
+  BACKFILL
+
+  @@map("business_event_source")
+}
+
 model RevisionIdentity {
   id        String       @id @db.Uuid
   kind      RevisionKind
@@ -907,6 +968,8 @@ model Node {
   jobs                       Job[]
   operatorGrants             OperatorNodeGrant[]
   auditEvents                AuditEvent[]
+  handlingSessions           HandlingSession[]
+  businessEvents             BusinessEvent[]
 
   @@map("nodes")
 }
@@ -926,6 +989,7 @@ model OperatorIdentity {
   sessions              OperatorSession[]
   securityEvents        SecurityEvent[]
   auditEvents           AuditEvent[]
+  handlingSessions      HandlingSession[]
 
   @@map("operator_identities")
 }
@@ -966,6 +1030,132 @@ model OperatorNodeGrant {
   @@id([operatorId, nodeId])
   @@index([nodeId])
   @@map("operator_node_grants")
+}
+
+model HandlingSession {
+  id                    String                   @id @default(uuid()) @db.Uuid
+  nodeId                String                   @map("node_id") @db.Uuid
+  operatorIdentityId    String                   @map("operator_identity_id") @db.Uuid
+  component             HandlingComponent
+  source                HandlingSource
+  lifecycle             HandlingSessionLifecycle @default(OPEN)
+  startedAt             DateTime                 @map("started_at") @db.Timestamptz(3)
+  endedAt               DateTime?                @map("ended_at") @db.Timestamptz(3)
+  durationMilliseconds  BigInt?                  @map("duration_milliseconds")
+  laborRateNumerator    BigInt                   @map("labor_rate_numerator")
+  laborRateDenominator  BigInt                   @map("labor_rate_denominator")
+  currency              String                   @db.Char(3)
+  totalCostMinor        BigInt?                  @map("total_cost_minor")
+  reason                String?                  @db.VarChar(1000)
+  commandIdempotencyKey String                   @map("command_idempotency_key") @db.VarChar(255)
+  completedAt           DateTime?                @map("completed_at") @db.Timestamptz(3)
+  voidedAt              DateTime?                @map("voided_at") @db.Timestamptz(3)
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  node        Node                 @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  operator    OperatorIdentity     @relation(fields: [operatorIdentityId], references: [id], onDelete: Restrict)
+  allocations HandlingAllocation[]
+
+  @@index([nodeId, createdAt])
+  @@index([operatorIdentityId, lifecycle])
+  @@map("handling_sessions")
+}
+
+model HandlingAllocation {
+  id                            String          @id @default(uuid()) @db.Uuid
+  handlingSessionId             String          @map("handling_session_id") @db.Uuid
+  orderId                       String          @map("order_id") @db.Uuid
+  orderItemId                   String?         @map("order_item_id") @db.Uuid
+  jobId                         String?         @map("job_id") @db.Uuid
+  shipmentId                    String?         @map("shipment_id") @db.Uuid
+  targetKey                     String          @map("target_key") @db.VarChar(255)
+  servedUnitCount               Int             @map("served_unit_count")
+  allocatedDurationMilliseconds BigInt          @map("allocated_duration_milliseconds")
+  allocatedCostMinor            BigInt          @map("allocated_cost_minor")
+  currency                      String          @db.Char(3)
+  createdAt                     DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  session   HandlingSession @relation(fields: [handlingSessionId], references: [id], onDelete: Restrict)
+  order     Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderItem OrderItem?      @relation(fields: [orderItemId, orderId], references: [id, orderId], onDelete: Restrict)
+  job       Job?            @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  shipment  Shipment?       @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  @@unique([handlingSessionId, targetKey])
+  @@index([orderId, createdAt])
+  @@index([jobId])
+  @@index([shipmentId])
+  @@map("handling_allocations")
+}
+
+model OrderActualCost {
+  id               String             @id @default(uuid()) @db.Uuid
+  orderId          String             @map("order_id") @db.Uuid
+  category         ActualCostCategory
+  amountMinor      BigInt             @map("amount_minor")
+  currency         String             @db.Char(3)
+  occurredAt       DateTime           @map("occurred_at") @db.Timestamptz(3)
+  source           ActualCostSource
+  sourceKey        String             @unique @map("source_key") @db.VarChar(255)
+  sourceEntityType String              @map("source_entity_type") @db.VarChar(80)
+  sourceEntityId   String?            @map("source_entity_id") @db.Uuid
+  supersedesId     String?            @unique @map("supersedes_id") @db.Uuid
+  reason           String?            @db.VarChar(1000)
+  recordedAt       DateTime           @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  order      Order            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  supersedes OrderActualCost? @relation("OrderActualCostSupersession", fields: [supersedesId], references: [id], onDelete: Restrict)
+  successor  OrderActualCost? @relation("OrderActualCostSupersession")
+
+  @@index([orderId, category, recordedAt])
+  @@map("order_actual_costs")
+}
+
+model AcquisitionSpend {
+  id               String             @id @default(uuid()) @db.Uuid
+  channel          AcquisitionChannel
+  periodStart      DateTime           @map("period_start") @db.Timestamptz(3)
+  periodEnd        DateTime           @map("period_end") @db.Timestamptz(3)
+  amountMinor      BigInt             @map("amount_minor")
+  currency         String             @db.Char(3)
+  sourceKey        String             @unique @map("source_key") @db.VarChar(255)
+  sourceEntityType String              @map("source_entity_type") @db.VarChar(80)
+  supersedesId     String?            @unique @map("supersedes_id") @db.Uuid
+  reason           String?            @db.VarChar(1000)
+  recordedAt       DateTime           @default(now()) @map("recorded_at") @db.Timestamptz(3)
+
+  supersedes AcquisitionSpend? @relation("AcquisitionSpendSupersession", fields: [supersedesId], references: [id], onDelete: Restrict)
+  successor  AcquisitionSpend? @relation("AcquisitionSpendSupersession")
+
+  @@index([channel, periodStart])
+  @@map("acquisition_spend")
+}
+
+model BusinessEvent {
+  id             String              @id @default(uuid()) @db.Uuid
+  schemaVersion  Int                 @default(1) @map("schema_version")
+  eventType      String              @map("event_type") @db.VarChar(100)
+  dedupeKey      String              @map("dedupe_key") @db.VarChar(255)
+  recordedAt     DateTime            @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  observedAt     DateTime            @map("observed_at") @db.Timestamptz(3)
+  source         BusinessEventSource
+  quoteSessionId String?             @map("quote_session_id") @db.Uuid
+  orderId        String?             @map("order_id") @db.Uuid
+  jobId          String?             @map("job_id") @db.Uuid
+  nodeId         String?             @map("node_id") @db.Uuid
+  payload        Json                @db.JsonB
+  expiresAt      DateTime?           @map("expires_at") @db.Timestamptz(3)
+
+  quoteSession QuoteSession? @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
+  order        Order?        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  job          Job?          @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  node         Node?         @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+
+  @@unique([eventType, dedupeKey])
+  @@index([recordedAt])
+  @@index([orderId, recordedAt])
+  @@map("business_events")
 }
 
 model OperatorSession {
@@ -1546,6 +1736,7 @@ model QuoteSession {
   customer             Customer?             @relation(fields: [customerId], references: [id], onDelete: Restrict)
   quoteRequest         QuoteRequest?
   automaticOrderOrigin AutomaticOrderOrigin?
+  businessEvents        BusinessEvent[]
 
   @@index([customerId, createdAt])
   @@index([status, expiresAt])
@@ -1851,6 +2042,9 @@ model Order {
   settlements                  OrderSettlement[]
   handoffReconciliations       HandoffReconciliation[]
   automaticQuoteDraft          AutomaticQuoteDraft?
+  handlingAllocations          HandlingAllocation[]
+  actualCosts                  OrderActualCost[]
+  businessEvents               BusinessEvent[]
 
   @@index([customerId, createdAt])
   @@index([status, createdAt])
@@ -2072,6 +2266,7 @@ model OrderItem {
   individualSource            IndividualOrderItemSource?
   priceComponents             PriceSnapshotComponent[]
   fulfilmentSlots             FulfilmentSlot[]
+  handlingAllocations         HandlingAllocation[]
 
   @@unique([orderId, ordinal])
   @@unique([id, orderId])
@@ -2242,6 +2437,7 @@ model Shipment {
   handoffReconciliation           HandoffReconciliation?
   originalReshipmentAuthorization ReshipmentAuthorization? @relation("OriginalReshipmentShipment")
   reshipmentAuthorization         ReshipmentAuthorization? @relation("AuthorizedReshipmentShipment")
+  handlingAllocations             HandlingAllocation[]
 
   @@unique([id, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "shipments_lineage_scope_key")
   @@unique([id, shipmentPlanId, orderId, orderPhaseId], map: "shipments_job_scope_key")
@@ -2409,6 +2605,8 @@ model Job {
   qcPhotoAsset             PhotoAsset?             @relation("JobQcPhotoAsset", fields: [qcPhotoAssetId], references: [id], onDelete: Restrict)
   productionReservations   ProductionReservation[] @relation("ProductionReservationJob")
   shipmentAssignment       JobShipmentAssignment?
+  handlingAllocations      HandlingAllocation[]
+  businessEvents           BusinessEvent[]
 
   @@unique([id, nodeId, phaseResourcePlanJobId])
   @@unique([id, shipmentPlanId, orderId, orderPhaseId], map: "jobs_shipment_scope_key")

@@ -4,6 +4,7 @@ export * from "./keys/canonical-key.js";
 export * from "./keys/idempotency-key.js";
 export * from "./lifecycle/policies.js";
 export * from "./lifecycle/transition.js";
+export * from "./metrics/handling.js";
 export * from "./primitives/digest.js";
 export * from "./primitives/errors.js";
 export * from "./primitives/money.js";
