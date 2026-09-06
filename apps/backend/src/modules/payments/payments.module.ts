@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { PrismaModule } from "../../prisma/prisma.module";
 import { AutomaticQuotesModule } from "../automatic-quotes/automatic-quotes.module";
+import { AdminAccessModule } from "../admin-access/admin-access.module";
 import { ResourcesModule } from "../resources/resources.module";
 import { BalancePaymentDeadlineService } from "./balance-payment-deadline.service";
 import { CheckoutPaymentDeadlineService } from "./checkout-payment-deadline.service";
@@ -19,7 +20,12 @@ import { SandboxCheckoutController } from "./sandbox-checkout.controller";
 import { SandboxPaymentProviderAdapter } from "./sandbox-payment-provider.adapter";
 
 @Module({
-  imports: [PrismaModule, AutomaticQuotesModule, ResourcesModule],
+  imports: [
+    PrismaModule,
+    AutomaticQuotesModule,
+    ResourcesModule,
+    AdminAccessModule,
+  ],
   controllers: [PaymentsController, SandboxCheckoutController],
   providers: [
     {

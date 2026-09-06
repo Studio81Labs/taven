@@ -9,6 +9,7 @@ import {
   Param,
   Post,
   Query,
+  UseGuards,
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
@@ -26,12 +27,14 @@ import {
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import {
+  CreateBalancePaymentDto,
   CheckoutPaymentDto,
   CreateCheckoutPaymentDto,
   PaymentCapabilitiesDto,
   PaymentWebhookAcceptedDto,
 } from "./payments.dto";
 import { PaymentsService } from "./payments.service";
+import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
 
 const SESSION_ID = { name: "sessionId", type: String, format: "uuid" };
 const IDEMPOTENCY_HEADER = {
@@ -57,6 +60,27 @@ export class PaymentsController {
   @ApiOkResponse({ type: PaymentCapabilitiesDto })
   capabilities(): Promise<PaymentCapabilitiesDto> {
     return this.payments.capabilities();
+  }
+
+  @Post("admin/orders/:orderId/balance-payment")
+  @HttpCode(200)
+  @ApiBearerAuth()
+  @UseGuards(OperatorAccessGuard)
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreateBalancePaymentDto })
+  @ApiOperation({ summary: "Create the post-QC balance payment intent" })
+  @ApiOkResponse({ type: CheckoutPaymentDto })
+  @ApiConflictResponse({ description: "Balance topology or command changed" })
+  @ApiServiceUnavailableResponse({
+    description: "The configured payment provider is unavailable",
+  })
+  createBalance(
+    @Param("orderId") orderId: string,
+    @Body() body: CreateBalancePaymentDto,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<CheckoutPaymentDto> {
+    return this.payments.createBalancePayment(orderId, body, idempotencyKey);
   }
 
   @Post("automatic-quote-sessions/:sessionId/checkout/payments")

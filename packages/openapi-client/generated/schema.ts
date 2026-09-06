@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/admin/orders/{orderId}/balance-payment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create the post-QC balance payment intent */
+        post: operations["PaymentsController_createBalance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment": {
         parameters: {
             query?: never;
@@ -66,6 +83,23 @@ export interface paths {
         put?: never;
         /** Cancel an order before physical handoff and request refunds */
         post: operations["OrdersController_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claim-window-migration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve the exact Claim window for a legacy accepted Order */
+        post: operations["OrdersController_approveLegacyClaimWindow"];
         delete?: never;
         options?: never;
         head?: never;
@@ -973,6 +1007,11 @@ export interface components {
             termsRevision: string;
             version: number;
         };
+        ApproveLegacyClaimWindowDto: {
+            approvalReference: string;
+            claimPolicyRevision: string;
+            claimWindowDays: number;
+        };
         AttachAutomaticQuoteModelFileDto: {
             /** Format: uuid */
             modelFileId: string;
@@ -1236,6 +1275,10 @@ export interface components {
             attribution?: {
                 [key: string]: unknown;
             };
+        };
+        CreateBalancePaymentDto: {
+            /** @enum {string} */
+            method: "CARD" | "BANK_TRANSFER";
         };
         CreateCheckoutPaymentDto: {
             acceptClaimPolicy: boolean;
@@ -1729,6 +1772,48 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    PaymentsController_createBalance: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable client command identity (8-255 characters) */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBalancePaymentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutPaymentDto"];
+                };
+            };
+            /** @description Balance topology or command changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The configured payment provider is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     OrdersController_get: {
         parameters: {
             query?: never;
@@ -1825,6 +1910,34 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["CancelOrderDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+        };
+    };
+    OrdersController_approveLegacyClaimWindow: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveLegacyClaimWindowDto"];
             };
         };
         responses: {

@@ -1548,6 +1548,7 @@ model PriceSnapshot {
   payments                      Payment[]
   orderSettlements              OrderSettlement[]
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
+  orderContractPriceRevisions   OrderContractPriceRevision[]
 
   @@unique([id, currency], map: "price_snapshots_id_currency_key")
   @@map("price_snapshots")
@@ -1658,27 +1659,30 @@ model Order {
   createdAt                         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  customer                 Customer?                 @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  automaticOrigin          AutomaticOrderOrigin?
-  individualOrigin         IndividualOrderOrigin?
-  priceBindings            OrderPriceBinding[]       @relation("OrderPriceBindings")
-  acceptedPriceBinding     OrderPriceBinding?        @relation("CheckoutAcceptanceBinding", fields: [acceptedOrderPriceBindingId], references: [id], onDelete: Restrict)
-  activePriceBinding       OrderActivePriceBinding?
-  deliveryDestinations     DeliveryDestination[]
-  items                    OrderItem[]
-  phases                   OrderPhase[]
-  shipmentPlans            ShipmentPlan[]
-  shipments                Shipment[]
-  jobs                     Job[]
-  auditEvents              AuditEvent[]
-  fulfilmentSlots          FulfilmentSlot[]
-  replacementRequests      ReplacementRequest[]
-  claims                   Claim[]
-  reshipmentAuthorizations ReshipmentAuthorization[]
-  priceAdjustments         PriceAdjustment[]
-  settlements              OrderSettlement[]
-  handoffReconciliations   HandoffReconciliation[]
-  automaticQuoteDraft      AutomaticQuoteDraft?
+  customer                     Customer?                     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  automaticOrigin              AutomaticOrderOrigin?
+  individualOrigin             IndividualOrderOrigin?
+  priceBindings                OrderPriceBinding[]           @relation("OrderPriceBindings")
+  acceptedPriceBinding         OrderPriceBinding?            @relation("CheckoutAcceptanceBinding", fields: [acceptedOrderPriceBindingId], references: [id], onDelete: Restrict)
+  activePriceBinding           OrderActivePriceBinding?
+  deliveryDestinations         DeliveryDestination[]
+  items                        OrderItem[]
+  phases                       OrderPhase[]
+  shipmentPlans                ShipmentPlan[]
+  shipments                    Shipment[]
+  jobs                         Job[]
+  auditEvents                  AuditEvent[]
+  fulfilmentSlots              FulfilmentSlot[]
+  replacementRequests          ReplacementRequest[]
+  claims                       Claim[]
+  reshipmentAuthorizations     ReshipmentAuthorization[]
+  priceAdjustments             PriceAdjustment[]
+  contractPriceRevisions       OrderContractPriceRevision[]
+  activeContractPrice          OrderActiveContractPrice?
+  claimWindowMigrationApproval ClaimWindowMigrationApproval?
+  settlements                  OrderSettlement[]
+  handoffReconciliations       HandoffReconciliation[]
+  automaticQuoteDraft          AutomaticQuoteDraft?
 
   @@index([customerId, createdAt])
   @@index([status, createdAt])
@@ -2293,7 +2297,7 @@ model Payment {
   orderPriceBinding              OrderPriceBinding             @relation(fields: [orderPriceBindingId, orderId, priceSnapshotId], references: [id, orderId, priceSnapshotId], onDelete: Restrict, map: "payments_order_snapshot_fkey")
   checkoutCommand                IdempotencyRecord?            @relation("CheckoutPaymentCommand", fields: [checkoutCommandId], references: [id], onDelete: Restrict, map: "payments_checkout_command_fkey")
   priceSnapshot                  PriceSnapshot                 @relation(fields: [priceSnapshotId, currency], references: [id, currency], onDelete: Restrict, map: "payments_snapshot_currency_fkey")
-  paymentSchedule                PaymentSchedule               @relation(fields: [paymentScheduleId, priceSnapshotId, role, requestedAmountMinor], references: [id, priceSnapshotId, role, grossAmountMinor], onDelete: Restrict, map: "payments_schedule_contract_fkey")
+  paymentSchedule                PaymentSchedule               @relation(fields: [paymentScheduleId], references: [id], onDelete: Restrict, map: "payments_schedule_contract_fkey")
   intentCreationFailureEvidence  PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailurePayment")
   intentCreationFailureResult    PaymentIntentCreationFailure? @relation("PaymentIntentCreationFailureResult", fields: [intentCreationFailureResultId, id, provider], references: [id, paymentId, provider], onDelete: Restrict, map: "payments_intent_creation_failure_result_fkey")
   refunds                        RefundTransaction[]
@@ -2377,15 +2381,15 @@ model Claim {
   createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  order                   Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  orderPhase              OrderPhase               @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
-  incidentShipment        Shipment?                @relation("ClaimIncidentShipment", fields: [incidentShipmentId], references: [id], onDelete: Restrict)
-  reprintShipments        Shipment[]               @relation("ClaimReprintShipments")
-  resolutions             ClaimSlotResolution[]
-  refunds                 RefundTransaction[]
-  priceAdjustments        PriceAdjustment[]
+  order                    Order                     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderPhase               OrderPhase                @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
+  incidentShipment         Shipment?                 @relation("ClaimIncidentShipment", fields: [incidentShipmentId], references: [id], onDelete: Restrict)
+  reprintShipments         Shipment[]                @relation("ClaimReprintShipments")
+  resolutions              ClaimSlotResolution[]
+  refunds                  RefundTransaction[]
+  priceAdjustments         PriceAdjustment[]
   reshipmentAuthorizations ReshipmentAuthorization[]
-  replacementRequests     ReplacementRequest[]
+  replacementRequests      ReplacementRequest[]
 
   @@unique([incidentShipmentId], map: "claims_incident_shipment_id_key")
   @@index([orderId, status])
@@ -2447,25 +2451,78 @@ model ClaimSlotResolution {
 }
 
 model PriceAdjustment {
-  id             String                @id @default(uuid()) @db.Uuid
-  orderId        String                @map("order_id") @db.Uuid
-  paymentId      String?               @map("payment_id") @db.Uuid
-  claimId        String?               @map("claim_id") @db.Uuid
-  idempotencyKey String                @unique @map("idempotency_key") @db.VarChar(255)
-  reason         PriceAdjustmentReason
-  amountMinor    BigInt                @map("amount_minor")
-  currency       String                @db.Char(3)
-  allocation     Json                  @db.JsonB
-  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                    String                @id @default(uuid()) @db.Uuid
+  orderId               String                @map("order_id") @db.Uuid
+  paymentId             String?               @map("payment_id") @db.Uuid
+  claimId               String?               @map("claim_id") @db.Uuid
+  sourceContractPriceId String                @map("source_contract_price_id") @db.Uuid
+  idempotencyKey        String                @unique @map("idempotency_key") @db.VarChar(255)
+  reason                PriceAdjustmentReason
+  amountMinor           BigInt                @map("amount_minor")
+  currency              String                @db.Char(3)
+  allocation            Json                  @db.JsonB
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  order   Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  payment Payment?            @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  claim   Claim?              @relation(fields: [claimId], references: [id], onDelete: Restrict)
-  refunds RefundTransaction[]
+  order               Order                       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payment             Payment?                    @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  claim               Claim?                      @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  sourceContractPrice OrderContractPriceRevision  @relation("AdjustmentSourceContractPrice", fields: [sourceContractPriceId], references: [id], onDelete: Restrict)
+  resultContractPrice OrderContractPriceRevision? @relation("AdjustmentResultContractPrice")
+  refunds             RefundTransaction[]
 
   @@index([orderId, createdAt])
   @@index([claimId])
   @@map("price_adjustments")
+}
+
+model OrderContractPriceRevision {
+  id                  String          @id @default(uuid()) @db.Uuid
+  orderId             String          @map("order_id") @db.Uuid
+  basePriceSnapshotId String          @map("base_price_snapshot_id") @db.Uuid
+  predecessorId       String?         @unique @map("predecessor_id") @db.Uuid
+  priceAdjustmentId   String?         @unique @map("price_adjustment_id") @db.Uuid
+  contractTotalMinor  BigInt          @map("contract_total_minor")
+  taxRegime           SellerTaxRegime @map("tax_regime")
+  vatRateBasisPoints  Int             @map("vat_rate_basis_points")
+  netAmountMinor      BigInt          @map("net_amount_minor")
+  vatAmountMinor      BigInt          @map("vat_amount_minor")
+  currency            String          @db.Char(3)
+  createdAt           DateTime        @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(3)
+
+  order             Order                       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  basePriceSnapshot PriceSnapshot               @relation(fields: [basePriceSnapshotId], references: [id], onDelete: Restrict)
+  predecessor       OrderContractPriceRevision? @relation("ContractPriceLineage", fields: [predecessorId], references: [id], onDelete: Restrict)
+  successor         OrderContractPriceRevision? @relation("ContractPriceLineage")
+  priceAdjustment   PriceAdjustment?            @relation("AdjustmentResultContractPrice", fields: [priceAdjustmentId], references: [id], onDelete: Restrict)
+  sourceAdjustments PriceAdjustment[]           @relation("AdjustmentSourceContractPrice")
+  activeForOrder    OrderActiveContractPrice?
+
+  @@unique([id, orderId], map: "order_contract_price_revisions_order_scope_key")
+  @@index([orderId, createdAt], map: "order_contract_price_revisions_order_created_idx")
+  @@map("order_contract_price_revisions")
+}
+
+model OrderActiveContractPrice {
+  orderId                 String @id @map("order_id") @db.Uuid
+  contractPriceRevisionId String @unique @map("contract_price_revision_id") @db.Uuid
+
+  order                 Order                      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  contractPriceRevision OrderContractPriceRevision @relation(fields: [contractPriceRevisionId, orderId], references: [id, orderId], onDelete: Restrict, map: "order_active_contract_prices_revision_scope_fkey")
+
+  @@unique([contractPriceRevisionId, orderId], map: "order_active_contract_prices_revision_scope_key")
+  @@map("order_active_contract_prices")
+}
+
+model ClaimWindowMigrationApproval {
+  orderId             String   @id @map("order_id") @db.Uuid
+  claimPolicyRevision String   @map("claim_policy_revision") @db.VarChar(100)
+  claimWindowDays     Int      @map("claim_window_days")
+  approvalReference   String   @map("approval_reference") @db.VarChar(500)
+  approvedAt          DateTime @default(dbgenerated("clock_timestamp()")) @map("approved_at") @db.Timestamptz(3)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@map("claim_window_migration_approvals")
 }
 
 model RefundTransaction {

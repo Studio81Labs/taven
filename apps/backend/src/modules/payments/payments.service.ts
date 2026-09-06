@@ -32,6 +32,7 @@ import {
 } from "../resources/resource-errors";
 import { ResourceReservationService } from "../resources/resource-reservation.service";
 import type {
+  CreateBalancePaymentDto,
   CreateCheckoutPaymentDto,
   CheckoutPaymentDto,
 } from "./payments.dto";
@@ -95,6 +96,260 @@ export class PaymentsService {
       methods: [...value.methods],
       legalDocuments,
     };
+  }
+
+  async createBalancePayment(
+    orderIdInput: string,
+    bodyInput: CreateBalancePaymentDto,
+    idempotencyKeyInput?: string,
+  ): Promise<CheckoutPaymentDto> {
+    const orderId = normalizedUuid(orderIdInput, "orderId");
+    const method = paymentMethod(bodyInput?.method);
+    const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
+    const namespace = balanceNamespace(orderId);
+    const fingerprint = fingerprintOf({ orderId, method });
+    const capabilities = await this.provider.capabilities();
+    if (
+      capabilities.provider !== this.provider.providerName() ||
+      !capabilities.methods.includes(method)
+    ) {
+      throw new BadRequestException("Payment method is unavailable");
+    }
+    const siteUrl = publicSiteUrl();
+
+    const staged = await this.prisma.$transaction(async (transaction) => {
+      await lockNamedIdempotencyKey(transaction, namespace, idempotencyKey);
+      const idempotency = await balanceIdempotencyAfterLock(
+        transaction,
+        namespace,
+        idempotencyKey,
+        fingerprint,
+      );
+      if (idempotency.replay) return { replay: idempotency.replay } as const;
+
+      await transaction.$queryRaw`
+        SELECT taven_lock_order_phase_envelope(${orderId}::uuid)::text
+      `;
+      const observedAt = await databaseNow(transaction);
+      const order = await transaction.order.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true,
+          publicReference: true,
+          status: true,
+          checkoutContactSnapshot: true,
+        },
+      });
+      if (!order) throw new NotFoundException("Order was not found");
+      if (order.status !== "QC_PASSED" && order.status !== "AWAITING_BALANCE") {
+        throw new ConflictException(
+          "Order is not awaiting its balance payment",
+        );
+      }
+      const contact = asRecord(order.checkoutContactSnapshot);
+      const email = requiredText(contact?.email, "checkout email", 320);
+      const fullName = requiredText(
+        contact?.fullName,
+        "checkout fullName",
+        200,
+      );
+
+      const open = await transaction.payment.findFirst({
+        where: {
+          orderId,
+          role: "BALANCE",
+          status: { in: ["CREATED", "PENDING", "CAPTURED"] },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+      if (open?.status === PaymentStatus.CAPTURED) {
+        return { replay: paymentDto(open) } as const;
+      }
+      if (open?.status === PaymentStatus.PENDING) {
+        if (open.checkoutMethod !== method || !open.providerCheckoutUrl) {
+          throw new ConflictException(
+            "Balance payment intent creation is incomplete",
+          );
+        }
+        return { replay: paymentDto(open) } as const;
+      }
+      if (
+        open &&
+        (open.checkoutMethod !== "ALL" ||
+          open.checkoutCommandId ||
+          open.merchantReference)
+      ) {
+        throw new ConflictException(
+          "Balance payment intent creation is incomplete",
+        );
+      }
+
+      const template =
+        open ??
+        (await transaction.payment.findFirst({
+          where: { orderId, role: "BALANCE" },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        }));
+      if (
+        !template ||
+        !template.balanceDueAt ||
+        template.balanceDueAt.getTime() <= observedAt.getTime() ||
+        template.provider !== capabilities.provider
+      ) {
+        throw new ConflictException("Balance payment is unavailable");
+      }
+
+      const record = await transaction.idempotencyRecord.create({
+        data: {
+          namespace,
+          idempotencyKey,
+          generation: idempotency.nextGeneration,
+          requestFingerprint: fingerprint,
+          expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
+        },
+      });
+      const retryPaymentId = randomUUID();
+      const payment = open
+        ? await transaction.payment.update({
+            where: { id: open.id },
+            data: {
+              checkoutMethod: method,
+              merchantReference: open.id,
+              checkoutCommandId: record.id,
+            },
+          })
+        : await transaction.payment.create({
+            data: {
+              id: retryPaymentId,
+              orderId,
+              priceSnapshotId: template.priceSnapshotId,
+              orderPriceBindingId: template.orderPriceBindingId,
+              paymentScheduleId: template.paymentScheduleId,
+              role: "BALANCE",
+              provider: template.provider,
+              checkoutMethod: method,
+              merchantReference: retryPaymentId,
+              checkoutCommandId: record.id,
+              requestedAmountMinor: template.requestedAmountMinor,
+              currency: template.currency,
+              balanceDueAt: template.balanceDueAt,
+              createdAt: observedAt,
+            },
+          });
+      return {
+        payment,
+        idempotencyRecordId: record.id,
+        orderReference: order.publicReference,
+        email,
+        fullName,
+      } as const;
+    });
+    if ("replay" in staged) return staged.replay;
+
+    let intent;
+    try {
+      intent = await this.provider.createIntent({
+        paymentId: staged.payment.id,
+        merchantReference: staged.payment.merchantReference!,
+        orderReference: staged.orderReference,
+        amountMinor: staged.payment.requestedAmountMinor,
+        currency: staged.payment.currency,
+        method,
+        email: staged.email,
+        fullName: staged.fullName,
+        observedAt: staged.payment.createdAt,
+        expiresAt: staged.payment.balanceDueAt!,
+        returnUrls: balanceReturnUrls(
+          siteUrl,
+          staged.orderReference,
+          staged.payment.id,
+        ),
+      });
+    } catch (error) {
+      if (
+        error instanceof PaymentIntentCreationError &&
+        error.providerIntentId
+      ) {
+        const closed = await this.closeReturnedBalanceIntent(
+          staged.payment.id,
+          staged.idempotencyRecordId,
+          error.providerIntentId,
+        );
+        if (closed) return closed;
+      } else if (
+        error instanceof PaymentIntentCreationError &&
+        error.outcome === "DEFINITIVE_FAILURE"
+      ) {
+        const failed = await this.recordIntentFailure(
+          staged.payment.id,
+          staged.idempotencyRecordId,
+          staged.idempotencyRecordId,
+        );
+        if (failed) return failed;
+      }
+      throw new BadGatewayException("Payment provider is unavailable");
+    }
+
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        await lockPaymentEnvelope(transaction, staged.payment.id);
+        let payment = await transaction.payment.findUniqueOrThrow({
+          where: { id: staged.payment.id },
+        });
+        if (payment.status === PaymentStatus.CREATED) {
+          payment = await transaction.payment.update({
+            where: { id: payment.id },
+            data: {
+              status: PaymentStatus.PENDING,
+              providerIntentId: intent.providerIntentId,
+              providerCheckoutUrl: intent.checkoutUrl,
+            },
+          });
+        } else if (
+          payment.status === PaymentStatus.PENDING &&
+          payment.providerIntentId === intent.providerIntentId &&
+          !payment.providerCheckoutUrl
+        ) {
+          payment = await transaction.payment.update({
+            where: { id: payment.id },
+            data: { providerCheckoutUrl: intent.checkoutUrl },
+          });
+        } else if (
+          payment.status !== PaymentStatus.CAPTURED ||
+          payment.providerIntentId !== intent.providerIntentId
+        ) {
+          throw new ConflictException(
+            "Balance payment closed during intent creation",
+          );
+        }
+        await transaction.order.updateMany({
+          where: { id: orderId, status: "QC_PASSED" },
+          data: { status: "AWAITING_BALANCE" },
+        });
+        const response = paymentDto(payment);
+        await completeIdempotency(
+          transaction,
+          staged.idempotencyRecordId,
+          response,
+        );
+        return response;
+      });
+    } catch (error) {
+      const finalized = await this.reconcileCommittedIntentFinalization(
+        staged.payment.id,
+        staged.idempotencyRecordId,
+        intent.providerIntentId,
+        intent.checkoutUrl,
+      );
+      if (finalized) return finalized;
+      const closed = await this.closeReturnedBalanceIntent(
+        staged.payment.id,
+        staged.idempotencyRecordId,
+        intent.providerIntentId,
+      );
+      if (closed) return closed;
+      throw error;
+    }
   }
 
   async createCheckoutPayment(
@@ -539,6 +794,38 @@ export class PaymentsService {
         "Payment provider event identity changed during verification",
       );
     }
+    const paymentRole = await this.prisma.payment.findFirst({
+      where: {
+        provider,
+        OR: [
+          { providerIntentId: event.providerTransactionId },
+          {
+            providerIntentId: null,
+            merchantReference: event.merchantReference,
+          },
+        ],
+      },
+      select: { role: true },
+    });
+    if (paymentRole?.role === "BALANCE") {
+      const kind =
+        event.status === "CAPTURED"
+          ? "PAYMENT_CAPTURED"
+          : event.status === "FAILED"
+            ? "PAYMENT_FAILED"
+            : "PAYMENT_PENDING";
+      const rows = await this.prisma.$queryRaw<Array<{ outcome: string }>>`
+        SELECT taven_apply_balance_payment_event(
+          ${event.provider}, ${event.providerEventId},
+          ${event.providerTransactionId},
+          ${kind}::payment_provider_event_kind,
+          ${event.amountMinor}, ${event.currency}::char(3),
+          ${event.occurredAt}, ${jsonInput(event.evidence)}::jsonb,
+          ${event.merchantReference}
+        ) AS outcome
+      `;
+      return { outcome: rows[0]?.outcome ?? "IGNORED" };
+    }
     const captureContextCurrent =
       event.status === "CAPTURED"
         ? await this.isCaptureContextCurrent(event)
@@ -974,6 +1261,61 @@ export class PaymentsService {
     }
   }
 
+  private async closeReturnedBalanceIntent(
+    paymentId: string,
+    idempotencyRecordId: string,
+    providerIntentId: string,
+  ): Promise<CheckoutPaymentDto | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      await lockPaymentEnvelope(transaction, paymentId);
+      const payment = await transaction.payment.findUniqueOrThrow({
+        where: { id: paymentId },
+      });
+      if (payment.status !== PaymentStatus.CREATED) return null;
+      const failedAt = await databaseNow(transaction);
+      const failure = await transaction.paymentIntentCreationFailure.create({
+        data: {
+          paymentId,
+          provider: payment.provider,
+          attemptKey: `balance-returned-intent:${createHash("sha256")
+            .update(idempotencyRecordId, "utf8")
+            .digest("hex")}`,
+          failedAt,
+        },
+      });
+      const failed = await transaction.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: PaymentStatus.FAILED,
+          captureAuthorized: false,
+          captureCutoffAt: failedAt,
+          intentCreationFailureResultId: failure.id,
+        },
+      });
+      await transaction.outboxMessage.createMany({
+        data: [
+          {
+            deduplicationKey: `void_payment:v1:${paymentId}`,
+            aggregateType: "Payment",
+            aggregateId: paymentId,
+            messageType: "void_payment",
+            schemaVersion: 1,
+            payload: jsonInput({
+              paymentId,
+              provider: payment.provider,
+              providerIntentId,
+              action: "void_payment",
+            }),
+          },
+        ],
+        skipDuplicates: true,
+      });
+      const response = paymentDto(failed);
+      await completeIdempotency(transaction, idempotencyRecordId, response);
+      return response;
+    });
+  }
+
   private async reconcileCommittedIntentFinalization(
     paymentId: string,
     idempotencyRecordId: string,
@@ -1313,6 +1655,7 @@ function paymentDto(payment: {
   currency: string;
   providerCheckoutUrl: string | null;
   checkoutCaptureExpiresAt: Date | null;
+  balanceDueAt?: Date | null;
 }): CheckoutPaymentDto {
   if (
     payment.checkoutMethod !== "CARD" &&
@@ -1320,9 +1663,9 @@ function paymentDto(payment: {
   ) {
     throw new ConflictException("Payment method is unavailable");
   }
-  if (!payment.checkoutCaptureExpiresAt) {
+  const expiresAt = payment.checkoutCaptureExpiresAt ?? payment.balanceDueAt;
+  if (!expiresAt)
     throw new ConflictException("Checkout payment has no capture deadline");
-  }
   const amountMinor = Number(payment.requestedAmountMinor);
   if (!Number.isSafeInteger(amountMinor) || amountMinor < 1) {
     throw new ConflictException("Checkout amount is outside the API range");
@@ -1335,8 +1678,42 @@ function paymentDto(payment: {
     amountMinor,
     currency: payment.currency,
     checkoutUrl: payment.providerCheckoutUrl,
-    expiresAt: payment.checkoutCaptureExpiresAt.toISOString(),
+    expiresAt: expiresAt.toISOString(),
   };
+}
+
+async function balanceIdempotencyAfterLock(
+  transaction: Transaction,
+  namespace: string,
+  idempotencyKey: string,
+  fingerprint: string,
+): Promise<{
+  replay: CheckoutPaymentDto | null;
+  nextGeneration: number;
+}> {
+  const observedAt = await databaseNow(transaction);
+  const existing = await transaction.idempotencyRecord.findFirst({
+    where: { namespace, idempotencyKey },
+    orderBy: { generation: "desc" },
+  });
+  if (!existing || existing.expiresAt.getTime() <= observedAt.getTime()) {
+    return { replay: null, nextGeneration: (existing?.generation ?? 0) + 1 };
+  }
+  if (existing.requestFingerprint !== fingerprint) {
+    throw new ConflictException(
+      "Idempotency key was used with different input",
+    );
+  }
+  if (
+    existing.status === IdempotencyStatus.COMPLETED &&
+    existing.responseBody
+  ) {
+    return {
+      replay: existing.responseBody as unknown as CheckoutPaymentDto,
+      nextGeneration: existing.generation,
+    };
+  }
+  throw new ConflictException("Balance payment intent creation is incomplete");
 }
 
 async function checkoutIdempotencyAfterLock(
@@ -1578,6 +1955,18 @@ async function lockIdempotencyKey(
   `;
 }
 
+async function lockNamedIdempotencyKey(
+  transaction: Transaction,
+  namespace: string,
+  idempotencyKey: string,
+) {
+  await transaction.$queryRaw`
+    SELECT pg_advisory_xact_lock(
+      hashtextextended(${`${namespace}:${idempotencyKey}`}, 0)
+    )::text
+  `;
+}
+
 async function lockPaymentEnvelope(
   transaction: Transaction,
   paymentId: string,
@@ -1600,6 +1989,17 @@ async function databaseNow(
 
 function checkoutNamespace(sessionId: string) {
   return `checkout-payment:${sessionId}`;
+}
+
+function balanceNamespace(orderId: string) {
+  return `balance-payment:${orderId}`;
+}
+
+function paymentMethod(value: unknown): CheckoutPaymentMethod {
+  if (value !== "CARD" && value !== "BANK_TRANSFER") {
+    throw new BadRequestException("method is invalid");
+  }
+  return value;
 }
 
 function addDays(value: Date, days: number) {
@@ -1682,6 +2082,24 @@ function checkoutReturnUrls(
   const target = (result: "success" | "cancelled" | "pending") => {
     const url = new URL(`/checkout/payment/${result}`, `${siteUrl}/`);
     url.searchParams.set("sessionId", sessionId);
+    url.searchParams.set("paymentId", paymentId);
+    return url.toString();
+  };
+  return {
+    success: target("success"),
+    cancelled: target("cancelled"),
+    pending: target("pending"),
+  } as const;
+}
+
+function balanceReturnUrls(
+  siteUrl: string,
+  orderReference: string,
+  paymentId: string,
+) {
+  const target = (result: "success" | "cancelled" | "pending") => {
+    const url = new URL(`/order/payment/${result}`, `${siteUrl}/`);
+    url.searchParams.set("order", orderReference);
     url.searchParams.set("paymentId", paymentId);
     return url.toString();
   };

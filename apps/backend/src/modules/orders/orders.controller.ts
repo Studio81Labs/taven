@@ -21,6 +21,7 @@ import {
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
 import {
+  ApproveLegacyClaimWindowDto,
   CancelOrderDto,
   CreateClaimReprintDto,
   CreateClaimDto,
@@ -82,6 +83,23 @@ export class OrdersController {
   @ApiNotFoundResponse({ description: "Order was not found" })
   get(@Param("orderId") orderId: string): Promise<FulfilmentProjectionDto> {
     return this.orders.getFulfilment(orderId);
+  }
+
+  @Post("claim-window-migration")
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Approve the exact Claim window for a legacy accepted Order",
+  })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ApproveLegacyClaimWindowDto })
+  @ApiOkResponse({ type: FulfilmentCommandResultDto })
+  approveLegacyClaimWindow(
+    @Param("orderId") orderId: string,
+    @Body() body: ApproveLegacyClaimWindowDto,
+    @Headers("idempotency-key") key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    return this.orders.approveLegacyClaimWindow(orderId, body, key);
   }
 
   @Post("jobs/:jobId/accept")

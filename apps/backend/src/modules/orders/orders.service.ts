@@ -22,9 +22,10 @@ import {
   ShipmentProviderEventKind,
   ShipmentStatus,
 } from "@prisma/client";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
+  ApproveLegacyClaimWindowDto,
   CancelOrderDto,
   CreateClaimReprintDto,
   CreateClaimDto,
@@ -114,6 +115,76 @@ export class OrdersService {
       claims: order.claims,
       priceAdjustments: order.priceAdjustments,
     }) as FulfilmentProjectionDto;
+  }
+
+  approveLegacyClaimWindow(
+    orderId: string,
+    body: ApproveLegacyClaimWindowDto,
+    key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    const claimPolicyRevision = requiredText(
+      body.claimPolicyRevision,
+      "claimPolicyRevision",
+      100,
+    );
+    const approvalReference = requiredText(
+      body.approvalReference,
+      "approvalReference",
+      500,
+    );
+    const claimWindowDays = body.claimWindowDays;
+    if (
+      !Number.isSafeInteger(claimWindowDays) ||
+      claimWindowDays < 1 ||
+      claimWindowDays > 3650
+    ) {
+      throw new BadRequestException("claimWindowDays is invalid");
+    }
+    return this.command(
+      orderId,
+      "claim-window-migration:approve",
+      key,
+      { claimPolicyRevision, claimWindowDays, approvalReference },
+      async (tx) => {
+        await this.lockOrder(tx, orderId);
+        const order = await tx.order.findUnique({
+          where: { id: orderId },
+          select: {
+            acceptedClaimPolicyRevision: true,
+            acceptedClaimWindowDays: true,
+          },
+        });
+        if (!order) throw new NotFoundException("Order was not found");
+        if (
+          order.acceptedClaimWindowDays !== null ||
+          order.acceptedClaimPolicyRevision !== claimPolicyRevision
+        ) {
+          throw new ConflictException(
+            "Legacy Claim policy evidence does not match the Order",
+          );
+        }
+        const approvedAt = await databaseNow(tx);
+        await tx.claimWindowMigrationApproval.create({
+          data: {
+            orderId,
+            claimPolicyRevision,
+            claimWindowDays,
+            approvalReference,
+            approvedAt,
+          },
+        });
+        await tx.order.update({
+          where: { id: orderId },
+          data: { acceptedClaimWindowDays: claimWindowDays },
+        });
+        return result(orderId, "CLAIM_WINDOW_MIGRATION_APPROVED", {
+          claimPolicyRevision,
+          claimWindowDays,
+          approvalReference,
+          approvedAt,
+        });
+      },
+    );
   }
 
   acceptJob(
@@ -1003,10 +1074,7 @@ export class OrdersService {
           ) AS ready
         `;
         if (readiness[0]?.ready) {
-          await tx.order.updateMany({
-            where: { id: orderId, status: OrderStatus.QC_PASSED },
-            data: { status: OrderStatus.READY_TO_SHIP, updatedAt: packedAt },
-          });
+          await this.markReadyToShipWhenFinanciallyReady(tx, orderId, packedAt);
         }
         return result(orderId, "JOB_PACKED", {
           jobId,
@@ -1138,13 +1206,11 @@ export class OrdersService {
           ) AS ready
         `;
         if (readiness[0]?.ready) {
-          await tx.order.updateMany({
-            where: { id: orderId, status: OrderStatus.QC_PASSED },
-            data: {
-              status: OrderStatus.READY_TO_SHIP,
-              updatedAt: labelCreatedAt,
-            },
-          });
+          await this.markReadyToShipWhenFinanciallyReady(
+            tx,
+            orderId,
+            labelCreatedAt,
+          );
         }
         return result(orderId, "SHIPMENT_LABELLED", {
           shipmentId,
@@ -3464,21 +3530,19 @@ export class OrdersService {
             "Price adjustment exceeds the selected Payment refundable balance",
           );
         }
-        const adjustment = await tx.priceAdjustment.create({
-          data: {
+        const adjustment = await createPriceAdjustmentWithRevision(tx, {
+          orderId,
+          paymentId: body.paymentId ?? null,
+          claimId: body.claimId ?? null,
+          idempotencyKey: persistenceKey(
+            "fulfilment-adjustment",
             orderId,
-            paymentId: body.paymentId ?? null,
-            claimId: body.claimId ?? null,
-            idempotencyKey: persistenceKey(
-              "fulfilment-adjustment",
-              orderId,
-              key!,
-            ),
-            reason,
-            amountMinor,
-            currency,
-            allocation: allocation as Prisma.InputJsonObject,
-          },
+            key!,
+          ),
+          reason,
+          amountMinor,
+          currency,
+          allocation: allocation as Prisma.InputJsonObject,
         });
         return result(orderId, "PRICE_ADJUSTMENT_CREATED", {
           priceAdjustmentId: adjustment.id,
@@ -3519,10 +3583,9 @@ export class OrdersService {
             "Price adjustment already has persisted refund work",
           );
         }
-        const payments = await tx.payment.findMany({
+        const allPayments = await tx.payment.findMany({
           where: {
             orderId,
-            ...(adjustment.paymentId ? { id: adjustment.paymentId } : {}),
             currency: adjustment.currency,
             capturedAmountMinor: { not: null },
           },
@@ -3532,45 +3595,63 @@ export class OrdersService {
                 status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
               },
             },
-            priceAdjustments: {
-              where: { id: { not: adjustment.id } },
-              include: {
-                refunds: {
-                  where: {
-                    status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
-                  },
-                },
-              },
-            },
           },
           orderBy: [{ capturedAt: "asc" }, { id: "asc" }],
         });
-        const available = payments.reduce(
+        const activeContractRows = await tx.$queryRaw<
+          Array<{ contract_total_minor: bigint }>
+        >`
+          SELECT revision.contract_total_minor
+          FROM order_active_contract_prices active
+          JOIN order_contract_price_revisions revision
+            ON revision.id = active.contract_price_revision_id
+           AND revision.order_id = active.order_id
+          WHERE active.order_id = ${orderId}::uuid
+        `;
+        const activeContractTotal = activeContractRows[0]?.contract_total_minor;
+        if (activeContractTotal === undefined) {
+          throw new ConflictException("Active contract price is unavailable");
+        }
+        const netCaptured = allPayments.reduce(
           (total, payment) =>
             total +
             payment.capturedAmountMinor! -
             payment.refunds.reduce(
               (allocated, refund) => allocated + refund.amountMinor,
               0n,
-            ) -
-            payment.priceAdjustments.reduce((reserved, otherAdjustment) => {
-              const committed = otherAdjustment.refunds.reduce(
-                (allocated, refund) => allocated + refund.amountMinor,
-                0n,
-              );
-              const outstanding = otherAdjustment.amountMinor - committed;
-              return reserved + (outstanding > 0n ? outstanding : 0n);
-            }, 0n),
+            ),
           0n,
         );
-        if (available < adjustment.amountMinor) {
+        const refundableBalance =
+          netCaptured > activeContractTotal
+            ? netCaptured - activeContractTotal
+            : 0n;
+        const refundTarget =
+          refundableBalance < adjustment.amountMinor
+            ? refundableBalance
+            : adjustment.amountMinor;
+        const payments = allPayments.filter(
+          (payment) =>
+            !adjustment.paymentId || payment.id === adjustment.paymentId,
+        );
+        const selectedAvailable = payments.reduce(
+          (total, payment) =>
+            total +
+            payment.capturedAmountMinor! -
+            payment.refunds.reduce(
+              (allocated, refund) => allocated + refund.amountMinor,
+              0n,
+            ),
+          0n,
+        );
+        if (selectedAvailable < refundTarget) {
           throw new ConflictException(
-            "Price adjustment exceeds the refundable balance",
+            "Selected Payment cannot fund the active contract refund",
           );
         }
         const refundReason = adjustmentRefundReason(adjustment.reason);
         const requestedAt = await databaseNow(tx);
-        let remaining = adjustment.amountMinor;
+        let remaining = refundTarget;
         const refundIds: string[] = [];
         for (const payment of payments) {
           if (remaining === 0n) break;
@@ -3578,19 +3659,8 @@ export class OrdersService {
             (total, refund) => total + refund.amountMinor,
             0n,
           );
-          const reserved = payment.priceAdjustments.reduce(
-            (total, otherAdjustment) => {
-              const committed = otherAdjustment.refunds.reduce(
-                (allocated, refund) => allocated + refund.amountMinor,
-                0n,
-              );
-              const outstanding = otherAdjustment.amountMinor - committed;
-              return total + (outstanding > 0n ? outstanding : 0n);
-            },
-            0n,
-          );
           const paymentAvailable =
-            payment.capturedAmountMinor! - alreadyAllocated - reserved;
+            payment.capturedAmountMinor! - alreadyAllocated;
           if (paymentAvailable <= 0n) continue;
           const amountMinor =
             paymentAvailable < remaining ? paymentAvailable : remaining;
@@ -3617,12 +3687,19 @@ export class OrdersService {
             data: { status: "REFUND_PENDING", updatedAt: requestedAt },
           });
         }
-        return result(orderId, "PRICE_ADJUSTMENT_REFUND_PENDING", {
-          priceAdjustmentId: adjustment.id,
-          refundIds,
-          amountMinor: adjustment.amountMinor,
-          currency: adjustment.currency,
-        });
+        return result(
+          orderId,
+          refundIds.length > 0
+            ? "PRICE_ADJUSTMENT_REFUND_PENDING"
+            : "PRICE_ADJUSTMENT_ACTIVATED",
+          {
+            priceAdjustmentId: adjustment.id,
+            refundIds,
+            amountMinor: adjustment.amountMinor,
+            refundAmountMinor: refundTarget,
+            currency: adjustment.currency,
+          },
+        );
       },
     );
   }
@@ -3867,26 +3944,24 @@ export class OrdersService {
           throw new ConflictException("Claim exceeds the refundable balance");
         }
         const at = await databaseNow(tx);
-        const adjustment = await tx.priceAdjustment.create({
-          data: {
+        const adjustment = await createPriceAdjustmentWithRevision(tx, {
+          orderId,
+          claimId,
+          idempotencyKey: persistenceKey(
+            "claim-refund-adjustment",
             orderId,
             claimId,
-            idempotencyKey: persistenceKey(
-              "claim-refund-adjustment",
-              orderId,
-              claimId,
-              key!,
-            ),
-            reason: adjustmentReason,
-            amountMinor,
-            currency,
-            allocation: {
-              claimId,
-              slotCredits: claimSlotCredits.map((credit) => ({
-                fulfilmentSlotId: credit.fulfilmentSlotId,
-                amountMinor: credit.amountMinor.toString(),
-              })),
-            },
+            key!,
+          ),
+          reason: adjustmentReason,
+          amountMinor,
+          currency,
+          allocation: {
+            claimId,
+            slotCredits: claimSlotCredits.map((credit) => ({
+              fulfilmentSlotId: credit.fulfilmentSlotId,
+              amountMinor: credit.amountMinor.toString(),
+            })),
           },
         });
         let remaining = amountMinor;
@@ -4092,6 +4167,24 @@ export class OrdersService {
         printingConsumptions,
       );
       return result(orderId, "ORDER_CANCELLED", { refundIds, reason });
+    });
+  }
+
+  private async markReadyToShipWhenFinanciallyReady(
+    tx: Transaction,
+    orderId: string,
+    readyAt: Date,
+  ): Promise<void> {
+    const capturedBalance = await tx.payment.count({
+      where: { orderId, role: "BALANCE", status: "CAPTURED" },
+    });
+    const sourceStatuses: OrderStatus[] = [OrderStatus.QC_PASSED];
+    if (capturedBalance > 0) {
+      sourceStatuses.push(OrderStatus.AWAITING_BALANCE);
+    }
+    await tx.order.updateMany({
+      where: { id: orderId, status: { in: sourceStatuses } },
+      data: { status: OrderStatus.READY_TO_SHIP, updatedAt: readyAt },
     });
   }
 
@@ -4978,26 +5071,24 @@ export class OrdersService {
         "Production failure refund exceeds the refundable balance",
       );
     }
-    const adjustment = await tx.priceAdjustment.create({
-      data: {
+    const adjustment = await createPriceAdjustmentWithRevision(tx, {
+      orderId,
+      idempotencyKey: persistenceKey(
+        "production-failure-adjustment",
         orderId,
-        idempotencyKey: persistenceKey(
-          "production-failure-adjustment",
-          orderId,
-          replacementRequestId,
-          key,
-        ),
-        reason: PriceAdjustmentReason.PRODUCTION_FAILURE,
-        amountMinor,
-        currency,
-        allocation: {
-          shipmentPlanId,
-          replacementRequestId,
-          slotCredits: slotCredits.map((credit) => ({
-            fulfilmentSlotId: credit.fulfilmentSlotId,
-            amountMinor: credit.amountMinor.toString(),
-          })),
-        },
+        replacementRequestId,
+        key,
+      ),
+      reason: PriceAdjustmentReason.PRODUCTION_FAILURE,
+      amountMinor,
+      currency,
+      allocation: {
+        shipmentPlanId,
+        replacementRequestId,
+        slotCredits: slotCredits.map((credit) => ({
+          fulfilmentSlotId: credit.fulfilmentSlotId,
+          amountMinor: credit.amountMinor.toString(),
+        })),
       },
     });
     await tx.fulfilmentSlot.updateMany({
@@ -5205,25 +5296,23 @@ export class OrdersService {
     let adjustmentId: string | undefined;
     if (amountMinor > 0n) {
       adjustmentId = (
-        await tx.priceAdjustment.create({
-          data: {
+        await createPriceAdjustmentWithRevision(tx, {
+          orderId,
+          idempotencyKey: persistenceKey(
+            "partial-cancellation-adjustment",
             orderId,
-            idempotencyKey: persistenceKey(
-              "partial-cancellation-adjustment",
-              orderId,
-              shipmentPlanId,
-              key,
-            ),
-            reason: PriceAdjustmentReason.CUSTOMER_CANCELLATION,
-            amountMinor,
-            currency,
-            allocation: {
-              shipmentPlanId,
-              slotCredits: slotCredits.map((credit) => ({
-                fulfilmentSlotId: credit.fulfilmentSlotId,
-                amountMinor: credit.amountMinor.toString(),
-              })),
-            },
+            shipmentPlanId,
+            key,
+          ),
+          reason: PriceAdjustmentReason.CUSTOMER_CANCELLATION,
+          amountMinor,
+          currency,
+          allocation: {
+            shipmentPlanId,
+            slotCredits: slotCredits.map((credit) => ({
+              fulfilmentSlotId: credit.fulfilmentSlotId,
+              amountMinor: credit.amountMinor.toString(),
+            })),
           },
         })
       ).id;
@@ -5800,6 +5889,44 @@ type PriceAdjustmentSlotCredit = {
   fulfilmentSlotId: string;
   amountMinor: bigint;
 };
+
+async function createPriceAdjustmentWithRevision(
+  transaction: Transaction,
+  input: {
+    orderId: string;
+    paymentId?: string | null;
+    claimId?: string | null;
+    idempotencyKey: string;
+    reason: PriceAdjustmentReason;
+    amountMinor: bigint;
+    currency: string;
+    allocation: Prisma.InputJsonObject;
+  },
+): Promise<{ id: string; contractPriceRevisionId: string }> {
+  const id = randomUUID();
+  const rows = await transaction.$queryRaw<
+    Array<{
+      price_adjustment_id: string;
+      contract_price_revision_id: string;
+    }>
+  >`
+    SELECT price_adjustment_id, contract_price_revision_id
+    FROM taven_create_price_adjustment_with_revision(
+      ${id}::uuid, ${input.orderId}::uuid, ${input.paymentId ?? null}::uuid,
+      ${input.claimId ?? null}::uuid, ${input.idempotencyKey},
+      ${input.reason}::price_adjustment_reason, ${input.amountMinor},
+      ${input.currency}::char(3), ${JSON.stringify(input.allocation)}::jsonb
+    )
+  `;
+  const created = rows[0];
+  if (!created || created.price_adjustment_id !== id) {
+    throw new ConflictException("Price adjustment activation failed");
+  }
+  return {
+    id,
+    contractPriceRevisionId: created.contract_price_revision_id,
+  };
+}
 
 function priceAdjustmentSlotCredits(
   allocation: unknown,

@@ -44,6 +44,31 @@
         ],
         "type": "object"
       },
+      "ApproveLegacyClaimWindowDto": {
+        "properties": {
+          "approvalReference": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "claimPolicyRevision": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "claimWindowDays": {
+            "maximum": 3650,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "claimPolicyRevision",
+          "claimWindowDays",
+          "approvalReference"
+        ],
+        "type": "object"
+      },
       "AttachAutomaticQuoteModelFileDto": {
         "properties": {
           "modelFileId": {
@@ -1132,6 +1157,21 @@
             "type": "object"
           }
         },
+        "type": "object"
+      },
+      "CreateBalancePaymentDto": {
+        "properties": {
+          "method": {
+            "enum": [
+              "CARD",
+              "BANK_TRANSFER"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "method"
+        ],
         "type": "object"
       },
       "CreateCheckoutPaymentDto": {
@@ -2914,6 +2954,70 @@
   },
   "openapi": "3.0.0",
   "paths": {
+    "/admin/orders/{orderId}/balance-payment": {
+      "post": {
+        "operationId": "PaymentsController_createBalance",
+        "parameters": [
+          {
+            "description": "Stable client command identity (8-255 characters)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBalancePaymentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutPaymentDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Balance topology or command changed"
+          },
+          "503": {
+            "description": "The configured payment provider is unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create the post-QC balance payment intent",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
     "/admin/orders/{orderId}/fulfilment": {
       "get": {
         "operationId": "OrdersController_get",
@@ -3122,6 +3226,64 @@
           }
         ],
         "summary": "Cancel an order before physical handoff and request refunds",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claim-window-migration": {
+      "post": {
+        "operationId": "OrdersController_approveLegacyClaimWindow",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveLegacyClaimWindowDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Approve the exact Claim window for a legacy accepted Order",
         "tags": [
           "operator fulfilment"
         ]

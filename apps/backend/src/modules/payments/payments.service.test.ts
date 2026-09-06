@@ -191,6 +191,7 @@ describe("provider event verification time", () => {
             }),
         ),
         $queryRaw: queryRaw,
+        payment: { findFirst: async () => ({ role: "FULL" }) },
       } as never,
       {
         providerName: () => "comgate",

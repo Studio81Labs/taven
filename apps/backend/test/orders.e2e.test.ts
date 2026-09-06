@@ -3,6 +3,11 @@ import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { OrdersService } from "../src/modules/orders/orders.service";
+import type { DeliveryCapabilityPort } from "../src/modules/automatic-quotes/delivery-capability.port";
+import type { PaymentProviderPort } from "../src/modules/payments/payment-provider.port";
+import { PaymentsService } from "../src/modules/payments/payments.service";
+import type { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
+import type { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import {
   PersistenceFactory,
@@ -16,6 +21,10 @@ const testScope = `orders-${randomUUID()}`;
 let pool: Pool;
 let prisma: PrismaService;
 let orders: OrdersService;
+let payments: PaymentsService;
+let createdBalanceIntent:
+  | { paymentId: string; amountMinor: bigint; merchantReference: string }
+  | undefined;
 
 type FulfilmentFixture = {
   foundation: PersistenceFoundation;
@@ -574,6 +583,61 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     prisma = new PrismaService();
     await prisma.onModuleInit();
     orders = new OrdersService(prisma);
+    const provider: PaymentProviderPort = {
+      providerName: () => "test",
+      capabilities: async () => ({
+        provider: "test",
+        methods: ["CARD", "BANK_TRANSFER"],
+      }),
+      refundRetrySafety: () => "IDEMPOTENT",
+      createIntent: async (input) => {
+        createdBalanceIntent = {
+          paymentId: input.paymentId,
+          amountMinor: input.amountMinor,
+          merchantReference: input.merchantReference,
+        };
+        return {
+          providerIntentId: `balance-intent-${input.paymentId}`,
+          checkoutUrl: `https://payments.example.test/${input.paymentId}`,
+        };
+      },
+      locateEvent: ({ body }) => {
+        const event = body as {
+          merchantReference: string;
+          providerTransactionId: string;
+        };
+        return event;
+      },
+      verifyEvent: async ({ body }) => {
+        const event = body as {
+          providerEventId: string;
+          providerTransactionId: string;
+          merchantReference: string;
+          status: "PENDING" | "CAPTURED" | "FAILED";
+          amountMinor: bigint;
+          currency: string;
+        };
+        return {
+          provider: "test",
+          ...event,
+          occurredAt: new Date(),
+          evidence: { source: "orders-e2e" },
+        };
+      },
+      cancelIntent: async () => undefined,
+      refund: async () => ({
+        providerRefundId: "unused",
+        occurredAt: new Date(),
+        evidence: {},
+      }),
+    };
+    payments = new PaymentsService(
+      prisma,
+      provider,
+      null as unknown as DeliveryCapabilityPort,
+      null as unknown as EligibilityPlanService,
+      null as unknown as ResourceReservationService,
+    );
   });
 
   afterAll(async () => {
@@ -607,6 +671,178 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         },
       }),
     ).resolves.toBe(1);
+  });
+
+  it("records explicit legal evidence before repairing a legacy Claim window", async () => {
+    const fixture = await preparePaidOrder("legacy-claim-window");
+    const { orderId } = fixture.foundation;
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN", "legacy-claim-delivery");
+    const client = await pool.connect();
+    try {
+      await client.query("SET session_replication_role = 'replica'");
+      await client.query(
+        `UPDATE orders SET accepted_claim_window_days = NULL WHERE id = $1`,
+        [orderId],
+      );
+    } finally {
+      await client
+        .query("SET session_replication_role = 'origin'")
+        .catch(() => undefined);
+      client.release();
+    }
+
+    const approved = await orders.approveLegacyClaimWindow(
+      orderId,
+      {
+        claimPolicyRevision: "claim-policy-v1",
+        claimWindowDays: 30,
+        approvalReference: "owner-approved migration record LEGAL-22",
+      },
+      "legacy-claim-window-approval",
+    );
+    expect(approved.status).toBe("CLAIM_WINDOW_MIGRATION_APPROVED");
+    await expect(
+      prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
+    ).resolves.toMatchObject({ acceptedClaimWindowDays: 30 });
+    await expect(
+      prisma.claimWindowMigrationApproval.findUniqueOrThrow({
+        where: { orderId },
+      }),
+    ).resolves.toMatchObject({
+      claimPolicyRevision: "claim-policy-v1",
+      claimWindowDays: 30,
+      approvalReference: "owner-approved migration record LEGAL-22",
+    });
+  });
+
+  it("launches and captures the post-QC balance before packing", async () => {
+    const fixture = await preparePaidOrder(
+      "post-qc-balance-payment",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    createdBalanceIntent = undefined;
+    await advanceThroughQc(fixture, 0);
+    const pending = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "post-qc-balance-payment-link",
+    );
+    expect(pending).toMatchObject({
+      provider: "test",
+      method: "CARD",
+      status: "PENDING",
+      checkoutUrl: expect.stringContaining("payments.example.test"),
+    });
+    expect(createdBalanceIntent).toMatchObject({
+      paymentId: pending.paymentId,
+      amountMinor: BigInt(pending.amountMinor),
+      merchantReference: pending.paymentId,
+    });
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "AWAITING_BALANCE" });
+
+    const captured = await payments.consumeProviderEvent(
+      "test",
+      {},
+      {
+        providerEventId: `balance-captured-${pending.paymentId}`,
+        providerTransactionId: `balance-intent-${pending.paymentId}`,
+        merchantReference: pending.paymentId,
+        status: "CAPTURED",
+        amountMinor: BigInt(pending.amountMinor),
+        currency: pending.currency,
+      },
+    );
+    expect(captured).toEqual({ outcome: "CAPTURED" });
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "AWAITING_BALANCE" });
+    await labelAndPack(fixture, 0);
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "READY_TO_SHIP" });
+  });
+
+  it("keeps a packed split-payment order waiting until balance capture", async () => {
+    const fixture = await preparePaidOrder(
+      "post-qc-balance-after-packing",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    const pending = await payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "BANK_TRANSFER" },
+      "post-qc-balance-after-packing-link",
+    );
+    await labelAndPack(fixture, 0);
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "AWAITING_BALANCE" });
+
+    await payments.consumeProviderEvent(
+      "test",
+      {},
+      {
+        providerEventId: `balance-after-packing-${pending.paymentId}`,
+        providerTransactionId: `balance-intent-${pending.paymentId}`,
+        merchantReference: pending.paymentId,
+        status: "CAPTURED",
+        amountMinor: BigInt(pending.amountMinor),
+        currency: pending.currency,
+      },
+    );
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "READY_TO_SHIP" });
+  });
+
+  it("derives the post-QC balance from the reduced active contract", async () => {
+    const fixture = await preparePaidOrder(
+      "reduced-post-qc-balance",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "PRODUCTION_FAILURE",
+        amountMinor: "1",
+        allocation: {
+          reason: "one-unit contractual credit",
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: "1",
+            },
+          ],
+        },
+      },
+      "reduced-post-qc-balance-adjustment",
+    );
+    await advanceThroughQc(fixture, 0);
+    const balance = await prisma.payment.findFirstOrThrow({
+      where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+      include: { paymentSchedule: true },
+    });
+    expect(balance.requestedAmountMinor).toBe(
+      balance.paymentSchedule.grossAmountMinor - 1n,
+    );
   });
 
   it("creates a replacement only after acquiring a fresh reservation", async () => {
@@ -3531,6 +3767,20 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       },
       "express-adjustment-key",
     );
+    const activeContract =
+      await prisma.orderActiveContractPrice.findUniqueOrThrow({
+        where: { orderId: fixture.foundation.orderId },
+        include: { contractPriceRevision: true },
+      });
+    const acceptedPrice = await prisma.priceSnapshot.findUniqueOrThrow({
+      where: { id: fixture.foundation.priceSnapshotId },
+    });
+    expect(activeContract.contractPriceRevision).toMatchObject({
+      priceAdjustmentId: adjustment.result.priceAdjustmentId,
+      contractTotalMinor: acceptedPrice.contractTotalMinor - 1n,
+      netAmountMinor: acceptedPrice.netAmountMinor - 1n,
+      vatAmountMinor: 0n,
+    });
     await expect(handoff(fixture, 0)).rejects.toThrow(
       "Shipment packing or financial handoff barriers are not satisfied",
     );

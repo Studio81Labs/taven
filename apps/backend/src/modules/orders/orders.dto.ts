@@ -214,6 +214,17 @@ export class CreateClaimDto {
   incidentShipmentId?: string;
 }
 
+export class ApproveLegacyClaimWindowDto {
+  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
+  claimPolicyRevision!: string;
+
+  @ApiProperty({ type: Number, minimum: 1, maximum: 3650 })
+  claimWindowDays!: number;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 500 })
+  approvalReference!: string;
+}
+
 export class RejectClaimDto {
   @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
   reason!: string;
