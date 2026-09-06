@@ -257,7 +257,7 @@ async function readPassword(prompt: string): Promise<string> {
         reject(new Error("Password entry cancelled"));
       } else if (text === "\u007f") {
         value = value.slice(0, -1);
-      } else if (!/[\x00-\x1f]/.test(text)) {
+      } else if (!containsControlCharacter(text)) {
         value += text;
       }
     };
@@ -268,6 +268,10 @@ async function readPassword(prompt: string): Promise<string> {
     };
     input.on("data", onData);
   });
+}
+
+function containsControlCharacter(value: string): boolean {
+  return [...value].some((character) => character.codePointAt(0)! < 32);
 }
 
 void main()
