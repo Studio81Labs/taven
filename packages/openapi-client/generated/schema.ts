@@ -106,6 +106,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/rejection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a clean post-delivery quality Claim */
+        post: operations["OrdersController_rejectClaim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint": {
         parameters: {
             query?: never;
@@ -1357,6 +1374,8 @@ export interface components {
         };
         JobFailureDto: {
             actualMaterialMilligrams?: string;
+            /** @description Exact material consumption for every other actively printing Job in the failed parcel */
+            printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
             reason: string;
             /** @enum {string} */
             recovery: "REPLACE" | "REFUND";
@@ -1587,6 +1606,9 @@ export interface components {
             requestId: string;
             /** @enum {string} */
             status: "IN_REVIEW" | "REJECTED" | "EXPIRED";
+        };
+        RejectClaimDto: {
+            reason: string;
         };
         RejectOfferDto: {
             reason?: string;
@@ -1825,6 +1847,42 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["FulfilmentCommandResultDto"];
                 };
+            };
+        };
+    };
+    OrdersController_rejectClaim: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectClaimDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                };
+            };
+            /** @description Claim has incident, remedy, or financial recovery history */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

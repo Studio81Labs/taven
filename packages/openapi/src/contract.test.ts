@@ -113,7 +113,7 @@ describe("OpenAPI artifact", () => {
       ),
     );
 
-    expect(idempotencyHeaders).toHaveLength(37);
+    expect(idempotencyHeaders).toHaveLength(38);
     expect(idempotencyHeaders).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

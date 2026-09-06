@@ -38,6 +38,7 @@ import {
   JobPrintedDto,
   JobQcSubmissionDto,
   PackJobDto,
+  RejectClaimDto,
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
@@ -90,7 +91,7 @@ export class OrdersService {
           include: {
             resolutions: true,
             refunds: true,
-            reshipmentAuthorization: true,
+            reshipmentAuthorizations: true,
           },
           orderBy: { createdAt: "asc" },
         },
@@ -392,6 +393,14 @@ export class OrdersService {
           true,
         )
       : undefined;
+    const printingConsumptions = cancellationPrintingConsumptions(
+      body.printingConsumptions,
+    );
+    if (body.recovery !== "REFUND" && printingConsumptions.size > 0) {
+      throw new BadRequestException(
+        "printingConsumptions is only valid for parcel refund recovery",
+      );
+    }
     return this.command(
       orderId,
       `job:${jobId}:failure`,
@@ -401,6 +410,12 @@ export class OrdersService {
         reason,
         recovery: body.recovery,
         actualMaterialMilligrams: actual?.toString() ?? null,
+        printingConsumptions: [...printingConsumptions]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([siblingJobId, actualMaterialMilligrams]) => ({
+            jobId: siblingJobId,
+            actualMaterialMilligrams: actualMaterialMilligrams.toString(),
+          })),
       },
       async (tx) => {
         const job = await this.lockJob(tx, orderId, jobId);
@@ -544,6 +559,7 @@ export class OrdersService {
               jobId,
               claimReprintRequest.claimId,
               failedAt,
+              printingConsumptions,
             );
             return result(orderId, prepared.status, {
               jobId,
@@ -577,6 +593,7 @@ export class OrdersService {
               job.shipmentPlanId,
               jobId,
               failedAt,
+              printingConsumptions,
             );
             const shipment = await tx.shipment.findFirst({
               where: {
@@ -635,6 +652,11 @@ export class OrdersService {
               recovery: body.recovery,
             });
           }
+        }
+        if (printingConsumptions.size > 0) {
+          throw new BadRequestException(
+            "printingConsumptions does not match an abandoned parcel scope",
+          );
         }
         return result(orderId, terminalStatus, {
           jobId,
@@ -2159,6 +2181,119 @@ export class OrdersService {
     );
   }
 
+  rejectClaim(
+    orderId: string,
+    claimId: string,
+    body: RejectClaimDto,
+    key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    assertUuid(claimId, "claimId");
+    const reason = requiredText(body.reason, "reason", 2_000);
+    return this.command(
+      orderId,
+      `claim:${claimId}:rejection`,
+      key,
+      { reason },
+      async (tx) => {
+        await this.lockOrder(tx, orderId);
+        await tx.$queryRaw`
+          SELECT id FROM claims
+          WHERE id = ${claimId}::uuid AND order_id = ${orderId}::uuid
+          FOR UPDATE
+        `;
+        const claim = await tx.claim.findFirst({
+          where: { id: claimId, orderId },
+          include: {
+            resolutions: {
+              include: { fulfilmentSlot: true },
+              orderBy: { fulfilmentSlotId: "asc" },
+            },
+            replacementRequests: { select: { id: true } },
+            reprintShipments: { select: { id: true } },
+            reshipmentAuthorizations: { select: { id: true } },
+            priceAdjustments: { select: { id: true } },
+            refunds: { select: { id: true } },
+          },
+        });
+        if (!claim) throw new NotFoundException("Claim was not found");
+        await tx.$queryRaw`
+          SELECT id FROM claim_slot_resolutions
+          WHERE claim_id = ${claimId}::uuid
+          ORDER BY id
+          FOR UPDATE
+        `;
+        if (
+          claim.origin !== ClaimOrigin.POST_DELIVERY_QUALITY ||
+          claim.status !== ClaimStatus.OPEN ||
+          claim.resolutions.length === 0 ||
+          claim.resolutions.some(
+            ({
+              status,
+              replacementRequestId,
+              replacementShipmentId,
+              fulfilmentSlot,
+            }) =>
+              status !== ClaimSlotResolutionStatus.PENDING ||
+              replacementRequestId !== null ||
+              replacementShipmentId !== null ||
+              fulfilmentSlot.outcome !== "DELIVERED",
+          ) ||
+          claim.replacementRequests.length > 0 ||
+          claim.reprintShipments.length > 0 ||
+          claim.reshipmentAuthorizations.length > 0 ||
+          claim.priceAdjustments.length > 0 ||
+          claim.refunds.length > 0
+        ) {
+          throw new ConflictException(
+            "Only a clean post-delivery quality Claim can be rejected",
+          );
+        }
+        const rejectedAt = await databaseNow(tx);
+        const rejected = await tx.claimSlotResolution.updateMany({
+          where: {
+            claimId,
+            status: ClaimSlotResolutionStatus.PENDING,
+            replacementRequestId: null,
+            replacementShipmentId: null,
+          },
+          data: {
+            status: ClaimSlotResolutionStatus.REJECTED,
+            resolvedAt: rejectedAt,
+            updatedAt: rejectedAt,
+          },
+        });
+        const resolved = await tx.claim.updateMany({
+          where: {
+            id: claimId,
+            orderId,
+            origin: ClaimOrigin.POST_DELIVERY_QUALITY,
+            status: ClaimStatus.OPEN,
+          },
+          data: {
+            status: ClaimStatus.RESOLVED_REJECTED,
+            resolvedAt: rejectedAt,
+            updatedAt: rejectedAt,
+          },
+        });
+        if (
+          rejected.count !== claim.resolutions.length ||
+          resolved.count !== 1
+        ) {
+          throw new ConflictException(
+            "Claim rejection lost its complete pending resolution scope",
+          );
+        }
+        return result(orderId, "CLAIM_REJECTED", {
+          claimId,
+          fulfilmentSlotIds: claim.resolutions.map(
+            ({ fulfilmentSlotId }) => fulfilmentSlotId,
+          ),
+          rejectedAt,
+        });
+      },
+    );
+  }
+
   createClaimReprint(
     orderId: string,
     claimId: string,
@@ -2228,6 +2363,14 @@ export class OrdersService {
         const predecessor = retrying
           ? claim.resolutions[0]?.replacementShipment
           : rootShipment;
+        const predecessorAuthorization = predecessor
+          ? await tx.reshipmentAuthorization.findUnique({
+              where: { reshipmentShipmentId: predecessor.id },
+            })
+          : null;
+        const predecessorIsReprint = predecessor?.reprintClaimId === claimId;
+        const predecessorIsReship =
+          predecessorAuthorization?.claimId === claimId;
         if (
           claim.origin !== ClaimOrigin.SHIPMENT_INCIDENT ||
           ![ClaimStatus.OPEN, ClaimStatus.ACTIVE].includes(
@@ -2238,7 +2381,7 @@ export class OrdersService {
           predecessor.status !== ShipmentStatus.LOST ||
           (retrying &&
             (priorReplacementIds.size !== 1 ||
-              predecessor.reprintClaimId !== claimId))
+              (!predecessorIsReprint && !predecessorIsReship)))
         ) {
           throw new ConflictException(
             "Only an unresolved LOST parcel Claim can authorize a reprint",
@@ -2287,8 +2430,9 @@ export class OrdersService {
                 (replacementRequestId !== null ||
                   replacementShipmentId !== null)) ||
               (retrying &&
-                (replacementRequestId === null ||
-                  replacementShipmentId !== predecessor.id)),
+                (replacementShipmentId !== predecessor.id ||
+                  (predecessorIsReprint && replacementRequestId === null) ||
+                  (predecessorIsReship && replacementRequestId !== null))),
           )
         ) {
           throw new ConflictException(
@@ -2321,6 +2465,10 @@ export class OrdersService {
           },
           orderBy: { id: "asc" },
         });
+        const predecessorLineageIds = await this.shipmentLineageIds(
+          tx,
+          predecessor.id,
+        );
         if (
           sourceJobs.length === 0 ||
           sourceJobs.length !== replacements.length ||
@@ -2330,7 +2478,8 @@ export class OrdersService {
                 status as
                   typeof JobStatus.HANDED_OVER | typeof JobStatus.SETTLED,
               ) ||
-              shipmentAssignment?.shipmentId !== predecessor.id ||
+              !shipmentAssignment ||
+              !predecessorLineageIds.has(shipmentAssignment.shipmentId) ||
               !replacements.some(({ sourceJobId }) => sourceJobId === id),
           )
         ) {
@@ -2646,7 +2795,6 @@ export class OrdersService {
               include: { replacementShipment: true },
               orderBy: { fulfilmentSlotId: "asc" },
             },
-            reshipmentAuthorization: true,
           },
         });
         if (!claim) throw new NotFoundException("Claim was not found");
@@ -2656,10 +2804,17 @@ export class OrdersService {
             replacementShipmentId ? [replacementShipmentId] : [],
           ),
         );
-        const retryingReprint = claim.status === ClaimStatus.ACTIVE;
-        const original = retryingReprint
+        const retrying = claim.status === ClaimStatus.ACTIVE;
+        const original = retrying
           ? claim.resolutions[0]?.replacementShipment
           : rootShipment;
+        const originalAuthorization = original
+          ? await tx.reshipmentAuthorization.findUnique({
+              where: { reshipmentShipmentId: original.id },
+            })
+          : null;
+        const originalIsReprint = original?.reprintClaimId === claimId;
+        const originalIsReship = originalAuthorization?.claimId === claimId;
         if (
           claim.origin !== ClaimOrigin.SHIPMENT_INCIDENT ||
           ![ClaimStatus.OPEN, ClaimStatus.ACTIVE].includes(
@@ -2671,10 +2826,9 @@ export class OrdersService {
             original.status as
               typeof ShipmentStatus.RETURNED | typeof ShipmentStatus.RECOVERED,
           ) ||
-          (retryingReprint &&
+          (retrying &&
             (priorReplacementIds.size !== 1 ||
-              original.reprintClaimId !== claimId)) ||
-          claim.reshipmentAuthorization
+              (!originalIsReprint && !originalIsReship)))
         ) {
           throw new ConflictException(
             "Claim does not have custody-confirmed reshipment scope",
@@ -2715,12 +2869,13 @@ export class OrdersService {
           claim.resolutions.some(
             ({ status, replacementRequestId, replacementShipmentId }) =>
               status !== ClaimSlotResolutionStatus.PENDING ||
-              (!retryingReprint &&
+              (!retrying &&
                 (replacementRequestId !== null ||
                   replacementShipmentId !== null)) ||
-              (retryingReprint &&
-                (replacementRequestId === null ||
-                  replacementShipmentId !== original.id)),
+              (retrying &&
+                (replacementShipmentId !== original.id ||
+                  (originalIsReprint && replacementRequestId === null) ||
+                  (originalIsReship && replacementRequestId !== null))),
           )
         ) {
           throw new ConflictException(
@@ -2745,6 +2900,10 @@ export class OrdersService {
           include: { shipmentAssignment: true },
           orderBy: { id: "asc" },
         });
+        const originalLineageIds = await this.shipmentLineageIds(
+          tx,
+          original.id,
+        );
         if (
           originalJobs.length === 0 ||
           originalJobs.some(
@@ -2752,7 +2911,9 @@ export class OrdersService {
               ![JobStatus.HANDED_OVER, JobStatus.SETTLED].includes(
                 status as
                   typeof JobStatus.HANDED_OVER | typeof JobStatus.SETTLED,
-              ) || shipmentAssignment?.shipmentId !== original.id,
+              ) ||
+              !shipmentAssignment ||
+              !originalLineageIds.has(shipmentAssignment.shipmentId),
           )
         ) {
           throw new ConflictException(
@@ -3288,21 +3449,33 @@ export class OrdersService {
               include: { fulfilmentSlot: true, replacementShipment: true },
               orderBy: { fulfilmentSlotId: "asc" },
             },
-            reshipmentAuthorization: {
+            reshipmentAuthorizations: {
               include: { reshipmentShipment: true },
+              orderBy: { consumedAt: "desc" },
             },
           },
         });
         if (!claim) throw new NotFoundException("Claim was not found");
+        const currentReplacementShipmentIds = new Set(
+          claim.resolutions.flatMap(({ replacementShipmentId }) =>
+            replacementShipmentId ? [replacementShipmentId] : [],
+          ),
+        );
+        const currentReshipmentAuthorization =
+          currentReplacementShipmentIds.size === 1
+            ? claim.reshipmentAuthorizations.find(({ reshipmentShipmentId }) =>
+                currentReplacementShipmentIds.has(reshipmentShipmentId),
+              )
+            : undefined;
         const reshipmentIncidentRefundable =
           claim.status === ClaimStatus.ACTIVE &&
-          claim.reshipmentAuthorization !== null &&
+          currentReshipmentAuthorization !== undefined &&
           [
             ShipmentStatus.LOST,
             ShipmentStatus.RETURNED,
             ShipmentStatus.RECOVERED,
           ].includes(
-            claim.reshipmentAuthorization.reshipmentShipment.status as
+            currentReshipmentAuthorization.reshipmentShipment.status as
               | typeof ShipmentStatus.LOST
               | typeof ShipmentStatus.RETURNED
               | typeof ShipmentStatus.RECOVERED,
@@ -3724,6 +3897,7 @@ export class OrdersService {
     shipmentPlanId: string,
     failedJobId: string,
     cancelledAt: Date,
+    printingConsumptions: Map<string, bigint>,
   ): Promise<void> {
     const siblings = await tx.job.findMany({
       where: {
@@ -3739,6 +3913,7 @@ export class OrdersService {
       },
       orderBy: { id: "asc" },
     });
+    const printingSiblings: Array<{ jobId: string }> = [];
     for (const sibling of siblings) {
       if (
         [
@@ -3763,9 +3938,31 @@ export class OrdersService {
       }
       const production = sibling.productionReservations[0]!;
       if (production.status === "PRINTING") {
+        printingSiblings.push({ jobId: sibling.id });
+      } else if (
+        !["RESERVED", "HELD", "SCHEDULED", "CONSUMED"].includes(
+          production.status,
+        )
+      ) {
         throw new ConflictException(
-          "Production failure cannot abandon a sibling Job while it is printing",
+          "Production failure sibling Job reservation is not terminal",
         );
+      }
+    }
+    assertPrintingConsumptionCoverage(
+      printingSiblings,
+      printingConsumptions,
+      false,
+    );
+    for (const sibling of siblings) {
+      const production = sibling.productionReservations[0]!;
+      if (production.status === "PRINTING") {
+        await tx.$queryRaw`
+          SELECT taven_settle_printing_production_reservation(
+            ${production.id}::uuid,
+            ${printingConsumptions.get(sibling.id)!}
+          )::text
+        `;
       }
       if (["RESERVED", "HELD", "SCHEDULED"].includes(production.status)) {
         await tx.$queryRaw`
@@ -3773,10 +3970,6 @@ export class OrdersService {
             ${production.id}::uuid
           )::text
         `;
-      } else if (production.status !== "CONSUMED") {
-        throw new ConflictException(
-          "Production failure sibling Job reservation is not terminal",
-        );
       }
       await tx.job.update({
         where: { id: sibling.id },
@@ -3796,6 +3989,7 @@ export class OrdersService {
     failedJobId: string,
     claimId: string,
     failedAt: Date,
+    printingConsumptions: Map<string, bigint>,
   ): Promise<{ status: string; shipmentId: string }> {
     await tx.$queryRaw`
       SELECT id FROM claims
@@ -3853,6 +4047,7 @@ export class OrdersService {
       job.shipmentPlanId,
       failedJobId,
       failedAt,
+      printingConsumptions,
     );
     if (shipment.status === ShipmentStatus.LABEL_CREATED) {
       await tx.shipment.update({
@@ -5142,6 +5337,26 @@ export class OrdersService {
     });
     if (!shipment) throw new NotFoundException("Shipment was not found");
     return shipment;
+  }
+
+  private async shipmentLineageIds(
+    tx: Transaction,
+    leafShipmentId: string,
+  ): Promise<Set<string>> {
+    const lineage = await tx.$queryRaw<Array<{ id: string }>>`
+      WITH RECURSIVE shipment_lineage AS (
+        SELECT id, replaces_shipment_id
+        FROM shipments
+        WHERE id = ${leafShipmentId}::uuid
+        UNION ALL
+        SELECT predecessor.id, predecessor.replaces_shipment_id
+        FROM shipments predecessor
+        JOIN shipment_lineage successor
+          ON successor.replaces_shipment_id = predecessor.id
+      )
+      SELECT id FROM shipment_lineage
+    `;
+    return new Set(lineage.map(({ id }) => id));
   }
 }
 

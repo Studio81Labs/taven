@@ -111,7 +111,11 @@ BEGIN
     FOR UPDATE OF photo;
 
     UPDATE "model_files" source
-    SET "retention_hold" = CASE
+    SET "source_delete_after" = greatest(
+            source."source_delete_after",
+            coalesce(NEW."resolved_at", source."source_delete_after")
+        ),
+        "retention_hold" = CASE
         WHEN source."retention_hold" = 'LEGAL' THEN source."retention_hold"
         WHEN EXISTS (
             SELECT 1
@@ -152,7 +156,11 @@ BEGIN
       );
 
     UPDATE "photo_assets" photo
-    SET "retention_hold" = CASE
+    SET "photo_delete_after" = greatest(
+            photo."photo_delete_after",
+            coalesce(NEW."resolved_at", photo."photo_delete_after")
+        ),
+        "retention_hold" = CASE
         WHEN photo."retention_hold" = 'LEGAL' THEN photo."retention_hold"
         WHEN EXISTS (
             SELECT 1
@@ -1076,6 +1084,12 @@ BEGIN
           AND (
               predecessor."id" = claim."incident_shipment_id"
               OR predecessor."reprint_claim_id" = claim."id"
+              OR EXISTS (
+                  SELECT 1
+                  FROM "reshipment_authorizations" predecessor_auth
+                  WHERE predecessor_auth."claim_id" = claim."id"
+                    AND predecessor_auth."reshipment_shipment_id" = predecessor."id"
+              )
           )
     ) THEN
         RAISE EXCEPTION 'Claim reprint Shipment must extend the current LOST Claim lineage'
@@ -1129,7 +1143,7 @@ CREATE TABLE "reshipment_authorizations" (
     "order_phase_id" uuid NOT NULL,
     "shipment_plan_id" uuid NOT NULL,
     "delivery_destination_id" uuid NOT NULL,
-    "claim_id" uuid NOT NULL UNIQUE,
+    "claim_id" uuid NOT NULL,
     "original_shipment_id" uuid NOT NULL UNIQUE,
     "reshipment_shipment_id" uuid NOT NULL UNIQUE,
     "acceptance_event_id" uuid NOT NULL UNIQUE,
@@ -1187,6 +1201,8 @@ CREATE TABLE "reshipment_authorizations" (
 );
 CREATE INDEX "reshipment_authorizations_order_id_consumed_at_idx"
     ON "reshipment_authorizations"("order_id", "consumed_at");
+CREATE INDEX "reshipment_authorizations_claim_id_consumed_at_idx"
+    ON "reshipment_authorizations"("claim_id", "consumed_at");
 
 CREATE FUNCTION taven_is_consumed_custody_reshipment(
     target_original_shipment_id uuid,
@@ -1248,6 +1264,12 @@ AS $$
           AND (
               original."id" = claim."incident_shipment_id"
               OR original."reprint_claim_id" = claim."id"
+              OR EXISTS (
+                  SELECT 1
+                  FROM "reshipment_authorizations" original_auth
+                  WHERE original_auth."claim_id" = claim."id"
+                    AND original_auth."reshipment_shipment_id" = original."id"
+              )
           )
     );
 $$;
@@ -1459,6 +1481,16 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    IF NEW."claim_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM "claims" claim
+           WHERE claim."id" = NEW."claim_id"
+             AND claim."status" IN ('OPEN', 'ACTIVE')
+       ) THEN
+        RAISE EXCEPTION 'refund Claim scope must remain active'
+            USING ERRCODE = '23514', CONSTRAINT = 'refund_claim_active_scope_check';
+    END IF;
+
     IF TG_OP = 'UPDATE'
        AND (NEW."claim_id" IS DISTINCT FROM OLD."claim_id"
             OR NEW."price_adjustment_id" IS DISTINCT FROM OLD."price_adjustment_id") THEN
@@ -1486,6 +1518,129 @@ CREATE TRIGGER "refund_transactions_fulfilment_scope_protected"
 BEFORE INSERT OR UPDATE OF "claim_id", "price_adjustment_id", "replaces_refund_transaction_id"
 ON "refund_transactions"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_fulfilment_refund_scope();
+
+CREATE FUNCTION taven_protect_rejected_claim_terminal()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    prior_status text := to_jsonb(OLD) ->> 'status';
+BEGIN
+    IF TG_TABLE_NAME = 'claims'
+       AND prior_status = 'RESOLVED_REJECTED'
+       AND (to_jsonb(NEW) - 'updated_at') IS DISTINCT FROM
+           (to_jsonb(OLD) - 'updated_at') THEN
+        RAISE EXCEPTION 'rejected Claim history is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'claim_rejection_terminal_immutable_check';
+    ELSIF TG_TABLE_NAME = 'claim_slot_resolutions'
+       AND prior_status = 'REJECTED'
+       AND (to_jsonb(NEW) - 'updated_at') IS DISTINCT FROM
+           (to_jsonb(OLD) - 'updated_at') THEN
+        RAISE EXCEPTION 'rejected Claim resolution history is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'claim_rejection_terminal_immutable_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "claims_rejection_terminal_immutable"
+BEFORE UPDATE ON "claims"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_rejected_claim_terminal();
+CREATE TRIGGER "claim_slot_resolutions_rejection_terminal_immutable"
+BEFORE UPDATE ON "claim_slot_resolutions"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_rejected_claim_terminal();
+
+CREATE FUNCTION taven_reconcile_rejected_claim()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    changed_row jsonb := CASE
+        WHEN TG_OP = 'DELETE' THEN to_jsonb(OLD)
+        ELSE to_jsonb(NEW)
+    END;
+    target_claim_id uuid;
+BEGIN
+    target_claim_id := CASE
+        WHEN TG_TABLE_NAME = 'claims' THEN (changed_row ->> 'id')::uuid
+        ELSE (changed_row ->> 'claim_id')::uuid
+    END;
+    IF EXISTS (
+        SELECT 1
+        FROM "claims" claim
+        WHERE claim."id" = target_claim_id
+          AND claim."status" = 'RESOLVED_REJECTED'
+          AND (
+              claim."origin" <> 'POST_DELIVERY_QUALITY'
+              OR NOT EXISTS (
+                  SELECT 1 FROM "claim_slot_resolutions" resolution
+                  WHERE resolution."claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM "claim_slot_resolutions" resolution
+                  JOIN "fulfilment_slots" slot
+                    ON slot."id" = resolution."fulfilment_slot_id"
+                  WHERE resolution."claim_id" = claim."id"
+                    AND (
+                        resolution."status" <> 'REJECTED'
+                        OR resolution."resolved_at" IS DISTINCT FROM claim."resolved_at"
+                        OR resolution."replacement_request_id" IS NOT NULL
+                        OR resolution."replacement_shipment_id" IS NOT NULL
+                        OR slot."outcome" <> 'DELIVERED'
+                    )
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "replacement_requests" request
+                  WHERE request."claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "shipments" shipment
+                  WHERE shipment."reprint_claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "reshipment_authorizations" auth_history
+                  WHERE auth_history."claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "price_adjustments" adjustment
+                  WHERE adjustment."claim_id" = claim."id"
+              )
+              OR EXISTS (
+                  SELECT 1 FROM "refund_transactions" refund
+                  WHERE refund."claim_id" = claim."id"
+              )
+          )
+    ) OR EXISTS (
+        SELECT 1
+        FROM "claim_slot_resolutions" rejected
+        JOIN "claims" claim ON claim."id" = rejected."claim_id"
+        WHERE rejected."claim_id" = target_claim_id
+          AND rejected."status" = 'REJECTED'
+          AND (
+              claim."status" <> 'RESOLVED_REJECTED'
+              OR EXISTS (
+                  SELECT 1 FROM "claim_slot_resolutions" sibling
+                  WHERE sibling."claim_id" = rejected."claim_id"
+                    AND sibling."status" <> 'REJECTED'
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION 'Claim rejection must atomically close one clean quality Claim and all resolutions'
+            USING ERRCODE = '23514', CONSTRAINT = 'claim_rejection_graph_check';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "claims_rejection_graph_reconciled"
+AFTER INSERT OR UPDATE OF "origin", "status", "resolved_at" ON "claims"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_rejected_claim();
+CREATE CONSTRAINT TRIGGER "claim_slot_resolutions_rejection_graph_reconciled"
+AFTER INSERT OR UPDATE OR DELETE ON "claim_slot_resolutions"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_rejected_claim();
 
 CREATE FUNCTION taven_reject_immutable_fulfilment_history_mutation()
 RETURNS trigger
@@ -4138,6 +4293,18 @@ BEGIN
                               target_order_id, job."shipment_plan_id", job."id"
                           )
                       ))
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "replacement_requests" request
+                      WHERE request."order_id" = target_order_id
+                        AND request."shipment_plan_id" = job."shipment_plan_id"
+                        AND (
+                            (request."status" = 'OPEN'
+                             AND request."source_job_id" = job."id")
+                            OR (request."status" = 'JOB_CREATED'
+                                AND request."replacement_job_id" = job."id")
+                        )
+                  )
                   OR taven_is_claim_reprint_job(job."id")
               )
         ) OR EXISTS (
@@ -4600,6 +4767,12 @@ BEGIN
               AND (
                   predecessor."id" = claim."incident_shipment_id"
                   OR predecessor."reprint_claim_id" = claim."id"
+                  OR EXISTS (
+                      SELECT 1
+                      FROM "reshipment_authorizations" predecessor_auth
+                      WHERE predecessor_auth."claim_id" = claim."id"
+                        AND predecessor_auth."reshipment_shipment_id" = predecessor."id"
+                  )
               )
         )) THEN
             RAISE EXCEPTION 'Claim slot resolution must preserve exact order, phase, slot, and Shipment scope'
@@ -4617,9 +4790,11 @@ BEGIN
         END IF;
         IF NEW."claim_id" IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM "claims" claim
-            WHERE claim."id" = NEW."claim_id" AND claim."order_id" = NEW."order_id"
+            WHERE claim."id" = NEW."claim_id"
+              AND claim."order_id" = NEW."order_id"
+              AND claim."status" IN ('OPEN', 'ACTIVE')
         ) THEN
-            RAISE EXCEPTION 'PriceAdjustment Claim must belong to its order'
+            RAISE EXCEPTION 'PriceAdjustment Claim must be active and belong to its order'
                 USING ERRCODE = '23514', CONSTRAINT = 'price_adjustment_scope_check';
         END IF;
     END IF;
@@ -5608,6 +5783,20 @@ BEGIN
         LEFT JOIN "shipment_provider_events" acceptance
           ON acceptance."id" = auth."acceptance_event_id"
          AND acceptance."shipment_id" = auth."reshipment_shipment_id"
+        LEFT JOIN LATERAL (
+            SELECT successor."id"
+            FROM "shipments" successor
+            LEFT JOIN "reshipment_authorizations" successor_auth
+              ON successor_auth."claim_id" = auth."claim_id"
+             AND successor_auth."original_shipment_id" = reshipment."id"
+             AND successor_auth."reshipment_shipment_id" = successor."id"
+            WHERE successor."replaces_shipment_id" = reshipment."id"
+              AND (
+                  successor."reprint_claim_id" = auth."claim_id"
+                  OR successor_auth."id" IS NOT NULL
+              )
+            LIMIT 1
+        ) claim_successor ON true
         WHERE auth."order_id" = target_order_id
           AND (
               claim."id" IS NULL
@@ -5618,6 +5807,12 @@ BEGIN
               OR (
                   claim."incident_shipment_id" IS DISTINCT FROM original."id"
                   AND original."reprint_claim_id" IS DISTINCT FROM claim."id"
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "reshipment_authorizations" predecessor_auth
+                      WHERE predecessor_auth."claim_id" = claim."id"
+                        AND predecessor_auth."reshipment_shipment_id" = original."id"
+                  )
               )
               OR (claim."order_id", claim."order_phase_id") IS DISTINCT FROM
                  (auth."order_id", auth."order_phase_id")
@@ -5637,6 +5832,7 @@ BEGIN
                   SELECT 1
                   FROM "shipments" later_successor
                   WHERE later_successor."replaces_shipment_id" = reshipment."id"
+                    AND claim_successor."id" IS NULL
               )
               OR EXISTS (
                   SELECT 1
@@ -5659,12 +5855,12 @@ BEGIN
               OR auth."re_qc_passed_at" > acceptance."occurred_at"
               OR acceptance."occurred_at" > acceptance."verified_at" + interval '5 seconds'
               OR auth."issued_at" IS DISTINCT FROM auth."consumed_at"
-              OR NOT EXISTS (
+              OR (claim_successor."id" IS NULL AND NOT EXISTS (
                   SELECT 1
                   FROM "claim_slot_resolutions" resolution
                   WHERE resolution."claim_id" = auth."claim_id"
-              )
-              OR EXISTS (
+              ))
+              OR (claim_successor."id" IS NULL AND EXISTS (
                   SELECT 1
                   FROM "claim_slot_resolutions" resolution
                   WHERE resolution."claim_id" = auth."claim_id"
@@ -5680,8 +5876,8 @@ BEGIN
                                   resolution."fulfilment_slot_id"
                         )
                     )
-              )
-              OR EXISTS (
+              ))
+              OR (claim_successor."id" IS NULL AND EXISTS (
                   SELECT 1
                   FROM "shipment_plan_fulfilment_slots" allocation
                   WHERE allocation."shipment_plan_id" = auth."shipment_plan_id"
@@ -5694,7 +5890,7 @@ BEGIN
                           AND resolution."replacement_shipment_id" =
                               auth."reshipment_shipment_id"
                     )
-              )
+              ))
               OR NOT EXISTS (
                   SELECT 1
                   FROM "jobs" job
@@ -5722,11 +5918,25 @@ BEGIN
                             SELECT 1
                             FROM "job_shipment_assignments" assignment
                             WHERE assignment."job_id" = job."id"
-                              AND assignment."shipment_id" = original."id"
+                              AND EXISTS (
+                                  WITH RECURSIVE predecessor_lineage AS (
+                                      SELECT lineage."id", lineage."replaces_shipment_id"
+                                      FROM "shipments" lineage
+                                      WHERE lineage."id" = original."id"
+                                      UNION ALL
+                                      SELECT predecessor."id", predecessor."replaces_shipment_id"
+                                      FROM "shipments" predecessor
+                                      JOIN predecessor_lineage successor
+                                        ON successor."replaces_shipment_id" = predecessor."id"
+                                  )
+                                  SELECT 1
+                                  FROM predecessor_lineage
+                                  WHERE predecessor_lineage."id" = assignment."shipment_id"
+                              )
                         )
                     )
               )
-              OR NOT (
+              OR (claim_successor."id" IS NULL AND NOT (
                   (
                       claim."status" = 'ACTIVE'
                       AND reshipment."status" IN ('HANDED_OVER', 'IN_TRANSIT')
@@ -5775,7 +5985,7 @@ BEGIN
                             AND resolution."status" <> 'REFUNDED'
                       )
                   )
-              )
+              ))
           )
     ) THEN
         RAISE EXCEPTION 'custody reshipment must preserve its exact Claim, parcel, evidence, and original Job graph'

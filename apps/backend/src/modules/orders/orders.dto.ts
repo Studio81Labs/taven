@@ -7,6 +7,14 @@ export class JobPrintedDto {
   actualMaterialMilligrams!: string;
 }
 
+export class CancellationPrintingConsumptionDto {
+  @ApiProperty(UUID)
+  jobId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[0-9]+$" })
+  actualMaterialMilligrams!: string;
+}
+
 export class JobQcSubmissionDto {
   @ApiPropertyOptional(UUID)
   photoAssetId?: string;
@@ -38,6 +46,13 @@ export class JobFailureDto {
 
   @ApiPropertyOptional({ type: String, pattern: "^[0-9]+$" })
   actualMaterialMilligrams?: string;
+
+  @ApiPropertyOptional({
+    type: [CancellationPrintingConsumptionDto],
+    description:
+      "Exact material consumption for every other actively printing Job in the failed parcel",
+  })
+  printingConsumptions?: CancellationPrintingConsumptionDto[];
 }
 
 export class CreateReplacementDto {
@@ -190,6 +205,11 @@ export class CreateClaimDto {
   incidentShipmentId?: string;
 }
 
+export class RejectClaimDto {
+  @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
+  reason!: string;
+}
+
 export class HandoffReshipmentDto extends ShipmentProviderEvidenceDto {
   @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
   carrier!: string;
@@ -211,14 +231,6 @@ export class HandoffReshipmentDto extends ShipmentProviderEvidenceDto {
 
   @ApiProperty({ type: String, minLength: 1, maxLength: 500 })
   reQcEvidence!: string;
-}
-
-export class CancellationPrintingConsumptionDto {
-  @ApiProperty(UUID)
-  jobId!: string;
-
-  @ApiProperty({ type: String, pattern: "^[0-9]+$" })
-  actualMaterialMilligrams!: string;
 }
 
 export class CancelOrderDto {

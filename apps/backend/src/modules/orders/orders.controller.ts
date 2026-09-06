@@ -34,6 +34,7 @@ import {
   JobPrintedDto,
   JobQcSubmissionDto,
   PackJobDto,
+  RejectClaimDto,
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
@@ -345,6 +346,26 @@ export class OrdersController {
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
     return this.orders.createClaim(orderId, body, key);
+  }
+
+  @Post("claims/:claimId/rejection")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Reject a clean post-delivery quality Claim" })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(CLAIM_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: RejectClaimDto })
+  @ApiConflictResponse({
+    description: "Claim has incident, remedy, or financial recovery history",
+  })
+  @ApiOkResponse({ type: FulfilmentCommandResultDto })
+  rejectClaim(
+    @Param("orderId") orderId: string,
+    @Param("claimId") claimId: string,
+    @Body() body: RejectClaimDto,
+    @Headers("idempotency-key") key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    return this.orders.rejectClaim(orderId, claimId, body, key);
   }
 
   @Post("claims/:claimId/reshipment-handoff")

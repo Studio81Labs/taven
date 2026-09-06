@@ -2379,7 +2379,7 @@ model Claim {
   resolutions             ClaimSlotResolution[]
   refunds                 RefundTransaction[]
   priceAdjustments        PriceAdjustment[]
-  reshipmentAuthorization ReshipmentAuthorization?
+  reshipmentAuthorizations ReshipmentAuthorization[]
   replacementRequests     ReplacementRequest[]
 
   @@unique([incidentShipmentId], map: "claims_incident_shipment_id_key")
@@ -2393,7 +2393,7 @@ model ReshipmentAuthorization {
   orderPhaseId          String   @map("order_phase_id") @db.Uuid
   shipmentPlanId        String   @map("shipment_plan_id") @db.Uuid
   deliveryDestinationId String   @map("delivery_destination_id") @db.Uuid
-  claimId               String   @unique @map("claim_id") @db.Uuid
+  claimId               String   @map("claim_id") @db.Uuid
   originalShipmentId    String   @unique @map("original_shipment_id") @db.Uuid
   reshipmentShipmentId  String   @unique @map("reshipment_shipment_id") @db.Uuid
   acceptanceEventId     String   @unique @map("acceptance_event_id") @db.Uuid
@@ -2415,6 +2415,7 @@ model ReshipmentAuthorization {
   @@unique([originalShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "reshipment_authorizations_original_shipment_scope_key")
   @@unique([reshipmentShipmentId, shipmentPlanId, orderId, orderPhaseId, deliveryDestinationId], map: "reshipment_authorizations_reshipment_shipment_scope_key")
   @@unique([acceptanceEventId, reshipmentShipmentId], map: "reshipment_authorizations_acceptance_event_scope_key")
+  @@index([claimId, consumedAt])
   @@index([orderId, consumedAt])
   @@map("reshipment_authorizations")
 }
