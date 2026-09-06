@@ -85,7 +85,7 @@ export class AuditController {
       paymentId,
       quoteRequestId,
     })) {
-      if (value && !UUID_PATTERN.test(value)) {
+      if (value !== undefined && !UUID_PATTERN.test(value)) {
         throw new BadRequestException(`${name} is invalid`);
       }
     }
