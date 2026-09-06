@@ -159,4 +159,40 @@ describe("OperatorAuthService expiry cleanup", () => {
     ).rejects.toMatchObject({ status: 429 });
     expect(calls).toBe(2);
   });
+
+  it("limits password attempts before an additional password verification runs", async () => {
+    vi.stubEnv("TAVEN_ENVIRONMENT", "development");
+    vi.stubEnv("TAVEN_ADMIN_CSRF_KEY", KEY);
+    vi.stubEnv("TAVEN_ADMIN_CLIENT_HASH_KEY", KEY);
+
+    let calls = 0;
+    const transaction = {
+      operatorLoginRateBucket: {
+        upsert: async () => ({ attempts: ++calls === 1 ? 1 : 6, failures: 0 }),
+      },
+    };
+    const service = new OperatorAuthService(
+      {
+        $transaction: async <T>(callback: (tx: typeof transaction) => T) =>
+          callback(transaction),
+      } as never,
+      {
+        exchangeCode: async () => {
+          throw new Error("GitHub must not be used while claiming budget");
+        },
+      },
+    );
+
+    await expect(
+      (
+        service as unknown as {
+          claimLoginBudget: (
+            subjectHash: string,
+            clientHash: string,
+          ) => Promise<void>;
+        }
+      ).claimLoginBudget("subject", "client"),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(calls).toBe(2);
+  });
 });

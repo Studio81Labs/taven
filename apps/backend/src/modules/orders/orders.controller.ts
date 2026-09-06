@@ -20,6 +20,7 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import {
@@ -73,6 +74,7 @@ const CLAIM_ID_PARAM = { name: "claimId", type: String, format: "uuid" };
 
 @ApiTags("operator fulfilment")
 @ApiSecurity("operatorSession")
+@ApiHeader(OPERATOR_CSRF_HEADER)
 @UseGuards(OperatorAccessGuard)
 @RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_WRITE)
 @Controller("admin/orders/:orderId/fulfilment")

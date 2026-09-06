@@ -2,7 +2,14 @@ import "reflect-metadata";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { NestFactory } from "@nestjs/core";
-import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
+import {
+  DocumentBuilder,
+  SwaggerModule,
+  type OperationObject,
+  type OpenAPIObject,
+} from "@nestjs/swagger";
+
+const UNSAFE_HTTP_METHODS = new Set(["delete", "patch", "post", "put"]);
 
 function sortObject(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortObject);
@@ -14,6 +21,34 @@ function sortObject(value: unknown): unknown {
     );
   }
   return value;
+}
+
+function requireOperatorCsrfHeader(document: OpenAPIObject): void {
+  for (const pathItem of Object.values(document.paths)) {
+    for (const method of UNSAFE_HTTP_METHODS) {
+      const operation = pathItem[method as keyof typeof pathItem];
+      if (
+        !operation ||
+        !(operation as OperationObject).security?.some(
+          (security) => "operatorSession" in security,
+        )
+      ) {
+        continue;
+      }
+      const parameters = (operation as OperationObject).parameters;
+      const headerIndex = parameters?.findIndex(
+        (parameter) =>
+          "in" in parameter &&
+          parameter.in === "header" &&
+          parameter.name === "x-csrf-token",
+      );
+      if (headerIndex === undefined || headerIndex < 0 || !parameters) continue;
+      const header = parameters[headerIndex];
+      if (header && "in" in header) {
+        parameters[headerIndex] = { ...header, required: true };
+      }
+    }
+  }
 }
 
 async function exportContract(): Promise<void> {
@@ -46,6 +81,7 @@ async function exportContract(): Promise<void> {
     })
     .build();
   const document = SwaggerModule.createDocument(app, config);
+  requireOperatorCsrfHeader(document);
   const outputPath = path.resolve("../../packages/openapi/openapi.json");
 
   await writeFile(

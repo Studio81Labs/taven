@@ -14,6 +14,7 @@ import {
   ApiBadRequestResponse,
   ApiBody,
   ApiForbiddenResponse,
+  ApiHeader,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
@@ -25,6 +26,7 @@ import {
 } from "@nestjs/swagger";
 import { readAdminAccessConfig } from "./admin-access.config";
 import { OperatorAccessGuard } from "./operator-access.guard";
+import { OPERATOR_CSRF_HEADER } from "./operator-auth.openapi";
 import {
   DevelopmentOperatorLoginDto,
   GithubCallbackQueryDto,
@@ -174,6 +176,7 @@ export class OperatorAuthController {
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
   @ApiNoContentResponse()
+  @ApiHeader({ ...OPERATOR_CSRF_HEADER, required: true })
   async logout(
     @Req() request: AdminRequest,
     @Res({ passthrough: true }) response: ResponseLike,

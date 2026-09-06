@@ -3196,7 +3196,19 @@
     "/admin/auth/session": {
       "delete": {
         "operationId": "OperatorAuthController_logout",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": ""
@@ -3263,6 +3275,17 @@
             }
           },
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "orderId",
             "required": true,
@@ -3316,6 +3339,17 @@
         "operationId": "OrdersController_get",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "orderId",
             "required": true,
@@ -3355,6 +3389,17 @@
       "post": {
         "operationId": "OrdersController_adjustment",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -3414,6 +3459,17 @@
         "operationId": "OrdersController_refundAdjustment",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -3470,6 +3526,17 @@
       "post": {
         "operationId": "OrdersController_cancel",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -3529,6 +3596,17 @@
         "operationId": "OrdersController_approveLegacyClaimWindow",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -3586,6 +3664,17 @@
       "post": {
         "operationId": "OrdersController_createClaim",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -3645,6 +3734,17 @@
         "operationId": "OrdersController_refundClaim",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -3701,6 +3801,17 @@
       "post": {
         "operationId": "OrdersController_rejectClaim",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -3772,6 +3883,17 @@
         "operationId": "OrdersController_createClaimReprint",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -3841,6 +3963,17 @@
       "post": {
         "operationId": "OrdersController_handoffReshipment",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -3912,6 +4045,17 @@
         "operationId": "OrdersController_withdrawClaim",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -3982,6 +4126,17 @@
         "operationId": "OrdersController_complete",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -4029,6 +4184,17 @@
       "post": {
         "operationId": "OrdersController_acceptJob",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -4086,6 +4252,17 @@
       "post": {
         "operationId": "OrdersController_failJob",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -4157,6 +4334,17 @@
         "operationId": "OrdersController_packJob",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -4223,6 +4411,17 @@
       "post": {
         "operationId": "OrdersController_printed",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -4291,6 +4490,17 @@
         "operationId": "OrdersController_startPrinting",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -4348,6 +4558,17 @@
         "operationId": "OrdersController_approveQc",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -4404,6 +4625,17 @@
       "post": {
         "operationId": "OrdersController_submitQc",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -4471,6 +4703,17 @@
       "post": {
         "operationId": "OrdersController_createReplacement",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -4542,6 +4785,17 @@
         "operationId": "OrdersController_expireReplacement",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -4612,6 +4866,17 @@
         "operationId": "OrdersController_createShipment",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -4669,6 +4934,17 @@
       "post": {
         "operationId": "OrdersController_shipmentEvent",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -4737,6 +5013,17 @@
         "operationId": "OrdersController_handoffShipment",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -4803,6 +5090,17 @@
       "post": {
         "operationId": "OrdersController_labelShipment",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
@@ -4871,6 +5169,17 @@
         "operationId": "OrdersController_confirmLabelVoid",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Stable command key; replaying altered input returns 409",
             "in": "header",
             "name": "Idempotency-Key",
@@ -4938,6 +5247,17 @@
         "operationId": "OperatorQuoteRequestsController_list",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "description": "Defaults to actionable NEW, IN_REVIEW, and QUOTED requests; select a terminal status explicitly to read history",
             "in": "query",
             "name": "status",
@@ -4986,6 +5306,17 @@
         "operationId": "OperatorQuoteRequestsController_get",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "requestId",
             "required": true,
@@ -5022,6 +5353,17 @@
       "post": {
         "operationId": "OperatorQuoteRequestsController_downloadAttachment",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "in": "path",
             "name": "photoAssetId",
@@ -5075,6 +5417,17 @@
         "operationId": "OperatorQuoteRequestsController_expire",
         "parameters": [
           {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
             "in": "path",
             "name": "requestId",
             "required": true,
@@ -5125,6 +5478,17 @@
       "post": {
         "operationId": "OperatorQuoteRequestsController_issue",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "in": "path",
             "name": "requestId",
@@ -5189,6 +5553,17 @@
       "post": {
         "operationId": "OperatorQuoteRequestsController_review",
         "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
           {
             "in": "path",
             "name": "requestId",

@@ -29,6 +29,7 @@ import {
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import { SignedDownloadResponseDto } from "../storage/storage.dto";
@@ -169,6 +170,7 @@ export class OffersController {
 
 @ApiTags("operator quote requests")
 @ApiSecurity("operatorSession")
+@ApiHeader(OPERATOR_CSRF_HEADER)
 @UseGuards(OperatorAccessGuard)
 @RequireOperatorPermissions(OPERATOR_PERMISSIONS.QUOTES_WRITE)
 @Controller("admin/quote-requests")

@@ -618,6 +618,7 @@ export class OperatorAuthService {
     if (
       result.global.attempts > MAX_LOGIN_STARTS ||
       (!subjectHash && result.scoped.attempts > MAX_LOGIN_STARTS_PER_CLIENT) ||
+      (subjectHash && result.scoped.attempts > MAX_PASSWORD_FAILURES) ||
       (subjectHash && result.scoped.failures >= MAX_PASSWORD_FAILURES)
     ) {
       throw new HttpException(

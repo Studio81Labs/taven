@@ -27,6 +27,7 @@ import {
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
+import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
 import {
   CreateBalancePaymentDto,
   CheckoutPaymentDto,
@@ -71,6 +72,7 @@ export class PaymentsController {
   @UseGuards(OperatorAccessGuard)
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
   @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiHeader({ ...OPERATOR_CSRF_HEADER, required: true })
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiBody({ type: CreateBalancePaymentDto })
   @ApiOperation({ summary: "Create the post-QC balance payment intent" })
