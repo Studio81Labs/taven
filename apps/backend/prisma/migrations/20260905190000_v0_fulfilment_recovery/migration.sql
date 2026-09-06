@@ -15,6 +15,194 @@ ALTER TYPE "outbox_status" ADD VALUE 'SUPERSEDED';
 ALTER TYPE "job_cancellation_reason" ADD VALUE 'PRODUCTION_FAILURE';
 
 ALTER TABLE "shipments" ADD COLUMN "reprint_claim_id" uuid;
+ALTER TABLE "orders"
+    ADD COLUMN "accepted_claim_window_days" integer,
+    ADD CONSTRAINT "orders_accepted_claim_window_days_check"
+        CHECK (
+            "accepted_claim_window_days" IS NULL
+            OR "accepted_claim_window_days" BETWEEN 1 AND 3650
+        );
+ALTER TABLE "fulfilment_slots"
+    ADD COLUMN "delivered_at" timestamptz(3),
+    ADD COLUMN "claim_until" timestamptz(3),
+    ADD CONSTRAINT "fulfilment_slots_claim_window_check" CHECK (
+        (
+            "outcome" = 'DELIVERED'
+            AND (
+                ("delivered_at" IS NULL AND "claim_until" IS NULL)
+                OR (
+                    "delivered_at" IS NOT NULL
+                    AND "claim_until" IS NOT NULL
+                    AND "claim_until" >= "delivered_at"
+                )
+            )
+        )
+        OR (
+            "outcome" <> 'DELIVERED'
+            AND "delivered_at" IS NULL
+            AND "claim_until" IS NULL
+        )
+    );
+
+CREATE FUNCTION taven_protect_order_claim_window_snapshot()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."accepted_claim_window_days" IS NOT NULL THEN
+            RAISE EXCEPTION 'new orders cannot begin with a Claim-window snapshot'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_claim_window_snapshot_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF OLD."accepted_claim_window_days" IS NOT NULL
+       AND NEW."accepted_claim_window_days" IS DISTINCT FROM OLD."accepted_claim_window_days" THEN
+        RAISE EXCEPTION 'accepted Claim-window snapshot is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_claim_window_snapshot_check';
+    END IF;
+
+    IF NEW."accepted_claim_window_days" IS DISTINCT FROM OLD."accepted_claim_window_days"
+       AND NOT (
+           OLD."accepted_claim_window_days" IS NULL
+           AND NEW."accepted_claim_window_days" IS NOT NULL
+           AND NEW."status" = 'QUOTED'
+           AND NEW."accepted_claim_policy_revision" IS NOT NULL
+       ) THEN
+        RAISE EXCEPTION 'Claim-window snapshot must be accepted with the quoted Claim policy'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_claim_window_snapshot_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "orders_claim_window_snapshot_protected"
+BEFORE INSERT OR UPDATE OF "accepted_claim_window_days" ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_order_claim_window_snapshot();
+
+CREATE OR REPLACE FUNCTION taven_protect_fulfilment_slot_topology()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_order_id uuid := CASE WHEN TG_OP = 'INSERT' THEN NEW."order_id" ELSE OLD."order_id" END;
+    target_order_status "order_status";
+    target_claim_window_days integer;
+BEGIN
+    IF TG_OP = 'INSERT'
+       OR (TG_OP = 'UPDATE'
+           AND NEW."settlement_amount_minor" IS DISTINCT FROM OLD."settlement_amount_minor") THEN
+        PERFORM taven_lock_automatic_order_session(target_order_id);
+    END IF;
+
+    SELECT "status", "accepted_claim_window_days"
+    INTO target_order_status, target_claim_window_days
+    FROM "orders"
+    WHERE "id" = target_order_id
+    FOR UPDATE;
+
+    IF TG_OP = 'INSERT' THEN
+        IF target_order_status IS DISTINCT FROM 'DRAFT'::"order_status" THEN
+            RAISE EXCEPTION 'fulfilment slots can be inserted only while the order is draft'
+                USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
+        END IF;
+
+        IF NEW."outcome" <> 'PENDING'
+           OR NEW."delivered_at" IS NOT NULL
+           OR NEW."claim_until" IS NOT NULL THEN
+            RAISE EXCEPTION 'new fulfilment slots must begin pending without delivery evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_initial_outcome_check';
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'fulfilment slots are stable topology and cannot be deleted'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
+    END IF;
+
+    IF (to_jsonb(NEW) - 'outcome' - 'updated_at' - 'settlement_amount_minor' - 'delivered_at' - 'claim_until')
+       IS DISTINCT FROM (to_jsonb(OLD) - 'outcome' - 'updated_at' - 'settlement_amount_minor' - 'delivered_at' - 'claim_until') THEN
+        RAISE EXCEPTION 'fulfilment slot identity and packing topology cannot be changed'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_topology_immutable_check';
+    END IF;
+
+    IF NEW."settlement_amount_minor" IS DISTINCT FROM OLD."settlement_amount_minor"
+       AND EXISTS (SELECT 1 FROM "payments" WHERE "order_id" = OLD."order_id") THEN
+        RAISE EXCEPTION 'fulfilment slot settlement cannot change after payment intent creation'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_settlement_payment_guard';
+    END IF;
+
+    IF NEW."outcome" IS DISTINCT FROM OLD."outcome"
+       AND NOT (
+           (OLD."outcome" = 'PENDING'
+            AND NEW."outcome" IN ('DELIVERED', 'CANCELLED', 'CANCELLED_REFUNDED'))
+           OR (OLD."outcome" = 'CANCELLED'
+               AND NEW."outcome" = 'CANCELLED_REFUNDED')
+           OR (OLD."outcome" = 'CANCELLED'
+               AND NEW."outcome" = 'PENDING'
+               AND taven_has_reconciled_post_void_handoff(
+                   NEW."order_id", NEW."order_phase_id", NULL,
+                   NEW."id", NULL, NEW."updated_at"
+               ))
+           OR (OLD."outcome" = 'CANCELLED_REFUNDED'
+               AND NEW."outcome" = 'PENDING'
+               AND target_order_status IN ('REFUNDED', 'SHIPPED')
+               AND taven_has_refunded_post_void_handoff_reconciliation(
+                   NEW."order_id", NEW."order_phase_id", NULL,
+                   NEW."id", NULL, NEW."updated_at"
+               ))
+           OR (OLD."outcome" = 'CANCELLED_REFUNDED'
+               AND NEW."outcome" = 'CANCELLED'
+               AND taven_order_has_newer_refund_failure(NEW."order_id"))
+       ) THEN
+        RAISE EXCEPTION 'fulfilment slot outcome is terminal once recorded'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_outcome_transition_check';
+    END IF;
+
+    IF OLD."delivered_at" IS NOT NULL
+       AND (
+           NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+           OR NEW."claim_until" IS DISTINCT FROM OLD."claim_until"
+       ) THEN
+        RAISE EXCEPTION 'fulfilment slot delivery and Claim deadline are immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_claim_window_immutable_check';
+    END IF;
+
+    IF OLD."outcome" = 'PENDING'
+       AND NEW."outcome" = 'DELIVERED'
+       AND (
+           NEW."delivered_at" IS NULL
+           OR NEW."claim_until" IS NULL
+           OR target_claim_window_days IS NULL
+           OR NEW."claim_until" <> NEW."delivered_at" + make_interval(days => target_claim_window_days)
+       ) THEN
+        RAISE EXCEPTION 'delivered fulfilment slot requires its snapshotted Claim deadline'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_claim_window_snapshot_check';
+    END IF;
+
+    IF (
+        NEW."delivered_at" IS DISTINCT FROM OLD."delivered_at"
+        OR NEW."claim_until" IS DISTINCT FROM OLD."claim_until"
+       ) AND NOT (
+        OLD."outcome" = 'PENDING'
+        AND NEW."outcome" = 'DELIVERED'
+        AND OLD."delivered_at" IS NULL
+        AND OLD."claim_until" IS NULL
+        AND NEW."delivered_at" IS NOT NULL
+        AND target_claim_window_days IS NOT NULL
+        AND NEW."claim_until" = NEW."delivered_at" + make_interval(days => target_claim_window_days)
+       ) THEN
+        RAISE EXCEPTION 'delivery must derive the Claim deadline from the accepted policy snapshot'
+            USING ERRCODE = '23514', CONSTRAINT = 'fulfilment_slot_claim_window_snapshot_check';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
 
 ALTER TABLE "orders" DROP CONSTRAINT "orders_timestamps_check";
 ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
@@ -64,16 +252,41 @@ END;
 $$;
 
 -- Claims can be opened after an Order has reached a terminal state, when the
--- normal order lifecycle has already released its reproduction evidence. Keep
--- every order-bound source and photo needed to investigate the Claim until the
--- last active Claim for that Order is resolved.
+-- normal order lifecycle has already released its reproduction evidence. Hold
+-- only source and photo evidence reached by the Claim's exact slot resolutions.
 CREATE FUNCTION taven_reconcile_claim_asset_retention()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    target_order_id uuid := coalesce(NEW."order_id", OLD."order_id");
+    target_order_id uuid;
+    target_claim_id uuid;
+    retention_event_at timestamptz;
 BEGIN
+    IF TG_TABLE_NAME = 'claims' THEN
+        target_order_id := coalesce(
+            (to_jsonb(NEW) ->> 'order_id')::uuid,
+            (to_jsonb(OLD) ->> 'order_id')::uuid
+        );
+    ELSE
+        target_claim_id := coalesce(
+            (to_jsonb(NEW) ->> 'claim_id')::uuid,
+            (to_jsonb(OLD) ->> 'claim_id')::uuid
+        );
+        SELECT claim."order_id" INTO target_order_id
+        FROM "claims" claim
+        WHERE claim."id" = target_claim_id;
+    END IF;
+
+    retention_event_at := coalesce(
+        (to_jsonb(NEW) ->> 'resolved_at')::timestamptz,
+        (to_jsonb(OLD) ->> 'resolved_at')::timestamptz
+    );
+
+    IF target_order_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
     PERFORM 1
     FROM "model_files" source
     WHERE source."id" IN (
@@ -113,17 +326,21 @@ BEGIN
     UPDATE "model_files" source
     SET "source_delete_after" = greatest(
             source."source_delete_after",
-            coalesce(NEW."resolved_at", source."source_delete_after")
+            coalesce(retention_event_at, source."source_delete_after")
         ),
         "retention_hold" = CASE
         WHEN source."retention_hold" = 'LEGAL' THEN source."retention_hold"
         WHEN EXISTS (
             SELECT 1
-            FROM "order_items" claim_item
-            JOIN "claims" active_claim
-              ON active_claim."order_id" = claim_item."order_id"
-             AND active_claim."status" IN ('OPEN', 'ACTIVE')
-            WHERE claim_item."source_model_file_id" = source."id"
+            FROM "claims" active_claim
+            JOIN "claim_slot_resolutions" resolution
+              ON resolution."claim_id" = active_claim."id"
+            JOIN "fulfilment_slots" slot
+              ON slot."id" = resolution."fulfilment_slot_id"
+            JOIN "order_items" claim_item
+              ON claim_item."id" = slot."order_item_id"
+            WHERE active_claim."status" IN ('OPEN', 'ACTIVE')
+              AND claim_item."source_model_file_id" = source."id"
         ) THEN 'ACTIVE_CLAIM'::"retention_hold"
         WHEN EXISTS (
             SELECT 1
@@ -158,32 +375,41 @@ BEGIN
     UPDATE "photo_assets" photo
     SET "photo_delete_after" = greatest(
             photo."photo_delete_after",
-            coalesce(NEW."resolved_at", photo."photo_delete_after")
+            coalesce(retention_event_at, photo."photo_delete_after")
         ),
         "retention_hold" = CASE
         WHEN photo."retention_hold" = 'LEGAL' THEN photo."retention_hold"
         WHEN EXISTS (
             SELECT 1
             FROM "claims" active_claim
+            JOIN "claim_slot_resolutions" resolution
+              ON resolution."claim_id" = active_claim."id"
+            JOIN "fulfilment_slots" slot
+              ON slot."id" = resolution."fulfilment_slot_id"
             WHERE active_claim."status" IN ('OPEN', 'ACTIVE')
               AND (
                   EXISTS (
                       SELECT 1
-                      FROM "jobs" claim_job
+                      FROM "phase_resource_plan_slots" plan_slot
+                      JOIN "jobs" claim_job
+                        ON claim_job."phase_resource_plan_job_id" = plan_slot."phase_resource_plan_job_id"
                       WHERE photo."kind" = 'QC'::"photo_asset_kind"
                         AND photo."scope_kind" = 'JOB'::"photo_scope_kind"
                         AND photo."scope_id" = claim_job."id"
                         AND claim_job."qc_photo_asset_id" = photo."id"
-                        AND claim_job."order_id" = active_claim."order_id"
+                        AND plan_slot."fulfilment_slot_id" = slot."id"
                   )
                   OR EXISTS (
                       SELECT 1
-                      FROM "individual_order_origins" claim_origin
-                      JOIN "quotes" claim_quote ON claim_quote."id" = claim_origin."quote_id"
+                      FROM "individual_order_item_sources" item_source
+                      JOIN "quote_items" claim_item
+                        ON claim_item."id" = item_source."quote_item_id"
+                      JOIN "quotes" claim_quote
+                        ON claim_quote."id" = claim_item."quote_id"
                       WHERE photo."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
                         AND photo."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
                         AND photo."scope_id" = claim_quote."quote_request_id"
-                        AND claim_origin."order_id" = active_claim."order_id"
+                        AND item_source."order_item_id" = slot."order_item_id"
                   )
               )
         ) THEN 'ACTIVE_CLAIM'::"retention_hold"
@@ -267,11 +493,15 @@ BEGIN
         OR NEW."retention_hold" NOT IN ('ACTIVE_CLAIM', 'LEGAL'))
        AND EXISTS (
            SELECT 1
-           FROM "order_items" item
-           JOIN "claims" active_claim
-             ON active_claim."order_id" = item."order_id"
-            AND active_claim."status" IN ('OPEN', 'ACTIVE')
-           WHERE item."source_model_file_id" = NEW."id"
+           FROM "claims" active_claim
+           JOIN "claim_slot_resolutions" resolution
+             ON resolution."claim_id" = active_claim."id"
+           JOIN "fulfilment_slots" slot
+             ON slot."id" = resolution."fulfilment_slot_id"
+           JOIN "order_items" item
+             ON item."id" = slot."order_item_id"
+           WHERE active_claim."status" IN ('OPEN', 'ACTIVE')
+             AND item."source_model_file_id" = NEW."id"
        ) THEN
         RAISE EXCEPTION 'Claim-bound source ModelFile must remain retained while its Claim is active'
             USING ERRCODE = '23514', CONSTRAINT = 'claim_source_active_claim_check';
@@ -291,25 +521,34 @@ BEGIN
        AND EXISTS (
            SELECT 1
            FROM "claims" active_claim
+           JOIN "claim_slot_resolutions" resolution
+             ON resolution."claim_id" = active_claim."id"
+           JOIN "fulfilment_slots" slot
+             ON slot."id" = resolution."fulfilment_slot_id"
            WHERE active_claim."status" IN ('OPEN', 'ACTIVE')
              AND (
                  EXISTS (
                      SELECT 1
-                     FROM "jobs" claim_job
+                     FROM "phase_resource_plan_slots" plan_slot
+                     JOIN "jobs" claim_job
+                       ON claim_job."phase_resource_plan_job_id" = plan_slot."phase_resource_plan_job_id"
                      WHERE NEW."kind" = 'QC'::"photo_asset_kind"
                        AND NEW."scope_kind" = 'JOB'::"photo_scope_kind"
                        AND NEW."scope_id" = claim_job."id"
                        AND claim_job."qc_photo_asset_id" = NEW."id"
-                       AND claim_job."order_id" = active_claim."order_id"
+                       AND plan_slot."fulfilment_slot_id" = slot."id"
                  )
                  OR EXISTS (
                      SELECT 1
-                     FROM "individual_order_origins" claim_origin
-                     JOIN "quotes" claim_quote ON claim_quote."id" = claim_origin."quote_id"
+                     FROM "individual_order_item_sources" item_source
+                     JOIN "quote_items" claim_item
+                       ON claim_item."id" = item_source."quote_item_id"
+                     JOIN "quotes" claim_quote
+                       ON claim_quote."id" = claim_item."quote_id"
                      WHERE NEW."kind" = 'QUOTE_REFERENCE'::"photo_asset_kind"
                        AND NEW."scope_kind" = 'QUOTE_REQUEST'::"photo_scope_kind"
                        AND NEW."scope_id" = claim_quote."quote_request_id"
-                       AND claim_origin."order_id" = active_claim."order_id"
+                       AND item_source."order_item_id" = slot."order_item_id"
                  )
              )
        ) THEN
@@ -4740,6 +4979,8 @@ DECLARE
     scoped_phase_id uuid;
     scoped_plan_id uuid;
     scoped_currency char(3);
+    scoped_claim_origin "claim_origin";
+    scoped_claim_opened_at timestamptz;
 BEGIN
     IF TG_TABLE_NAME = 'replacement_requests' THEN
         SELECT job."order_id", job."order_phase_id", job."shipment_plan_id"
@@ -4798,14 +5039,24 @@ BEGIN
                 USING ERRCODE = '23514', CONSTRAINT = 'claim_incident_scope_check';
         END IF;
     ELSIF TG_TABLE_NAME = 'claim_slot_resolutions' THEN
-        SELECT claim."order_id", claim."order_phase_id"
-        INTO scoped_order_id, scoped_phase_id
+        SELECT claim."order_id", claim."order_phase_id", claim."origin", claim."opened_at"
+        INTO scoped_order_id, scoped_phase_id, scoped_claim_origin, scoped_claim_opened_at
         FROM "claims" claim WHERE claim."id" = NEW."claim_id";
         IF NOT EXISTS (
             SELECT 1 FROM "fulfilment_slots" slot
             WHERE slot."id" = NEW."fulfilment_slot_id"
               AND slot."order_id" = scoped_order_id
               AND slot."order_phase_id" = scoped_phase_id
+        ) OR (
+            scoped_claim_origin = 'POST_DELIVERY_QUALITY'
+            AND NOT EXISTS (
+                SELECT 1
+                FROM "fulfilment_slots" slot
+                WHERE slot."id" = NEW."fulfilment_slot_id"
+                  AND slot."outcome" = 'DELIVERED'
+                  AND slot."claim_until" IS NOT NULL
+                  AND scoped_claim_opened_at <= slot."claim_until"
+            )
         ) OR (NEW."replacement_shipment_id" IS NOT NULL AND NOT EXISTS (
             SELECT 1
             FROM "shipments" shipment
@@ -5426,6 +5677,7 @@ BEGIN
            OR NEW."accepted_order_price_binding_id" IS NOT NULL
            OR NEW."accepted_terms_revision" IS NOT NULL
            OR NEW."accepted_claim_policy_revision" IS NOT NULL
+           OR NEW."accepted_claim_window_days" IS NOT NULL
            OR NEW."withdrawal_exception_acknowledged_at" IS NOT NULL THEN
             RAISE EXCEPTION 'new orders must begin draft without lifecycle timestamps'
                 USING ERRCODE = '23514', CONSTRAINT = 'order_status_transition_check';
@@ -5496,6 +5748,7 @@ BEGIN
            NEW."accepted_order_price_binding_id" IS NULL
            OR NEW."accepted_terms_revision" IS NULL
            OR NEW."accepted_claim_policy_revision" IS NULL
+           OR NEW."accepted_claim_window_days" IS NULL
            OR NEW."withdrawal_exception_acknowledged_at" IS NULL
            OR NEW."withdrawal_exception_acknowledged_at" > NEW."confirmed_at"
            OR NOT EXISTS (
@@ -5809,6 +6062,9 @@ AFTER UPDATE OF "status" ON "claims"
 FOR EACH ROW
 WHEN (OLD."status" IS DISTINCT FROM NEW."status")
 EXECUTE FUNCTION taven_reconcile_claim_asset_retention();
+CREATE TRIGGER "claim_slot_resolutions_asset_retention_reconciled"
+AFTER INSERT OR DELETE ON "claim_slot_resolutions"
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_claim_asset_retention();
 CREATE TRIGGER "model_files_active_claim_protected"
 BEFORE UPDATE OF "retention_hold", "deleted_at" ON "model_files"
 FOR EACH ROW EXECUTE FUNCTION taven_protect_active_claim_source();

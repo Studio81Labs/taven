@@ -1650,6 +1650,7 @@ model Order {
   acceptedOrderPriceBindingId       String?     @unique(map: "orders_accepted_order_price_binding_id_key") @map("accepted_order_price_binding_id") @db.Uuid
   acceptedTermsRevision             String?     @map("accepted_terms_revision") @db.VarChar(100)
   acceptedClaimPolicyRevision       String?     @map("accepted_claim_policy_revision") @db.VarChar(100)
+  acceptedClaimWindowDays           Int?        @map("accepted_claim_window_days")
   withdrawalExceptionAcknowledgedAt DateTime?   @map("withdrawal_exception_acknowledged_at") @db.Timestamptz(3)
   checkoutContactSnapshot           Json?       @map("checkout_contact_snapshot") @db.JsonB
   photoPublicationConsentGrantedAt  DateTime?   @map("photo_publication_consent_granted_at") @db.Timestamptz(3)
@@ -1997,6 +1998,8 @@ model FulfilmentSlot {
   packingUnitKey        String                @map("packing_unit_key") @db.VarChar(255)
   settlementAmountMinor BigInt                @map("settlement_amount_minor")
   outcome               FulfilmentSlotOutcome @default(PENDING)
+  deliveredAt           DateTime?             @map("delivered_at") @db.Timestamptz(3)
+  claimUntil            DateTime?             @map("claim_until") @db.Timestamptz(3)
   createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
 

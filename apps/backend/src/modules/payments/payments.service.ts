@@ -142,6 +142,7 @@ export class PaymentsService {
       {
         termsRevision: initial.order.acceptedTermsRevision,
         claimPolicyRevision: initial.order.acceptedClaimPolicyRevision,
+        claimWindowDays: initial.order.acceptedClaimWindowDays,
       },
       initialLegalRevisions,
     );
@@ -194,6 +195,7 @@ export class PaymentsService {
         {
           termsRevision: context.order.acceptedTermsRevision,
           claimPolicyRevision: context.order.acceptedClaimPolicyRevision,
+          claimWindowDays: context.order.acceptedClaimWindowDays,
         },
         legalRevisions,
       );
@@ -300,6 +302,11 @@ export class PaymentsService {
             ? {}
             : {
                 acceptedClaimPolicyRevision: legalRevisions.claimPolicyRevision,
+              }),
+          ...(context.order.acceptedClaimWindowDays
+            ? {}
+            : {
+                acceptedClaimWindowDays: legalRevisions.claimWindowDays,
               }),
           ...(context.order.withdrawalExceptionAcknowledgedAt
             ? {}

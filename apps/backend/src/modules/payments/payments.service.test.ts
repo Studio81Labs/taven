@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CHECKOUT_CLAIM_POLICY_REVISION_ENV,
+  CHECKOUT_CLAIM_WINDOW_DAYS_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
   CHECKOUT_PHOTO_CONSENT_REVISION_ENV,
   CHECKOUT_TERMS_REVISION_ENV,
@@ -73,6 +74,7 @@ describe("payment capabilities", () => {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
         [CHECKOUT_TERMS_REVISION_ENV]: "terms-pending",
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
       },
       {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
@@ -94,6 +96,7 @@ describe("payment capabilities", () => {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
         [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
       }),
     ).resolves.toEqual({
       available: true,
@@ -126,6 +129,7 @@ describe("payment capabilities", () => {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
         [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
       }),
     ).resolves.toEqual({
       available: false,
@@ -154,6 +158,7 @@ describe("payment capabilities", () => {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
         [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
         [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
         [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photos-v1-approved",
       }),
     ).resolves.toMatchObject({

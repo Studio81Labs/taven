@@ -1808,6 +1808,19 @@ export class OrdersService {
             data: { status: ShipmentStatus.IN_TRANSIT },
           });
         } else if (kind === ShipmentProviderEventKind.DELIVERY_SCAN) {
+          const deliveryPolicy = await tx.order.findUnique({
+            where: { id: orderId },
+            select: { acceptedClaimWindowDays: true },
+          });
+          if (!deliveryPolicy?.acceptedClaimWindowDays) {
+            throw new ConflictException(
+              "Order has no snapshotted post-delivery Claim window",
+            );
+          }
+          const claimUntil = addDays(
+            verifiedAt,
+            deliveryPolicy.acceptedClaimWindowDays,
+          );
           await tx.shipment.update({
             where: { id: shipmentId },
             data: { status: ShipmentStatus.DELIVERED, deliveredAt: verifiedAt },
@@ -1900,7 +1913,12 @@ export class OrdersService {
                 some: { shipmentPlanId: shipment.shipmentPlanId },
               },
             },
-            data: { outcome: "DELIVERED", updatedAt: verifiedAt },
+            data: {
+              outcome: "DELIVERED",
+              deliveredAt: verifiedAt,
+              claimUntil,
+              updatedAt: verifiedAt,
+            },
           });
           const unfinished = await tx.$queryRaw<Array<{ blocked: boolean }>>`
             SELECT EXISTS (
@@ -2139,6 +2157,7 @@ export class OrdersService {
         if (slots.length !== slotIds.length) {
           throw new NotFoundException("Claim fulfilment slot was not found");
         }
+        const openedAt = await databaseNow(tx);
         if (origin === ClaimOrigin.POST_DELIVERY_QUALITY) {
           if (
             ![
@@ -2151,7 +2170,12 @@ export class OrdersService {
                 | typeof OrderStatus.COMPLETED
                 | typeof OrderStatus.PARTIALLY_FULFILLED,
             ) ||
-            slots.some(({ outcome }) => outcome !== "DELIVERED")
+            slots.some(
+              ({ outcome, claimUntil }) =>
+                outcome !== "DELIVERED" ||
+                claimUntil === null ||
+                openedAt.getTime() > claimUntil.getTime(),
+            )
           ) {
             throw new ConflictException(
               "Post-delivery Claims require delivered fulfilment slots",
@@ -2223,7 +2247,6 @@ export class OrdersService {
             "A fulfilment slot already has an active Claim remedy",
           );
         }
-        const openedAt = await databaseNow(tx);
         const claim = await tx.claim.create({
           data: {
             orderId,

@@ -780,7 +780,8 @@ async function advanceOrderLifecycleStep(
     }
     await client.query(
       `UPDATE fulfilment_slots
-       SET outcome = 'DELIVERED', updated_at = $2
+       SET outcome = 'DELIVERED', delivered_at = $2::timestamptz,
+           claim_until = $2::timestamptz + interval '30 days', updated_at = $2
        WHERE order_id = $1 AND outcome = 'PENDING'`,
       [orderId, transitionedAt],
     );
@@ -4765,7 +4766,8 @@ describe("commerce persistence foundations", () => {
         async () => {
           await client.query(
             `UPDATE fulfilment_slots
-             SET outcome = 'DELIVERED', updated_at = $2
+             SET outcome = 'DELIVERED', delivered_at = $2::timestamptz,
+                 claim_until = $2::timestamptz + interval '30 days', updated_at = $2
              WHERE order_id = $1`,
             [foundation.orderId, changedAt],
           );
@@ -12530,7 +12532,8 @@ describe("commerce persistence foundations", () => {
           }
           await client.query(
             `UPDATE fulfilment_slots
-             SET outcome = 'DELIVERED', updated_at = $2
+             SET outcome = 'DELIVERED', delivered_at = $2::timestamptz,
+                 claim_until = $2::timestamptz + interval '30 days', updated_at = $2
              WHERE order_id = $1`,
             [foundation.orderId, deliveredAt],
           );
@@ -12901,7 +12904,8 @@ describe("commerce persistence foundations", () => {
         async () => {
           await client.query(
             `UPDATE fulfilment_slots
-             SET outcome = 'DELIVERED', updated_at = $2
+             SET outcome = 'DELIVERED', delivered_at = $2::timestamptz,
+                 claim_until = $2::timestamptz + interval '30 days', updated_at = $2
              WHERE id = (
                SELECT allocation.fulfilment_slot_id
                FROM shipment_plan_fulfilment_slots allocation
@@ -12968,7 +12972,8 @@ describe("commerce persistence foundations", () => {
           );
           await client.query(
             `UPDATE fulfilment_slots
-             SET outcome = 'DELIVERED', updated_at = $2
+             SET outcome = 'DELIVERED', delivered_at = $2::timestamptz,
+                 claim_until = $2::timestamptz + interval '30 days', updated_at = $2
              WHERE id = (
                SELECT allocation.fulfilment_slot_id
                FROM shipment_plan_fulfilment_slots allocation
@@ -13117,7 +13122,8 @@ describe("commerce persistence foundations", () => {
       ]);
       await client.query(
         `UPDATE fulfilment_slots slot
-         SET outcome = 'DELIVERED', updated_at = $2
+         SET outcome = 'DELIVERED', delivered_at = $2::timestamptz,
+             claim_until = $2::timestamptz + interval '30 days', updated_at = $2
          FROM shipment_plan_fulfilment_slots allocation
          WHERE allocation.fulfilment_slot_id = slot.id
            AND allocation.shipment_plan_id = $1`,
@@ -13186,7 +13192,8 @@ describe("commerce persistence foundations", () => {
           }
           await client.query(
             `UPDATE fulfilment_slots
-             SET outcome = 'DELIVERED', updated_at = $2
+             SET outcome = 'DELIVERED', delivered_at = $2::timestamptz,
+                 claim_until = $2::timestamptz + interval '30 days', updated_at = $2
              WHERE order_id = $1 AND outcome = 'PENDING'`,
             [foundation.orderId, finalDeliveredAt],
           );
@@ -13556,7 +13563,8 @@ describe("commerce persistence foundations", () => {
               }
               await client.query(
                 `UPDATE fulfilment_slots
-                 SET outcome = 'DELIVERED', updated_at = $2
+                 SET outcome = 'DELIVERED', delivered_at = $2::timestamptz,
+                     claim_until = $2::timestamptz + interval '30 days', updated_at = $2
                  WHERE order_id = $1`,
                 [foundation.orderId, deliveredAt],
               );
@@ -17089,6 +17097,7 @@ describe("commerce persistence foundations", () => {
              SET accepted_order_price_binding_id = $2,
                  accepted_terms_revision = 'terms-v1',
                  accepted_claim_policy_revision = 'claim-policy-v1',
+                 accepted_claim_window_days = 30,
                  withdrawal_exception_acknowledged_at = clock_timestamp(),
                  checkout_contact_snapshot = jsonb_build_object(
                    'email', 'test@example.test',
@@ -17144,6 +17153,7 @@ describe("commerce persistence foundations", () => {
              SET accepted_order_price_binding_id = $2,
                  accepted_terms_revision = 'terms-v2',
                  accepted_claim_policy_revision = 'claim-policy-v1',
+                 accepted_claim_window_days = 30,
                  withdrawal_exception_acknowledged_at = clock_timestamp(),
                  checkout_contact_snapshot = jsonb_build_object(
                    'email', 'test@example.test',
@@ -17166,6 +17176,7 @@ describe("commerce persistence foundations", () => {
              SET accepted_order_price_binding_id = $2,
                  accepted_terms_revision = 'terms-v1',
                  accepted_claim_policy_revision = 'claim-policy-v1',
+                 accepted_claim_window_days = 30,
                  withdrawal_exception_acknowledged_at =
                    clock_timestamp() + interval '60 seconds',
                  checkout_contact_snapshot = jsonb_build_object(

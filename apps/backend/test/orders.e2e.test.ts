@@ -963,6 +963,15 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(projection.jobs).toEqual([
       expect.objectContaining({ status: "SETTLED" }),
     ]);
+    const deliveredSlot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
+    });
+    expect(deliveredSlot.deliveredAt).not.toBeNull();
+    expect(deliveredSlot.claimUntil).not.toBeNull();
+    expect(
+      deliveredSlot.claimUntil!.getTime() -
+        deliveredSlot.deliveredAt!.getTime(),
+    ).toBe(30 * 24 * 60 * 60 * 1_000);
     await expect(
       prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetId } }),
     ).resolves.toMatchObject({ retentionHold: "NONE" });
@@ -1093,6 +1102,112 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         data: { status: "PENDING", resolvedAt: null },
       }),
     ).rejects.toThrow("rejected Claim resolution history is immutable");
+  }, 10_000);
+
+  it("retains QC evidence only for Jobs that produced claimed slots", async () => {
+    const fixture = await preparePaidOrder("slot-scoped-claim-retention", 2);
+    const photoAssetIds = [randomUUID(), randomUUID()];
+    for (const [index, photoAssetId] of photoAssetIds.entries()) {
+      await prisma.photoAsset.create({
+        data: {
+          id: photoAssetId,
+          kind: "QC",
+          scopeKind: "JOB",
+          scopeId: fixture.productions[index]!.jobId,
+          storageObjectKey: `qc/${photoAssetId}`,
+          contentHash: `${index + 4}`.repeat(64),
+          mediaType: "image/jpeg",
+          sizeBytes: 1n,
+          uploadedAt: new Date(),
+          photoDeleteAfter: new Date(Date.now() + 60 * 60 * 1_000),
+          retentionHold: "ACTIVE_ORDER",
+        },
+      });
+    }
+    for (const [index, photoAssetId] of photoAssetIds.entries()) {
+      await advanceThroughQc(fixture, index, photoAssetId);
+    }
+    for (const [index] of photoAssetIds.entries()) {
+      await labelAndPack(fixture, index);
+    }
+    for (const [index] of photoAssetIds.entries()) {
+      await handoff(fixture, index);
+    }
+    for (const [index] of photoAssetIds.entries()) {
+      await carrierEvent(
+        fixture,
+        index,
+        "TRANSIT_SCAN",
+        `scoped-transit-${index}`,
+      );
+    }
+    for (const [index] of photoAssetIds.entries()) {
+      await carrierEvent(
+        fixture,
+        index,
+        "DELIVERY_SCAN",
+        `scoped-delivery-${index}`,
+      );
+    }
+    await orders.completeOrder(
+      fixture.foundation.orderId,
+      "slot-scoped-claim-retention-complete",
+    );
+
+    await orders.createClaim(
+      fixture.foundation.orderId,
+      {
+        origin: "POST_DELIVERY_QUALITY",
+        reason: "the first delivered part has a surface defect",
+        fulfilmentSlotIds: [fixture.foundation.fulfilmentSlotIds[0]!],
+      },
+      "slot-scoped-claim-retention-open",
+    );
+
+    await expect(
+      prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetIds[0]! } }),
+    ).resolves.toMatchObject({ retentionHold: "ACTIVE_CLAIM" });
+    await expect(
+      prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetIds[1]! } }),
+    ).resolves.toMatchObject({ retentionHold: "NONE" });
+  }, 10_000);
+
+  it("rejects a quality Claim resolution opened after its slot deadline", async () => {
+    const fixture = await preparePaidOrder("expired-quality-claim");
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN");
+    await carrierEvent(fixture, 0, "DELIVERY_SCAN");
+    await orders.completeOrder(
+      fixture.foundation.orderId,
+      "expired-quality-claim-complete",
+    );
+    const slot = await prisma.fulfilmentSlot.findUniqueOrThrow({
+      where: { id: fixture.foundation.fulfilmentSlotIds[0]! },
+    });
+    if (!slot.claimUntil) throw new Error("Claim deadline was not snapshotted");
+    await expect(
+      prisma.$transaction(async (transaction) => {
+        const claim = await transaction.claim.create({
+          data: {
+            orderId: fixture.foundation.orderId,
+            orderPhaseId: fixture.foundation.orderPhaseId,
+            origin: "POST_DELIVERY_QUALITY",
+            reason: "late request must use manual legal review",
+            openedAt: new Date(slot.claimUntil!.getTime() + 1),
+          },
+        });
+        await transaction.claimSlotResolution.create({
+          data: {
+            claimId: claim.id,
+            fulfilmentSlotId: slot.id,
+          },
+        });
+      }),
+    ).rejects.toThrow(
+      "Claim slot resolution must preserve exact order, phase, slot, and Shipment scope",
+    );
   }, 10_000);
 
   it("withdraws a clean quality Claim atomically and releases its evidence", async () => {
