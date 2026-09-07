@@ -347,13 +347,13 @@ export class AutomaticQuotesService {
     }
     await this.prisma.$transaction(async (transaction) => {
       const session = await lockedSession(transaction, sessionId);
-      assertOpenOrConvertedSession(session, sessionCapability);
+      const observedAt = await databaseNow(transaction);
+      assertOpenOrConvertedSession(session, sessionCapability, observedAt);
       const origin = await transaction.automaticOrderOrigin.findUnique({
         where: { quoteSessionId: sessionId },
         select: { orderId: true },
       });
       if (!origin) throw new ConflictException("Automatic order is missing");
-      const observedAt = await databaseNow(transaction);
       await transaction.businessEvent.upsert({
         where: {
           eventType_dedupeKey: {
@@ -5691,12 +5691,13 @@ function assertOpenOrConvertedSession(
     expiresAt: Date;
   },
   token: string,
+  observedAt = new Date(),
 ): void {
   assertSessionCapability(session, token);
   if (
     (session.status !== QuoteSessionStatus.OPEN &&
       session.status !== QuoteSessionStatus.CONVERTED) ||
-    session.expiresAt.getTime() <= Date.now()
+    session.expiresAt.getTime() <= observedAt.getTime()
   ) {
     throw new GoneException("Automatic quote session is no longer available");
   }
