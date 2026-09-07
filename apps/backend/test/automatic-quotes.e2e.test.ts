@@ -3991,6 +3991,77 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       kind: "INDIVIDUAL_QUOTE_REQUEST",
       reasons: ["UNSUPPORTED_FORMAT"],
     });
+    const handoffKey = key("step-handoff");
+    const issued = await api(
+      `automatic-quote-sessions/${sessionId}/handoff-capabilities`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, handoffKey),
+      },
+    );
+    expect(issued.response.status).toBe(201);
+    const handoffToken = string(issued.body.handoffToken);
+    expect(handoffToken).toHaveLength(43);
+    expect(string(issued.body.expiresAt)).toBeTruthy();
+    const replayedIssuance = await api(
+      `automatic-quote-sessions/${sessionId}/handoff-capabilities`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, handoffKey),
+      },
+    );
+    expect(replayedIssuance.response.status).toBe(201);
+    expect(replayedIssuance.body).toEqual(issued.body);
+
+    const requestKey = key("step-assisted-request");
+    const requestBody = {
+      automaticQuoteHandoffToken: handoffToken,
+      attribution: { channel: "unknown", source: "automatic-quote" },
+      contact: {
+        email: `step-handoff-${randomUUID()}@example.test`,
+        name: "Step handoff customer",
+      },
+      description: "Need a manual review of the imported STEP model.",
+    };
+    const submitted = await api("quote-requests", {
+      method: "POST",
+      headers: jsonHeaders(requestKey),
+      body: JSON.stringify(requestBody),
+    });
+    expect(submitted.response.status).toBe(201);
+    const requestId = string(submitted.body.requestId);
+    const replayedSubmission = await api("quote-requests", {
+      method: "POST",
+      headers: jsonHeaders(requestKey),
+      body: JSON.stringify(requestBody),
+    });
+    expect(replayedSubmission.response.status).toBe(201);
+    expect(replayedSubmission.body.requestId).toBe(requestId);
+    const storedHandoff =
+      await prisma.automaticQuoteRequestHandoff.findUniqueOrThrow({
+        where: { quoteRequestId: requestId },
+      });
+    expect(storedHandoff.sourceQuoteSessionId).toBe(sessionId);
+    expect(storedHandoff.reasons).toEqual(["UNSUPPORTED_FORMAT"]);
+    expect(storedHandoff.modelFileIds).toEqual([modelFile.id]);
+    expect(
+      await prisma.automaticQuoteHandoffCapability.findUniqueOrThrow({
+        where: { tokenHash: sha(handoffToken) },
+      }),
+    ).toMatchObject({ consumedAt: expect.any(Date) });
+
+    const reused = await api("quote-requests", {
+      method: "POST",
+      headers: jsonHeaders(key("step-assisted-request-reuse")),
+      body: JSON.stringify({
+        ...requestBody,
+        contact: {
+          email: `step-handoff-reuse-${randomUUID()}@example.test`,
+          name: "Second customer",
+        },
+      }),
+    });
+    expect(reused.response.status).toBe(401);
     expect(
       await prisma.outboxMessage.count({
         where: {

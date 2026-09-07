@@ -56,6 +56,14 @@ export class CreateQuoteRequestDto {
   @ApiPropertyOptional({ type: Boolean })
   photoPublicationConsent?: boolean;
 
+  @ApiPropertyOptional({
+    type: String,
+    minLength: 43,
+    maxLength: 43,
+    description: "Single-use server-issued automatic-quote handoff capability",
+  })
+  automaticQuoteHandoffToken?: string;
+
   @ApiPropertyOptional({ type: AttributionDto })
   attribution?: AttributionDto | Record<string, unknown>;
 }
@@ -144,6 +152,48 @@ export class QuoteRequestDetailDto {
 
   @ApiProperty({ type: [QuoteAttachmentDto] })
   attachments!: QuoteAttachmentDto[];
+}
+
+export class AutomaticQuoteRequestHandoffDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  automaticQuoteSessionId!: string;
+
+  @ApiProperty({ type: [String] })
+  reasons!: string[];
+
+  @ApiProperty({ type: [String], format: "uuid" })
+  modelFileIds!: string[];
+
+  @ApiProperty({ type: () => [AutomaticQuoteRequestHandoffItemDto] })
+  itemSelections!: AutomaticQuoteRequestHandoffItemDto[];
+}
+
+export class AutomaticQuoteRequestHandoffItemDto {
+  @ApiProperty({ type: "integer", minimum: 0 })
+  ordinal!: number;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  modelFileId!: string;
+
+  @ApiProperty({ type: [String] })
+  bodyIds!: string[];
+
+  @ApiProperty({ type: String })
+  material!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1 })
+  quantity!: number;
+
+  @ApiProperty({ type: Boolean })
+  fitSensitive!: boolean;
+}
+
+export class OperatorQuoteRequestDetailDto extends QuoteRequestDetailDto {
+  @ApiPropertyOptional({
+    type: AutomaticQuoteRequestHandoffDto,
+    nullable: true,
+  })
+  automaticQuoteHandoff!: AutomaticQuoteRequestHandoffDto | null;
 }
 
 export class ModelOfferItemDto {

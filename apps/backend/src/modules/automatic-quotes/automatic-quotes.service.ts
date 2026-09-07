@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import {
   AutomaticQuoteRiskDecision,
+  AutomaticQuoteHandoffScope,
   IdempotencyStatus,
   InventoryStatus,
   MachineStatus,
@@ -57,6 +58,7 @@ import {
 import { candidatePlateCapacities } from "./candidate-plate-capacities";
 import type {
   AttachAutomaticQuoteModelFileDto,
+  AutomaticQuoteHandoffCapabilityDto,
   AutomaticQuoteSessionCreatedDto,
   AutomaticQuoteSessionDto,
   AutomaticQuoteRiskDecisionDto,
@@ -77,6 +79,7 @@ import {
 } from "./reference-occupancy-probe";
 
 const SESSION_DAYS = 30;
+const HANDOFF_CAPABILITY_MINUTES = 15;
 const IDEMPOTENCY_DAYS = 7;
 const INSPECTION_REVISION = "inspection-v1";
 const CANONICALIZER_REVISION = "canonical-v1";
@@ -100,6 +103,18 @@ const INFILL_PERCENT = {
 
 type Transaction = Prisma.TransactionClient;
 type JsonRecord = Record<string, unknown>;
+type AutomaticQuoteHandoffSnapshot = {
+  reasons: string[];
+  modelFileIds: string[];
+  itemSelections: Array<{
+    ordinal: number;
+    modelFileId: string;
+    bodyIds: string[];
+    material: string;
+    quantity: number;
+    fitSensitive: boolean;
+  }>;
+};
 type QuoteCapabilityKey = { id: string; key: string };
 type AutomaticCandidateDispatchState = {
   attempt: number;
@@ -356,6 +371,79 @@ export class AutomaticQuotesService {
         },
         update: {},
       });
+    });
+  }
+
+  async createHandoffCapability(
+    sessionId: string,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteHandoffCapabilityDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+
+    return this.prisma.$transaction(async (transaction) => {
+      const session = await lockedSession(transaction, sessionId);
+      assertOpenSession(session, sessionCapability);
+      const capabilityKey = quoteCapabilityKeyRing().byId.get(
+        session.capabilityKeyId ?? "",
+      );
+      if (!capabilityKey) {
+        throw new Error("Automatic quote capability key is unavailable");
+      }
+      const record = await lockIdempotency(
+        transaction,
+        `automatic-quote.handoff:${sessionId}`,
+        commandKey,
+        fingerprintOf({
+          sessionId,
+          sessionCapabilityHash: hashToken(sessionCapability),
+        }),
+      );
+      if (record.replayed) {
+        return handoffCapabilityResponse(
+          capabilityKey.key,
+          record.response as { handoffId: string; expiresAt: string },
+        );
+      }
+
+      const source = await this.loadSession(sessionId);
+      const snapshot = handoffSnapshot(await this.readModel(source));
+      const observedAt = await databaseNow(transaction);
+      const expiresAt = new Date(
+        Math.min(
+          session.expiresAt.getTime(),
+          observedAt.getTime() + HANDOFF_CAPABILITY_MINUTES * 60_000,
+        ),
+      );
+      if (expiresAt.getTime() <= observedAt.getTime()) {
+        throw new GoneException(
+          "Automatic quote session is no longer available",
+        );
+      }
+      const handoffId = randomUUID();
+      const response = {
+        handoffId,
+        expiresAt: expiresAt.toISOString(),
+      };
+      await transaction.automaticQuoteHandoffCapability.create({
+        data: {
+          id: handoffId,
+          sourceQuoteSessionId: sessionId,
+          tokenHash: hashToken(
+            automaticQuoteHandoffToken(capabilityKey.key, handoffId),
+          ),
+          scope: AutomaticQuoteHandoffScope.ASSISTED_QUOTE_REQUEST,
+          reasons: snapshot.reasons,
+          modelFileIds: snapshot.modelFileIds,
+          itemSelections: jsonSafe(snapshot.itemSelections),
+          issuedAt: observedAt,
+          expiresAt,
+        },
+      });
+      await completeIdempotency(transaction, record.id, response);
+      return handoffCapabilityResponse(capabilityKey.key, response);
     });
   }
 
@@ -5667,6 +5755,71 @@ function sessionToken(
     .digest("base64url");
 }
 
+function automaticQuoteHandoffToken(secret: string, handoffId: string): string {
+  return createHmac("sha256", secret)
+    .update(["automatic-quote-handoff", handoffId].join("\0"))
+    .digest("base64url");
+}
+
+function handoffCapabilityResponse(
+  secret: string,
+  stored: { handoffId: string; expiresAt: string },
+): AutomaticQuoteHandoffCapabilityDto {
+  return {
+    handoffToken: automaticQuoteHandoffToken(secret, stored.handoffId),
+    expiresAt: stored.expiresAt,
+  };
+}
+
+function handoffSnapshot(
+  view: AutomaticQuoteSessionDto,
+): AutomaticQuoteHandoffSnapshot {
+  const handoff = view.handoff;
+  const context = handoff?.safeContext;
+  if (!handoff || !context) {
+    throw new ConflictException(
+      "Automatic quote does not require an assisted request",
+    );
+  }
+  const modelFileIds = context.modelFileIds;
+  const itemSelections = context.itemSelections;
+  if (!Array.isArray(modelFileIds) || !Array.isArray(itemSelections)) {
+    throw new Error("Automatic quote handoff context is invalid");
+  }
+  return {
+    reasons: [...handoff.reasons],
+    modelFileIds: modelFileIds.map((value) =>
+      normalizedUuid(value, "modelFileId"),
+    ),
+    itemSelections: itemSelections.map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("Automatic quote handoff item is invalid");
+      }
+      const item = value as JsonRecord;
+      if (
+        typeof item.ordinal !== "number" ||
+        !Number.isSafeInteger(item.ordinal) ||
+        typeof item.material !== "string" ||
+        typeof item.quantity !== "number" ||
+        !Number.isSafeInteger(item.quantity) ||
+        typeof item.fitSensitive !== "boolean" ||
+        !Array.isArray(item.bodyIds) ||
+        item.bodyIds.some((bodyId) => typeof bodyId !== "string")
+      ) {
+        throw new Error("Automatic quote handoff item is invalid");
+      }
+      return {
+        ordinal: item.ordinal,
+        modelFileId: normalizedUuid(item.modelFileId, "modelFileId"),
+        bodyIds: [...item.bodyIds] as string[],
+        material: item.material,
+        quantity: item.quantity,
+        fitSensitive: item.fitSensitive,
+      };
+    }),
+  };
+}
+
 function automaticQuoteClientSubject(
   capabilityKey: string,
   clientAddress: string,
@@ -5714,6 +5867,7 @@ function geometryFitsCapability(
 
 function quoteCapabilityKeyRing(): {
   all: readonly QuoteCapabilityKey[];
+  byId: ReadonlyMap<string, QuoteCapabilityKey>;
 } {
   const currentKey = process.env.TAVEN_QUOTE_CAPABILITY_KEY;
   if (!currentKey || currentKey.length < 32) {
@@ -5730,9 +5884,7 @@ function quoteCapabilityKeyRing(): {
     }
     return { id: quoteCapabilityKeyId(key), key } satisfies QuoteCapabilityKey;
   });
-  return {
-    all: keys,
-  };
+  return { all: keys, byId: new Map(keys.map((key) => [key.id, key])) };
 }
 
 function previousQuoteCapabilityKeys(): string[] {

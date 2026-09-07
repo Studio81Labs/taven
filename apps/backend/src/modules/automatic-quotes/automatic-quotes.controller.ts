@@ -28,6 +28,7 @@ import {
 } from "@nestjs/swagger";
 import {
   AttachAutomaticQuoteModelFileDto,
+  AutomaticQuoteHandoffCapabilityDto,
   AutomaticQuoteRiskDecisionDto,
   AutomaticQuoteSessionCreatedDto,
   AutomaticQuoteSessionDto,
@@ -111,6 +112,29 @@ export class AutomaticQuotesController {
       sessionId,
       body,
       authorization,
+    );
+  }
+
+  @Post(":sessionId/handoff-capabilities")
+  @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({
+    summary: "Mint one single-use assisted quote-request handoff capability",
+  })
+  @ApiCreatedResponse({ type: AutomaticQuoteHandoffCapabilityDto })
+  @ApiConflictResponse({ description: "Idempotency input changed" })
+  @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
+  @ApiGoneResponse({ description: "Session or handoff is no longer available" })
+  createHandoffCapability(
+    @Param("sessionId") sessionId: string,
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<AutomaticQuoteHandoffCapabilityDto> {
+    return this.automaticQuotes.createHandoffCapability(
+      sessionId,
+      authorization,
+      idempotencyKey,
     );
   }
 

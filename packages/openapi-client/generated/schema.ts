@@ -890,6 +890,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/automatic-quote-sessions/{sessionId}/handoff-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mint one single-use assisted quote-request handoff capability */
+        post: operations["AutomaticQuotesController_createHandoffCapability"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/automatic-quote-sessions/{sessionId}/items/{ordinal}/configuration": {
         parameters: {
             query?: never;
@@ -1299,6 +1316,12 @@ export interface components {
             /** @enum {string} */
             severity: "INFO" | "WARNING" | "BLOCKING";
         };
+        AutomaticQuoteHandoffCapabilityDto: {
+            /** Format: date-time */
+            expiresAt: string;
+            /** @description Single-use capability for one assisted quote request */
+            handoffToken: string;
+        };
         AutomaticQuoteHandoffDto: {
             /** @enum {string} */
             kind: "INDIVIDUAL_QUOTE_REQUEST";
@@ -1366,6 +1389,22 @@ export interface components {
             orderTotalMinor: number;
             /** @enum {integer} */
             quantity: 1 | 5 | 20;
+        };
+        AutomaticQuoteRequestHandoffDto: {
+            /** Format: uuid */
+            automaticQuoteSessionId: string;
+            itemSelections: components["schemas"]["AutomaticQuoteRequestHandoffItemDto"][];
+            modelFileIds: string[];
+            reasons: string[];
+        };
+        AutomaticQuoteRequestHandoffItemDto: {
+            bodyIds: string[];
+            fitSensitive: boolean;
+            material: string;
+            /** Format: uuid */
+            modelFileId: string;
+            ordinal: number;
+            quantity: number;
         };
         AutomaticQuoteRiskDecisionDto: {
             acknowledgementKey: string;
@@ -1570,6 +1609,8 @@ export interface components {
         };
         CreateQuoteRequestDto: {
             attribution?: components["schemas"]["AttributionDto"];
+            /** @description Single-use server-issued automatic-quote handoff capability */
+            automaticQuoteHandoffToken?: string;
             contact: components["schemas"]["QuoteContactDto"];
             description: string;
             measurements?: {
@@ -1893,6 +1934,30 @@ export interface components {
         };
         OperatorAuthMethodsDto: {
             methods: ("EMAIL_PASSWORD" | "GITHUB")[];
+        };
+        OperatorQuoteRequestDetailDto: {
+            attachments: components["schemas"]["QuoteAttachmentDto"][];
+            attribution?: {
+                [key: string]: unknown;
+            } | null;
+            automaticQuoteHandoff?: components["schemas"]["AutomaticQuoteRequestHandoffDto"] | null;
+            contact: components["schemas"]["QuoteContactDto"];
+            description: string;
+            measurements?: {
+                [key: string]: unknown;
+            } | null;
+            photoPublicationConsentGranted: boolean;
+            publicReference: string;
+            purpose?: string | null;
+            /** Format: date */
+            requestedDate?: string | null;
+            /** Format: uuid */
+            requestId: string;
+            slaBreached: boolean;
+            /** Format: date-time */
+            slaDueAt: string;
+            /** @enum {string} */
+            status: "NEW" | "IN_REVIEW" | "QUOTED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
         };
         OperatorSessionDto: {
             csrfToken: string;
@@ -3396,7 +3461,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["QuoteRequestDetailDto"][];
+                    "application/json": components["schemas"]["OperatorQuoteRequestDetailDto"][];
                 };
             };
         };
@@ -3420,7 +3485,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["QuoteRequestDetailDto"];
+                    "application/json": components["schemas"]["OperatorQuoteRequestDetailDto"];
                 };
             };
         };
@@ -3818,6 +3883,51 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
                 };
+            };
+        };
+    };
+    AutomaticQuotesController_createHandoffCapability: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteHandoffCapabilityDto"];
+                };
+            };
+            /** @description Session capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Idempotency input changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Session or handoff is no longer available */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

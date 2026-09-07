@@ -300,6 +300,23 @@
         ],
         "type": "object"
       },
+      "AutomaticQuoteHandoffCapabilityDto": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "handoffToken": {
+            "description": "Single-use capability for one assisted quote request",
+            "type": "string"
+          }
+        },
+        "required": [
+          "handoffToken",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
       "AutomaticQuoteHandoffDto": {
         "properties": {
           "kind": {
@@ -588,6 +605,77 @@
           "quantity",
           "currency",
           "orderTotalMinor"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteRequestHandoffDto": {
+        "properties": {
+          "automaticQuoteSessionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemSelections": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticQuoteRequestHandoffItemDto"
+            },
+            "type": "array"
+          },
+          "modelFileIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "automaticQuoteSessionId",
+          "reasons",
+          "modelFileIds",
+          "itemSelections"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteRequestHandoffItemDto": {
+        "properties": {
+          "bodyIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "fitSensitive": {
+            "type": "boolean"
+          },
+          "material": {
+            "type": "string"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ordinal",
+          "modelFileId",
+          "bodyIds",
+          "material",
+          "quantity",
+          "fitSensitive"
         ],
         "type": "object"
       },
@@ -1438,6 +1526,12 @@
         "properties": {
           "attribution": {
             "$ref": "#/components/schemas/AttributionDto"
+          },
+          "automaticQuoteHandoffToken": {
+            "description": "Single-use server-issued automatic-quote handoff capability",
+            "maxLength": 43,
+            "minLength": 43,
+            "type": "string"
           },
           "contact": {
             "$ref": "#/components/schemas/QuoteContactDto"
@@ -2602,6 +2696,90 @@
         },
         "required": [
           "methods"
+        ],
+        "type": "object"
+      },
+      "OperatorQuoteRequestDetailDto": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteAttachmentDto"
+            },
+            "type": "array"
+          },
+          "attribution": {
+            "additionalProperties": true,
+            "nullable": true,
+            "type": "object"
+          },
+          "automaticQuoteHandoff": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AutomaticQuoteRequestHandoffDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "contact": {
+            "$ref": "#/components/schemas/QuoteContactDto"
+          },
+          "description": {
+            "type": "string"
+          },
+          "measurements": {
+            "additionalProperties": true,
+            "nullable": true,
+            "type": "object"
+          },
+          "photoPublicationConsentGranted": {
+            "type": "boolean"
+          },
+          "publicReference": {
+            "type": "string"
+          },
+          "purpose": {
+            "nullable": true,
+            "type": "string"
+          },
+          "requestedDate": {
+            "format": "date",
+            "nullable": true,
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "slaBreached": {
+            "type": "boolean"
+          },
+          "slaDueAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "NEW",
+              "IN_REVIEW",
+              "QUOTED",
+              "ACCEPTED",
+              "REJECTED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "publicReference",
+          "status",
+          "description",
+          "photoPublicationConsentGranted",
+          "contact",
+          "slaDueAt",
+          "slaBreached",
+          "attachments"
         ],
         "type": "object"
       },
@@ -6178,7 +6356,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/QuoteRequestDetailDto"
+                    "$ref": "#/components/schemas/OperatorQuoteRequestDetailDto"
                   },
                   "type": "array"
                 }
@@ -6228,7 +6406,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/QuoteRequestDetailDto"
+                  "$ref": "#/components/schemas/OperatorQuoteRequestDetailDto"
                 }
               }
             },
@@ -6924,6 +7102,63 @@
           }
         ],
         "summary": "Set the whole-order express preference",
+        "tags": [
+          "automatic quotes"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/handoff-capabilities": {
+      "post": {
+        "operationId": "AutomaticQuotesController_createHandoffCapability",
+        "parameters": [
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteHandoffCapabilityDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Session capability is invalid"
+          },
+          "409": {
+            "description": "Idempotency input changed"
+          },
+          "410": {
+            "description": "Session or handoff is no longer available"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mint one single-use assisted quote-request handoff capability",
         "tags": [
           "automatic quotes"
         ]

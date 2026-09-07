@@ -19,6 +19,7 @@ export interface AssistedQuoteItemContext {
 export interface AssistedQuoteHandoffContext {
   automaticQuoteSessionId: string;
   expiresAt: string;
+  handoffToken?: string;
   itemSelections: AssistedQuoteItemContext[];
   modelFileIds: string[];
   reasons: string[];
@@ -127,6 +128,7 @@ export function sanitizeAssistedQuoteHandoff(
   if (!automaticQuoteSessionId) return undefined;
 
   const modelFileIds = safeUuidArray(handoff.safeContext.modelFileIds, 20);
+  const handoffToken = safeCapabilityToken(handoff.safeContext.handoffToken);
   const itemSelections = Array.isArray(handoff.safeContext.itemSelections)
     ? handoff.safeContext.itemSelections
         .slice(0, 50)
@@ -137,6 +139,7 @@ export function sanitizeAssistedQuoteHandoff(
   return {
     automaticQuoteSessionId,
     expiresAt: new Date(expiresAtMs).toISOString(),
+    ...(handoffToken ? { handoffToken } : {}),
     itemSelections,
     modelFileIds,
     reasons: handoff.reasons
@@ -231,6 +234,12 @@ function safeUuidArray(value: unknown, maximum: number): string[] {
 function safeUuid(value: unknown): string | undefined {
   return typeof value === "string" && UUID_PATTERN.test(value)
     ? value.toLowerCase()
+    : undefined;
+}
+
+function safeCapabilityToken(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value)
+    ? value
     : undefined;
 }
 

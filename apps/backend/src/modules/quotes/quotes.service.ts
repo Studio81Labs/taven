@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import {
   AuditActorKind,
+  AutomaticQuoteHandoffScope,
   IdempotencyStatus,
   Material,
   PaymentRole,
@@ -39,6 +40,7 @@ import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
   AcceptOfferDto,
   AcceptedOfferDto,
+  AutomaticQuoteRequestHandoffItemDto,
   CreateQuoteRequestDto,
   IssueOfferDto,
   ModelOfferItemDto,
@@ -48,6 +50,7 @@ import type {
   OfferPaymentScheduleDto,
   OfferPreviewDto,
   OfferPreviewPriceComponentDto,
+  OperatorQuoteRequestDetailDto,
   OfferShipmentPlanDto,
   QuoteContactDto,
   QuoteRequestCreatedDto,
@@ -221,6 +224,14 @@ export class QuotesService {
             updatedAt: observedAt,
           },
         });
+        if (request.automaticQuoteHandoffToken) {
+          await consumeAutomaticQuoteHandoff(
+            transaction,
+            request.automaticQuoteHandoffToken,
+            requestId,
+            observedAt,
+          );
+        }
         await transaction.auditEvent.create({
           data: {
             quoteRequestId: requestId,
@@ -295,7 +306,9 @@ export class QuotesService {
     return this.requestDetail(request, observedAt);
   }
 
-  async listRequests(status?: string): Promise<QuoteRequestDetailDto[]> {
+  async listRequests(
+    status?: string,
+  ): Promise<OperatorQuoteRequestDetailDto[]> {
     const normalizedStatus = status ? parseStatus(status) : undefined;
     const observedAt = await databaseNow(this.prisma);
     const requests = await this.prisma.quoteRequest.findMany({
@@ -310,24 +323,36 @@ export class QuotesService {
               ],
             },
           },
-      include: { quoteSession: true, customer: true },
+      include: {
+        quoteSession: true,
+        customer: true,
+        automaticQuoteHandoff: true,
+      },
       orderBy: [{ slaDueAt: "asc" }, { createdAt: "asc" }],
       take: 100,
     });
     return Promise.all(
-      requests.map((request) => this.requestDetail(request, observedAt)),
+      requests.map((request) =>
+        this.operatorRequestDetail(request, observedAt),
+      ),
     );
   }
 
-  async getOperatorRequest(requestId: string): Promise<QuoteRequestDetailDto> {
+  async getOperatorRequest(
+    requestId: string,
+  ): Promise<OperatorQuoteRequestDetailDto> {
     requestId = normalizedUuid(requestId, "requestId");
     const observedAt = await databaseNow(this.prisma);
     const request = await this.prisma.quoteRequest.findUnique({
       where: { id: requestId },
-      include: { quoteSession: true, customer: true },
+      include: {
+        quoteSession: true,
+        customer: true,
+        automaticQuoteHandoff: true,
+      },
     });
     if (!request) throw new NotFoundException("Quote request was not found");
-    return this.requestDetail(request, observedAt);
+    return this.operatorRequestDetail(request, observedAt);
   }
 
   async beginReview(
@@ -1412,6 +1437,39 @@ export class QuotesService {
     };
   }
 
+  private async operatorRequestDetail(
+    request: Awaited<
+      ReturnType<PrismaService["quoteRequest"]["findUniqueOrThrow"]>
+    > & {
+      customer?: {
+        email: string;
+        displayName: string | null;
+        phone: string | null;
+      } | null;
+      automaticQuoteHandoff?: {
+        sourceQuoteSessionId: string;
+        reasons: string[];
+        modelFileIds: string[];
+        itemSelections: Prisma.JsonValue;
+      } | null;
+    },
+    observedAt: Date,
+  ): Promise<OperatorQuoteRequestDetailDto> {
+    const detail = await this.requestDetail(request, observedAt);
+    const handoff = request.automaticQuoteHandoff;
+    return {
+      ...detail,
+      automaticQuoteHandoff: handoff
+        ? {
+            automaticQuoteSessionId: handoff.sourceQuoteSessionId,
+            reasons: handoff.reasons,
+            modelFileIds: handoff.modelFileIds,
+            itemSelections: handoffItemSelections(handoff.itemSelections),
+          }
+        : null,
+    };
+  }
+
   private currentCapabilityKey(): QuoteCapabilityKey {
     return quoteCapabilityKeyRing().current;
   }
@@ -1519,6 +1577,55 @@ async function lockedRequest(transaction: Transaction, requestId: string) {
     SELECT "id" FROM "quote_requests" WHERE "id" = ${requestId}::uuid FOR UPDATE
   `;
   return transaction.quoteRequest.findUnique({ where: { id: requestId } });
+}
+
+async function consumeAutomaticQuoteHandoff(
+  transaction: Transaction,
+  token: string,
+  quoteRequestId: string,
+  observedAt: Date,
+): Promise<void> {
+  const tokenHash = hashToken(token);
+  const rows = await transaction.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "automatic_quote_handoff_capabilities"
+    WHERE "token_hash" = ${tokenHash}
+    FOR UPDATE
+  `;
+  if (!rows[0]) {
+    throw new UnauthorizedException(
+      "Automatic quote handoff capability is invalid",
+    );
+  }
+  const capability =
+    await transaction.automaticQuoteHandoffCapability.findUnique({
+      where: { id: rows[0].id },
+    });
+  if (
+    !capability ||
+    capability.scope !== AutomaticQuoteHandoffScope.ASSISTED_QUOTE_REQUEST ||
+    capability.consumedAt !== null ||
+    capability.expiresAt.getTime() <= observedAt.getTime()
+  ) {
+    throw new UnauthorizedException(
+      "Automatic quote handoff capability is invalid",
+    );
+  }
+  await transaction.automaticQuoteRequestHandoff.create({
+    data: {
+      quoteRequestId,
+      capabilityId: capability.id,
+      sourceQuoteSessionId: capability.sourceQuoteSessionId,
+      reasons: capability.reasons,
+      modelFileIds: capability.modelFileIds,
+      itemSelections: jsonInput(capability.itemSelections)!,
+      createdAt: observedAt,
+    },
+  });
+  await transaction.automaticQuoteHandoffCapability.update({
+    where: { id: capability.id },
+    data: { consumedAt: observedAt },
+  });
 }
 
 async function lockedOffer(transaction: Transaction, quoteId: string) {
@@ -1885,8 +1992,23 @@ function validateCreateRequest(input: CreateQuoteRequestDto) {
       input.photoPublicationConsent,
       "photoPublicationConsent",
     ),
+    automaticQuoteHandoffToken: optionalCapabilityToken(
+      input.automaticQuoteHandoffToken,
+      "automaticQuoteHandoffToken",
+    ),
     attribution: normalizeAttribution(input.attribution),
   };
+}
+
+function optionalCapabilityToken(
+  value: unknown,
+  name: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return value;
 }
 
 function optionalBoolean(value: unknown, name: string): boolean {
@@ -3172,6 +3294,39 @@ function nullableJsonObject(
 ): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function handoffItemSelections(
+  value: Prisma.JsonValue,
+): AutomaticQuoteRequestHandoffItemDto[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Stored automatic quote handoff selections are invalid");
+  }
+  return value.map((value) => {
+    const item = nullableJsonObject(value);
+    if (
+      !item ||
+      typeof item.ordinal !== "number" ||
+      !Number.isSafeInteger(item.ordinal) ||
+      typeof item.modelFileId !== "string" ||
+      !Array.isArray(item.bodyIds) ||
+      !item.bodyIds.every((bodyId) => typeof bodyId === "string") ||
+      typeof item.material !== "string" ||
+      typeof item.quantity !== "number" ||
+      !Number.isSafeInteger(item.quantity) ||
+      typeof item.fitSensitive !== "boolean"
+    ) {
+      throw new Error("Stored automatic quote handoff selections are invalid");
+    }
+    return {
+      ordinal: item.ordinal,
+      modelFileId: item.modelFileId,
+      bodyIds: item.bodyIds,
+      material: item.material,
+      quantity: item.quantity,
+      fitSensitive: item.fitSensitive,
+    };
+  });
 }
 
 function jsonObject(value: Prisma.JsonValue): Record<string, unknown> {

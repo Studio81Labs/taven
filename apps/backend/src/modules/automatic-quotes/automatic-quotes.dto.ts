@@ -13,6 +13,17 @@ export class RecordAutomaticQuoteObservationDto {
   eventType!: "quote.viewed" | "checkout.started";
 }
 
+export class AutomaticQuoteHandoffCapabilityDto {
+  @ApiProperty({
+    type: String,
+    description: "Single-use capability for one assisted quote request",
+  })
+  handoffToken!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  expiresAt!: string;
+}
+
 export class AttachAutomaticQuoteModelFileDto {
   @ApiProperty({ type: String, format: "uuid" })
   modelFileId!: string;
