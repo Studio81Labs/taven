@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/admin/acquisition-spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record append-only acquisition spend evidence */
+        post: operations["MeasurementController_acquisitionSpend"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/audit-events": {
         parameters: {
             query?: never;
@@ -102,6 +119,91 @@ export interface paths {
         post?: never;
         /** Revoke the current operator session */
         delete: operations["OperatorAuthController_logout"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/handling-sessions/{sessionId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete a handling timer and allocate its measured cost */
+        post: operations["MeasurementController_stop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/handling-sessions/{sessionId}/void": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Void immutable handling evidence with a correction reason */
+        post: operations["MeasurementController_void"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/handling-sessions/manual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a completed manual handling measurement */
+        post: operations["MeasurementController_manual"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/handling-sessions/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start an operator handling timer */
+        post: operations["MeasurementController_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/actual-costs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record append-only actual order-cost evidence */
+        post: operations["MeasurementController_actualCost"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1351,6 +1453,9 @@ export interface components {
             /** Format: uuid */
             sourceJobId: string;
         };
+        CompleteHandlingSessionDto: {
+            allocations: components["schemas"]["HandlingAllocationInputDto"][];
+        };
         ConfigureAutomaticQuoteDraftItemDto: {
             bodyIds: string[];
             color?: string;
@@ -1501,6 +1606,22 @@ export interface components {
             /** Format: uri */
             authorizationUrl: string;
         };
+        HandlingAllocationInputDto: {
+            /** Format: uuid */
+            jobId?: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderItemId?: string;
+            /**
+             * Format: uuid
+             * @description Required for POSTPROCESSING_ITEM; forbidden otherwise.
+             */
+            orderPhaseId?: string;
+            servedUnitCount: string;
+            /** Format: uuid */
+            shipmentId?: string;
+        };
         HandoffReshipmentDto: {
             carrier: string;
             carrierLabelId: string;
@@ -1603,6 +1724,11 @@ export interface components {
             omissionReason?: string;
             /** Format: uuid */
             photoAssetId?: string;
+        };
+        MeasurementCommandResultDto: {
+            /** Format: uuid */
+            id: string;
+            status: string;
         };
         ModelOfferItemDto: {
             color?: string;
@@ -1837,6 +1963,50 @@ export interface components {
             /** @enum {string} */
             status: "IN_REVIEW" | "REJECTED" | "EXPIRED";
         };
+        RecordAcquisitionSpendDto: {
+            amountMinor: string;
+            /** @enum {string} */
+            channel: "DIRECT" | "ORGANIC" | "PAID" | "REFERRAL" | "UNKNOWN";
+            currency: string;
+            /** Format: date-time */
+            periodEnd: string;
+            /** Format: date-time */
+            periodStart: string;
+            reason?: string;
+            sourceEntityType: string;
+            sourceKey: string;
+            /** Format: uuid */
+            supersedesId?: string;
+        };
+        RecordActualCostDto: {
+            amountMinor: string;
+            /** @enum {string} */
+            category: "MATERIAL" | "VARIABLE_MACHINE" | "CARRIER" | "PACKAGING" | "PAYMENT_FEE";
+            currency: string;
+            /** Format: date-time */
+            occurredAt: string;
+            /** @description Required when source is MANUAL or supersedesId is supplied. */
+            reason?: string;
+            /** @enum {string} */
+            source: "MEASURED" | "MANUAL";
+            /** Format: uuid */
+            sourceEntityId?: string;
+            sourceEntityType: string;
+            sourceKey: string;
+            /** Format: uuid */
+            supersedesId?: string;
+        };
+        RecordManualHandlingSessionDto: {
+            allocations: components["schemas"]["HandlingAllocationInputDto"][];
+            /** @enum {string} */
+            component: "HANDLING_ORDER_FIX" | "HANDLING_PLATE" | "HANDLING_PIECE" | "HANDLING_PACK" | "SHIPPING_TRIP" | "POSTPROCESSING_ITEM";
+            durationMilliseconds: string;
+            /** Format: date-time */
+            endedAt: string;
+            reason: string;
+            /** Format: date-time */
+            startedAt: string;
+        };
         RejectClaimDto: {
             reason: string;
         };
@@ -1888,6 +2058,10 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
         };
+        StartHandlingSessionDto: {
+            /** @enum {string} */
+            component: "HANDLING_ORDER_FIX" | "HANDLING_PLATE" | "HANDLING_PIECE" | "HANDLING_PACK" | "SHIPPING_TRIP" | "POSTPROCESSING_ITEM";
+        };
         UploadIntentResponseDto: {
             /** @description One-time capability used to confirm and later read this upload. It is returned only when the intent is created. */
             accessToken: string;
@@ -1909,6 +2083,9 @@ export interface components {
             /** Format: uri */
             uploadUrl: string;
         };
+        VoidHandlingSessionDto: {
+            reason: string;
+        };
         WithdrawClaimDto: {
             reason: string;
         };
@@ -1921,6 +2098,33 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    MeasurementController_acquisitionSpend: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordAcquisitionSpendDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeasurementCommandResultDto"];
+                };
+            };
+        };
+    };
     AuditController_list: {
         parameters: {
             query?: {
@@ -2133,6 +2337,147 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    MeasurementController_stop: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteHandlingSessionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeasurementCommandResultDto"];
+                };
+            };
+        };
+    };
+    MeasurementController_void: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoidHandlingSessionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeasurementCommandResultDto"];
+                };
+            };
+        };
+    };
+    MeasurementController_manual: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordManualHandlingSessionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeasurementCommandResultDto"];
+                };
+            };
+        };
+    };
+    MeasurementController_start: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartHandlingSessionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeasurementCommandResultDto"];
+                };
+            };
+        };
+    };
+    MeasurementController_actualCost: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordActualCostDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeasurementCommandResultDto"];
+                };
             };
         };
     };
