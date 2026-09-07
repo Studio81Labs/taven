@@ -333,10 +333,10 @@ BEGIN
         WHERE "handling_session_id" = session_id
       ), floors AS (
         SELECT *,
-          (expected_duration * "served_unit_count") / total_units AS duration_floor,
-          (expected_duration * "served_unit_count") % total_units AS duration_remainder,
-          (expected_cost * "served_unit_count") / total_units AS cost_floor,
-          (expected_cost * "served_unit_count") % total_units AS cost_remainder
+          ((expected_duration::numeric * "served_unit_count") / total_units)::bigint AS duration_floor,
+          (expected_duration::numeric * "served_unit_count") % total_units AS duration_remainder,
+          ((expected_cost::numeric * "served_unit_count") / total_units)::bigint AS cost_floor,
+          (expected_cost::numeric * "served_unit_count") % total_units AS cost_remainder
         FROM basis
       ), ranked AS (
         SELECT *,

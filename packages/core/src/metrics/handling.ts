@@ -126,7 +126,11 @@ function allocateByServedUnits(
     if (left.remainder !== right.remainder) {
       return left.remainder > right.remainder ? -1 : 1;
     }
-    return left.target.id.localeCompare(right.target.id);
+    return left.target.id < right.target.id
+      ? -1
+      : left.target.id > right.target.id
+        ? 1
+        : 0;
   })) {
     if (remaining === 0n) break;
     allocations.set(
