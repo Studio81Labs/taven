@@ -32,6 +32,7 @@ import {
 type CheckoutPayment = components["schemas"]["CheckoutPaymentDto"];
 type CreateCheckoutPayment = components["schemas"]["CreateCheckoutPaymentDto"];
 type PaymentCapabilities = components["schemas"]["PaymentCapabilitiesDto"];
+const CHECKOUT_OBSERVATION_TIMEOUT_MS = 1_000;
 
 const props = defineProps<{
   quote: QuoteSession;
@@ -205,7 +206,7 @@ async function submitCheckout(): Promise<void> {
   persistCheckout();
   submitting.value = true;
   errorMessage.value = undefined;
-  await recordCheckoutStarted();
+  await recordCheckoutStartedBeforePayment();
   try {
     const result = await $api.POST(
       "/automatic-quote-sessions/{sessionId}/checkout/payments",
@@ -254,6 +255,16 @@ async function recordCheckoutStarted(): Promise<void> {
   } catch {
     // Observation failure must not block checkout.
   }
+}
+
+async function recordCheckoutStartedBeforePayment(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(resolve, CHECKOUT_OBSERVATION_TIMEOUT_MS);
+    void recordCheckoutStarted().finally(() => {
+      window.clearTimeout(timeout);
+      resolve();
+    });
+  });
 }
 
 async function refreshPayment(): Promise<void> {

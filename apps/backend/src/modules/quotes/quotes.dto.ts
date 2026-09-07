@@ -60,6 +60,7 @@ export class CreateQuoteRequestDto {
     type: String,
     minLength: 43,
     maxLength: 43,
+    pattern: "^[A-Za-z0-9_-]{43}$",
     description: "Single-use server-issued automatic-quote handoff capability",
   })
   automaticQuoteHandoffToken?: string;
