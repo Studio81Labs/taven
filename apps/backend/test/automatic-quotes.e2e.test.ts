@@ -3992,14 +3992,19 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       reasons: ["UNSUPPORTED_FORMAT"],
     });
     const handoffKey = key("step-handoff");
-    const issued = await api(
-      `automatic-quote-sessions/${sessionId}/handoff-capabilities`,
-      {
+    const [issued, concurrentIssuance] = await Promise.all([
+      api(`automatic-quote-sessions/${sessionId}/handoff-capabilities`, {
         method: "POST",
         headers: capabilityHeaders(sessionToken, handoffKey),
-      },
-    );
+      }),
+      api(`automatic-quote-sessions/${sessionId}/handoff-capabilities`, {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("step-handoff-other")),
+      }),
+    ]);
     expect(issued.response.status).toBe(201);
+    expect(concurrentIssuance.response.status).toBe(201);
+    expect(concurrentIssuance.body).toEqual(issued.body);
     const handoffToken = string(issued.body.handoffToken);
     expect(handoffToken).toHaveLength(43);
     expect(string(issued.body.expiresAt)).toBeTruthy();
@@ -4012,6 +4017,20 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     );
     expect(replayedIssuance.response.status).toBe(201);
     expect(replayedIssuance.body).toEqual(issued.body);
+    const activeCapability = await api(
+      `automatic-quote-sessions/${sessionId}/handoff-capabilities`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, key("step-handoff-active")),
+      },
+    );
+    expect(activeCapability.response.status).toBe(201);
+    expect(activeCapability.body).toEqual(issued.body);
+    expect(
+      await prisma.automaticQuoteHandoffCapability.count({
+        where: { sourceQuoteSessionId: sessionId },
+      }),
+    ).toBe(1);
 
     const requestKey = key("step-assisted-request");
     const requestBody = {
@@ -4062,6 +4081,17 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       }),
     });
     expect(reused.response.status).toBe(401);
+    const replacement = await api(
+      `automatic-quote-sessions/${sessionId}/handoff-capabilities`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(
+          sessionToken,
+          key("step-handoff-after-consumption"),
+        ),
+      },
+    );
+    expect(replacement.response.status).toBe(409);
     expect(
       await prisma.outboxMessage.count({
         where: {

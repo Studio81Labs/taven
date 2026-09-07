@@ -2249,7 +2249,7 @@ model AutomaticQuoteRiskDecisionRecord {
 
 model AutomaticQuoteHandoffCapability {
   id                   String                     @id @default(uuid()) @db.Uuid
-  sourceQuoteSessionId String                     @map("source_quote_session_id") @db.Uuid
+  sourceQuoteSessionId String                     @unique @map("source_quote_session_id") @db.Uuid
   tokenHash            String                     @unique @map("token_hash") @db.VarChar(64)
   scope                AutomaticQuoteHandoffScope
   reasons              String[]
@@ -2262,7 +2262,6 @@ model AutomaticQuoteHandoffCapability {
   sourceQuoteSession QuoteSession                   @relation("AutomaticQuoteHandoffSourceSession", fields: [sourceQuoteSessionId], references: [id], onDelete: Restrict)
   requestHandoff     AutomaticQuoteRequestHandoff?
 
-  @@index([sourceQuoteSessionId, expiresAt])
   @@index([expiresAt])
   @@map("automatic_quote_handoff_capabilities")
 }

@@ -3915,7 +3915,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Idempotency input changed */
+            /** @description Idempotency input changed or the source session's handoff capability is no longer available */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-09-07
-- **Decision authority:** architecture resolution of epic #7 escalation 002
+- **Decision authority:** architecture resolution of epic #7 escalations 002 and 003
 - **Implementation:** issue #24, P4, PR #89; no production implementation in this decision
 
 ## Context
@@ -55,8 +55,24 @@ The source handoff issuance command is idempotent. A retry with the same
 source session, bearer capability and idempotency key returns the original
 stored issuance response, even if that token has since been consumed; a
 changed request fingerprint conflicts. Issuance does not consume the source
-session bearer. Issuing a second handoff with a new key is allowed until source
-expiry, but each token is independently single-use.
+session bearer.
+
+There is at most one handoff capability row for a source quote session over
+its lifetime. If a new idempotency key arrives while that row is unconsumed
+and unexpired, the command returns the same handoff ID and derives the same
+opaque token from it. The database stores only the token hash; the existing
+issuance response and deterministic token derivation make this replay safe
+without retaining plaintext or an encrypted token envelope. Once the
+capability is consumed or expires, no replacement may be issued. The caller
+falls back to the manual assisted flow. An expired, unconsumed row remains
+retained as immutable issuance evidence and is never deleted by capability
+issuance or routine expiry cleanup.
+
+The one-row bound is enforced in the database with a unique source-session
+constraint and in the issuance transaction by locking the source session and
+handling row before deciding whether to replay or reject. A concurrent request
+cannot create a second immutable row. The source session's 30-day expiry does
+not reopen issuance.
 
 The persisted handoff snapshot is immutable and allowlisted. Operator reads
 may display the source session and safe technical fields through a typed
@@ -79,6 +95,13 @@ for what the assisted request actually disclosed.
   a useful assisted flow despite a bounded capability design that preserves
   privacy and replay safety; it is a product fallback only if implementation
   cannot meet this contract.
+- **Allow a fixed multi-row issuance quota.** A quota would still permit
+  unnecessary permanent rows and would add a product-specific number without
+  a demonstrated need for multiple handoffs. One row per source session is a
+  stronger and simpler anonymous resource bound.
+- **Replace after expiry and delete expired rows.** Deletion would weaken the
+  immutable issuance-evidence policy and require a separate retention and
+  deletion audit design. Manual fallback avoids that lifecycle exception.
 - **Use a reusable signed/JWT handoff.** Signature validity alone does not
   provide single-use consumption or a durable replay fence; a database-backed
   opaque capability is required.
@@ -86,17 +109,21 @@ for what the assisted request actually disclosed.
 ## Consequences and rollout
 
 Add a forward migration for the handoff capability and immutable request
-handoff record, with token-hash uniqueness, scope, expiry, consumed timestamp,
-source-session/request relations and idempotency identity. Add the assisted
-request field and handoff endpoint to OpenAPI and regenerate the client. Update
+handoff record, with token-hash uniqueness, a unique source-session
+constraint, scope, expiry, consumed timestamp, source-session/request
+relations and idempotency identity. The migration must preflight duplicate
+source-session capability rows and abort rather than silently discard
+provenance. Add the assisted request field and handoff endpoint to OpenAPI and
+regenerate the client. Update
 the web flow to request and store only the opaque handoff token while retaining
 local context solely for display copy; the server response is authoritative.
 
 No existing automatic session, quote request, attribution JSON or customer
-record is backfilled. Existing browser contexts without a handoff token fall
-back to the manual assisted form. Deploy the source endpoint, generated
-contract, quote-request consumer and web consumer together before enabling the
-automatic handoff path.
+record is backfilled. Existing browser contexts without a handoff token, and
+sessions whose one capability has expired or been consumed, fall back to the
+manual assisted form. Deploy the source endpoint, generated contract,
+quote-request consumer and web consumer together before enabling the automatic
+handoff path.
 
 This decision does not change automatic pricing, accepted quotes, order
 creation, public customer accounts, attribution dimensions or generic

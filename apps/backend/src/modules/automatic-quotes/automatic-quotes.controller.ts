@@ -123,7 +123,10 @@ export class AutomaticQuotesController {
     summary: "Mint one single-use assisted quote-request handoff capability",
   })
   @ApiCreatedResponse({ type: AutomaticQuoteHandoffCapabilityDto })
-  @ApiConflictResponse({ description: "Idempotency input changed" })
+  @ApiConflictResponse({
+    description:
+      "Idempotency input changed or the source session's handoff capability is no longer available",
+  })
   @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
   @ApiGoneResponse({ description: "Session or handoff is no longer available" })
   createHandoffCapability(

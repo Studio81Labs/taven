@@ -7147,7 +7147,7 @@
             "description": "Session capability is invalid"
           },
           "409": {
-            "description": "Idempotency input changed"
+            "description": "Idempotency input changed or the source session's handoff capability is no longer available"
           },
           "410": {
             "description": "Session or handoff is no longer available"

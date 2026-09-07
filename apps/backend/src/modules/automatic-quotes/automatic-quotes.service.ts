@@ -408,9 +408,27 @@ export class AutomaticQuotesService {
         );
       }
 
+      const observedAt = await databaseNow(transaction);
+      const existing = await lockedHandoffCapability(transaction, sessionId);
+      if (existing) {
+        if (
+          existing.consumedAt !== null ||
+          existing.expiresAt.getTime() <= observedAt.getTime()
+        ) {
+          throw new ConflictException(
+            "Automatic quote handoff is no longer available",
+          );
+        }
+        const response = {
+          handoffId: existing.id,
+          expiresAt: existing.expiresAt.toISOString(),
+        };
+        await completeIdempotency(transaction, record.id, response);
+        return handoffCapabilityResponse(capabilityKey.key, response);
+      }
+
       const source = await this.loadSession(sessionId);
       const snapshot = handoffSnapshot(await this.readModel(source));
-      const observedAt = await databaseNow(transaction);
       const expiresAt = new Date(
         Math.min(
           session.expiresAt.getTime(),
@@ -5588,6 +5606,22 @@ async function lockedSession(transaction: Transaction, sessionId: string) {
     throw new NotFoundException("Automatic quote session was not found");
   return transaction.quoteSession.findUniqueOrThrow({
     where: { id: sessionId },
+  });
+}
+
+async function lockedHandoffCapability(
+  transaction: Transaction,
+  sourceQuoteSessionId: string,
+) {
+  const rows = await transaction.$queryRaw<Array<{ id: string }>>`
+    SELECT id
+    FROM automatic_quote_handoff_capabilities
+    WHERE source_quote_session_id = ${sourceQuoteSessionId}::uuid
+    FOR UPDATE
+  `;
+  if (!rows[0]) return null;
+  return transaction.automaticQuoteHandoffCapability.findUniqueOrThrow({
+    where: { id: rows[0].id },
   });
 }
 
