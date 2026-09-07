@@ -61,6 +61,7 @@ export class MeasurementService {
     key: string | undefined,
   ): Promise<MeasurementCommandResultDto> {
     assertRequestBody(body);
+    assertNoClientHandlingRateFields(body);
     const nodeId = operatorNode(operator);
     const input = parseSessionInput(body);
     return this.command(
@@ -111,6 +112,7 @@ export class MeasurementService {
   ): Promise<MeasurementCommandResultDto> {
     sessionId = uuid(sessionId, "sessionId");
     assertRequestBody(body);
+    assertNoClientHandlingRateFields(body);
     const allocations = parseAllocations(body.allocations);
     const nodeId = operatorNode(operator);
     return this.command(
@@ -158,6 +160,7 @@ export class MeasurementService {
       );
     }
     assertRequestBody(body);
+    assertNoClientHandlingRateFields(body);
     const nodeId = operatorNode(operator);
     const input = parseSessionInput(body);
     const reason = requiredText(body.reason, "reason", 1000);
@@ -245,6 +248,7 @@ export class MeasurementService {
       );
     }
     assertRequestBody(body);
+    assertNoClientHandlingRateFields(body);
     sessionId = uuid(sessionId, "sessionId");
     const reason = requiredText(body.reason, "reason", 1000);
     const nodeId = operatorNode(operator);
@@ -745,10 +749,6 @@ export class MeasurementService {
 }
 
 function parseSessionInput(body: StartHandlingSessionDto) {
-  if ("currency" in body)
-    throw new BadRequestException(
-      "Client-supplied handling rate policy is invalid",
-    );
   if (
     !Object.values(HandlingComponent).includes(
       body.component as HandlingComponent,
@@ -773,6 +773,13 @@ function assertRequestBody(value: unknown): asserts value is object {
         "Client-supplied handling rate policy is invalid",
       );
   }
+}
+
+function assertNoClientHandlingRateFields(value: object): void {
+  if ("currency" in value)
+    throw new BadRequestException(
+      "Client-supplied handling rate policy is invalid",
+    );
 }
 function parseAllocations(
   value: HandlingAllocationInputDto[] | undefined,

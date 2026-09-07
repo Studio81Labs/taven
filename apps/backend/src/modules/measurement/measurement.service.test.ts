@@ -111,7 +111,7 @@ describe("MeasurementService command boundaries", () => {
     ).toThrow(BadRequestException);
   });
 
-  it("rejects client-supplied handling rates", () => {
+  it("rejects client-supplied handling rate policy fields", () => {
     const service = new MeasurementService({} as never, {} as never);
     expect(() =>
       service.start(
@@ -120,6 +120,22 @@ describe("MeasurementService command boundaries", () => {
           component: "HANDLING_PACK",
           laborRateNumerator: "9223372036854775808",
         } as never,
+        "valid-key",
+      ),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      service.complete(
+        operator,
+        "00000000-0000-4000-8000-000000000010",
+        { allocations: [], currency: "CZK" } as never,
+        "valid-key",
+      ),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      service.void(
+        { ...operator, role: OperatorRole.ADMIN },
+        "00000000-0000-4000-8000-000000000010",
+        { reason: "correction", currency: "CZK" } as never,
         "valid-key",
       ),
     ).toThrow(BadRequestException);
