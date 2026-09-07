@@ -41,8 +41,8 @@ CREATE TABLE "handling_sessions" (
     AND ("source" <> 'MANUAL' OR "reason" IS NOT NULL)
   ),
   CONSTRAINT "handling_sessions_shape_check" CHECK (
-    ("lifecycle" = 'OPEN' AND "ended_at" IS NULL AND "duration_milliseconds" IS NULL AND "total_cost_minor" IS NULL AND "completed_at" IS NULL AND "voided_at" IS NULL)
-    OR ("lifecycle" = 'COMPLETED' AND "ended_at" IS NOT NULL AND "ended_at" >= "started_at" AND "duration_milliseconds" > 0 AND "duration_milliseconds" = (extract(epoch FROM ("ended_at" - "started_at")) * 1000)::bigint AND "total_cost_minor" = ceil(("duration_milliseconds"::numeric * "labor_rate_numerator"::numeric) / (1000::numeric * "labor_rate_denominator"::numeric))::bigint AND "completed_at" IS NOT NULL AND "completed_at" >= "ended_at" AND "voided_at" IS NULL)
+    ("lifecycle" = 'OPEN' AND "ended_at" IS NULL AND "duration_milliseconds" IS NULL AND "total_cost_minor" IS NULL AND "completed_at" IS NULL AND "voided_at" IS NULL AND "void_reason" IS NULL)
+    OR ("lifecycle" = 'COMPLETED' AND "ended_at" IS NOT NULL AND "ended_at" >= "started_at" AND "duration_milliseconds" > 0 AND "duration_milliseconds" = (extract(epoch FROM ("ended_at" - "started_at")) * 1000)::bigint AND "total_cost_minor" = ceil(("duration_milliseconds"::numeric * "labor_rate_numerator"::numeric) / (1000::numeric * "labor_rate_denominator"::numeric))::bigint AND "completed_at" IS NOT NULL AND "completed_at" >= "ended_at" AND "voided_at" IS NULL AND "void_reason" IS NULL)
     OR ("lifecycle" = 'VOIDED' AND "voided_at" IS NOT NULL AND "voided_at" >= "started_at" AND ("completed_at" IS NULL OR "voided_at" >= "completed_at") AND "void_reason" IS NOT NULL)
   )
 );

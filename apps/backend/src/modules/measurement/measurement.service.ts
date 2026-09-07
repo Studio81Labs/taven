@@ -876,7 +876,7 @@ function parseTimestamp(value: string, name: string): Date {
   if (typeof value !== "string")
     throw new BadRequestException(`${name} is invalid`);
   const match =
-    /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(
+    /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i.exec(
       value,
     );
   if (!match) throw new BadRequestException(`${name} is invalid`);
