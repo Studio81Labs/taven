@@ -1159,7 +1159,6 @@ model BusinessEvent {
 
   @@unique([eventType, dedupeKey])
   @@index([recordedAt])
-  @@index([expiresAt, id])
   @@index([orderId, recordedAt])
   @@map("business_events")
 }
