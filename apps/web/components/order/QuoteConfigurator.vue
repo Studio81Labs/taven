@@ -19,6 +19,10 @@ import {
   type ConfigurationOption,
   type QuoteSession,
 } from "../../utils/automatic-quote-configurator";
+import {
+  getSessionStorage,
+  loadQuoteSession,
+} from "../../utils/quote-session-storage";
 
 type ConfigureItem = components["schemas"]["ConfigureAutomaticQuoteItemDto"];
 type RiskDecision = components["schemas"]["AutomaticQuoteRiskDecisionDto"];
@@ -40,6 +44,8 @@ const props = defineProps<{
   onSetExpress: (requested: boolean) => Promise<boolean>;
 }>();
 
+const { $api } = useNuxtApp();
+
 type ItemDraft = {
   fitSensitive: boolean;
   option: ConfigurationOption;
@@ -56,6 +62,32 @@ const expressRequested = ref(false);
 const localError = ref<string>();
 const saving = ref(false);
 const configurationLocked = computed(() => props.pending || saving.value);
+
+watch(
+  () => (props.quote.bindingQuote ? props.quote.sessionId : undefined),
+  () => {
+    if (props.quote.bindingQuote) void recordObservation("quote.viewed");
+  },
+  { immediate: true },
+);
+
+async function recordObservation(
+  eventType: "quote.viewed" | "checkout.started",
+): Promise<void> {
+  if (!import.meta.client) return;
+  const storage = getSessionStorage(window);
+  const session = storage ? loadQuoteSession(storage) : undefined;
+  if (!session || session.sessionId !== props.quote.sessionId) return;
+  try {
+    await $api.POST("/automatic-quote-sessions/{sessionId}/observations", {
+      body: { eventType },
+      headers: { Authorization: `Bearer ${session.sessionToken}` },
+      params: { path: { sessionId: session.sessionId } },
+    });
+  } catch {
+    // Observation failure must not block quote use.
+  }
+}
 
 const configuredBodyIds = computed(
   () =>

@@ -925,6 +925,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/automatic-quote-sessions/{sessionId}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record one deduplicated quote or checkout observation */
+        post: operations["AutomaticQuotesController_observe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/automatic-quote-sessions/{sessionId}/prepare": {
         parameters: {
             query?: never;
@@ -1223,6 +1240,13 @@ export interface components {
             /** @description Capability returned for the confirmed source upload */
             uploadToken: string;
         };
+        AttributionDto: {
+            campaign?: string;
+            /** @enum {string} */
+            channel: "direct" | "organic" | "paid" | "referral" | "unknown";
+            medium?: string;
+            source?: string;
+        };
         AuditEventPageDto: {
             items: components["schemas"]["AuditEventSummaryDto"][];
             nextCursor?: string;
@@ -1500,9 +1524,7 @@ export interface components {
             uploadId: string;
         };
         CreateAutomaticQuoteSessionDto: {
-            attribution?: {
-                [key: string]: unknown;
-            };
+            attribution?: components["schemas"]["AttributionDto"];
         };
         CreateBalancePaymentDto: {
             /** @enum {string} */
@@ -1547,9 +1569,7 @@ export interface components {
             reason: "EXPRESS_BREACH" | "PRODUCTION_FAILURE" | "SHIPMENT_INCIDENT" | "POST_DELIVERY_ISSUE";
         };
         CreateQuoteRequestDto: {
-            attribution?: {
-                [key: string]: unknown;
-            };
+            attribution?: components["schemas"]["AttributionDto"];
             contact: components["schemas"]["QuoteContactDto"];
             description: string;
             measurements?: {
@@ -1995,6 +2015,10 @@ export interface components {
             sourceKey: string;
             /** Format: uuid */
             supersedesId?: string;
+        };
+        RecordAutomaticQuoteObservationDto: {
+            /** @enum {string} */
+            eventType: "quote.viewed" | "checkout.started";
         };
         RecordManualHandlingSessionDto: {
             allocations: components["schemas"]["HandlingAllocationInputDto"][];
@@ -3898,6 +3922,30 @@ export interface operations {
             };
             /** @description Session or source expired */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AutomaticQuotesController_observe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordAutomaticQuoteObservationDto"];
+            };
+        };
+        responses: {
+            /** @description Session capability is invalid */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

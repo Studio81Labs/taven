@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { AttributionDto } from "../metrics/attribution.dto";
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const OFFER_PACKING_UNIT_MAX = 1_000;
@@ -52,8 +53,8 @@ export class CreateQuoteRequestDto {
   @ApiProperty({ type: QuoteContactDto })
   contact!: QuoteContactDto;
 
-  @ApiPropertyOptional({ type: "object", additionalProperties: true })
-  attribution?: Record<string, unknown>;
+  @ApiPropertyOptional({ type: AttributionDto })
+  attribution?: AttributionDto | Record<string, unknown>;
 }
 
 export class QuoteRequestCreatedDto {

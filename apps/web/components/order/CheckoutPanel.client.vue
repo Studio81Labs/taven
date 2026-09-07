@@ -203,6 +203,7 @@ async function submitCheckout(): Promise<void> {
         };
   command.value = activeCommand;
   persistCheckout();
+  void recordCheckoutStarted();
   submitting.value = true;
   errorMessage.value = undefined;
   try {
@@ -238,6 +239,20 @@ async function submitCheckout(): Promise<void> {
     errorMessage.value = checkoutErrorMessage(0);
   } finally {
     submitting.value = false;
+  }
+}
+
+async function recordCheckoutStarted(): Promise<void> {
+  const session = credentials.value;
+  if (!session) return;
+  try {
+    await $api.POST("/automatic-quote-sessions/{sessionId}/observations", {
+      body: { eventType: "checkout.started" },
+      headers: { Authorization: `Bearer ${session.sessionToken}` },
+      params: { path: { sessionId: session.sessionId } },
+    });
+  } catch {
+    // Observation failure must not block checkout.
   }
 }
 

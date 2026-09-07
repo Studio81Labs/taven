@@ -723,7 +723,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       );
       if (!attachmentSession) {
         const created = await $api.POST("/automatic-quote-sessions", {
-          body: { attribution: { channel: "web-upload" } },
+          body: { attribution: { channel: "direct", source: "web-upload" } },
           params: {
             header: { "Idempotency-Key": commandKeys.createSession() },
           },

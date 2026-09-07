@@ -32,6 +32,7 @@ import {
   AutomaticQuoteSessionDto,
   ConfigureAutomaticQuoteItemDto,
   CreateAutomaticQuoteSessionDto,
+  RecordAutomaticQuoteObservationDto,
   ReplaceAutomaticQuoteConfigurationDto,
   SelectAutomaticQuoteDestinationDto,
   SetAutomaticQuoteExpressDto,
@@ -88,6 +89,27 @@ export class AutomaticQuotesController {
     @Headers("authorization") authorization?: string,
   ): Promise<AutomaticQuoteSessionDto> {
     return this.automaticQuotes.getSession(sessionId, authorization);
+  }
+
+  @Post(":sessionId/observations")
+  @HttpCode(204)
+  @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
+  @ApiOperation({
+    summary: "Record one deduplicated quote or checkout observation",
+  })
+  @ApiBody({ type: RecordAutomaticQuoteObservationDto })
+  @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
+  observe(
+    @Param("sessionId") sessionId: string,
+    @Body() body: RecordAutomaticQuoteObservationDto,
+    @Headers("authorization") authorization?: string,
+  ): Promise<void> {
+    return this.automaticQuotes.recordObservation(
+      sessionId,
+      body,
+      authorization,
+    );
   }
 
   @Post(":sessionId/model-files")

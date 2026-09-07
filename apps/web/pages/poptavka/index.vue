@@ -161,20 +161,8 @@ async function submitRequest(): Promise<void> {
   if (!context) handoffContext.value = undefined;
   const body: CreateQuoteRequest = {
     attribution: {
-      channel: "web-assisted-quote",
-      entrySource: source,
-      privacyNoticeAcknowledged: true,
-      photoPublicationConsent: photoPublicationConsent.value,
-      ...(context
-        ? {
-            automaticQuoteHandoff: {
-              automaticQuoteSessionId: context.automaticQuoteSessionId,
-              itemSelections: context.itemSelections,
-              modelFileIds: context.modelFileIds,
-              reasons: context.reasons,
-            },
-          }
-        : {}),
+      channel: "direct",
+      source,
     },
     contact: {
       email: contactEmail.value.trim(),

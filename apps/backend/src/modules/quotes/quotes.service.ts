@@ -33,6 +33,7 @@ import {
 } from "node:crypto";
 import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
+import { normalizeAttribution } from "../metrics/attribution";
 import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
@@ -1875,7 +1876,7 @@ function validateCreateRequest(input: CreateQuoteRequestDto) {
     measurements: optionalObject(input.measurements, "measurements"),
     requestedDate: optionalDate(input.requestedDate, "requestedDate"),
     contact,
-    attribution: optionalObject(input.attribution, "attribution"),
+    attribution: normalizeAttribution(input.attribution),
   };
 }
 

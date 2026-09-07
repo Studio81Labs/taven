@@ -1,10 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { AttributionDto } from "../metrics/attribution.dto";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
 export class CreateAutomaticQuoteSessionDto {
-  @ApiPropertyOptional({ type: "object", additionalProperties: true })
-  attribution?: Record<string, unknown>;
+  @ApiPropertyOptional({ type: AttributionDto })
+  attribution?: AttributionDto | Record<string, unknown>;
+}
+
+export class RecordAutomaticQuoteObservationDto {
+  @ApiProperty({ enum: ["quote.viewed", "checkout.started"] })
+  eventType!: "quote.viewed" | "checkout.started";
 }
 
 export class AttachAutomaticQuoteModelFileDto {

@@ -36,6 +36,7 @@ import {
 } from "node:crypto";
 import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
+import { normalizeAttribution } from "../metrics/attribution";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
 import { EligibilityPlanService } from "../resources/eligibility-plan.service";
 import {
@@ -61,6 +62,7 @@ import type {
   AutomaticQuoteRiskDecisionDto,
   ConfigureAutomaticQuoteItemDto,
   CreateAutomaticQuoteSessionDto,
+  RecordAutomaticQuoteObservationDto,
   ReplaceAutomaticQuoteConfigurationDto,
   SelectAutomaticQuoteDestinationDto,
 } from "./automatic-quotes.dto";
@@ -199,7 +201,7 @@ export class AutomaticQuotesService {
     idempotencyKey: string | undefined,
   ): Promise<AutomaticQuoteSessionCreatedDto> {
     const commandKey = requireIdempotencyKey(idempotencyKey);
-    const attribution = optionalJsonObject(input?.attribution, "attribution");
+    const attribution = normalizeAttribution(input?.attribution);
     const capabilityRequests = quoteCapabilityKeyRing().all.map(
       (capabilityKey) => {
         const clientSubjectHash = automaticQuoteClientSubject(
@@ -270,7 +272,7 @@ export class AutomaticQuotesService {
           id: sessionId,
           publicTokenHash: hashToken(token),
           capabilityKeyId: currentCapabilityRequest.capabilityKey.id,
-          attribution: jsonNullable(attribution),
+          attribution: jsonNullable(attribution ?? null),
           expiresAt: addDays(observedAt, SESSION_DAYS),
           createdAt: observedAt,
           updatedAt: observedAt,
@@ -313,6 +315,48 @@ export class AutomaticQuotesService {
     const session = await this.loadSession(sessionId);
     assertSessionCapability(session, token);
     return this.readModel(session);
+  }
+
+  async recordObservation(
+    sessionId: string,
+    input: RecordAutomaticQuoteObservationDto,
+    authorization: string | undefined,
+  ): Promise<void> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const sessionCapability = bearerCapability(authorization);
+    const eventType = input?.eventType;
+    if (eventType !== "quote.viewed" && eventType !== "checkout.started") {
+      throw new BadRequestException("eventType is invalid");
+    }
+    await this.prisma.$transaction(async (transaction) => {
+      const session = await lockedSession(transaction, sessionId);
+      assertOpenOrConvertedSession(session, sessionCapability);
+      const origin = await transaction.automaticOrderOrigin.findUnique({
+        where: { quoteSessionId: sessionId },
+        select: { orderId: true },
+      });
+      if (!origin) throw new ConflictException("Automatic order is missing");
+      const observedAt = await databaseNow(transaction);
+      await transaction.businessEvent.upsert({
+        where: {
+          eventType_dedupeKey: {
+            eventType,
+            dedupeKey: `${sessionId}:${eventType}`,
+          },
+        },
+        create: {
+          eventType,
+          dedupeKey: `${sessionId}:${eventType}`,
+          observedAt,
+          expiresAt: addDays(observedAt, 90),
+          source: "CLIENT",
+          quoteSessionId: sessionId,
+          orderId: origin.orderId,
+          payload: {},
+        },
+        update: {},
+      });
+    });
   }
 
   async attachModelFile(
@@ -5846,18 +5890,6 @@ function nonnegativeInteger(
     throw new BadRequestException(`${name} is invalid`);
   }
   return number;
-}
-
-function optionalJsonObject(value: unknown, name: string): JsonRecord | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new BadRequestException(`${name} must be an object`);
-  }
-  const serialized = JSON.stringify(value);
-  if (serialized.length > 16_384) {
-    throw new BadRequestException(`${name} is too large`);
-  }
-  return JSON.parse(serialized) as JsonRecord;
 }
 
 function jsonNullable(
