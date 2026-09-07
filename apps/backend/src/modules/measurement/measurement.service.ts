@@ -104,7 +104,7 @@ export class MeasurementService {
     body: CompleteHandlingSessionDto,
     key: string | undefined,
   ): Promise<MeasurementCommandResultDto> {
-    assertUuid(sessionId, "sessionId");
+    sessionId = uuid(sessionId, "sessionId");
     const allocations = parseAllocations(body.allocations);
     const nodeId = operatorNode(operator);
     return this.command(
@@ -230,7 +230,7 @@ export class MeasurementService {
         "Voiding handling evidence requires an administrator",
       );
     }
-    assertUuid(sessionId, "sessionId");
+    sessionId = uuid(sessionId, "sessionId");
     const reason = requiredText(body.reason, "reason", 1000);
     const nodeId = operatorNode(operator);
     return this.command(
@@ -270,7 +270,7 @@ export class MeasurementService {
     body: RecordActualCostDto,
     key: string | undefined,
   ): Promise<MeasurementCommandResultDto> {
-    assertUuid(orderId, "orderId");
+    orderId = uuid(orderId, "orderId");
     const input = parseActualCost(body);
     const nodeId = operatorNode(operator);
     return this.command(
@@ -831,8 +831,13 @@ function assertUuid(value: string, name: string): void {
 function parseTimestamp(value: string, name: string): Date {
   if (typeof value !== "string")
     throw new BadRequestException(`${name} is invalid`);
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/.exec(
+    value,
+  );
+  if (!match) throw new BadRequestException(`${name} is invalid`);
   const result = new Date(value);
-  if (Number.isNaN(result.getTime()))
+  const normalized = `${match[1]}.${(match[2] ?? "").padEnd(3, "0")}Z`;
+  if (Number.isNaN(result.getTime()) || result.toISOString() !== normalized)
     throw new BadRequestException(`${name} is invalid`);
   return result;
 }
@@ -868,7 +873,8 @@ function nonNegativeBigInt(
   name: string,
   maximum = MAX_INT64,
 ): bigint {
-  if (!/^\d+$/.test(value)) throw new BadRequestException(`${name} is invalid`);
+  if (typeof value !== "string" || !/^\d+$/.test(value))
+    throw new BadRequestException(`${name} is invalid`);
   const result = BigInt(value);
   if (result > maximum) throw new BadRequestException(`${name} is invalid`);
   return result;
