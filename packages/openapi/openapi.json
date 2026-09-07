@@ -87,6 +87,7 @@
         "type": "object"
       },
       "AttributionDto": {
+        "additionalProperties": false,
         "properties": {
           "campaign": {
             "maxLength": 64,
