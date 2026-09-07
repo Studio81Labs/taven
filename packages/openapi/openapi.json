@@ -2924,16 +2924,19 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "sourceEntityType": {
             "maxLength": 80,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "sourceKey": {
             "maxLength": 255,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "supersedesId": {
@@ -2980,6 +2983,7 @@
             "description": "Required when source is MANUAL or supersedesId is supplied.",
             "maxLength": 1000,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "source": {
@@ -2996,11 +3000,13 @@
           "sourceEntityType": {
             "maxLength": 80,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "sourceKey": {
             "maxLength": 255,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "supersedesId": {
@@ -3050,6 +3056,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "startedAt": {
@@ -3346,6 +3353,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           }
         },

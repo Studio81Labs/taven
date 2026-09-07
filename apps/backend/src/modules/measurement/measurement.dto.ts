@@ -54,7 +54,7 @@ export class RecordManualHandlingSessionDto extends StartHandlingSessionDto {
   @ApiProperty({ type: String, pattern: "^[1-9][0-9]*$" })
   durationMilliseconds!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 1000 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1000, pattern: "\\S" })
   reason!: string;
 
   @ApiProperty({ type: [HandlingAllocationInputDto], minItems: 1 })
@@ -62,7 +62,7 @@ export class RecordManualHandlingSessionDto extends StartHandlingSessionDto {
 }
 
 export class VoidHandlingSessionDto {
-  @ApiProperty({ type: String, minLength: 1, maxLength: 1000 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1000, pattern: "\\S" })
   reason!: string;
 }
 
@@ -90,10 +90,10 @@ export class RecordActualCostDto {
   @ApiProperty({ enum: ["MEASURED", "MANUAL"] })
   source!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 255 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 255, pattern: "\\S" })
   sourceKey!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 80 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 80, pattern: "\\S" })
   sourceEntityType!: string;
 
   @ApiPropertyOptional(UUID)
@@ -107,6 +107,7 @@ export class RecordActualCostDto {
     minLength: 1,
     maxLength: 1000,
     description: "Required when source is MANUAL or supersedesId is supplied.",
+    pattern: "\\S",
   })
   reason?: string;
 }
@@ -127,16 +128,21 @@ export class RecordAcquisitionSpendDto {
   @ApiProperty({ type: String, pattern: "^[A-Z]{3}$" })
   currency!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 255 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 255, pattern: "\\S" })
   sourceKey!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 80 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 80, pattern: "\\S" })
   sourceEntityType!: string;
 
   @ApiPropertyOptional(UUID)
   supersedesId?: string;
 
-  @ApiPropertyOptional({ type: String, minLength: 1, maxLength: 1000 })
+  @ApiPropertyOptional({
+    type: String,
+    minLength: 1,
+    maxLength: 1000,
+    pattern: "\\S",
+  })
   reason?: string;
 }
 
