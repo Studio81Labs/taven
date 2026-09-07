@@ -113,6 +113,22 @@ describe("MeasurementService command boundaries", () => {
     ).toThrow(BadRequestException);
   });
 
+  it("rejects numeric values outside their persistence ranges", () => {
+    const service = new MeasurementService({} as never, {} as never);
+    expect(() =>
+      service.start(
+        operator,
+        {
+          component: "HANDLING_PACK",
+          laborRateNumerator: "9223372036854775808",
+          laborRateDenominator: "1",
+          currency: "CZK",
+        },
+        "valid-key",
+      ),
+    ).toThrow(BadRequestException);
+  });
+
   it("reserves manual measurements for administrators", async () => {
     const service = new MeasurementService({} as never, {} as never);
     await expect(
@@ -167,9 +183,16 @@ describe("MeasurementService command boundaries", () => {
           id: "00000000-0000-4000-8000-000000000010",
           component: "HANDLING_PACK",
           nodeId: operator.nodeIds[0],
-          durationMilliseconds: 1_000n,
-          totalCostMinor: 300n,
+          operatorIdentityId: operator.operatorId,
+          startedAt: now,
+          laborRateNumerator: 300n,
+          laborRateDenominator: 1n,
           currency: "CZK",
+        }),
+        update: async () => ({
+          id: "00000000-0000-4000-8000-000000000010",
+          component: "HANDLING_PACK",
+          nodeId: operator.nodeIds[0],
         }),
       },
       job: { findMany: async () => [{ nodeId: operator.nodeIds[0] }] },

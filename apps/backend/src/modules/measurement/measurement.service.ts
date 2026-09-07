@@ -43,6 +43,8 @@ type AllocationInput = Readonly<{
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_DAYS = 30;
+const MAX_INT64 = 9_223_372_036_854_775_807n;
+const MAX_INT32 = 2_147_483_647n;
 
 @Injectable()
 export class MeasurementService {
@@ -157,7 +159,7 @@ export class MeasurementService {
       body.durationMilliseconds,
       "durationMilliseconds",
     );
-    if (endedAt.getTime() - startedAt.getTime() !== Number(duration)) {
+    if (BigInt(endedAt.getTime()) - BigInt(startedAt.getTime()) !== duration) {
       throw new BadRequestException(
         "Manual duration must match start and end evidence",
       );
@@ -179,36 +181,29 @@ export class MeasurementService {
           throw new ConflictException(
             "Manual handling cannot overlap an open timer",
           );
-        const cost = await handlingCost(
-          duration,
-          input.rateNumerator,
-          input.rateDenominator,
-        );
         const session = await tx.handlingSession.create({
           data: {
             nodeId,
             operatorIdentityId: operator.operatorId,
             component: input.component,
             source: HandlingSource.MANUAL,
-            lifecycle: HandlingSessionLifecycle.COMPLETED,
             startedAt,
-            endedAt,
-            durationMilliseconds: duration,
             laborRateNumerator: input.rateNumerator,
             laborRateDenominator: input.rateDenominator,
             currency: input.currency,
-            totalCostMinor: cost,
             reason,
             commandIdempotencyKey: requiredKey(key),
-            completedAt: await databaseNow(tx),
           },
         });
-        return this.writeAllocationsAndEvidence(
+        return this.completeSession(
           tx,
           operator,
           session,
+          endedAt,
+          duration,
           allocations,
           requiredKey(key),
+          await databaseNow(tx),
         );
       },
     );
@@ -377,12 +372,14 @@ export class MeasurementService {
     duration: bigint,
     allocations: AllocationInput[],
     key: string,
+    completedAt: Date = endedAt,
   ): Promise<MeasurementCommandResultDto> {
     const cost = await handlingCost(
       duration,
       session.laborRateNumerator,
       session.laborRateDenominator,
     );
+    await this.writeAllocations(tx, session, duration, cost, allocations);
     const completed = await tx.handlingSession.update({
       where: { id: session.id },
       data: {
@@ -390,37 +387,25 @@ export class MeasurementService {
         endedAt,
         durationMilliseconds: duration,
         totalCostMinor: cost,
-        completedAt: endedAt,
+        completedAt,
       },
     });
-    return this.writeAllocationsAndEvidence(
-      tx,
-      operator,
-      completed,
-      allocations,
-      key,
-    );
+    await this.recordCompletionEvidence(tx, operator, completed, key);
+    return { id: completed.id, status: "COMPLETED" };
   }
 
-  private async writeAllocationsAndEvidence(
+  private async writeAllocations(
     tx: Transaction,
-    operator: OperatorContext,
     session: {
       id: string;
       component: HandlingComponent;
       nodeId: string;
-      durationMilliseconds: bigint | null;
-      totalCostMinor: bigint | null;
       currency: string;
     },
+    duration: bigint,
+    cost: bigint,
     inputs: AllocationInput[],
-    key: string,
-  ): Promise<MeasurementCommandResultDto> {
-    if (
-      session.durationMilliseconds === null ||
-      session.totalCostMinor === null
-    )
-      throw new ConflictException("Handling session is incomplete");
+  ): Promise<void> {
     await this.assertAllocationLineage(
       tx,
       session.nodeId,
@@ -428,8 +413,8 @@ export class MeasurementService {
       inputs,
     );
     const allocations = await allocateSession(
-      session.durationMilliseconds,
-      session.totalCostMinor,
+      duration,
+      cost,
       inputs.map((input) => ({
         id: allocationTargetKey(input),
         servedUnits: input.servedUnits,
@@ -456,6 +441,18 @@ export class MeasurementService {
         };
       }),
     });
+  }
+
+  private async recordCompletionEvidence(
+    tx: Transaction,
+    operator: OperatorContext,
+    session: {
+      id: string;
+      component: HandlingComponent;
+      nodeId: string;
+    },
+    key: string,
+  ): Promise<void> {
     await this.audit.recordOperator(tx, operator, {
       eventType: "handling.completed",
       nodeId: session.nodeId,
@@ -473,7 +470,6 @@ export class MeasurementService {
         payload: { component: session.component },
       },
     });
-    return { id: session.id, status: "COMPLETED" };
   }
 
   private async assertAllocationLineage(
@@ -713,7 +709,11 @@ function parseAllocations(
     ...(item.shipmentId
       ? { shipmentId: uuid(item.shipmentId, "shipmentId") }
       : {}),
-    servedUnits: positiveBigInt(item.servedUnitCount, "servedUnitCount"),
+    servedUnits: positiveBigInt(
+      item.servedUnitCount,
+      "servedUnitCount",
+      MAX_INT32,
+    ),
   }));
   if (new Set(result.map(allocationTargetKey)).size !== result.length)
     throw new BadRequestException("Allocation targets must be unique");
@@ -842,14 +842,24 @@ function optionalText(
 ): string | undefined {
   return value === undefined ? undefined : requiredText(value, name, max);
 }
-function positiveBigInt(value: string, name: string): bigint {
-  const result = nonNegativeBigInt(value, name);
+function positiveBigInt(
+  value: string,
+  name: string,
+  maximum = MAX_INT64,
+): bigint {
+  const result = nonNegativeBigInt(value, name, maximum);
   if (result <= 0n) throw new BadRequestException(`${name} must be positive`);
   return result;
 }
-function nonNegativeBigInt(value: string, name: string): bigint {
+function nonNegativeBigInt(
+  value: string,
+  name: string,
+  maximum = MAX_INT64,
+): bigint {
   if (!/^\d+$/.test(value)) throw new BadRequestException(`${name} is invalid`);
-  return BigInt(value);
+  const result = BigInt(value);
+  if (result > maximum) throw new BadRequestException(`${name} is invalid`);
+  return result;
 }
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -871,7 +881,10 @@ async function handlingCost(
   denominator: bigint,
 ): Promise<bigint> {
   const { calculateHandlingCostMinor } = await import("@taven/core");
-  return calculateHandlingCostMinor(duration, { numerator, denominator });
+  const cost = calculateHandlingCostMinor(duration, { numerator, denominator });
+  if (cost > MAX_INT64)
+    throw new BadRequestException("handling cost exceeds storage range");
+  return cost;
 }
 async function allocateSession(
   duration: bigint,

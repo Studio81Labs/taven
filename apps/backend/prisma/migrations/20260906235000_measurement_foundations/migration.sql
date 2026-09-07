@@ -41,8 +41,8 @@ CREATE TABLE "handling_sessions" (
     AND ("source" <> 'MANUAL' OR "reason" IS NOT NULL)
   ),
   CONSTRAINT "handling_sessions_shape_check" CHECK (
-    ("lifecycle" = 'OPEN' AND "source" = 'TIMER' AND "ended_at" IS NULL AND "duration_milliseconds" IS NULL AND "total_cost_minor" IS NULL AND "completed_at" IS NULL AND "voided_at" IS NULL)
-    OR ("lifecycle" = 'COMPLETED' AND "ended_at" IS NOT NULL AND "ended_at" >= "started_at" AND "duration_milliseconds" > 0 AND "total_cost_minor" >= 0 AND "completed_at" IS NOT NULL AND "voided_at" IS NULL)
+    ("lifecycle" = 'OPEN' AND "ended_at" IS NULL AND "duration_milliseconds" IS NULL AND "total_cost_minor" IS NULL AND "completed_at" IS NULL AND "voided_at" IS NULL)
+    OR ("lifecycle" = 'COMPLETED' AND "ended_at" IS NOT NULL AND "ended_at" >= "started_at" AND "duration_milliseconds" > 0 AND "duration_milliseconds" = (extract(epoch FROM ("ended_at" - "started_at")) * 1000)::bigint AND "total_cost_minor" = ceil(("duration_milliseconds"::numeric * "labor_rate_numerator"::numeric) / (1000::numeric * "labor_rate_denominator"::numeric))::bigint AND "completed_at" IS NOT NULL AND "voided_at" IS NULL)
     OR ("lifecycle" = 'VOIDED' AND "voided_at" IS NOT NULL AND "void_reason" IS NOT NULL)
   )
 );
@@ -210,10 +210,11 @@ CREATE TRIGGER "acquisition_spend_supersession" BEFORE INSERT ON "acquisition_sp
 
 CREATE FUNCTION "taven_validate_handling_allocation_lineage"() RETURNS trigger
 LANGUAGE plpgsql AS $$
-DECLARE session_node uuid; session_currency char(3); session_component "handling_component"; job_order uuid; job_node uuid; shipment_order uuid;
+DECLARE session_node uuid; session_currency char(3); session_component "handling_component"; session_lifecycle "handling_session_lifecycle"; job_order uuid; job_node uuid; shipment_order uuid;
 BEGIN
-  SELECT "node_id", "currency", "component" INTO session_node, session_currency, session_component FROM "handling_sessions" WHERE "id" = NEW."handling_session_id";
+  SELECT "node_id", "currency", "component", "lifecycle" INTO session_node, session_currency, session_component, session_lifecycle FROM "handling_sessions" WHERE "id" = NEW."handling_session_id";
   IF session_node IS NULL OR session_currency IS DISTINCT FROM NEW."currency" THEN RAISE EXCEPTION 'handling allocation has an invalid session currency'; END IF;
+  IF session_lifecycle <> 'OPEN' THEN RAISE EXCEPTION 'handling allocations are sealed once a session is closed'; END IF;
   IF (session_component = 'HANDLING_ORDER_FIX' AND (NEW."order_item_id" IS NOT NULL OR NEW."job_id" IS NOT NULL OR NEW."shipment_id" IS NOT NULL OR NEW."served_unit_count" <> 1))
      OR (session_component IN ('HANDLING_PLATE', 'HANDLING_PIECE') AND (NEW."order_item_id" IS NULL OR NEW."shipment_id" IS NOT NULL))
      OR (session_component IN ('HANDLING_PACK', 'SHIPPING_TRIP') AND (NEW."shipment_id" IS NULL OR NEW."order_item_id" IS NOT NULL OR NEW."job_id" IS NOT NULL OR NEW."served_unit_count" <> 1))
@@ -243,9 +244,7 @@ LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'handling sessions are immutable'; END IF;
   IF TG_OP = 'INSERT' THEN
-    IF NEW."lifecycle" = 'VOIDED'
-       OR (NEW."source" = 'TIMER' AND NEW."lifecycle" <> 'OPEN')
-       OR (NEW."source" = 'MANUAL' AND NEW."lifecycle" <> 'COMPLETED') THEN
+    IF NEW."lifecycle" <> 'OPEN' THEN
       RAISE EXCEPTION 'handling session has an invalid initial lifecycle';
     END IF;
     RETURN NEW;
