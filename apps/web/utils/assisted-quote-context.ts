@@ -118,6 +118,7 @@ export function sanitizeAssistedQuoteHandoff(
   handoff: { reasons: readonly string[]; safeContext: unknown },
   expiresAt: string,
   now = Date.now(),
+  requireCapabilityToken = false,
 ): AssistedQuoteHandoffContext | undefined {
   const expiresAtMs = Date.parse(expiresAt);
   if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now) return undefined;
@@ -129,7 +130,7 @@ export function sanitizeAssistedQuoteHandoff(
 
   const modelFileIds = safeUuidArray(handoff.safeContext.modelFileIds, 20);
   const handoffToken = safeCapabilityToken(handoff.safeContext.handoffToken);
-  if (!handoffToken) return undefined;
+  if (requireCapabilityToken && !handoffToken) return undefined;
   const itemSelections = Array.isArray(handoff.safeContext.itemSelections)
     ? handoff.safeContext.itemSelections
         .slice(0, 50)
@@ -140,7 +141,7 @@ export function sanitizeAssistedQuoteHandoff(
   return {
     automaticQuoteSessionId,
     expiresAt: new Date(expiresAtMs).toISOString(),
-    handoffToken,
+    ...(handoffToken ? { handoffToken } : {}),
     itemSelections,
     modelFileIds,
     reasons: handoff.reasons
@@ -179,6 +180,7 @@ export function loadAssistedQuoteHandoff(
       },
       typeof parsed.expiresAt === "string" ? parsed.expiresAt : "",
       now,
+      true,
     );
     if (!context) throw new Error("expired handoff");
     return context;
