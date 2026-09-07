@@ -203,7 +203,7 @@ async function submitCheckout(): Promise<void> {
         };
   command.value = activeCommand;
   persistCheckout();
-  void recordCheckoutStarted();
+  await recordCheckoutStarted();
   submitting.value = true;
   errorMessage.value = undefined;
   try {
