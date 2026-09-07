@@ -49,6 +49,7 @@ const {
   attachmentsEditable,
   cancel,
   created,
+  createFailureStatus,
   errorMessage,
   pending,
   phase,
@@ -181,8 +182,12 @@ async function submitRequest(): Promise<void> {
     ...(requestedDate.value ? { requestedDate: requestedDate.value } : {}),
   };
   await submit(body, selectedPhotos.value);
-  if (phase.value === "success" && import.meta.client) {
-    const storage = getSessionStorage(window);
+  if (!import.meta.client) return;
+  const storage = getSessionStorage(window);
+  if (phase.value === "success") {
+    if (storage) clearAssistedQuoteHandoff(storage);
+  } else if (createFailureStatus.value === 401 && context?.handoffToken) {
+    handoffContext.value = undefined;
     if (storage) clearAssistedQuoteHandoff(storage);
   }
 }

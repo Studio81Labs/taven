@@ -71,6 +71,9 @@ export class QuoteRequestsController {
   @ApiBody({ type: CreateQuoteRequestDto })
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiCreatedResponse({ type: QuoteRequestCreatedDto })
+  @ApiUnauthorizedResponse({
+    description: "Automatic quote handoff capability is invalid or unavailable",
+  })
   @ApiConflictResponse({ description: "Idempotency input changed" })
   @ApiTooManyRequestsResponse({
     description: "Anonymous quote-submission limit is exhausted",

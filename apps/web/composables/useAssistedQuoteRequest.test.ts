@@ -35,10 +35,14 @@ describe("assisted request recovery messages", () => {
     );
   });
 
-  it("unlocks only a definite pre-create validation failure", () => {
+  it("unlocks validation and expired handoff failures before creating", () => {
     expect(isEditableCreateFailure("create", 400)).toBe(true);
+    expect(isEditableCreateFailure("create", 401)).toBe(true);
     expect(isEditableCreateFailure("create", 409)).toBe(false);
     expect(isEditableCreateFailure("intent", 400)).toBe(false);
+    expect(assistedQuoteRequestMessage(401, "create")).toContain(
+      "automatické kalkulace",
+    );
   });
 
   it("allows replacing only definitely rejected attachments", () => {

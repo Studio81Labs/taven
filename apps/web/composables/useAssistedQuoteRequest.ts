@@ -65,7 +65,9 @@ export function assistedQuoteRequestMessage(
     return "Platnost nahrání fotografie vypršela. Poptávka je uložená; fotografii nahrajeme znovu.";
   }
   if (status === 401) {
-    return "Oprávnění k této poptávce už není platné. Poznamenejte si její referenci a kontaktujte nás e-mailem.";
+    return stage === "create"
+      ? "Kontext z automatické kalkulace už není platný. Údaje zůstaly vyplněné; odešlete poptávku znovu bez něj."
+      : "Oprávnění k této poptávce už není platné. Poznamenejte si její referenci a kontaktujte nás e-mailem.";
   }
   if (status === 409) {
     return stage === "create"
@@ -90,7 +92,7 @@ export function isEditableCreateFailure(
   stage: "confirm" | "create" | "intent",
   status: number,
 ): boolean {
-  return stage === "create" && status === 400;
+  return stage === "create" && (status === 400 || status === 401);
 }
 
 export function isEditableAttachmentFailure(
@@ -124,6 +126,7 @@ export function useAssistedQuoteRequest() {
   const phase = ref<AssistedQuoteRequestPhase>("editing");
   const created = shallowRef<CreatedQuoteRequest>();
   const errorMessage = ref<string>();
+  const createFailureStatus = ref<number>();
   const uploadProgress = ref(0);
   const activePhotoName = ref<string>();
   const attachmentsEditable = ref(false);
@@ -173,6 +176,7 @@ export function useAssistedQuoteRequest() {
     controller = activeController;
     const signal = activeController.signal;
     errorMessage.value = undefined;
+    createFailureStatus.value = undefined;
     uploadProgress.value = 0;
     activePhotoName.value = undefined;
     let currentPhoto: File | undefined;
@@ -351,6 +355,7 @@ export function useAssistedQuoteRequest() {
           : "Odesílání bylo pozastavené. Stejnou poptávku můžete zkusit znovu.";
       } else if (error instanceof RequestFailure) {
         errorMessage.value = error.message;
+        if (error.stage === "create") createFailureStatus.value = error.status;
         if (isEditableCreateFailure(error.stage, error.status)) {
           lockedSubmission = undefined;
           preparedPhotos = undefined;
@@ -390,6 +395,7 @@ export function useAssistedQuoteRequest() {
     attachmentsEditable,
     cancel,
     created,
+    createFailureStatus,
     errorMessage,
     pending,
     phase,

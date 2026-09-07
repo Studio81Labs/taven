@@ -7815,6 +7815,9 @@
             },
             "description": ""
           },
+          "401": {
+            "description": "Automatic quote handoff capability is invalid or unavailable"
+          },
           "409": {
             "description": "Idempotency input changed"
           },

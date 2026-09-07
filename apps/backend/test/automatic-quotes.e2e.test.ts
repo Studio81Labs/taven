@@ -4031,6 +4031,11 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         where: { sourceQuoteSessionId: sessionId },
       }),
     ).toBe(1);
+    expect(
+      await prisma.idempotencyRecord.count({
+        where: { namespace: `automatic-quote.handoff:${sessionId}` },
+      }),
+    ).toBe(1);
 
     const requestKey = key("step-assisted-request");
     const requestBody = {

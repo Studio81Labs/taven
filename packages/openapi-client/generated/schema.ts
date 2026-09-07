@@ -4363,6 +4363,13 @@ export interface operations {
                     "application/json": components["schemas"]["QuoteRequestCreatedDto"];
                 };
             };
+            /** @description Automatic quote handoff capability is invalid or unavailable */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Idempotency input changed */
             409: {
                 headers: {
