@@ -212,7 +212,7 @@ CREATE FUNCTION "taven_validate_handling_allocation_lineage"() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE session_node uuid; session_currency char(3); session_component "handling_component"; session_lifecycle "handling_session_lifecycle"; job_order uuid; job_node uuid; shipment_order uuid;
 BEGIN
-  SELECT "node_id", "currency", "component", "lifecycle" INTO session_node, session_currency, session_component, session_lifecycle FROM "handling_sessions" WHERE "id" = NEW."handling_session_id";
+  SELECT "node_id", "currency", "component", "lifecycle" INTO session_node, session_currency, session_component, session_lifecycle FROM "handling_sessions" WHERE "id" = NEW."handling_session_id" FOR UPDATE;
   IF session_node IS NULL OR session_currency IS DISTINCT FROM NEW."currency" THEN RAISE EXCEPTION 'handling allocation has an invalid session currency'; END IF;
   IF session_lifecycle <> 'OPEN' THEN RAISE EXCEPTION 'handling allocations are sealed once a session is closed'; END IF;
   IF (session_component = 'HANDLING_ORDER_FIX' AND (NEW."order_item_id" IS NOT NULL OR NEW."job_id" IS NOT NULL OR NEW."shipment_id" IS NOT NULL OR NEW."served_unit_count" <> 1))
