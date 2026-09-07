@@ -3,6 +3,7 @@ import { HealthModule } from "./health/health.module";
 import { AdminAccessModule } from "./modules/admin-access/admin-access.module";
 import { AuditModule } from "./modules/audit/audit.module";
 import { MeasurementModule } from "./modules/measurement/measurement.module";
+import { MetricsModule } from "./modules/metrics/metrics.module";
 import { AutomaticQuotesModule } from "./modules/automatic-quotes/automatic-quotes.module";
 import { OrdersModule } from "./modules/orders/orders.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
@@ -26,6 +27,7 @@ import { ResourcesModule } from "./modules/resources/resources.module";
     AdminAccessModule,
     AuditModule,
     MeasurementModule,
+    MetricsModule,
   ],
 })
 export class AppModule {}

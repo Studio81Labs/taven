@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import {
   AutomaticQuoteRiskDecision,
+  AutomaticQuoteHandoffScope,
   IdempotencyStatus,
   InventoryStatus,
   MachineStatus,
@@ -36,6 +37,7 @@ import {
 } from "node:crypto";
 import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
+import { normalizeAttribution } from "../metrics/attribution";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
 import { EligibilityPlanService } from "../resources/eligibility-plan.service";
 import {
@@ -56,11 +58,15 @@ import {
 import { candidatePlateCapacities } from "./candidate-plate-capacities";
 import type {
   AttachAutomaticQuoteModelFileDto,
+  AutomaticQuoteHandoffCapabilityDto,
+  AutomaticQuoteItemDto,
+  AutomaticQuoteModelFileDto,
   AutomaticQuoteSessionCreatedDto,
   AutomaticQuoteSessionDto,
   AutomaticQuoteRiskDecisionDto,
   ConfigureAutomaticQuoteItemDto,
   CreateAutomaticQuoteSessionDto,
+  RecordAutomaticQuoteObservationDto,
   ReplaceAutomaticQuoteConfigurationDto,
   SelectAutomaticQuoteDestinationDto,
 } from "./automatic-quotes.dto";
@@ -75,6 +81,7 @@ import {
 } from "./reference-occupancy-probe";
 
 const SESSION_DAYS = 30;
+const HANDOFF_CAPABILITY_MINUTES = 15;
 const IDEMPOTENCY_DAYS = 7;
 const INSPECTION_REVISION = "inspection-v1";
 const CANONICALIZER_REVISION = "canonical-v1";
@@ -98,6 +105,18 @@ const INFILL_PERCENT = {
 
 type Transaction = Prisma.TransactionClient;
 type JsonRecord = Record<string, unknown>;
+type AutomaticQuoteHandoffSnapshot = {
+  reasons: string[];
+  modelFileIds: string[];
+  itemSelections: Array<{
+    ordinal: number;
+    modelFileId: string;
+    bodyIds: string[];
+    material: string;
+    quantity: number;
+    fitSensitive: boolean;
+  }>;
+};
 type QuoteCapabilityKey = { id: string; key: string };
 type AutomaticCandidateDispatchState = {
   attempt: number;
@@ -199,7 +218,7 @@ export class AutomaticQuotesService {
     idempotencyKey: string | undefined,
   ): Promise<AutomaticQuoteSessionCreatedDto> {
     const commandKey = requireIdempotencyKey(idempotencyKey);
-    const attribution = optionalJsonObject(input?.attribution, "attribution");
+    const attribution = normalizeAttribution(input?.attribution);
     const capabilityRequests = quoteCapabilityKeyRing().all.map(
       (capabilityKey) => {
         const clientSubjectHash = automaticQuoteClientSubject(
@@ -270,7 +289,7 @@ export class AutomaticQuotesService {
           id: sessionId,
           publicTokenHash: hashToken(token),
           capabilityKeyId: currentCapabilityRequest.capabilityKey.id,
-          attribution: jsonNullable(attribution),
+          attribution: jsonNullable(attribution ?? null),
           expiresAt: addDays(observedAt, SESSION_DAYS),
           createdAt: observedAt,
           updatedAt: observedAt,
@@ -313,6 +332,157 @@ export class AutomaticQuotesService {
     const session = await this.loadSession(sessionId);
     assertSessionCapability(session, token);
     return this.readModel(session);
+  }
+
+  async recordObservation(
+    sessionId: string,
+    input: RecordAutomaticQuoteObservationDto,
+    authorization: string | undefined,
+  ): Promise<void> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const sessionCapability = bearerCapability(authorization);
+    const eventType = input?.eventType;
+    if (eventType !== "quote.viewed" && eventType !== "checkout.started") {
+      throw new BadRequestException("eventType is invalid");
+    }
+    await this.prisma.$transaction(async (transaction) => {
+      const session = await lockedSession(transaction, sessionId);
+      const observedAt = await databaseNow(transaction);
+      assertOpenOrConvertedSession(session, sessionCapability, observedAt);
+      const origin = await transaction.automaticOrderOrigin.findUnique({
+        where: { quoteSessionId: sessionId },
+        select: { orderId: true },
+      });
+      if (!origin) throw new ConflictException("Automatic order is missing");
+      await transaction.businessEvent.upsert({
+        where: {
+          eventType_dedupeKey: {
+            eventType,
+            dedupeKey: `${sessionId}:${eventType}`,
+          },
+        },
+        create: {
+          eventType,
+          dedupeKey: `${sessionId}:${eventType}`,
+          observedAt,
+          expiresAt: addDays(observedAt, 90),
+          source: "CLIENT",
+          quoteSessionId: sessionId,
+          orderId: origin.orderId,
+          payload: {},
+        },
+        update: {},
+      });
+    });
+  }
+
+  async createHandoffCapability(
+    sessionId: string,
+    authorization: string | undefined,
+    idempotencyKey: string | undefined,
+  ): Promise<AutomaticQuoteHandoffCapabilityDto> {
+    sessionId = normalizedUuid(sessionId, "sessionId");
+    const sessionCapability = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+
+    return this.prisma.$transaction(async (transaction) => {
+      const session = await lockedSession(transaction, sessionId);
+      const sessionObservedAt = await databaseNow(transaction);
+      assertOpenSession(session, sessionCapability, sessionObservedAt);
+      const capabilityKey = quoteCapabilityKeyRing().byId.get(
+        session.capabilityKeyId ?? "",
+      );
+      if (!capabilityKey) {
+        throw new Error("Automatic quote capability key is unavailable");
+      }
+      const namespace = `automatic-quote.handoff:${sessionId}`;
+      const fingerprint = fingerprintOf({
+        sessionId,
+        sessionCapabilityHash: hashToken(sessionCapability),
+      });
+      await lockIdempotencyKey(transaction, namespace, commandKey);
+      const replayed = await replayedIdempotencyAfterLock(
+        transaction,
+        namespace,
+        commandKey,
+        fingerprint,
+      );
+      if (replayed) {
+        return handoffCapabilityResponse(
+          capabilityKey.key,
+          replayed.response as { handoffId: string; expiresAt: string },
+        );
+      }
+
+      const existing = await lockedHandoffCapability(transaction, sessionId);
+      const observedAt = await databaseNow(transaction);
+      if (existing) {
+        if (
+          existing.consumedAt !== null ||
+          existing.expiresAt.getTime() <= observedAt.getTime()
+        ) {
+          throw new ConflictException(
+            "Automatic quote handoff is no longer available",
+          );
+        }
+        return handoffCapabilityResponse(capabilityKey.key, {
+          handoffId: existing.id,
+          expiresAt: existing.expiresAt.toISOString(),
+        });
+      }
+
+      const record = await idempotencyRecordAfterLock(
+        transaction,
+        namespace,
+        commandKey,
+        fingerprint,
+      );
+      if (record.replayed) {
+        return handoffCapabilityResponse(
+          capabilityKey.key,
+          record.response as { handoffId: string; expiresAt: string },
+        );
+      }
+
+      const source = await this.loadSession(sessionId, transaction);
+      const snapshot = handoffSnapshot(
+        await this.readModel(source, transaction),
+      );
+      const issuedAt = await databaseNow(transaction);
+      const expiresAt = new Date(
+        Math.min(
+          session.expiresAt.getTime(),
+          issuedAt.getTime() + HANDOFF_CAPABILITY_MINUTES * 60_000,
+        ),
+      );
+      if (expiresAt.getTime() <= issuedAt.getTime()) {
+        throw new GoneException(
+          "Automatic quote session is no longer available",
+        );
+      }
+      const handoffId = randomUUID();
+      const response = {
+        handoffId,
+        expiresAt: expiresAt.toISOString(),
+      };
+      await transaction.automaticQuoteHandoffCapability.create({
+        data: {
+          id: handoffId,
+          sourceQuoteSessionId: sessionId,
+          tokenHash: hashToken(
+            automaticQuoteHandoffToken(capabilityKey.key, handoffId),
+          ),
+          scope: AutomaticQuoteHandoffScope.ASSISTED_QUOTE_REQUEST,
+          reasons: snapshot.reasons,
+          modelFileIds: snapshot.modelFileIds,
+          itemSelections: jsonSafe(snapshot.itemSelections),
+          issuedAt,
+          expiresAt,
+        },
+      });
+      await completeIdempotency(transaction, record.id, response);
+      return handoffCapabilityResponse(capabilityKey.key, response);
+    });
   }
 
   async attachModelFile(
@@ -1420,17 +1590,15 @@ export class AutomaticQuotesService {
     correlationId: string,
     attempt: number,
   ) {
-    const [source, profile, config] = await Promise.all([
-      transaction.modelFile.findUniqueOrThrow({
-        where: { id: geometry.sourceModelFileId },
-      }),
-      transaction.referenceProfile.findUniqueOrThrow({
-        where: { id: item.referenceProfileId },
-      }),
-      transaction.printConfigRevision.findUniqueOrThrow({
-        where: { id: item.printConfigRevisionId },
-      }),
-    ]);
+    const source = await transaction.modelFile.findUniqueOrThrow({
+      where: { id: geometry.sourceModelFileId },
+    });
+    const profile = await transaction.referenceProfile.findUniqueOrThrow({
+      where: { id: item.referenceProfileId },
+    });
+    const config = await transaction.printConfigRevision.findUniqueOrThrow({
+      where: { id: item.printConfigRevisionId },
+    });
     const input = {
       geometry: {
         sourceModelFileId: source.id,
@@ -1696,14 +1864,15 @@ export class AutomaticQuotesService {
   private async preprocessingRequiresHandoff(
     orderId: string,
     items: readonly AutomaticQuoteCandidateDraftItem[],
+    client: Transaction | PrismaService = this.prisma,
   ): Promise<boolean> {
     for (const item of items) {
-      const geometry = await this.prisma.modelGeometry.findUnique({
+      const geometry = await client.modelGeometry.findUnique({
         where: { id: item.targetModelGeometryId },
       });
       if (!geometry) {
         const dispatch = await this.latestPreprocessingDispatch(
-          this.prisma,
+          client,
           deterministicUuid(
             `canonicalization:${item.id}:${item.selectionSha256}`,
           ),
@@ -1713,7 +1882,7 @@ export class AutomaticQuotesService {
         continue;
       }
       const occupancy = await this.resolveReferenceOccupancy(
-        this.prisma,
+        client,
         item,
         geometry,
         orderId,
@@ -1722,14 +1891,14 @@ export class AutomaticQuotesService {
       if (occupancy.kind === "failed") return true;
       if (occupancy.kind === "pending") continue;
       const missing = await this.missingReferenceSlices(
-        this.prisma,
+        client,
         item,
         geometry,
         referenceOccupancies(item.quantity, occupancy.partsPerPlate),
       );
       for (const partsPerPlate of missing) {
         const job = await this.referenceSliceJob(
-          this.prisma,
+          client,
           item,
           geometry,
           partsPerPlate,
@@ -1737,30 +1906,28 @@ export class AutomaticQuotesService {
           1,
         );
         const dispatch = await this.latestPreprocessingDispatch(
-          this.prisma,
+          client,
           job.jobId,
           "slicing.reference-slice.requested",
         );
         if (this.preprocessingDispatchRequiresHandoff(dispatch)) return true;
       }
     }
-    const [draft, priceList] = await Promise.all([
-      this.prisma.automaticQuoteDraft.findUnique({
-        where: { orderId },
-        include: { selectedDeliveryDestination: true },
-      }),
-      this.prisma.priceList.findUnique({
-        where: {
-          currency_revision: {
-            currency: "CZK",
-            revision: AUTOMATIC_PRICE_LIST_REVISION,
-          },
+    const draft = await client.automaticQuoteDraft.findUnique({
+      where: { orderId },
+      include: { selectedDeliveryDestination: true },
+    });
+    const priceList = await client.priceList.findUnique({
+      where: {
+        currency_revision: {
+          currency: "CZK",
+          revision: AUTOMATIC_PRICE_LIST_REVISION,
         },
-      }),
-    ]);
+      },
+    });
     if (!draft?.selectedDeliveryDestination || !priceList) return false;
     const pricing = await this.pricingItemsFromDraft(
-      this.prisma,
+      client,
       orderId,
       items,
       null,
@@ -1794,7 +1961,7 @@ export class AutomaticQuotesService {
       const item = itemByPricingId.get(demand.itemId);
       const pricingItem = pricing.items.find(({ id }) => id === demand.itemId);
       if (!item || !pricingItem) continue;
-      const geometry = await this.prisma.modelGeometry.findUnique({
+      const geometry = await client.modelGeometry.findUnique({
         where: { id: item.targetModelGeometryId },
       });
       if (!geometry) continue;
@@ -1803,7 +1970,7 @@ export class AutomaticQuotesService {
         Math.min(pricingItem.referencePartsPerPlate, demand.quantity),
       );
       const missing = await this.missingReferenceSlices(
-        this.prisma,
+        client,
         item,
         geometry,
         occupancies,
@@ -1813,7 +1980,7 @@ export class AutomaticQuotesService {
         if (checked.has(requestKey)) continue;
         checked.add(requestKey);
         const job = await this.referenceSliceJob(
-          this.prisma,
+          client,
           item,
           geometry,
           partsPerPlate,
@@ -1821,7 +1988,7 @@ export class AutomaticQuotesService {
           1,
         );
         const dispatch = await this.latestPreprocessingDispatch(
-          this.prisma,
+          client,
           job.jobId,
           "slicing.reference-slice.requested",
         );
@@ -2120,19 +2287,22 @@ export class AutomaticQuotesService {
         where: { id: item.targetModelGeometryId },
       });
       if (geometry) {
-        const referenceJobs = await Promise.all(
-          referenceOccupancies(item.quantity, item.referencePartsPerPlate).map(
-            (partsPerPlate) =>
-              this.referenceSliceJob(
-                transaction,
-                item,
-                geometry,
-                partsPerPlate,
-                item.orderId,
-                1,
-              ),
-          ),
-        );
+        const referenceJobs = [];
+        for (const partsPerPlate of referenceOccupancies(
+          item.quantity,
+          item.referencePartsPerPlate,
+        )) {
+          referenceJobs.push(
+            await this.referenceSliceJob(
+              transaction,
+              item,
+              geometry,
+              partsPerPlate,
+              item.orderId,
+              1,
+            ),
+          );
+        }
         inspectionRevisions.push(
           ...referenceJobs.map(
             ({ inputFingerprintSha256 }) => inputFingerprintSha256,
@@ -3717,8 +3887,9 @@ export class AutomaticQuotesService {
 
   private async candidateEstimationRequiresHandoff(
     orderId: string,
+    client: Transaction | PrismaService = this.prisma,
   ): Promise<boolean> {
-    const active = await this.prisma.orderActivePriceBinding.findUnique({
+    const active = await client.orderActivePriceBinding.findUnique({
       where: { orderId },
       include: {
         order: { include: { automaticQuoteDraft: true } },
@@ -3734,10 +3905,10 @@ export class AutomaticQuotesService {
     ) {
       return false;
     }
-    const observedAt = await databaseNow(this.prisma);
+    const observedAt = await databaseNow(client);
     if (
       await this.hasLiveCandidatePlan(
-        this.prisma,
+        client,
         active.orderPriceBindingId,
         observedAt,
       )
@@ -3745,12 +3916,12 @@ export class AutomaticQuotesService {
       return false;
     }
     const frontier = await this.automaticCandidateFrontier(
-      this.prisma,
+      client,
       active.orderPriceBindingId,
       observedAt,
     );
     if (frontier.allFailedRequirement) return true;
-    const marker = await this.prisma.outboxMessage.findUnique({
+    const marker = await client.outboxMessage.findUnique({
       where: {
         deduplicationKey: candidateUnusableDispositionKey(
           active.orderPriceBindingId,
@@ -4072,44 +4243,46 @@ export class AutomaticQuotesService {
   private async roughQuote(
     orderId: string,
     candidateAdmissionSatisfied = false,
+    client: Transaction | PrismaService = this.prisma,
   ): Promise<{
     quote: AutomaticQuoteSessionDto["roughEstimate"];
     deliveryOptions: AutomaticQuoteSessionDto["deliveryOptions"];
     express: { eligible: boolean; reasons: readonly string[] };
     reasons: readonly string[];
   } | null> {
-    const [draft, priceList] = await Promise.all([
-      this.prisma.automaticQuoteDraft.findUnique({
-        where: { orderId },
-        include: {
-          selectedDeliveryDestination: true,
-          items: { orderBy: { ordinal: "asc" } },
+    const draft = await client.automaticQuoteDraft.findUnique({
+      where: { orderId },
+      include: {
+        selectedDeliveryDestination: true,
+        items: { orderBy: { ordinal: "asc" } },
+      },
+    });
+    const priceList = await client.priceList.findUnique({
+      where: {
+        currency_revision: {
+          currency: "CZK",
+          revision: AUTOMATIC_PRICE_LIST_REVISION,
         },
-      }),
-      this.prisma.priceList.findUnique({
-        where: {
-          currency_revision: {
-            currency: "CZK",
-            revision: AUTOMATIC_PRICE_LIST_REVISION,
-          },
-        },
-      }),
-    ]);
+      },
+    });
     if (!draft || !priceList || draft.items.length === 0) return null;
     const pricing = await this.pricingItemsFromDraft(
-      this.prisma,
+      client,
       orderId,
       draft.items,
       parseAutomaticQuotePricingParameters(priceList.parameters),
     );
     if (!pricing) return null;
-    const deliveryOptions = await this.deliveryOptions({
-      orderId,
-      configurationRevision: draft.configurationRevision,
-      expressRequested: draft.expressRequested,
-      items: pricing.items,
-      priceList,
-    });
+    const deliveryOptions = await this.deliveryOptions(
+      {
+        orderId,
+        configurationRevision: draft.configurationRevision,
+        expressRequested: draft.expressRequested,
+        items: pricing.items,
+        priceList,
+      },
+      client,
+    );
     const itemOrdinals = new Map(
       pricing.items.map((item, index) => [
         item.id,
@@ -4140,7 +4313,7 @@ export class AutomaticQuotesService {
     const candidateResourcesAvailable = candidateAdmissionSatisfied
       ? true
       : await this.candidateResourcesAvailable(
-          this.prisma,
+          client,
           draft.items,
           pricing.items,
           provisionalPlan.prepared.kind === "binding_quote"
@@ -4165,8 +4338,11 @@ export class AutomaticQuotesService {
     };
   }
 
-  private async loadSession(sessionId: string) {
-    const session = await this.prisma.quoteSession.findUnique({
+  private async loadSession(
+    sessionId: string,
+    client: Transaction | PrismaService = this.prisma,
+  ) {
+    const session = await client.quoteSession.findUnique({
       where: { id: sessionId },
       include: {
         automaticOrderOrigin: {
@@ -4217,56 +4393,60 @@ export class AutomaticQuotesService {
 
   private async readModel(
     session: Awaited<ReturnType<AutomaticQuotesService["loadSession"]>>,
+    client: Transaction | PrismaService = this.prisma,
   ): Promise<AutomaticQuoteSessionDto> {
     const order = session.automaticOrderOrigin!.order;
     const draft = order.automaticQuoteDraft!;
     const expired =
       session.status === QuoteSessionStatus.EXPIRED ||
       session.expiresAt.getTime() <= Date.now();
-    const modelFiles = await Promise.all(
-      draft.modelFiles.map(async (attached) => {
+    const modelFiles = await this.mapSnapshotReads(
+      client,
+      draft.modelFiles,
+      async (attached): Promise<AutomaticQuoteModelFileDto> => {
         if (attached.modelFile.format === ModelFileFormat.STEP) {
           return {
             modelFileId: attached.modelFileId,
             format: attached.modelFile.format,
-            inspectionStatus: "UNSUPPORTED" as const,
+            inspectionStatus: "UNSUPPORTED",
             discoveredBodyIds: [],
           };
         }
-        const [result, dispatch] = await Promise.all([
-          terminalResultForJob(
-            this.prisma,
-            attached.inspectionJobId,
-            "model_inspection",
-          ),
-          this.latestPreprocessingDispatch(
-            this.prisma,
-            attached.inspectionJobId,
-            "slicing.model-inspection.requested",
-          ),
-        ]);
+        const result = await terminalResultForJob(
+          client,
+          attached.inspectionJobId,
+          "model_inspection",
+        );
+        const dispatch = await this.latestPreprocessingDispatch(
+          client,
+          attached.inspectionJobId,
+          "slicing.model-inspection.requested",
+        );
         return {
           modelFileId: attached.modelFileId,
           format: attached.modelFile.format,
           inspectionStatus: dispatch?.deadLettered
-            ? ("FAILED" as const)
+            ? "FAILED"
             : terminalStatus(result),
           discoveredBodyIds: successfulInspectionBodies(result),
         };
-      }),
+      },
     );
-    const configurationCapabilities = await this.configurationCapabilities();
+    const configurationCapabilities =
+      await this.configurationCapabilities(client);
     const configurationOptions = configurationCapabilities.map(
       ({ referenceProfileId: _referenceProfileId, ...option }) => option,
     );
-    const itemDtos = await Promise.all(
-      draft.items.map(async (item) => {
-        const geometry = await this.prisma.modelGeometry.findUnique({
+    const itemDtos = await this.mapSnapshotReads(
+      client,
+      draft.items,
+      async (item): Promise<AutomaticQuoteItemDto> => {
+        const geometry = await client.modelGeometry.findUnique({
           where: { id: item.targetModelGeometryId },
         });
         const occupancy = geometry
           ? await this.resolveReferenceOccupancy(
-              this.prisma,
+              client,
               item,
               geometry,
               order.id,
@@ -4276,13 +4456,13 @@ export class AutomaticQuotesService {
         const missing =
           geometry && occupancy?.kind === "resolved"
             ? await this.missingReferenceSlices(
-                this.prisma,
+                client,
                 item,
                 geometry,
                 referenceOccupancies(item.quantity, occupancy.partsPerPlate),
               )
             : [];
-        const findings = await this.currentRiskFindings(this.prisma, item);
+        const findings = await this.currentRiskFindings(client, item);
         const decisions = new Map(
           item.riskDecisions
             .filter(
@@ -4323,13 +4503,15 @@ export class AutomaticQuotesService {
             decision: decisions.get(finding.id) ?? null,
           })),
         };
-      }),
+      },
     );
     const handoffReasons: string[] = [];
-    if (await this.preprocessingRequiresHandoff(order.id, draft.items)) {
+    if (
+      await this.preprocessingRequiresHandoff(order.id, draft.items, client)
+    ) {
       handoffReasons.push("PREPROCESSING_FAILED");
     }
-    if (await this.candidateEstimationRequiresHandoff(order.id)) {
+    if (await this.candidateEstimationRequiresHandoff(order.id, client)) {
       handoffReasons.push("CANDIDATE_ESTIMATION_FAILED");
     }
     if (modelFiles.some((file) => file.inspectionStatus === "UNSUPPORTED")) {
@@ -4387,7 +4569,7 @@ export class AutomaticQuotesService {
         ? candidateActive
         : undefined;
     const currentPlan = active
-      ? await this.prisma.phaseResourcePlan.findFirst({
+      ? await client.phaseResourcePlan.findFirst({
           where: {
             orderPhaseId: { in: order.phases.map((phase) => phase.id) },
             expiresAt: { gt: new Date() },
@@ -4411,10 +4593,10 @@ export class AutomaticQuotesService {
     const hasLiveReservation = Boolean(currentPlan && currentReservation);
     const rough =
       itemDtos.length > 0
-        ? await this.roughQuote(order.id, hasLiveReservation)
+        ? await this.roughQuote(order.id, hasLiveReservation, client)
         : null;
     const deliveryOptions =
-      rough?.deliveryOptions ?? (await this.deliveryOptions());
+      rough?.deliveryOptions ?? (await this.deliveryOptions(undefined, client));
     const selectedDeliveryDestination = draft.selectedDeliveryDestination
       ? {
           providerEndpointId:
@@ -4471,7 +4653,9 @@ export class AutomaticQuotesService {
     const shipmentIneligible =
       rough?.reasons.includes("SHIPMENT_INELIGIBLE") ?? false;
     const quantityComparisons =
-      itemDtos.length > 0 ? await this.quantityComparisons(order.id) : [];
+      itemDtos.length > 0
+        ? await this.quantityComparisons(order.id, client)
+        : [];
     const phase = expired
       ? "EXPIRED"
       : handoffReasons.length > 0
@@ -4540,6 +4724,17 @@ export class AutomaticQuotesService {
       checkoutReady,
       expiresAt: session.expiresAt.toISOString(),
     };
+  }
+
+  private async mapSnapshotReads<TInput, TResult>(
+    client: Transaction | PrismaService,
+    inputs: readonly TInput[],
+    map: (input: TInput) => Promise<TResult>,
+  ): Promise<TResult[]> {
+    if (client === this.prisma) return Promise.all(inputs.map(map));
+    const results: TResult[] = [];
+    for (const input of inputs) results.push(await map(input));
+    return results;
   }
 
   // This catalog seeds the selector before the customer has supplied bodies and
@@ -4632,32 +4827,35 @@ export class AutomaticQuotesService {
     }));
   }
 
-  private async deliveryOptions(input?: {
-    orderId: string;
-    configurationRevision: number;
-    expressRequested: boolean;
-    items: readonly AutomaticQuotePricingItem[];
-    priceList: {
-      id: string;
-      revision: string;
-      termsRevision: string;
-      currency: string;
-      parameters: Prisma.JsonValue;
-    };
-  }) {
-    const [options, priceList] = await Promise.all([
-      this.deliveryCapabilities.list(),
-      input
-        ? Promise.resolve(input.priceList)
-        : this.prisma.priceList.findUnique({
-            where: {
-              currency_revision: {
-                currency: "CZK",
-                revision: AUTOMATIC_PRICE_LIST_REVISION,
-              },
-            },
-          }),
-    ]);
+  private async deliveryOptions(
+    input:
+      | {
+          orderId: string;
+          configurationRevision: number;
+          expressRequested: boolean;
+          items: readonly AutomaticQuotePricingItem[];
+          priceList: {
+            id: string;
+            revision: string;
+            termsRevision: string;
+            currency: string;
+            parameters: Prisma.JsonValue;
+          };
+        }
+      | undefined,
+    client: Transaction | PrismaService = this.prisma,
+  ) {
+    const priceList =
+      input?.priceList ??
+      (await client.priceList.findUnique({
+        where: {
+          currency_revision: {
+            currency: "CZK",
+            revision: AUTOMATIC_PRICE_LIST_REVISION,
+          },
+        },
+      }));
+    const options = await this.deliveryCapabilities.list();
     if (!priceList) return [];
     const pricedCategories = new Set(
       parseAutomaticQuotePricingParameters(
@@ -4711,37 +4909,36 @@ export class AutomaticQuotesService {
 
   private async quantityComparisons(
     orderId: string,
+    client: Transaction | PrismaService = this.prisma,
   ): Promise<AutomaticQuoteSessionDto["quantityComparisons"]> {
-    const [draft, priceList] = await Promise.all([
-      this.prisma.automaticQuoteDraft.findUnique({
-        where: { orderId },
-        include: {
-          modelFiles: true,
-          selectedDeliveryDestination: true,
-          items: { orderBy: { ordinal: "asc" } },
+    const draft = await client.automaticQuoteDraft.findUnique({
+      where: { orderId },
+      include: {
+        modelFiles: true,
+        selectedDeliveryDestination: true,
+        items: { orderBy: { ordinal: "asc" } },
+      },
+    });
+    const priceList = await client.priceList.findUnique({
+      where: {
+        currency_revision: {
+          currency: "CZK",
+          revision: AUTOMATIC_PRICE_LIST_REVISION,
         },
-      }),
-      this.prisma.priceList.findUnique({
-        where: {
-          currency_revision: {
-            currency: "CZK",
-            revision: AUTOMATIC_PRICE_LIST_REVISION,
-          },
-        },
-      }),
-    ]);
+      },
+    });
     if (!draft || !priceList || draft.items.length === 0) return [];
     const parameters = parseAutomaticQuotePricingParameters(
       priceList.parameters,
     );
     const baseline = await this.pricingItemsFromDraft(
-      this.prisma,
+      client,
       orderId,
       draft.items,
       parameters,
     );
     if (!baseline) return [];
-    const geometries = await this.prisma.modelGeometry.findMany({
+    const geometries = await client.modelGeometry.findMany({
       where: {
         id: {
           in: draft.items.map(
@@ -4758,25 +4955,21 @@ export class AutomaticQuotesService {
         .filter((item) => !geometryById.has(item.targetModelGeometryId))
         .map(({ sourceModelFileId }) => sourceModelFileId),
     );
-    const inspectionByModelFileId = new Map(
-      await Promise.all(
-        draft.modelFiles
-          .filter(({ modelFileId }) =>
-            missingGeometryModelFileIds.has(modelFileId),
-          )
-          .map(
-            async (attached) =>
-              [
-                attached.modelFileId,
-                await terminalResultForJob(
-                  this.prisma,
-                  attached.inspectionJobId,
-                  "model_inspection",
-                ),
-              ] as const,
-          ),
-      ),
-    );
+    const inspectionByModelFileId = new Map<
+      string,
+      Awaited<ReturnType<typeof terminalResultForJob>>
+    >();
+    for (const attached of draft.modelFiles) {
+      if (!missingGeometryModelFileIds.has(attached.modelFileId)) continue;
+      inspectionByModelFileId.set(
+        attached.modelFileId,
+        await terminalResultForJob(
+          client,
+          attached.inspectionJobId,
+          "model_inspection",
+        ),
+      );
+    }
     const comparisons: AutomaticQuoteSessionDto["quantityComparisons"] = [];
     for (const [activeIndex, activeItem] of draft.items.entries()) {
       const bounds =
@@ -5459,6 +5652,22 @@ async function lockedSession(transaction: Transaction, sessionId: string) {
   });
 }
 
+async function lockedHandoffCapability(
+  transaction: Transaction,
+  sourceQuoteSessionId: string,
+) {
+  const rows = await transaction.$queryRaw<Array<{ id: string }>>`
+    SELECT id
+    FROM automatic_quote_handoff_capabilities
+    WHERE source_quote_session_id = ${sourceQuoteSessionId}::uuid
+    FOR UPDATE
+  `;
+  if (!rows[0]) return null;
+  return transaction.automaticQuoteHandoffCapability.findUniqueOrThrow({
+    where: { id: rows[0].id },
+  });
+}
+
 function assertOpenSession(
   session: {
     publicTokenHash: string;
@@ -5466,11 +5675,12 @@ function assertOpenSession(
     expiresAt: Date;
   },
   token: string,
+  observedAt = new Date(Date.now()),
 ): void {
   assertSessionCapability(session, token);
   if (
     session.status !== QuoteSessionStatus.OPEN ||
-    session.expiresAt.getTime() <= Date.now()
+    session.expiresAt.getTime() <= observedAt.getTime()
   ) {
     throw new GoneException("Automatic quote session is no longer editable");
   }
@@ -5483,12 +5693,13 @@ function assertOpenOrConvertedSession(
     expiresAt: Date;
   },
   token: string,
+  observedAt = new Date(Date.now()),
 ): void {
   assertSessionCapability(session, token);
   if (
     (session.status !== QuoteSessionStatus.OPEN &&
       session.status !== QuoteSessionStatus.CONVERTED) ||
-    session.expiresAt.getTime() <= Date.now()
+    session.expiresAt.getTime() <= observedAt.getTime()
   ) {
     throw new GoneException("Automatic quote session is no longer available");
   }
@@ -5530,44 +5741,90 @@ async function lockIdempotencyKey(
   `;
 }
 
+async function replayedIdempotencyAfterLock(
+  transaction: Transaction,
+  namespace: string,
+  idempotencyKey: string,
+  requestFingerprint: string | readonly string[],
+) {
+  const observedAt = await databaseNow(transaction);
+  const existing = await transaction.idempotencyRecord.findFirst({
+    where: { namespace, idempotencyKey },
+    orderBy: { generation: "desc" },
+  });
+  return replayedIdempotency(
+    existing,
+    observedAt,
+    idempotencyFingerprints(requestFingerprint),
+  );
+}
+
+function idempotencyFingerprints(
+  requestFingerprint: string | readonly string[],
+): readonly string[] {
+  const acceptedFingerprints =
+    typeof requestFingerprint === "string"
+      ? [requestFingerprint]
+      : requestFingerprint;
+  if (!acceptedFingerprints[0]) {
+    throw new Error("At least one idempotency fingerprint is required");
+  }
+  return acceptedFingerprints;
+}
+
+function replayedIdempotency(
+  existing: {
+    id: string;
+    generation: number;
+    requestFingerprint: string;
+    status: IdempotencyStatus;
+    responseBody: Prisma.JsonValue | null;
+    expiresAt: Date;
+  } | null,
+  observedAt: Date,
+  acceptedFingerprints: readonly string[],
+) {
+  if (!existing || existing.expiresAt.getTime() <= observedAt.getTime()) {
+    return null;
+  }
+  if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
+    throw new ConflictException(
+      "Idempotency key was already used with different input",
+    );
+  }
+  if (
+    existing.status !== IdempotencyStatus.COMPLETED ||
+    existing.responseBody === null
+  ) {
+    throw new ConflictException("Idempotent command is incomplete");
+  }
+  return {
+    id: existing.id,
+    generation: existing.generation,
+    replayed: true as const,
+    response: existing.responseBody,
+  };
+}
+
 async function idempotencyRecordAfterLock(
   transaction: Transaction,
   namespace: string,
   idempotencyKey: string,
   requestFingerprint: string | readonly string[],
 ) {
-  const acceptedFingerprints =
-    typeof requestFingerprint === "string"
-      ? [requestFingerprint]
-      : requestFingerprint;
-  const primaryFingerprint = acceptedFingerprints[0];
-  if (!primaryFingerprint) {
-    throw new Error("At least one idempotency fingerprint is required");
-  }
+  const acceptedFingerprints = idempotencyFingerprints(requestFingerprint);
+  const primaryFingerprint = acceptedFingerprints[0]!;
   const observedAt = await databaseNow(transaction);
   const existing = await transaction.idempotencyRecord.findFirst({
     where: { namespace, idempotencyKey },
     orderBy: { generation: "desc" },
   });
-  if (existing && existing.expiresAt.getTime() > observedAt.getTime()) {
-    if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
-      throw new ConflictException(
-        "Idempotency key was already used with different input",
-      );
-    }
-    if (
-      existing.status !== IdempotencyStatus.COMPLETED ||
-      existing.responseBody === null
-    ) {
-      throw new ConflictException("Idempotent command is incomplete");
-    }
-    return {
-      id: existing.id,
-      generation: existing.generation,
-      replayed: true as const,
-      response: existing.responseBody,
-    };
-  }
+  const replayed = replayedIdempotency(
+    existing,
+    observedAt,
+    acceptedFingerprints,
+  );
+  if (replayed) return replayed;
   const created = await transaction.idempotencyRecord.create({
     data: {
       namespace,
@@ -5623,6 +5880,71 @@ function sessionToken(
     .digest("base64url");
 }
 
+function automaticQuoteHandoffToken(secret: string, handoffId: string): string {
+  return createHmac("sha256", secret)
+    .update(["automatic-quote-handoff", handoffId].join("\0"))
+    .digest("base64url");
+}
+
+function handoffCapabilityResponse(
+  secret: string,
+  stored: { handoffId: string; expiresAt: string },
+): AutomaticQuoteHandoffCapabilityDto {
+  return {
+    handoffToken: automaticQuoteHandoffToken(secret, stored.handoffId),
+    expiresAt: stored.expiresAt,
+  };
+}
+
+function handoffSnapshot(
+  view: AutomaticQuoteSessionDto,
+): AutomaticQuoteHandoffSnapshot {
+  const handoff = view.handoff;
+  const context = handoff?.safeContext;
+  if (!handoff || !context) {
+    throw new ConflictException(
+      "Automatic quote does not require an assisted request",
+    );
+  }
+  const modelFileIds = context.modelFileIds;
+  const itemSelections = context.itemSelections;
+  if (!Array.isArray(modelFileIds) || !Array.isArray(itemSelections)) {
+    throw new Error("Automatic quote handoff context is invalid");
+  }
+  return {
+    reasons: [...handoff.reasons],
+    modelFileIds: modelFileIds.map((value) =>
+      normalizedUuid(value, "modelFileId"),
+    ),
+    itemSelections: itemSelections.map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("Automatic quote handoff item is invalid");
+      }
+      const item = value as JsonRecord;
+      if (
+        typeof item.ordinal !== "number" ||
+        !Number.isSafeInteger(item.ordinal) ||
+        typeof item.material !== "string" ||
+        typeof item.quantity !== "number" ||
+        !Number.isSafeInteger(item.quantity) ||
+        typeof item.fitSensitive !== "boolean" ||
+        !Array.isArray(item.bodyIds) ||
+        item.bodyIds.some((bodyId) => typeof bodyId !== "string")
+      ) {
+        throw new Error("Automatic quote handoff item is invalid");
+      }
+      return {
+        ordinal: item.ordinal,
+        modelFileId: normalizedUuid(item.modelFileId, "modelFileId"),
+        bodyIds: [...item.bodyIds] as string[],
+        material: item.material,
+        quantity: item.quantity,
+        fitSensitive: item.fitSensitive,
+      };
+    }),
+  };
+}
+
 function automaticQuoteClientSubject(
   capabilityKey: string,
   clientAddress: string,
@@ -5670,6 +5992,7 @@ function geometryFitsCapability(
 
 function quoteCapabilityKeyRing(): {
   all: readonly QuoteCapabilityKey[];
+  byId: ReadonlyMap<string, QuoteCapabilityKey>;
 } {
   const currentKey = process.env.TAVEN_QUOTE_CAPABILITY_KEY;
   if (!currentKey || currentKey.length < 32) {
@@ -5686,9 +6009,7 @@ function quoteCapabilityKeyRing(): {
     }
     return { id: quoteCapabilityKeyId(key), key } satisfies QuoteCapabilityKey;
   });
-  return {
-    all: keys,
-  };
+  return { all: keys, byId: new Map(keys.map((key) => [key.id, key])) };
 }
 
 function previousQuoteCapabilityKeys(): string[] {
@@ -5846,18 +6167,6 @@ function nonnegativeInteger(
     throw new BadRequestException(`${name} is invalid`);
   }
   return number;
-}
-
-function optionalJsonObject(value: unknown, name: string): JsonRecord | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new BadRequestException(`${name} must be an object`);
-  }
-  const serialized = JSON.stringify(value);
-  if (serialized.length > 16_384) {
-    throw new BadRequestException(`${name} is too large`);
-  }
-  return JSON.parse(serialized) as JsonRecord;
 }
 
 function jsonNullable(

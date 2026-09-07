@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { AttributionDto } from "../metrics/attribution.dto";
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const OFFER_PACKING_UNIT_MAX = 1_000;
@@ -52,8 +53,20 @@ export class CreateQuoteRequestDto {
   @ApiProperty({ type: QuoteContactDto })
   contact!: QuoteContactDto;
 
-  @ApiPropertyOptional({ type: "object", additionalProperties: true })
-  attribution?: Record<string, unknown>;
+  @ApiPropertyOptional({ type: Boolean })
+  photoPublicationConsent?: boolean;
+
+  @ApiPropertyOptional({
+    type: String,
+    minLength: 43,
+    maxLength: 43,
+    pattern: "^[A-Za-z0-9_-]{43}$",
+    description: "Single-use server-issued automatic-quote handoff capability",
+  })
+  automaticQuoteHandoffToken?: string;
+
+  @ApiPropertyOptional({ type: AttributionDto })
+  attribution?: AttributionDto | Record<string, unknown>;
 }
 
 export class QuoteRequestCreatedDto {
@@ -109,6 +122,9 @@ export class QuoteRequestDetailDto {
   @ApiPropertyOptional({ type: String, nullable: true })
   purpose!: string | null;
 
+  @ApiProperty({ type: Boolean })
+  photoPublicationConsentGranted!: boolean;
+
   @ApiPropertyOptional({
     type: "object",
     nullable: true,
@@ -137,6 +153,48 @@ export class QuoteRequestDetailDto {
 
   @ApiProperty({ type: [QuoteAttachmentDto] })
   attachments!: QuoteAttachmentDto[];
+}
+
+export class AutomaticQuoteRequestHandoffDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  automaticQuoteSessionId!: string;
+
+  @ApiProperty({ type: [String] })
+  reasons!: string[];
+
+  @ApiProperty({ type: [String], format: "uuid" })
+  modelFileIds!: string[];
+
+  @ApiProperty({ type: () => [AutomaticQuoteRequestHandoffItemDto] })
+  itemSelections!: AutomaticQuoteRequestHandoffItemDto[];
+}
+
+export class AutomaticQuoteRequestHandoffItemDto {
+  @ApiProperty({ type: "integer", minimum: 0 })
+  ordinal!: number;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  modelFileId!: string;
+
+  @ApiProperty({ type: [String] })
+  bodyIds!: string[];
+
+  @ApiProperty({ type: String })
+  material!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1 })
+  quantity!: number;
+
+  @ApiProperty({ type: Boolean })
+  fitSensitive!: boolean;
+}
+
+export class OperatorQuoteRequestDetailDto extends QuoteRequestDetailDto {
+  @ApiPropertyOptional({
+    type: AutomaticQuoteRequestHandoffDto,
+    nullable: true,
+  })
+  automaticQuoteHandoff!: AutomaticQuoteRequestHandoffDto | null;
 }
 
 export class ModelOfferItemDto {

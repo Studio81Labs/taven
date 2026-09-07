@@ -49,6 +49,7 @@ const {
   attachmentsEditable,
   cancel,
   created,
+  createFailureStatus,
   errorMessage,
   pending,
   phase,
@@ -161,20 +162,8 @@ async function submitRequest(): Promise<void> {
   if (!context) handoffContext.value = undefined;
   const body: CreateQuoteRequest = {
     attribution: {
-      channel: "web-assisted-quote",
-      entrySource: source,
-      privacyNoticeAcknowledged: true,
-      photoPublicationConsent: photoPublicationConsent.value,
-      ...(context
-        ? {
-            automaticQuoteHandoff: {
-              automaticQuoteSessionId: context.automaticQuoteSessionId,
-              itemSelections: context.itemSelections,
-              modelFileIds: context.modelFileIds,
-              reasons: context.reasons,
-            },
-          }
-        : {}),
+      channel: "direct",
+      source,
     },
     contact: {
       email: contactEmail.value.trim(),
@@ -184,13 +173,21 @@ async function submitRequest(): Promise<void> {
         : {}),
     },
     description: description.value.trim(),
+    photoPublicationConsent: photoPublicationConsent.value,
+    ...(context?.handoffToken
+      ? { automaticQuoteHandoffToken: context.handoffToken }
+      : {}),
     ...(hasDimensions.value ? { measurements } : {}),
     ...(purpose.value.trim() ? { purpose: purpose.value.trim() } : {}),
     ...(requestedDate.value ? { requestedDate: requestedDate.value } : {}),
   };
   await submit(body, selectedPhotos.value);
-  if (phase.value === "success" && import.meta.client) {
-    const storage = getSessionStorage(window);
+  if (!import.meta.client) return;
+  const storage = getSessionStorage(window);
+  if (phase.value === "success") {
+    if (storage) clearAssistedQuoteHandoff(storage);
+  } else if (createFailureStatus.value === 401 && context?.handoffToken) {
+    handoffContext.value = undefined;
     if (storage) clearAssistedQuoteHandoff(storage);
   }
 }

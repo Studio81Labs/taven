@@ -17,6 +17,7 @@ import {
   ApiCreatedResponse,
   ApiGoneResponse,
   ApiHeader,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -27,11 +28,13 @@ import {
 } from "@nestjs/swagger";
 import {
   AttachAutomaticQuoteModelFileDto,
+  AutomaticQuoteHandoffCapabilityDto,
   AutomaticQuoteRiskDecisionDto,
   AutomaticQuoteSessionCreatedDto,
   AutomaticQuoteSessionDto,
   ConfigureAutomaticQuoteItemDto,
   CreateAutomaticQuoteSessionDto,
+  RecordAutomaticQuoteObservationDto,
   ReplaceAutomaticQuoteConfigurationDto,
   SelectAutomaticQuoteDestinationDto,
   SetAutomaticQuoteExpressDto,
@@ -88,6 +91,55 @@ export class AutomaticQuotesController {
     @Headers("authorization") authorization?: string,
   ): Promise<AutomaticQuoteSessionDto> {
     return this.automaticQuotes.getSession(sessionId, authorization);
+  }
+
+  @Post(":sessionId/observations")
+  @HttpCode(204)
+  @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
+  @ApiOperation({
+    summary: "Record one deduplicated quote or checkout observation",
+  })
+  @ApiBody({ type: RecordAutomaticQuoteObservationDto })
+  @ApiNoContentResponse({ description: "Observation was recorded or replayed" })
+  @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
+  @ApiGoneResponse({ description: "Session is no longer available" })
+  observe(
+    @Param("sessionId") sessionId: string,
+    @Body() body: RecordAutomaticQuoteObservationDto,
+    @Headers("authorization") authorization?: string,
+  ): Promise<void> {
+    return this.automaticQuotes.recordObservation(
+      sessionId,
+      body,
+      authorization,
+    );
+  }
+
+  @Post(":sessionId/handoff-capabilities")
+  @ApiBearerAuth()
+  @ApiParam(SESSION_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({
+    summary: "Mint one single-use assisted quote-request handoff capability",
+  })
+  @ApiCreatedResponse({ type: AutomaticQuoteHandoffCapabilityDto })
+  @ApiConflictResponse({
+    description:
+      "Idempotency input changed or the source session's handoff capability is no longer available",
+  })
+  @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
+  @ApiGoneResponse({ description: "Session or handoff is no longer available" })
+  createHandoffCapability(
+    @Param("sessionId") sessionId: string,
+    @Headers("authorization") authorization: string | undefined,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<AutomaticQuoteHandoffCapabilityDto> {
+    return this.automaticQuotes.createHandoffCapability(
+      sessionId,
+      authorization,
+      idempotencyKey,
+    );
   }
 
   @Post(":sessionId/model-files")

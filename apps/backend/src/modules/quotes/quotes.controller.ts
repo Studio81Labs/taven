@@ -41,6 +41,7 @@ import {
   IssueOfferDto,
   OfferIssuedDto,
   OfferPreviewDto,
+  OperatorQuoteRequestDetailDto,
   QuoteRequestCreatedDto,
   QuoteRequestDetailDto,
   QuoteRequestStatusDto,
@@ -70,6 +71,9 @@ export class QuoteRequestsController {
   @ApiBody({ type: CreateQuoteRequestDto })
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiCreatedResponse({ type: QuoteRequestCreatedDto })
+  @ApiUnauthorizedResponse({
+    description: "Automatic quote handoff capability is invalid or unavailable",
+  })
   @ApiConflictResponse({ description: "Idempotency input changed" })
   @ApiTooManyRequestsResponse({
     description: "Anonymous quote-submission limit is exhausted",
@@ -190,8 +194,10 @@ export class OperatorQuoteRequestsController {
     description:
       "Defaults to actionable NEW, IN_REVIEW, and QUOTED requests; select a terminal status explicitly to read history",
   })
-  @ApiOkResponse({ type: QuoteRequestDetailDto, isArray: true })
-  list(@Query("status") status?: string): Promise<QuoteRequestDetailDto[]> {
+  @ApiOkResponse({ type: OperatorQuoteRequestDetailDto, isArray: true })
+  list(
+    @Query("status") status?: string,
+  ): Promise<OperatorQuoteRequestDetailDto[]> {
     return this.quotes.listRequests(status);
   }
 
@@ -199,8 +205,10 @@ export class OperatorQuoteRequestsController {
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_READ)
   @ApiOperation({ summary: "Read one operator quote-request detail" })
   @ApiParam({ name: "requestId", type: String, format: "uuid" })
-  @ApiOkResponse({ type: QuoteRequestDetailDto })
-  get(@Param("requestId") requestId: string): Promise<QuoteRequestDetailDto> {
+  @ApiOkResponse({ type: OperatorQuoteRequestDetailDto })
+  get(
+    @Param("requestId") requestId: string,
+  ): Promise<OperatorQuoteRequestDetailDto> {
     return this.quotes.getOperatorRequest(requestId);
   }
 

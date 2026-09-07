@@ -5,7 +5,10 @@ import {
   saveAssistedQuoteHandoff,
   type AssistedQuoteEntrySource,
 } from "../../utils/assisted-quote-context";
-import { getSessionStorage } from "../../utils/quote-session-storage";
+import {
+  getSessionStorage,
+  loadQuoteSession,
+} from "../../utils/quote-session-storage";
 
 definePageMeta({ middleware: "automatic-pricing-gate" });
 
@@ -163,7 +166,7 @@ function chooseAdditionalFile(): void {
   additionalFileInput.value?.click();
 }
 
-function openAssistedQuote(): void {
+async function openAssistedQuote(): Promise<void> {
   let source: AssistedQuoteEntrySource = "individual-file";
   const activeQuote = quote.value;
   if (activeQuote?.handoff && import.meta.client) {
@@ -172,13 +175,47 @@ function openAssistedQuote(): void {
       activeQuote.handoff,
       activeQuote.expiresAt,
     );
-    if (storage && context && saveAssistedQuoteHandoff(storage, context)) {
-      source = "automatic-quote";
+    const session = storage ? loadQuoteSession(storage) : undefined;
+    if (
+      storage &&
+      context &&
+      session?.sessionId === activeQuote.sessionId &&
+      session.sessionToken
+    ) {
+      try {
+        const issued = await useNuxtApp().$api.POST(
+          "/automatic-quote-sessions/{sessionId}/handoff-capabilities",
+          {
+            headers: {
+              Authorization: `Bearer ${session.sessionToken}`,
+            },
+            params: {
+              header: {
+                "Idempotency-Key": `automatic-handoff-${crypto.randomUUID()}`,
+              },
+              path: { sessionId: session.sessionId },
+            },
+          },
+        );
+        if (
+          issued.response.ok &&
+          issued.data &&
+          saveAssistedQuoteHandoff(storage, {
+            ...context,
+            expiresAt: issued.data.expiresAt,
+            handoffToken: issued.data.handoffToken,
+          })
+        ) {
+          source = "automatic-quote";
+        }
+      } catch {
+        // The assisted form remains available without transferred context.
+      }
     }
   } else if (metadata.value?.format === "3MF") {
     source = "blocked-3mf";
   }
-  void navigateTo({ path: "/poptavka", query: { source } });
+  await navigateTo({ path: "/poptavka", query: { source } });
 }
 
 function inspectionLabel(status: string | undefined): string {
