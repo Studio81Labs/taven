@@ -203,9 +203,9 @@ async function submitCheckout(): Promise<void> {
         };
   command.value = activeCommand;
   persistCheckout();
-  await recordCheckoutStarted();
   submitting.value = true;
   errorMessage.value = undefined;
+  await recordCheckoutStarted();
   try {
     const result = await $api.POST(
       "/automatic-quote-sessions/{sessionId}/checkout/payments",
