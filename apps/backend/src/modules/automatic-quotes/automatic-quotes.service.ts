@@ -5675,7 +5675,7 @@ function assertOpenSession(
     expiresAt: Date;
   },
   token: string,
-  observedAt = new Date(),
+  observedAt = new Date(Date.now()),
 ): void {
   assertSessionCapability(session, token);
   if (
@@ -5693,7 +5693,7 @@ function assertOpenOrConvertedSession(
     expiresAt: Date;
   },
   token: string,
-  observedAt = new Date(),
+  observedAt = new Date(Date.now()),
 ): void {
   assertSessionCapability(session, token);
   if (
