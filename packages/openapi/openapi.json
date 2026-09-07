@@ -7384,6 +7384,9 @@
           },
           "401": {
             "description": "Session capability is invalid"
+          },
+          "410": {
+            "description": "Session is no longer available"
           }
         },
         "security": [

@@ -4070,6 +4070,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Session is no longer available */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     AutomaticQuotesController_prepare: {

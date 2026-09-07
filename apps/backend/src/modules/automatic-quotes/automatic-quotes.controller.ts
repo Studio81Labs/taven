@@ -103,6 +103,7 @@ export class AutomaticQuotesController {
   @ApiBody({ type: RecordAutomaticQuoteObservationDto })
   @ApiNoContentResponse({ description: "Observation was recorded or replayed" })
   @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
+  @ApiGoneResponse({ description: "Session is no longer available" })
   observe(
     @Param("sessionId") sessionId: string,
     @Body() body: RecordAutomaticQuoteObservationDto,
