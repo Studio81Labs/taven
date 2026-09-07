@@ -59,7 +59,7 @@ export class MeasurementService {
     const nodeId = operatorNode(operator);
     const input = parseSessionInput(body);
     return this.command(
-      "handling:start",
+      operatorCommandNamespace("handling:start", operator),
       key,
       { nodeId, ...input },
       async (tx) => {
@@ -106,7 +106,7 @@ export class MeasurementService {
     const allocations = parseAllocations(body.allocations);
     const nodeId = operatorNode(operator);
     return this.command(
-      `handling:stop:${sessionId}`,
+      operatorCommandNamespace(`handling:stop:${sessionId}`, operator),
       key,
       allocations,
       async (tx) => {
@@ -164,7 +164,7 @@ export class MeasurementService {
     }
     const allocations = parseAllocations(body.allocations);
     return this.command(
-      "handling:manual",
+      operatorCommandNamespace("handling:manual", operator),
       key,
       { ...input, startedAt, endedAt, duration, reason, allocations },
       async (tx) => {
@@ -229,7 +229,7 @@ export class MeasurementService {
     const reason = requiredText(body.reason, "reason", 1000);
     const nodeId = operatorNode(operator);
     return this.command(
-      `handling:void:${sessionId}`,
+      operatorCommandNamespace(`handling:void:${sessionId}`, operator),
       key,
       { reason },
       async (tx) => {
@@ -268,48 +268,53 @@ export class MeasurementService {
     assertUuid(orderId, "orderId");
     const input = parseActualCost(body);
     const nodeId = operatorNode(operator);
-    return this.command(`actual-cost:${orderId}`, key, input, async (tx) => {
-      await this.assertOrderNode(tx, orderId, nodeId);
-      if (input.supersedesId)
-        await this.assertActualCostSupersession(
-          tx,
-          input.supersedesId,
-          orderId,
-          input.category,
-          input.currency,
-        );
-      try {
-        const cost = await tx.orderActualCost.create({
-          data: { orderId, ...input },
-        });
-        await this.audit.recordOperator(tx, operator, {
-          eventType: "actual_cost.recorded",
-          orderId,
-          nodeId,
-          correlationId: cost.id,
-          idempotencyKey: requiredKey(key),
-          payload: { operation: "record_actual_cost", status: "RECORDED" },
-        });
-        await tx.businessEvent.create({
-          data: {
-            eventType: "actual-cost.recorded",
-            dedupeKey: cost.id,
-            observedAt: cost.recordedAt,
-            source: "SERVER",
+    return this.command(
+      operatorCommandNamespace(`actual-cost:${orderId}`, operator),
+      key,
+      input,
+      async (tx) => {
+        await this.assertOrderNode(tx, orderId, nodeId);
+        if (input.supersedesId)
+          await this.assertActualCostSupersession(
+            tx,
+            input.supersedesId,
+            orderId,
+            input.category,
+            input.currency,
+          );
+        try {
+          const cost = await tx.orderActualCost.create({
+            data: { orderId, ...input },
+          });
+          await this.audit.recordOperator(tx, operator, {
+            eventType: "actual_cost.recorded",
             orderId,
             nodeId,
-            payload: { category: cost.category },
-          },
-        });
-        return { id: cost.id, status: "RECORDED" };
-      } catch (error) {
-        if (isUniqueViolation(error))
-          throw new ConflictException(
-            "Cost evidence source or correction was already recorded",
-          );
-        throw error;
-      }
-    });
+            correlationId: cost.id,
+            idempotencyKey: requiredKey(key),
+            payload: { operation: "record_actual_cost", status: "RECORDED" },
+          });
+          await tx.businessEvent.create({
+            data: {
+              eventType: "actual-cost.recorded",
+              dedupeKey: cost.id,
+              observedAt: cost.recordedAt,
+              source: "SERVER",
+              orderId,
+              nodeId,
+              payload: { category: cost.category },
+            },
+          });
+          return { id: cost.id, status: "RECORDED" };
+        } catch (error) {
+          if (isUniqueViolation(error))
+            throw new ConflictException(
+              "Cost evidence source or correction was already recorded",
+            );
+          throw error;
+        }
+      },
+    );
   }
 
   recordAcquisitionSpend(
@@ -319,35 +324,40 @@ export class MeasurementService {
   ): Promise<MeasurementCommandResultDto> {
     const input = parseAcquisitionSpend(body);
     const nodeId = operatorNode(operator);
-    return this.command("acquisition-spend", key, input, async (tx) => {
-      if (input.supersedesId)
-        await this.assertSpendSupersession(
-          tx,
-          input.supersedesId,
-          input.channel,
-          input.currency,
-        );
-      try {
-        const spend = await tx.acquisitionSpend.create({ data: input });
-        await this.audit.recordOperator(tx, operator, {
-          eventType: "acquisition_spend.recorded",
-          nodeId,
-          correlationId: spend.id,
-          idempotencyKey: requiredKey(key),
-          payload: {
-            operation: "record_acquisition_spend",
-            status: "RECORDED",
-          },
-        });
-        return { id: spend.id, status: "RECORDED" };
-      } catch (error) {
-        if (isUniqueViolation(error))
-          throw new ConflictException(
-            "Spend source or correction was already recorded",
+    return this.command(
+      operatorCommandNamespace("acquisition-spend", operator),
+      key,
+      input,
+      async (tx) => {
+        if (input.supersedesId)
+          await this.assertSpendSupersession(
+            tx,
+            input.supersedesId,
+            input.channel,
+            input.currency,
           );
-        throw error;
-      }
-    });
+        try {
+          const spend = await tx.acquisitionSpend.create({ data: input });
+          await this.audit.recordOperator(tx, operator, {
+            eventType: "acquisition_spend.recorded",
+            nodeId,
+            correlationId: spend.id,
+            idempotencyKey: requiredKey(key),
+            payload: {
+              operation: "record_acquisition_spend",
+              status: "RECORDED",
+            },
+          });
+          return { id: spend.id, status: "RECORDED" };
+        } catch (error) {
+          if (isUniqueViolation(error))
+            throw new ConflictException(
+              "Spend source or correction was already recorded",
+            );
+          throw error;
+        }
+      },
+    );
   }
 
   private async completeSession(
@@ -785,6 +795,12 @@ function operatorNode(operator: OperatorContext): string {
   if (operator.nodeIds.length !== 1)
     throw new ForbiddenException("Operator node scope is invalid");
   return operator.nodeIds[0]!;
+}
+function operatorCommandNamespace(
+  namespace: string,
+  operator: OperatorContext,
+): string {
+  return `${namespace}:${operator.operatorId}`;
 }
 function requiredKey(value: string | undefined): string {
   return requiredText(value, "Idempotency-Key", 255, 8);

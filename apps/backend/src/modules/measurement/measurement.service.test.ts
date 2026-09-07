@@ -53,6 +53,50 @@ describe("MeasurementService command boundaries", () => {
     ).resolves.toEqual({ id: "session", status: "OPEN" });
   });
 
+  it("scopes timer idempotency records to the authenticated operator", async () => {
+    const now = new Date("2026-09-06T10:00:00.000Z");
+    const namespaces: string[] = [];
+    const transaction = {
+      $queryRaw: async () => [{ now }],
+      idempotencyRecord: {
+        findFirst: async (input: { where: { namespace: string } }) => {
+          namespaces.push(input.where.namespace);
+          return null;
+        },
+        create: async () => ({ id: "record" }),
+        update: async () => undefined,
+      },
+      handlingSession: {
+        create: async () => ({ id: "session", lifecycle: "OPEN" }),
+      },
+    };
+    const service = new MeasurementService(
+      {
+        $transaction: async (operation: (tx: typeof transaction) => unknown) =>
+          operation(transaction),
+      } as never,
+      { recordOperator: async () => undefined } as never,
+    );
+    const input = {
+      component: "HANDLING_PACK",
+      laborRateNumerator: "300",
+      laborRateDenominator: "1",
+      currency: "CZK",
+    };
+
+    await service.start(operator, input, "valid-key");
+    await service.start(
+      { ...operator, operatorId: "00000000-0000-4000-8000-000000000004" },
+      input,
+      "valid-key",
+    );
+
+    expect(namespaces).toEqual([
+      "handling:start:00000000-0000-4000-8000-000000000001",
+      "handling:start:00000000-0000-4000-8000-000000000004",
+    ]);
+  });
+
   it("rejects malformed timer evidence before persistence", () => {
     const service = new MeasurementService({} as never, {} as never);
     expect(() =>
