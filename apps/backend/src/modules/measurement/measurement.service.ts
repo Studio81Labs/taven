@@ -180,7 +180,6 @@ export class MeasurementService {
         const overlappingTimer = await tx.handlingSession.findFirst({
           where: {
             operatorIdentityId: operator.operatorId,
-            source: HandlingSource.TIMER,
             lifecycle: {
               in: [
                 HandlingSessionLifecycle.OPEN,

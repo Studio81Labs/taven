@@ -285,6 +285,10 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'voiding an open handling session cannot add measurements';
   END IF;
+  IF OLD."lifecycle" = 'OPEN' AND NEW."lifecycle" = 'VOIDED'
+     AND EXISTS (SELECT 1 FROM "handling_allocations" WHERE "handling_session_id" = OLD."id") THEN
+    RAISE EXCEPTION 'voiding an open handling session cannot retain allocations';
+  END IF;
   RETURN NEW;
 END;
 $$;
