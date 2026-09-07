@@ -293,14 +293,14 @@ CREATE TRIGGER "handling_sessions_immutable" BEFORE INSERT OR UPDATE OR DELETE O
 
 CREATE FUNCTION "taven_validate_handling_reconciliation"() RETURNS trigger
 LANGUAGE plpgsql AS $$
-DECLARE session_id uuid; session_state "handling_session_lifecycle"; session_component "handling_component"; total_duration bigint; total_cost bigint; allocation_count bigint; expected_duration bigint; expected_cost bigint;
+DECLARE session_id uuid; session_state "handling_session_lifecycle"; session_source "handling_source"; session_component "handling_component"; total_duration bigint; total_cost bigint; allocation_count bigint; expected_duration bigint; expected_cost bigint;
 BEGIN
   IF TG_TABLE_NAME = 'handling_sessions' THEN
     session_id := COALESCE(NEW."id", OLD."id");
   ELSE
     session_id := COALESCE(NEW."handling_session_id", OLD."handling_session_id");
   END IF;
-  SELECT "lifecycle", "component", "duration_milliseconds", "total_cost_minor" INTO session_state, session_component, expected_duration, expected_cost FROM "handling_sessions" WHERE "id" = session_id;
+  SELECT "lifecycle", "source", "component", "duration_milliseconds", "total_cost_minor" INTO session_state, session_source, session_component, expected_duration, expected_cost FROM "handling_sessions" WHERE "id" = session_id;
   IF session_state = 'COMPLETED' THEN
     SELECT count(*), coalesce(sum("allocated_duration_milliseconds"), 0), coalesce(sum("allocated_cost_minor"), 0)
       INTO allocation_count, total_duration, total_cost FROM "handling_allocations" WHERE "handling_session_id" = session_id;
@@ -310,8 +310,8 @@ BEGIN
        OR (session_component = 'HANDLING_ORDER_FIX' AND allocation_count <> 1) THEN
       RAISE EXCEPTION 'completed handling session allocations do not reconcile';
     END IF;
-  ELSIF session_state = 'OPEN' AND EXISTS (SELECT 1 FROM "handling_allocations" WHERE "handling_session_id" = session_id) THEN
-    RAISE EXCEPTION 'open handling session cannot have allocations';
+  ELSIF session_state = 'OPEN' AND (session_source = 'MANUAL' OR EXISTS (SELECT 1 FROM "handling_allocations" WHERE "handling_session_id" = session_id)) THEN
+    RAISE EXCEPTION 'open handling session cannot be manual or have allocations';
   END IF;
   RETURN NULL;
 END;
