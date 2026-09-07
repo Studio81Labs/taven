@@ -718,11 +718,11 @@ function parseAllocations(
     throw new BadRequestException("allocations must not be empty");
   const result = value.map((item) => ({
     orderId: uuid(item.orderId, "orderId"),
-    ...(item.orderItemId
+    ...(item.orderItemId !== undefined
       ? { orderItemId: uuid(item.orderItemId, "orderItemId") }
       : {}),
-    ...(item.jobId ? { jobId: uuid(item.jobId, "jobId") } : {}),
-    ...(item.shipmentId
+    ...(item.jobId !== undefined ? { jobId: uuid(item.jobId, "jobId") } : {}),
+    ...(item.shipmentId !== undefined
       ? { shipmentId: uuid(item.shipmentId, "shipmentId") }
       : {}),
     servedUnits: positiveBigInt(
@@ -838,7 +838,7 @@ function uuid(value: string, name: string): string {
   return value.toLowerCase();
 }
 function assertUuid(value: string, name: string): void {
-  if (!UUID_PATTERN.test(value))
+  if (typeof value !== "string" || !UUID_PATTERN.test(value))
     throw new BadRequestException(`${name} is invalid`);
 }
 function parseTimestamp(value: string, name: string): Date {
