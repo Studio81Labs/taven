@@ -4,6 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AutomaticQuotesService } from "./automatic-quotes.service";
 
+type HandoffSnapshotPreparer = {
+  prepareHandoffSnapshot: () => Promise<{
+    sourceVersion: string;
+    snapshot: null;
+  }>;
+};
+
 describe("AutomaticQuotesService", () => {
   it("uses the locked transaction's database clock to reject expired observations", async () => {
     const sessionId = "00000000-0000-4000-8000-000000000001";
@@ -104,6 +111,13 @@ describe("AutomaticQuotesService", () => {
         null as never,
         null as never,
       );
+      vi.spyOn(
+        service as unknown as HandoffSnapshotPreparer,
+        "prepareHandoffSnapshot",
+      ).mockResolvedValue({
+        sourceVersion: "unchanged-source",
+        snapshot: null,
+      });
 
       await expect(
         service.createHandoffCapability(

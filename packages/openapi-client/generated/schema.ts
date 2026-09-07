@@ -1258,10 +1258,13 @@ export interface components {
             uploadToken: string;
         };
         AttributionDto: {
+            /** @description ASCII slug input; leading/trailing whitespace is trimmed and letters are lowercased before the stored label is limited to 64 characters. */
             campaign?: string;
             /** @enum {string} */
             channel: "direct" | "organic" | "paid" | "referral" | "unknown";
+            /** @description ASCII slug input; leading/trailing whitespace is trimmed and letters are lowercased before the stored label is limited to 64 characters. */
             medium?: string;
+            /** @description ASCII slug input; leading/trailing whitespace is trimmed and letters are lowercased before the stored label is limited to 64 characters. */
             source?: string;
         };
         AuditEventPageDto: {

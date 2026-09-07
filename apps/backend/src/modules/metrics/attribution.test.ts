@@ -19,6 +19,18 @@ describe("normalizeAttribution", () => {
     });
   });
 
+  it("accepts the documented pre-normalization label bounds", () => {
+    const padded = `${" ".repeat(123)}Google-Ads${" ".repeat(123)}`;
+    expect(padded).toHaveLength(256);
+    expect(normalizeAttribution({ channel: "paid", source: padded })).toEqual({
+      channel: "paid",
+      source: "google-ads",
+    });
+    expect(() =>
+      normalizeAttribution({ channel: "paid", source: `${padded} ` }),
+    ).toThrow(BadRequestException);
+  });
+
   it("rejects arbitrary attribution data", () => {
     expect(() =>
       normalizeAttribution({

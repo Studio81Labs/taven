@@ -117,6 +117,10 @@ type AutomaticQuoteHandoffSnapshot = {
     fitSensitive: boolean;
   }>;
 };
+type PreparedAutomaticQuoteHandoffSnapshot = {
+  sourceVersion: string;
+  snapshot: AutomaticQuoteHandoffSnapshot | null;
+};
 type QuoteCapabilityKey = { id: string; key: string };
 type AutomaticCandidateDispatchState = {
   attempt: number;
@@ -384,6 +388,10 @@ export class AutomaticQuotesService {
     sessionId = normalizedUuid(sessionId, "sessionId");
     const sessionCapability = bearerCapability(authorization);
     const commandKey = requireIdempotencyKey(idempotencyKey);
+    const preparedSnapshot = await this.prepareHandoffSnapshot(
+      sessionId,
+      sessionCapability,
+    );
 
     return this.prisma.$transaction(async (transaction) => {
       const session = await lockedSession(transaction, sessionId);
@@ -444,10 +452,20 @@ export class AutomaticQuotesService {
         );
       }
 
-      const source = await this.loadSession(sessionId, transaction);
-      const snapshot = handoffSnapshot(
-        await this.readModel(source, transaction),
-      );
+      if (
+        preparedSnapshot.sourceVersion !==
+        (await this.handoffSourceVersion(sessionId, transaction))
+      ) {
+        throw new ConflictException(
+          "Automatic quote changed while preparing the assisted request",
+        );
+      }
+      if (!preparedSnapshot.snapshot) {
+        throw new ConflictException(
+          "Automatic quote does not require an assisted request",
+        );
+      }
+      const snapshot = preparedSnapshot.snapshot;
       const issuedAt = await databaseNow(transaction);
       const expiresAt = new Date(
         Math.min(
@@ -4389,6 +4407,105 @@ export class AutomaticQuotesService {
       throw new NotFoundException("Automatic quote session was not found");
     }
     return session;
+  }
+
+  private async prepareHandoffSnapshot(
+    sessionId: string,
+    sessionCapability: string,
+  ): Promise<PreparedAutomaticQuoteHandoffSnapshot> {
+    const session = await this.prisma.quoteSession.findUnique({
+      where: { id: sessionId },
+      select: { publicTokenHash: true },
+    });
+    if (!session)
+      throw new NotFoundException("Automatic quote session was not found");
+    assertSessionCapability(session, sessionCapability);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const before = await this.handoffSourceVersion(sessionId);
+      const source = await this.loadSession(sessionId);
+      const view = await this.readModel(source);
+      const after = await this.handoffSourceVersion(sessionId);
+      if (before === after) {
+        return {
+          sourceVersion: after,
+          snapshot: view.handoff ? handoffSnapshot(view) : null,
+        };
+      }
+    }
+    throw new ConflictException(
+      "Automatic quote changed while preparing the assisted request",
+    );
+  }
+
+  private async handoffSourceVersion(
+    sessionId: string,
+    client: Transaction | PrismaService = this.prisma,
+  ): Promise<string> {
+    const session = await client.quoteSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        status: true,
+        expiresAt: true,
+        automaticOrderOrigin: {
+          select: {
+            order: {
+              select: {
+                status: true,
+                automaticQuoteDraft: {
+                  select: {
+                    configurationRevision: true,
+                    modelFiles: {
+                      select: {
+                        modelFileId: true,
+                        inspectionJobId: true,
+                        modelFile: { select: { format: true } },
+                      },
+                      orderBy: { createdAt: "asc" },
+                    },
+                    items: {
+                      select: {
+                        id: true,
+                        ordinal: true,
+                        sourceModelFileId: true,
+                        bodyIds: true,
+                        selectionSha256: true,
+                        targetModelGeometryId: true,
+                        printConfigRevisionId: true,
+                        referenceProfileId: true,
+                        material: true,
+                        color: true,
+                        infillPreset: true,
+                        quantity: true,
+                        fitSensitive: true,
+                        referencePartsPerPlate: true,
+                        referenceProbeLowerBound: true,
+                        referenceProbeUpperBound: true,
+                        configurationFingerprint: true,
+                      },
+                      orderBy: { ordinal: "asc" },
+                    },
+                    riskDecisions: {
+                      select: {
+                        automaticQuoteItemId: true,
+                        preflightFindingId: true,
+                        configurationFingerprint: true,
+                        decision: true,
+                      },
+                      orderBy: { id: "asc" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!session?.automaticOrderOrigin?.order.automaticQuoteDraft) {
+      throw new NotFoundException("Automatic quote session was not found");
+    }
+    return fingerprintOf(session);
   }
 
   private async readModel(

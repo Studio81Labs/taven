@@ -90,8 +90,9 @@
         "additionalProperties": false,
         "properties": {
           "campaign": {
-            "maxLength": 64,
-            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "ASCII slug input; leading/trailing whitespace is trimmed and letters are lowercased before the stored label is limited to 64 characters.",
+            "maxLength": 256,
+            "pattern": "^\\s*[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\\s*$",
             "type": "string"
           },
           "channel": {
@@ -105,13 +106,15 @@
             "type": "string"
           },
           "medium": {
-            "maxLength": 64,
-            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "ASCII slug input; leading/trailing whitespace is trimmed and letters are lowercased before the stored label is limited to 64 characters.",
+            "maxLength": 256,
+            "pattern": "^\\s*[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\\s*$",
             "type": "string"
           },
           "source": {
-            "maxLength": 64,
-            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "ASCII slug input; leading/trailing whitespace is trimmed and letters are lowercased before the stored label is limited to 64 characters.",
+            "maxLength": 256,
+            "pattern": "^\\s*[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\\s*$",
             "type": "string"
           }
         },
