@@ -50,6 +50,12 @@ CREATE INDEX "handling_sessions_node_id_created_at_idx" ON "handling_sessions"("
 CREATE INDEX "handling_sessions_operator_identity_id_lifecycle_idx" ON "handling_sessions"("operator_identity_id", "lifecycle");
 CREATE UNIQUE INDEX "handling_sessions_one_open_timer_per_operator"
   ON "handling_sessions"("operator_identity_id") WHERE "source" = 'TIMER' AND "lifecycle" = 'OPEN';
+ALTER TABLE "handling_sessions"
+  ADD CONSTRAINT "handling_sessions_no_operator_overlap"
+  EXCLUDE USING gist (
+    "operator_identity_id" WITH =,
+    tstzrange("started_at", coalesce("ended_at", 'infinity'), '[)') WITH &&
+  ) WHERE ("lifecycle" <> 'VOIDED') DEFERRABLE INITIALLY DEFERRED;
 
 CREATE TABLE "handling_allocations" (
   "id" uuid NOT NULL,
@@ -228,6 +234,12 @@ BEGIN
   IF NEW."job_id" IS NOT NULL THEN
     SELECT "order_id", "node_id" INTO job_order, job_node FROM "jobs" WHERE "id" = NEW."job_id";
     IF job_order IS DISTINCT FROM NEW."order_id" OR job_node IS DISTINCT FROM session_node THEN RAISE EXCEPTION 'handling job target is outside its order or node'; END IF;
+    IF NEW."order_item_id" IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM "phase_resource_plan_slots" plan_slot
+      JOIN "jobs" job ON job."phase_resource_plan_job_id" = plan_slot."phase_resource_plan_job_id"
+      JOIN "fulfilment_slots" slot ON slot."id" = plan_slot."fulfilment_slot_id"
+      WHERE job."id" = NEW."job_id" AND slot."order_item_id" = NEW."order_item_id"
+    ) THEN RAISE EXCEPTION 'handling job target does not contain the order item'; END IF;
   END IF;
   IF NEW."shipment_id" IS NOT NULL THEN
     SELECT "order_id" INTO shipment_order FROM "shipments" WHERE "id" = NEW."shipment_id";

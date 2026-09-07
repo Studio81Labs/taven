@@ -567,6 +567,22 @@ export class MeasurementService {
           throw new BadRequestException(
             "Allocation job is outside its order or node",
           );
+        if (input.orderItemId) {
+          const membership = await tx.$queryRaw<{ exists: boolean }[]>`
+            SELECT EXISTS(
+              SELECT 1
+              FROM phase_resource_plan_slots plan_slot
+              JOIN jobs ON jobs.phase_resource_plan_job_id = plan_slot.phase_resource_plan_job_id
+              JOIN fulfilment_slots ON fulfilment_slots.id = plan_slot.fulfilment_slot_id
+              WHERE jobs.id = ${input.jobId}::uuid
+                AND fulfilment_slots.order_item_id = ${input.orderItemId}::uuid
+            ) AS exists
+          `;
+          if (!membership[0]?.exists)
+            throw new BadRequestException(
+              "Allocation job does not contain the order item",
+            );
+        }
       }
       if (input.shipmentId) {
         const shipment = await tx.shipment.findFirst({
