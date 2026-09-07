@@ -1575,6 +1575,7 @@ export interface components {
             measurements?: {
                 [key: string]: unknown;
             };
+            photoPublicationConsent?: boolean;
             purpose?: string;
             /** Format: date */
             requestedDate?: string;
@@ -1965,6 +1966,7 @@ export interface components {
             measurements?: {
                 [key: string]: unknown;
             } | null;
+            photoPublicationConsentGranted: boolean;
             publicReference: string;
             purpose?: string | null;
             /** Format: date */
@@ -3944,6 +3946,13 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Observation was recorded or replayed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Session capability is invalid */
             401: {
                 headers: {

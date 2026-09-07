@@ -1930,7 +1930,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         email: `${scope}-${randomUUID()}@example.test`,
         phone: "+420123456789",
       },
-      attribution: { source: "e2e" },
+      attribution: { channel: "unknown", source: "e2e" },
     };
   }
 

@@ -53,6 +53,9 @@ export class CreateQuoteRequestDto {
   @ApiProperty({ type: QuoteContactDto })
   contact!: QuoteContactDto;
 
+  @ApiPropertyOptional({ type: Boolean })
+  photoPublicationConsent?: boolean;
+
   @ApiPropertyOptional({ type: AttributionDto })
   attribution?: AttributionDto | Record<string, unknown>;
 }
@@ -109,6 +112,9 @@ export class QuoteRequestDetailDto {
 
   @ApiPropertyOptional({ type: String, nullable: true })
   purpose!: string | null;
+
+  @ApiProperty({ type: Boolean })
+  photoPublicationConsentGranted!: boolean;
 
   @ApiPropertyOptional({
     type: "object",

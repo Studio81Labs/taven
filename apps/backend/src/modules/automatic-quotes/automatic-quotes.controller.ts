@@ -17,6 +17,7 @@ import {
   ApiCreatedResponse,
   ApiGoneResponse,
   ApiHeader,
+  ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -99,6 +100,7 @@ export class AutomaticQuotesController {
     summary: "Record one deduplicated quote or checkout observation",
   })
   @ApiBody({ type: RecordAutomaticQuoteObservationDto })
+  @ApiNoContentResponse({ description: "Observation was recorded or replayed" })
   @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
   observe(
     @Param("sessionId") sessionId: string,

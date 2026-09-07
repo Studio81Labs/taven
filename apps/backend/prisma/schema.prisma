@@ -1159,6 +1159,7 @@ model BusinessEvent {
 
   @@unique([eventType, dedupeKey])
   @@index([recordedAt])
+  @@index([expiresAt, id])
   @@index([orderId, recordedAt])
   @@map("business_events")
 }
@@ -1759,6 +1760,7 @@ model QuoteRequest {
   measurements           Json?              @db.JsonB
   requestedDate          DateTime?          @map("requested_date") @db.Date
   contactSnapshot        Json?              @map("contact_snapshot") @db.JsonB
+  photoPublicationConsentGrantedAt DateTime? @map("photo_publication_consent_granted_at") @db.Timestamptz(3)
   attribution            Json?              @db.JsonB
   slaDueAt               DateTime           @default(now()) @map("sla_due_at") @db.Timestamptz(3)
   slaRespondedAt         DateTime?          @map("sla_responded_at") @db.Timestamptz(3)

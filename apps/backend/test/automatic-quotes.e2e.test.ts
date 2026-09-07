@@ -237,7 +237,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
 
   it("binds create-session idempotency replay to the initiating client", async () => {
     const idempotencyKey = key("client-bound-create");
-    const body = { attribution: { campaign: "client-bound" } };
+    const body = { attribution: { channel: "paid", campaign: "client-bound" } };
     const created = await automaticQuotes.createSession(
       body,
       "198.51.100.10",
@@ -798,7 +798,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const created = await api("automatic-quote-sessions", {
       method: "POST",
       headers: jsonHeaders(key("create")),
-      body: JSON.stringify({ attribution: { campaign: "e2e" } }),
+      body: JSON.stringify({
+        attribution: { channel: "paid", campaign: "e2e" },
+      }),
     });
     expect(created.response.status).toBe(201);
     expect(created.body.configurationOptions).toEqual(
@@ -866,7 +868,9 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       const replayed = await api("automatic-quote-sessions", {
         method: "POST",
         headers: jsonHeaders(key("create")),
-        body: JSON.stringify({ attribution: { campaign: "e2e" } }),
+        body: JSON.stringify({
+          attribution: { channel: "paid", campaign: "e2e" },
+        }),
       });
       expect(replayed.response.status).toBe(201);
       expect(replayed.body.sessionId).toBe(sessionId);

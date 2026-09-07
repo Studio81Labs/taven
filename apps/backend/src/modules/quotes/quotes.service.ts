@@ -210,6 +210,9 @@ export class QuotesService {
             measurements: jsonNullable(request.measurements),
             requestedDate: request.requestedDate ?? null,
             contactSnapshot: jsonInput(request.contact)!,
+            photoPublicationConsentGrantedAt: request.photoPublicationConsent
+              ? observedAt
+              : null,
             attribution: jsonNullable(request.attribution),
             slaDueAt,
             currentStateCommandKey: commandKey,
@@ -1391,6 +1394,8 @@ export class QuotesService {
       status: request.status,
       description: request.description,
       purpose: request.purpose,
+      photoPublicationConsentGranted:
+        request.photoPublicationConsentGrantedAt !== null,
       measurements: nullableJsonObject(request.measurements),
       requestedDate: dateOnly(request.requestedDate),
       contact: contactFrom(request.contactSnapshot, request.customer),
@@ -1876,8 +1881,19 @@ function validateCreateRequest(input: CreateQuoteRequestDto) {
     measurements: optionalObject(input.measurements, "measurements"),
     requestedDate: optionalDate(input.requestedDate, "requestedDate"),
     contact,
+    photoPublicationConsent: optionalBoolean(
+      input.photoPublicationConsent,
+      "photoPublicationConsent",
+    ),
     attribution: normalizeAttribution(input.attribution),
   };
+}
+
+function optionalBoolean(value: unknown, name: string): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean")
+    throw new BadRequestException(`${name} is invalid`);
+  return value;
 }
 
 function validateContact(input: QuoteContactDto | undefined): QuoteContactDto {

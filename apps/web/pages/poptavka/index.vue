@@ -172,6 +172,7 @@ async function submitRequest(): Promise<void> {
         : {}),
     },
     description: description.value.trim(),
+    photoPublicationConsent: photoPublicationConsent.value,
     ...(hasDimensions.value ? { measurements } : {}),
     ...(purpose.value.trim() ? { purpose: purpose.value.trim() } : {}),
     ...(requestedDate.value ? { requestedDate: requestedDate.value } : {}),
