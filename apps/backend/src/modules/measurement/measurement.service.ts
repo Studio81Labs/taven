@@ -166,7 +166,7 @@ export class MeasurementService {
     return this.command(
       "handling:manual",
       key,
-      { ...input, startedAt, endedAt, duration, allocations },
+      { ...input, startedAt, endedAt, duration, reason, allocations },
       async (tx) => {
         const overlappingTimer = await tx.handlingSession.findFirst({
           where: {
@@ -511,17 +511,23 @@ export class MeasurementService {
         );
       if (
         component === HandlingComponent.SHIPPING_TRIP &&
-        (!input.shipmentId || input.servedUnits !== 1n)
+        (!input.shipmentId ||
+          input.orderItemId ||
+          input.jobId ||
+          input.servedUnits !== 1n)
       )
         throw new BadRequestException(
-          "Shipping trip allocations require a shipment",
+          "Shipping trip allocations require one actual shipment",
         );
       if (
         component === HandlingComponent.POSTPROCESSING_ITEM &&
-        (!input.orderItemId || input.servedUnits !== 1n)
+        (!input.orderItemId ||
+          input.jobId ||
+          input.shipmentId ||
+          input.servedUnits !== 1n)
       )
         throw new BadRequestException(
-          "Postprocessing allocations require an order item",
+          "Postprocessing allocations require one order item",
         );
       await this.assertOrderNode(tx, input.orderId, nodeId);
       if (input.orderItemId) {

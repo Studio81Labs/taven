@@ -38,6 +38,7 @@ CREATE TABLE "handling_sessions" (
   CONSTRAINT "handling_sessions_reason_check" CHECK (
     ("reason" IS NULL OR length(btrim("reason")) BETWEEN 1 AND 1000)
     AND ("void_reason" IS NULL OR length(btrim("void_reason")) BETWEEN 1 AND 1000)
+    AND ("source" <> 'MANUAL' OR "reason" IS NOT NULL)
   ),
   CONSTRAINT "handling_sessions_shape_check" CHECK (
     ("lifecycle" = 'OPEN' AND "source" = 'TIMER' AND "ended_at" IS NULL AND "duration_milliseconds" IS NULL AND "total_cost_minor" IS NULL AND "completed_at" IS NULL AND "voided_at" IS NULL)
@@ -72,7 +73,9 @@ CREATE TABLE "handling_allocations" (
   CONSTRAINT "handling_allocations_shipment_id_fkey" FOREIGN KEY ("shipment_id") REFERENCES "shipments"("id") ON DELETE RESTRICT,
   CONSTRAINT "handling_allocations_values_check" CHECK ("served_unit_count" > 0 AND "allocated_duration_milliseconds" >= 0 AND "allocated_cost_minor" >= 0),
   CONSTRAINT "handling_allocations_currency_check" CHECK ("currency" ~ '^[A-Z]{3}$'),
-  CONSTRAINT "handling_allocations_target_check" CHECK ("order_item_id" IS NOT NULL OR "job_id" IS NOT NULL OR "shipment_id" IS NOT NULL OR "target_key" = "order_id"::text)
+  CONSTRAINT "handling_allocations_target_key_check" CHECK (
+    "target_key" = "order_id"::text || ':' || coalesce("order_item_id"::text, '') || ':' || coalesce("job_id"::text, '') || ':' || coalesce("shipment_id"::text, '')
+  )
 );
 CREATE INDEX "handling_allocations_order_id_created_at_idx" ON "handling_allocations"("order_id", "created_at");
 CREATE INDEX "handling_allocations_job_id_idx" ON "handling_allocations"("job_id");
@@ -100,7 +103,10 @@ CREATE TABLE "order_actual_costs" (
   CONSTRAINT "order_actual_costs_amount_check" CHECK ("amount_minor" >= 0),
   CONSTRAINT "order_actual_costs_currency_check" CHECK ("currency" ~ '^[A-Z]{3}$'),
   CONSTRAINT "order_actual_costs_source_check" CHECK (length(btrim("source_key")) BETWEEN 1 AND 255 AND length(btrim("source_entity_type")) BETWEEN 1 AND 80),
-  CONSTRAINT "order_actual_costs_reason_check" CHECK ("reason" IS NULL OR length(btrim("reason")) BETWEEN 1 AND 1000)
+  CONSTRAINT "order_actual_costs_reason_check" CHECK (
+    ("reason" IS NULL OR length(btrim("reason")) BETWEEN 1 AND 1000)
+    AND ("source" <> 'MANUAL' AND "supersedes_id" IS NULL OR "reason" IS NOT NULL)
+  )
 );
 CREATE INDEX "order_actual_costs_order_category_recorded_idx" ON "order_actual_costs"("order_id", "category", "recorded_at");
 
@@ -124,7 +130,10 @@ CREATE TABLE "acquisition_spend" (
   CONSTRAINT "acquisition_spend_amount_check" CHECK ("amount_minor" >= 0),
   CONSTRAINT "acquisition_spend_currency_check" CHECK ("currency" ~ '^[A-Z]{3}$'),
   CONSTRAINT "acquisition_spend_source_check" CHECK (length(btrim("source_key")) BETWEEN 1 AND 255 AND length(btrim("source_entity_type")) BETWEEN 1 AND 80),
-  CONSTRAINT "acquisition_spend_reason_check" CHECK ("reason" IS NULL OR length(btrim("reason")) BETWEEN 1 AND 1000)
+  CONSTRAINT "acquisition_spend_reason_check" CHECK (
+    ("reason" IS NULL OR length(btrim("reason")) BETWEEN 1 AND 1000)
+    AND ("supersedes_id" IS NULL OR "reason" IS NOT NULL)
+  )
 );
 CREATE INDEX "acquisition_spend_channel_period_start_idx" ON "acquisition_spend"("channel", "period_start");
 
@@ -201,10 +210,16 @@ CREATE TRIGGER "acquisition_spend_supersession" BEFORE INSERT ON "acquisition_sp
 
 CREATE FUNCTION "taven_validate_handling_allocation_lineage"() RETURNS trigger
 LANGUAGE plpgsql AS $$
-DECLARE session_node uuid; session_currency char(3); job_order uuid; job_node uuid; shipment_order uuid;
+DECLARE session_node uuid; session_currency char(3); session_component "handling_component"; job_order uuid; job_node uuid; shipment_order uuid;
 BEGIN
-  SELECT "node_id", "currency" INTO session_node, session_currency FROM "handling_sessions" WHERE "id" = NEW."handling_session_id";
+  SELECT "node_id", "currency", "component" INTO session_node, session_currency, session_component FROM "handling_sessions" WHERE "id" = NEW."handling_session_id";
   IF session_node IS NULL OR session_currency IS DISTINCT FROM NEW."currency" THEN RAISE EXCEPTION 'handling allocation has an invalid session currency'; END IF;
+  IF (session_component = 'HANDLING_ORDER_FIX' AND (NEW."order_item_id" IS NOT NULL OR NEW."job_id" IS NOT NULL OR NEW."shipment_id" IS NOT NULL OR NEW."served_unit_count" <> 1))
+     OR (session_component IN ('HANDLING_PLATE', 'HANDLING_PIECE') AND (NEW."order_item_id" IS NULL OR NEW."shipment_id" IS NOT NULL))
+     OR (session_component IN ('HANDLING_PACK', 'SHIPPING_TRIP') AND (NEW."shipment_id" IS NULL OR NEW."order_item_id" IS NOT NULL OR NEW."job_id" IS NOT NULL OR NEW."served_unit_count" <> 1))
+     OR (session_component = 'POSTPROCESSING_ITEM' AND (NEW."order_item_id" IS NULL OR NEW."job_id" IS NOT NULL OR NEW."shipment_id" IS NOT NULL OR NEW."served_unit_count" <> 1)) THEN
+    RAISE EXCEPTION 'handling allocation target is invalid for its component';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM "jobs" WHERE "order_id" = NEW."order_id" AND "node_id" = session_node)
      OR EXISTS (SELECT 1 FROM "jobs" WHERE "order_id" = NEW."order_id" AND "node_id" <> session_node) THEN
     RAISE EXCEPTION 'handling order is outside its node';
@@ -227,6 +242,14 @@ CREATE FUNCTION "taven_reject_handling_session_mutation"() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'handling sessions are immutable'; END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."lifecycle" = 'VOIDED'
+       OR (NEW."source" = 'TIMER' AND NEW."lifecycle" <> 'OPEN')
+       OR (NEW."source" = 'MANUAL' AND NEW."lifecycle" <> 'COMPLETED') THEN
+      RAISE EXCEPTION 'handling session has an invalid initial lifecycle';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF OLD."lifecycle" = 'VOIDED' THEN RAISE EXCEPTION 'voided handling sessions cannot change'; END IF;
   IF NEW."node_id" IS DISTINCT FROM OLD."node_id"
      OR NEW."operator_identity_id" IS DISTINCT FROM OLD."operator_identity_id"
@@ -255,10 +278,18 @@ BEGIN
   IF OLD."lifecycle" = 'OPEN' AND NEW."lifecycle" NOT IN ('COMPLETED', 'VOIDED') THEN
     RAISE EXCEPTION 'open handling session has an invalid transition';
   END IF;
+  IF OLD."lifecycle" = 'OPEN' AND NEW."lifecycle" = 'VOIDED' AND (
+    NEW."ended_at" IS DISTINCT FROM OLD."ended_at"
+    OR NEW."duration_milliseconds" IS DISTINCT FROM OLD."duration_milliseconds"
+    OR NEW."total_cost_minor" IS DISTINCT FROM OLD."total_cost_minor"
+    OR NEW."completed_at" IS DISTINCT FROM OLD."completed_at"
+  ) THEN
+    RAISE EXCEPTION 'voiding an open handling session cannot add measurements';
+  END IF;
   RETURN NEW;
 END;
 $$;
-CREATE TRIGGER "handling_sessions_immutable" BEFORE UPDATE OR DELETE ON "handling_sessions"
+CREATE TRIGGER "handling_sessions_immutable" BEFORE INSERT OR UPDATE OR DELETE ON "handling_sessions"
   FOR EACH ROW EXECUTE FUNCTION "taven_reject_handling_session_mutation"();
 
 CREATE FUNCTION "taven_validate_handling_reconciliation"() RETURNS trigger

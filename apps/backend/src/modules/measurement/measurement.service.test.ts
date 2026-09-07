@@ -1,4 +1,8 @@
-import { BadRequestException, ForbiddenException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from "@nestjs/common";
 import { OperatorRole } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import type { OperatorContext } from "../admin-access/operator-context";
@@ -84,5 +88,130 @@ describe("MeasurementService command boundaries", () => {
         "valid-key",
       ),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it("treats a changed manual rationale as an idempotency conflict", async () => {
+    const now = new Date("2026-09-06T10:00:00.000Z");
+    let record:
+      | {
+          expiresAt: Date;
+          requestFingerprint: string;
+          status: "COMPLETED";
+          responseBody: { id: string; status: string };
+          generation: number;
+        }
+      | undefined;
+    const transaction = {
+      $queryRaw: async () => [{ now }],
+      idempotencyRecord: {
+        findFirst: async () => record ?? null,
+        create: async (input: { data: { requestFingerprint: string } }) => {
+          record = {
+            expiresAt: new Date("2026-10-06T10:00:00.000Z"),
+            requestFingerprint: input.data.requestFingerprint,
+            status: "COMPLETED",
+            responseBody: { id: "session", status: "COMPLETED" },
+            generation: 1,
+          };
+          return { id: "record" };
+        },
+        update: async () => undefined,
+      },
+      handlingSession: {
+        findFirst: async () => null,
+        create: async () => ({
+          id: "00000000-0000-4000-8000-000000000010",
+          component: "HANDLING_PACK",
+          nodeId: operator.nodeIds[0],
+          durationMilliseconds: 1_000n,
+          totalCostMinor: 300n,
+          currency: "CZK",
+        }),
+      },
+      job: { findMany: async () => [{ nodeId: operator.nodeIds[0] }] },
+      shipment: { findFirst: async () => ({ id: "shipment" }) },
+      handlingAllocation: { createMany: async () => undefined },
+      businessEvent: { create: async () => undefined },
+    };
+    const service = new MeasurementService(
+      {
+        $transaction: async (operation: (tx: typeof transaction) => unknown) =>
+          operation(transaction),
+      } as never,
+      { recordOperator: async () => undefined } as never,
+    );
+    const admin = { ...operator, role: OperatorRole.ADMIN };
+    const input = {
+      component: "HANDLING_PACK",
+      laborRateNumerator: "300",
+      laborRateDenominator: "1",
+      currency: "CZK",
+      startedAt: "2026-09-06T10:00:00.000Z",
+      endedAt: "2026-09-06T10:00:01.000Z",
+      durationMilliseconds: "1000",
+      reason: "first rationale",
+      allocations: [
+        {
+          orderId: "00000000-0000-4000-8000-000000000011",
+          shipmentId: "00000000-0000-4000-8000-000000000012",
+          servedUnitCount: "1",
+        },
+      ],
+    };
+
+    await service.recordManual(admin, input, "valid-key");
+    await expect(
+      service.recordManual(
+        admin,
+        { ...input, reason: "changed rationale" },
+        "valid-key",
+      ),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it("rejects irrelevant allocation targets for single-unit components", async () => {
+    const service = new MeasurementService({} as never, {} as never);
+    const assertAllocationLineage = (
+      service as unknown as {
+        assertAllocationLineage: (
+          tx: unknown,
+          nodeId: string,
+          component: string,
+          inputs: unknown[],
+        ) => Promise<void>;
+      }
+    ).assertAllocationLineage.bind(service);
+    const orderId = "00000000-0000-4000-8000-000000000011";
+
+    await expect(
+      assertAllocationLineage(
+        {} as never,
+        operator.nodeIds[0]!,
+        "SHIPPING_TRIP",
+        [
+          {
+            orderId,
+            shipmentId: "00000000-0000-4000-8000-000000000012",
+            jobId: "00000000-0000-4000-8000-000000000013",
+            servedUnits: 1n,
+          },
+        ],
+      ),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      assertAllocationLineage(
+        {} as never,
+        operator.nodeIds[0]!,
+        "POSTPROCESSING_ITEM",
+        [
+          {
+            orderId,
+            orderItemId: "00000000-0000-4000-8000-000000000014",
+            shipmentId: "00000000-0000-4000-8000-000000000012",
+            servedUnits: 1n,
+          },
+        ],
+      ),
+    ).rejects.toThrow(BadRequestException);
   });
 });
