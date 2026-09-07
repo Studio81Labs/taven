@@ -326,6 +326,32 @@ BEGIN
        OR (session_component = 'HANDLING_ORDER_FIX' AND allocation_count <> 1) THEN
       RAISE EXCEPTION 'completed handling session allocations do not reconcile';
     END IF;
+    IF EXISTS (
+      WITH basis AS (
+        SELECT allocation.*, sum("served_unit_count") OVER () AS total_units
+        FROM "handling_allocations" allocation
+        WHERE "handling_session_id" = session_id
+      ), floors AS (
+        SELECT *,
+          (expected_duration * "served_unit_count") / total_units AS duration_floor,
+          (expected_duration * "served_unit_count") % total_units AS duration_remainder,
+          (expected_cost * "served_unit_count") / total_units AS cost_floor,
+          (expected_cost * "served_unit_count") % total_units AS cost_remainder
+        FROM basis
+      ), ranked AS (
+        SELECT *,
+          row_number() OVER (ORDER BY duration_remainder DESC, "target_key") AS duration_rank,
+          row_number() OVER (ORDER BY cost_remainder DESC, "target_key") AS cost_rank,
+          expected_duration - sum(duration_floor) OVER () AS duration_remaining,
+          expected_cost - sum(cost_floor) OVER () AS cost_remaining
+        FROM floors
+      )
+      SELECT 1 FROM ranked
+      WHERE "allocated_duration_milliseconds" <> duration_floor + CASE WHEN duration_rank <= duration_remaining THEN 1 ELSE 0 END
+         OR "allocated_cost_minor" <> cost_floor + CASE WHEN cost_rank <= cost_remaining THEN 1 ELSE 0 END
+    ) THEN
+      RAISE EXCEPTION 'handling allocations do not use deterministic served-unit shares';
+    END IF;
   ELSIF session_state = 'OPEN' AND (session_source = 'MANUAL' OR EXISTS (SELECT 1 FROM "handling_allocations" WHERE "handling_session_id" = session_id)) THEN
     RAISE EXCEPTION 'open handling session cannot be manual or have allocations';
   END IF;
