@@ -113,6 +113,13 @@ describe("MeasurementService command boundaries", () => {
     ).toThrow(BadRequestException);
   });
 
+  it("rejects an absent request body before dereferencing it", () => {
+    const service = new MeasurementService({} as never, {} as never);
+    expect(() =>
+      service.start(operator, undefined as never, "valid-key"),
+    ).toThrow(BadRequestException);
+  });
+
   it("rejects numeric values outside their persistence ranges", () => {
     const service = new MeasurementService({} as never, {} as never);
     expect(() =>

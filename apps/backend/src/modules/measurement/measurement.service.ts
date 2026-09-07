@@ -58,6 +58,7 @@ export class MeasurementService {
     body: StartHandlingSessionDto,
     key: string | undefined,
   ): Promise<MeasurementCommandResultDto> {
+    assertRequestBody(body);
     const nodeId = operatorNode(operator);
     const input = parseSessionInput(body);
     return this.command(
@@ -106,6 +107,7 @@ export class MeasurementService {
     key: string | undefined,
   ): Promise<MeasurementCommandResultDto> {
     sessionId = uuid(sessionId, "sessionId");
+    assertRequestBody(body);
     const allocations = parseAllocations(body.allocations);
     const nodeId = operatorNode(operator);
     return this.command(
@@ -151,6 +153,7 @@ export class MeasurementService {
         "Manual handling evidence requires an administrator",
       );
     }
+    assertRequestBody(body);
     const nodeId = operatorNode(operator);
     const input = parseSessionInput(body);
     const reason = requiredText(body.reason, "reason", 1000);
@@ -236,6 +239,7 @@ export class MeasurementService {
         "Voiding handling evidence requires an administrator",
       );
     }
+    assertRequestBody(body);
     sessionId = uuid(sessionId, "sessionId");
     const reason = requiredText(body.reason, "reason", 1000);
     const nodeId = operatorNode(operator);
@@ -277,6 +281,7 @@ export class MeasurementService {
     key: string | undefined,
   ): Promise<MeasurementCommandResultDto> {
     orderId = uuid(orderId, "orderId");
+    assertRequestBody(body);
     const input = parseActualCost(body);
     const nodeId = operatorNode(operator);
     return this.command(
@@ -333,6 +338,7 @@ export class MeasurementService {
     body: RecordAcquisitionSpendDto,
     key: string | undefined,
   ): Promise<MeasurementCommandResultDto> {
+    assertRequestBody(body);
     const input = parseAcquisitionSpend(body);
     const nodeId = operatorNode(operator);
     return this.command(
@@ -726,6 +732,10 @@ function parseSessionInput(body: StartHandlingSessionDto) {
     ),
     currency: currency(body.currency),
   };
+}
+function assertRequestBody(value: unknown): asserts value is object {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new BadRequestException("Request body is invalid");
 }
 function parseAllocations(
   value: HandlingAllocationInputDto[] | undefined,
