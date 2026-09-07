@@ -19,7 +19,7 @@ const operator: OperatorContext = {
 
 describe("MeasurementService command boundaries", () => {
   it("fingerprints parsed bigint timer evidence without throwing", async () => {
-    const now = new Date("2026-09-06T10:00:00.000Z");
+    const now = new Date("2026-09-06T10:01:00.000Z");
     const transaction = {
       $queryRaw: async () => [{ now }],
       idempotencyRecord: {
@@ -54,7 +54,7 @@ describe("MeasurementService command boundaries", () => {
   });
 
   it("scopes timer idempotency records to the authenticated operator", async () => {
-    const now = new Date("2026-09-06T10:00:00.000Z");
+    const now = new Date("2026-09-06T10:01:00.000Z");
     const namespaces: string[] = [];
     const transaction = {
       $queryRaw: async () => [{ now }],
@@ -171,7 +171,7 @@ describe("MeasurementService command boundaries", () => {
   });
 
   it("treats a changed manual rationale as an idempotency conflict", async () => {
-    const now = new Date("2026-09-06T10:00:00.000Z");
+    const now = new Date("2026-09-06T10:01:00.000Z");
     let record:
       | {
           expiresAt: Date;

@@ -170,6 +170,11 @@ export class MeasurementService {
       key,
       { ...input, startedAt, endedAt, duration, reason, allocations },
       async (tx) => {
+        const completedAt = await databaseNow(tx);
+        if (endedAt > completedAt)
+          throw new BadRequestException(
+            "Manual handling cannot end in the future",
+          );
         const overlappingTimer = await tx.handlingSession.findFirst({
           where: {
             operatorIdentityId: operator.operatorId,
@@ -213,7 +218,7 @@ export class MeasurementService {
           duration,
           allocations,
           requiredKey(key),
-          await databaseNow(tx),
+          completedAt,
         );
       },
     );
@@ -738,7 +743,11 @@ function parseActualCost(body: RecordActualCostDto) {
   )
     throw new BadRequestException("Cost category or source is invalid");
   const reason = optionalText(body.reason, "reason", 1000);
-  if ((body.source === ActualCostSource.MANUAL || body.supersedesId) && !reason)
+  if (
+    (body.source === ActualCostSource.MANUAL ||
+      body.supersedesId !== undefined) &&
+    !reason
+  )
     throw new BadRequestException("Manual cost evidence requires a reason");
   return {
     category: body.category as ActualCostCategory,
@@ -755,9 +764,10 @@ function parseActualCost(body: RecordActualCostDto) {
     sourceEntityId: body.sourceEntityId
       ? uuid(body.sourceEntityId, "sourceEntityId")
       : null,
-    supersedesId: body.supersedesId
-      ? uuid(body.supersedesId, "supersedesId")
-      : null,
+    supersedesId:
+      body.supersedesId === undefined
+        ? null
+        : uuid(body.supersedesId, "supersedesId"),
     reason: reason ?? null,
   };
 }
@@ -773,7 +783,7 @@ function parseAcquisitionSpend(body: RecordAcquisitionSpendDto) {
   if (end <= start)
     throw new BadRequestException("periodEnd must be after periodStart");
   const reason = optionalText(body.reason, "reason", 1000);
-  if (body.supersedesId && !reason)
+  if (body.supersedesId !== undefined && !reason)
     throw new BadRequestException("Spend corrections require a reason");
   return {
     channel: body.channel as AcquisitionChannel,
@@ -787,9 +797,10 @@ function parseAcquisitionSpend(body: RecordAcquisitionSpendDto) {
       "sourceEntityType",
       80,
     ),
-    supersedesId: body.supersedesId
-      ? uuid(body.supersedesId, "supersedesId")
-      : null,
+    supersedesId:
+      body.supersedesId === undefined
+        ? null
+        : uuid(body.supersedesId, "supersedesId"),
     reason: reason ?? null,
   };
 }
@@ -831,13 +842,21 @@ function assertUuid(value: string, name: string): void {
 function parseTimestamp(value: string, name: string): Date {
   if (typeof value !== "string")
     throw new BadRequestException(`${name} is invalid`);
-  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/.exec(
-    value,
-  );
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(
+      value,
+    );
   if (!match) throw new BadRequestException(`${name} is invalid`);
   const result = new Date(value);
-  const normalized = `${match[1]}.${(match[2] ?? "").padEnd(3, "0")}Z`;
-  if (Number.isNaN(result.getTime()) || result.toISOString() !== normalized)
+  const calendar = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+  );
+  if (
+    Number.isNaN(result.getTime()) ||
+    calendar.getUTCFullYear() !== Number(match[1]) ||
+    calendar.getUTCMonth() !== Number(match[2]) - 1 ||
+    calendar.getUTCDate() !== Number(match[3])
+  )
     throw new BadRequestException(`${name} is invalid`);
   return result;
 }
