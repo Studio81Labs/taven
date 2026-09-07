@@ -65,6 +65,7 @@ export class MeasurementService {
       key,
       { nodeId, ...input },
       async (tx) => {
+        await lockHandlingOperator(tx, operator.operatorId);
         const now = await databaseNow(tx);
         try {
           const session = await tx.handlingSession.create({
@@ -170,6 +171,7 @@ export class MeasurementService {
       key,
       { ...input, startedAt, endedAt, duration, reason, allocations },
       async (tx) => {
+        await lockHandlingOperator(tx, operator.operatorId);
         const completedAt = await databaseNow(tx);
         if (endedAt > completedAt)
           throw new BadRequestException(
@@ -761,9 +763,10 @@ function parseActualCost(body: RecordActualCostDto) {
       "sourceEntityType",
       80,
     ),
-    sourceEntityId: body.sourceEntityId
-      ? uuid(body.sourceEntityId, "sourceEntityId")
-      : null,
+    sourceEntityId:
+      body.sourceEntityId === undefined
+        ? null
+        : uuid(body.sourceEntityId, "sourceEntityId"),
     supersedesId:
       body.supersedesId === undefined
         ? null
@@ -911,6 +914,12 @@ async function databaseNow(tx: Transaction): Promise<Date> {
     Array<{ now: Date }>
   >`SELECT clock_timestamp() AS now`;
   return rows[0]!.now;
+}
+async function lockHandlingOperator(
+  tx: Transaction,
+  operatorId: string,
+): Promise<void> {
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`handling:operator:${operatorId}`}, 0))::text`;
 }
 async function handlingCost(
   duration: bigint,
