@@ -413,8 +413,8 @@ export class AutomaticQuotesService {
         );
       }
 
-      const observedAt = await databaseNow(transaction);
       const existing = await lockedHandoffCapability(transaction, sessionId);
+      const observedAt = await databaseNow(transaction);
       if (existing) {
         if (
           existing.consumedAt !== null ||
@@ -447,13 +447,14 @@ export class AutomaticQuotesService {
       const snapshot = handoffSnapshot(
         await this.readModel(source, transaction),
       );
+      const issuedAt = await databaseNow(transaction);
       const expiresAt = new Date(
         Math.min(
           session.expiresAt.getTime(),
-          observedAt.getTime() + HANDOFF_CAPABILITY_MINUTES * 60_000,
+          issuedAt.getTime() + HANDOFF_CAPABILITY_MINUTES * 60_000,
         ),
       );
-      if (expiresAt.getTime() <= observedAt.getTime()) {
+      if (expiresAt.getTime() <= issuedAt.getTime()) {
         throw new GoneException(
           "Automatic quote session is no longer available",
         );
@@ -474,7 +475,7 @@ export class AutomaticQuotesService {
           reasons: snapshot.reasons,
           modelFileIds: snapshot.modelFileIds,
           itemSelections: jsonSafe(snapshot.itemSelections),
-          issuedAt: observedAt,
+          issuedAt,
           expiresAt,
         },
       });
@@ -4398,103 +4399,111 @@ export class AutomaticQuotesService {
     const expired =
       session.status === QuoteSessionStatus.EXPIRED ||
       session.expiresAt.getTime() <= Date.now();
-    const modelFiles: AutomaticQuoteModelFileDto[] = [];
-    for (const attached of draft.modelFiles) {
-      if (attached.modelFile.format === ModelFileFormat.STEP) {
-        modelFiles.push({
+    const modelFiles = await this.mapSnapshotReads(
+      client,
+      draft.modelFiles,
+      async (attached): Promise<AutomaticQuoteModelFileDto> => {
+        if (attached.modelFile.format === ModelFileFormat.STEP) {
+          return {
+            modelFileId: attached.modelFileId,
+            format: attached.modelFile.format,
+            inspectionStatus: "UNSUPPORTED",
+            discoveredBodyIds: [],
+          };
+        }
+        const result = await terminalResultForJob(
+          client,
+          attached.inspectionJobId,
+          "model_inspection",
+        );
+        const dispatch = await this.latestPreprocessingDispatch(
+          client,
+          attached.inspectionJobId,
+          "slicing.model-inspection.requested",
+        );
+        return {
           modelFileId: attached.modelFileId,
           format: attached.modelFile.format,
-          inspectionStatus: "UNSUPPORTED",
-          discoveredBodyIds: [],
-        });
-        continue;
-      }
-      const result = await terminalResultForJob(
-        client,
-        attached.inspectionJobId,
-        "model_inspection",
-      );
-      const dispatch = await this.latestPreprocessingDispatch(
-        client,
-        attached.inspectionJobId,
-        "slicing.model-inspection.requested",
-      );
-      modelFiles.push({
-        modelFileId: attached.modelFileId,
-        format: attached.modelFile.format,
-        inspectionStatus: dispatch?.deadLettered
-          ? "FAILED"
-          : terminalStatus(result),
-        discoveredBodyIds: successfulInspectionBodies(result),
-      });
-    }
+          inspectionStatus: dispatch?.deadLettered
+            ? "FAILED"
+            : terminalStatus(result),
+          discoveredBodyIds: successfulInspectionBodies(result),
+        };
+      },
+    );
     const configurationCapabilities =
       await this.configurationCapabilities(client);
     const configurationOptions = configurationCapabilities.map(
       ({ referenceProfileId: _referenceProfileId, ...option }) => option,
     );
-    const itemDtos: AutomaticQuoteItemDto[] = [];
-    for (const item of draft.items) {
-      const geometry = await client.modelGeometry.findUnique({
-        where: { id: item.targetModelGeometryId },
-      });
-      const occupancy = geometry
-        ? await this.resolveReferenceOccupancy(
-            client,
-            item,
-            geometry,
-            order.id,
-            false,
-          )
-        : null;
-      const missing =
-        geometry && occupancy?.kind === "resolved"
-          ? await this.missingReferenceSlices(
+    const itemDtos = await this.mapSnapshotReads(
+      client,
+      draft.items,
+      async (item): Promise<AutomaticQuoteItemDto> => {
+        const geometry = await client.modelGeometry.findUnique({
+          where: { id: item.targetModelGeometryId },
+        });
+        const occupancy = geometry
+          ? await this.resolveReferenceOccupancy(
               client,
               item,
               geometry,
-              referenceOccupancies(item.quantity, occupancy.partsPerPlate),
+              order.id,
+              false,
             )
-          : [];
-      const findings = await this.currentRiskFindings(client, item);
-      const decisions = new Map(
-        item.riskDecisions
-          .filter(
-            (decision) =>
-              decision.configurationFingerprint ===
-              item.configurationFingerprint,
-          )
-          .map((decision) => [decision.preflightFindingId, decision.decision]),
-      );
-      itemDtos.push({
-        id: item.id,
-        ordinal: item.ordinal,
-        modelFileId: item.sourceModelFileId,
-        bodyIds: item.bodyIds,
-        printConfigRevisionId: item.printConfigRevisionId,
-        material: item.material,
-        color: item.color,
-        infillPreset: item.infillPreset,
-        quality: item.printConfigRevision.quality,
-        quantity: item.quantity,
-        fitSensitive: item.fitSensitive,
-        status: !geometry
-          ? ("CANONICALIZATION_PENDING" as const)
-          : occupancy?.kind !== "resolved" ||
-              item.referencePartsPerPlate !== occupancy.partsPerPlate ||
-              missing.length > 0
-            ? ("REFERENCE_SLICING_PENDING" as const)
-            : ("READY" as const),
-        findings: findings.map((finding) => ({
-          id: finding.id,
-          code: finding.code,
-          severity: finding.severity,
-          message: finding.message,
-          acknowledgementKey: findingAcknowledgementKey(finding.evidence),
-          decision: decisions.get(finding.id) ?? null,
-        })),
-      });
-    }
+          : null;
+        const missing =
+          geometry && occupancy?.kind === "resolved"
+            ? await this.missingReferenceSlices(
+                client,
+                item,
+                geometry,
+                referenceOccupancies(item.quantity, occupancy.partsPerPlate),
+              )
+            : [];
+        const findings = await this.currentRiskFindings(client, item);
+        const decisions = new Map(
+          item.riskDecisions
+            .filter(
+              (decision) =>
+                decision.configurationFingerprint ===
+                item.configurationFingerprint,
+            )
+            .map((decision) => [
+              decision.preflightFindingId,
+              decision.decision,
+            ]),
+        );
+        return {
+          id: item.id,
+          ordinal: item.ordinal,
+          modelFileId: item.sourceModelFileId,
+          bodyIds: item.bodyIds,
+          printConfigRevisionId: item.printConfigRevisionId,
+          material: item.material,
+          color: item.color,
+          infillPreset: item.infillPreset,
+          quality: item.printConfigRevision.quality,
+          quantity: item.quantity,
+          fitSensitive: item.fitSensitive,
+          status: !geometry
+            ? ("CANONICALIZATION_PENDING" as const)
+            : occupancy?.kind !== "resolved" ||
+                item.referencePartsPerPlate !== occupancy.partsPerPlate ||
+                missing.length > 0
+              ? ("REFERENCE_SLICING_PENDING" as const)
+              : ("READY" as const),
+          findings: findings.map((finding) => ({
+            id: finding.id,
+            code: finding.code,
+            severity: finding.severity,
+            message: finding.message,
+            acknowledgementKey: findingAcknowledgementKey(finding.evidence),
+            decision: decisions.get(finding.id) ?? null,
+          })),
+        };
+      },
+    );
     const handoffReasons: string[] = [];
     if (
       await this.preprocessingRequiresHandoff(order.id, draft.items, client)
@@ -4714,6 +4723,17 @@ export class AutomaticQuotesService {
       checkoutReady,
       expiresAt: session.expiresAt.toISOString(),
     };
+  }
+
+  private async mapSnapshotReads<TInput, TResult>(
+    client: Transaction | PrismaService,
+    inputs: readonly TInput[],
+    map: (input: TInput) => Promise<TResult>,
+  ): Promise<TResult[]> {
+    if (client === this.prisma) return Promise.all(inputs.map(map));
+    const results: TResult[] = [];
+    for (const input of inputs) results.push(await map(input));
+    return results;
   }
 
   // This catalog seeds the selector before the customer has supplied bodies and
