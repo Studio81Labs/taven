@@ -115,6 +115,7 @@ export class MeasurementService {
       key,
       allocations,
       async (tx) => {
+        await lockHandlingOperator(tx, operator.operatorId);
         const session = await this.lockSession(tx, sessionId, nodeId);
         if (session.operatorIdentityId !== operator.operatorId) {
           throw new ForbiddenException(
