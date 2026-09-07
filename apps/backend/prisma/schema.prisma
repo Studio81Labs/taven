@@ -1044,6 +1044,7 @@ model HandlingSession {
   durationMilliseconds  BigInt?                  @map("duration_milliseconds")
   laborRateNumerator    BigInt                   @map("labor_rate_numerator")
   laborRateDenominator  BigInt                   @map("labor_rate_denominator")
+  laborRatePolicyVersion String                  @map("labor_rate_policy_version") @db.VarChar(100)
   currency              String                   @db.Char(3)
   totalCostMinor        BigInt?                  @map("total_cost_minor")
   reason                String?                  @db.VarChar(1000)
@@ -1068,6 +1069,7 @@ model HandlingAllocation {
   handlingSessionId             String          @map("handling_session_id") @db.Uuid
   orderId                       String          @map("order_id") @db.Uuid
   orderItemId                   String?         @map("order_item_id") @db.Uuid
+  orderPhaseId                  String?         @map("order_phase_id") @db.Uuid
   jobId                         String?         @map("job_id") @db.Uuid
   shipmentId                    String?         @map("shipment_id") @db.Uuid
   targetKey                     String          @map("target_key") @db.VarChar(255)
@@ -1080,12 +1082,14 @@ model HandlingAllocation {
   session   HandlingSession @relation(fields: [handlingSessionId], references: [id], onDelete: Restrict)
   order     Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
   orderItem OrderItem?      @relation(fields: [orderItemId, orderId], references: [id, orderId], onDelete: Restrict)
+  orderPhase OrderPhase?    @relation(fields: [orderPhaseId, orderId], references: [id, orderId], onDelete: Restrict)
   job       Job?            @relation(fields: [jobId], references: [id], onDelete: Restrict)
   shipment  Shipment?       @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
 
   @@unique([handlingSessionId, targetKey])
   @@index([orderId, createdAt])
   @@index([jobId])
+  @@index([orderPhaseId])
   @@index([shipmentId])
   @@map("handling_allocations")
 }
@@ -2311,6 +2315,7 @@ model OrderPhase {
   settlements              OrderSettlement[]
   handoffReconciliations   HandoffReconciliation[]
   reshipmentAuthorizations ReshipmentAuthorization[]
+  handlingAllocations      HandlingAllocation[]
 
   @@unique([id, orderId])
   @@map("order_phases")

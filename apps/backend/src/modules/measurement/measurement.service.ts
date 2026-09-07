@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { AuditService } from "../audit/audit.service";
+import { HANDLING_RATE_POLICY } from "./handling-rate-policy";
 import type {
   CompleteHandlingSessionDto,
   HandlingAllocationInputDto,
@@ -35,6 +36,7 @@ type Transaction = Prisma.TransactionClient;
 type AllocationInput = Readonly<{
   orderId: string;
   orderItemId?: string;
+  orderPhaseId?: string;
   jobId?: string;
   shipmentId?: string;
   servedUnits: bigint;
@@ -76,9 +78,10 @@ export class MeasurementService {
               component: input.component,
               source: HandlingSource.TIMER,
               startedAt: now,
-              laborRateNumerator: input.rateNumerator,
-              laborRateDenominator: input.rateDenominator,
-              currency: input.currency,
+              laborRatePolicyVersion: HANDLING_RATE_POLICY.version,
+              laborRateNumerator: HANDLING_RATE_POLICY.numerator,
+              laborRateDenominator: HANDLING_RATE_POLICY.denominator,
+              currency: HANDLING_RATE_POLICY.currency,
               commandIdempotencyKey: requiredKey(key),
             },
           });
@@ -208,9 +211,10 @@ export class MeasurementService {
             component: input.component,
             source: HandlingSource.MANUAL,
             startedAt,
-            laborRateNumerator: input.rateNumerator,
-            laborRateDenominator: input.rateDenominator,
-            currency: input.currency,
+            laborRatePolicyVersion: HANDLING_RATE_POLICY.version,
+            laborRateNumerator: HANDLING_RATE_POLICY.numerator,
+            laborRateDenominator: HANDLING_RATE_POLICY.denominator,
+            currency: HANDLING_RATE_POLICY.currency,
             reason,
             commandIdempotencyKey: requiredKey(key),
           },
@@ -454,6 +458,7 @@ export class MeasurementService {
           handlingSessionId: session.id,
           orderId: input.orderId,
           orderItemId: input.orderItemId ?? null,
+          orderPhaseId: input.orderPhaseId ?? null,
           jobId: input.jobId ?? null,
           shipmentId: input.shipmentId ?? null,
           targetKey: value.targetId,
@@ -511,6 +516,13 @@ export class MeasurementService {
     }
     for (const input of inputs) {
       if (
+        component !== HandlingComponent.POSTPROCESSING_ITEM &&
+        input.orderPhaseId
+      )
+        throw new BadRequestException(
+          "Allocation phase is only valid for postprocessing",
+        );
+      if (
         component === HandlingComponent.HANDLING_ORDER_FIX &&
         (input.orderItemId ||
           input.jobId ||
@@ -551,12 +563,13 @@ export class MeasurementService {
       if (
         component === HandlingComponent.POSTPROCESSING_ITEM &&
         (!input.orderItemId ||
+          !input.orderPhaseId ||
           input.jobId ||
           input.shipmentId ||
           input.servedUnits !== 1n)
       )
         throw new BadRequestException(
-          "Postprocessing allocations require one order item",
+          "Postprocessing allocations require one order item and phase",
         );
       await this.assertOrderNode(tx, input.orderId, nodeId);
       if (input.orderItemId) {
@@ -565,6 +578,23 @@ export class MeasurementService {
         });
         if (!item)
           throw new BadRequestException("Allocation item is outside its order");
+      }
+      if (input.orderPhaseId) {
+        if (!input.orderItemId)
+          throw new BadRequestException(
+            "Allocation phase requires an order item",
+          );
+        const slot = await tx.fulfilmentSlot.findFirst({
+          where: {
+            orderId: input.orderId,
+            orderItemId: input.orderItemId,
+            orderPhaseId: input.orderPhaseId,
+          },
+        });
+        if (!slot)
+          throw new BadRequestException(
+            "Allocation phase is outside its order item",
+          );
       }
       if (input.jobId) {
         const job = await tx.job.findFirst({
@@ -715,6 +745,10 @@ export class MeasurementService {
 }
 
 function parseSessionInput(body: StartHandlingSessionDto) {
+  if ("currency" in body)
+    throw new BadRequestException(
+      "Client-supplied handling rate policy is invalid",
+    );
   if (
     !Object.values(HandlingComponent).includes(
       body.component as HandlingComponent,
@@ -723,20 +757,22 @@ function parseSessionInput(body: StartHandlingSessionDto) {
     throw new BadRequestException("component is invalid");
   return {
     component: body.component as HandlingComponent,
-    rateNumerator: nonNegativeBigInt(
-      body.laborRateNumerator,
-      "laborRateNumerator",
-    ),
-    rateDenominator: positiveBigInt(
-      body.laborRateDenominator,
-      "laborRateDenominator",
-    ),
-    currency: currency(body.currency),
   };
 }
 function assertRequestBody(value: unknown): asserts value is object {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new BadRequestException("Request body is invalid");
+  for (const field of [
+    "laborRateNumerator",
+    "laborRateDenominator",
+    "laborRatePolicyVersion",
+    "rateOverride",
+  ]) {
+    if (field in value)
+      throw new BadRequestException(
+        "Client-supplied handling rate policy is invalid",
+      );
+  }
 }
 function parseAllocations(
   value: HandlingAllocationInputDto[] | undefined,
@@ -750,6 +786,9 @@ function parseAllocations(
       orderId: uuid(item.orderId, "orderId"),
       ...(item.orderItemId !== undefined
         ? { orderItemId: uuid(item.orderItemId, "orderItemId") }
+        : {}),
+      ...(item.orderPhaseId !== undefined
+        ? { orderPhaseId: uuid(item.orderPhaseId, "orderPhaseId") }
         : {}),
       ...(item.jobId !== undefined ? { jobId: uuid(item.jobId, "jobId") } : {}),
       ...(item.shipmentId !== undefined
@@ -841,6 +880,7 @@ function allocationTargetKey(input: AllocationInput): string {
   return [
     input.orderId,
     input.orderItemId ?? "",
+    input.orderPhaseId ?? "",
     input.jobId ?? "",
     input.shipmentId ?? "",
   ].join(":");

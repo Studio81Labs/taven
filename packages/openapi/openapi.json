@@ -1612,6 +1612,11 @@
             "format": "uuid",
             "type": "string"
           },
+          "orderPhaseId": {
+            "description": "Required for POSTPROCESSING_ITEM; forbidden otherwise.",
+            "format": "uuid",
+            "type": "string"
+          },
           "servedUnitCount": {
             "pattern": "^[1-9][0-9]*$",
             "type": "string"
@@ -3034,24 +3039,12 @@
             ],
             "type": "string"
           },
-          "currency": {
-            "pattern": "^[A-Z]{3}$",
-            "type": "string"
-          },
           "durationMilliseconds": {
             "pattern": "^[1-9][0-9]*$",
             "type": "string"
           },
           "endedAt": {
             "format": "date-time",
-            "type": "string"
-          },
-          "laborRateDenominator": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "laborRateNumerator": {
-            "pattern": "^[0-9]+$",
             "type": "string"
           },
           "reason": {
@@ -3066,9 +3059,6 @@
         },
         "required": [
           "component",
-          "laborRateNumerator",
-          "laborRateDenominator",
-          "currency",
           "startedAt",
           "endedAt",
           "durationMilliseconds",
@@ -3301,25 +3291,10 @@
               "POSTPROCESSING_ITEM"
             ],
             "type": "string"
-          },
-          "currency": {
-            "pattern": "^[A-Z]{3}$",
-            "type": "string"
-          },
-          "laborRateDenominator": {
-            "pattern": "^[1-9][0-9]*$",
-            "type": "string"
-          },
-          "laborRateNumerator": {
-            "pattern": "^[0-9]+$",
-            "type": "string"
           }
         },
         "required": [
-          "component",
-          "laborRateNumerator",
-          "laborRateDenominator",
-          "currency"
+          "component"
         ],
         "type": "object"
       },

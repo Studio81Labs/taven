@@ -1613,6 +1613,11 @@ export interface components {
             orderId: string;
             /** Format: uuid */
             orderItemId?: string;
+            /**
+             * Format: uuid
+             * @description Required for POSTPROCESSING_ITEM; forbidden otherwise.
+             */
+            orderPhaseId?: string;
             servedUnitCount: string;
             /** Format: uuid */
             shipmentId?: string;
@@ -1995,12 +2000,9 @@ export interface components {
             allocations: components["schemas"]["HandlingAllocationInputDto"][];
             /** @enum {string} */
             component: "HANDLING_ORDER_FIX" | "HANDLING_PLATE" | "HANDLING_PIECE" | "HANDLING_PACK" | "SHIPPING_TRIP" | "POSTPROCESSING_ITEM";
-            currency: string;
             durationMilliseconds: string;
             /** Format: date-time */
             endedAt: string;
-            laborRateDenominator: string;
-            laborRateNumerator: string;
             reason: string;
             /** Format: date-time */
             startedAt: string;
@@ -2059,9 +2061,6 @@ export interface components {
         StartHandlingSessionDto: {
             /** @enum {string} */
             component: "HANDLING_ORDER_FIX" | "HANDLING_PLATE" | "HANDLING_PIECE" | "HANDLING_PACK" | "SHIPPING_TRIP" | "POSTPROCESSING_ITEM";
-            currency: string;
-            laborRateDenominator: string;
-            laborRateNumerator: string;
         };
         UploadIntentResponseDto: {
             /** @description One-time capability used to confirm and later read this upload. It is returned only when the intent is created. */

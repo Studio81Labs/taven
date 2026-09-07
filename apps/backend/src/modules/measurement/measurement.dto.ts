@@ -9,6 +9,12 @@ export class HandlingAllocationInputDto {
   @ApiPropertyOptional(UUID)
   orderItemId?: string;
 
+  @ApiPropertyOptional({
+    ...UUID,
+    description: "Required for POSTPROCESSING_ITEM; forbidden otherwise.",
+  })
+  orderPhaseId?: string;
+
   @ApiPropertyOptional(UUID)
   jobId?: string;
 
@@ -31,15 +37,6 @@ export class StartHandlingSessionDto {
     ],
   })
   component!: string;
-
-  @ApiProperty({ type: String, pattern: "^[0-9]+$" })
-  laborRateNumerator!: string;
-
-  @ApiProperty({ type: String, pattern: "^[1-9][0-9]*$" })
-  laborRateDenominator!: string;
-
-  @ApiProperty({ type: String, pattern: "^[A-Z]{3}$" })
-  currency!: string;
 }
 
 export class CompleteHandlingSessionDto {

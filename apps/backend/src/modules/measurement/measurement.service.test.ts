@@ -44,9 +44,6 @@ describe("MeasurementService command boundaries", () => {
         operator,
         {
           component: "HANDLING_PACK",
-          laborRateNumerator: "300",
-          laborRateDenominator: "1",
-          currency: "CZK",
         },
         "valid-key",
       ),
@@ -79,9 +76,6 @@ describe("MeasurementService command boundaries", () => {
     );
     const input = {
       component: "HANDLING_PACK",
-      laborRateNumerator: "300",
-      laborRateDenominator: "1",
-      currency: "CZK",
     };
 
     await service.start(operator, input, "valid-key");
@@ -104,9 +98,6 @@ describe("MeasurementService command boundaries", () => {
         operator,
         {
           component: "not-a-component",
-          laborRateNumerator: "1",
-          laborRateDenominator: "1",
-          currency: "CZK",
         },
         "valid-key",
       ),
@@ -120,7 +111,7 @@ describe("MeasurementService command boundaries", () => {
     ).toThrow(BadRequestException);
   });
 
-  it("rejects numeric values outside their persistence ranges", () => {
+  it("rejects client-supplied handling rates", () => {
     const service = new MeasurementService({} as never, {} as never);
     expect(() =>
       service.start(
@@ -128,9 +119,7 @@ describe("MeasurementService command boundaries", () => {
         {
           component: "HANDLING_PACK",
           laborRateNumerator: "9223372036854775808",
-          laborRateDenominator: "1",
-          currency: "CZK",
-        },
+        } as never,
         "valid-key",
       ),
     ).toThrow(BadRequestException);
@@ -184,9 +173,6 @@ describe("MeasurementService command boundaries", () => {
         admin,
         {
           component: "HANDLING_PACK",
-          laborRateNumerator: "1",
-          laborRateDenominator: "1",
-          currency: "CZK",
           startedAt: "2026-09-06T10:00:00.000Z",
           endedAt: "2026-09-06T10:00:01.000Z",
           durationMilliseconds: "1000",
@@ -205,9 +191,6 @@ describe("MeasurementService command boundaries", () => {
         operator,
         {
           component: "HANDLING_PACK",
-          laborRateNumerator: "1",
-          laborRateDenominator: "1",
-          currency: "CZK",
           startedAt: "2026-09-06T10:00:00.000Z",
           endedAt: "2026-09-06T10:00:01.000Z",
           durationMilliseconds: "1000",
@@ -279,9 +262,6 @@ describe("MeasurementService command boundaries", () => {
     const admin = { ...operator, role: OperatorRole.ADMIN };
     const input = {
       component: "HANDLING_PACK",
-      laborRateNumerator: "300",
-      laborRateDenominator: "1",
-      currency: "CZK",
       startedAt: "2026-09-06T10:00:00.000Z",
       endedAt: "2026-09-06T10:00:01.000Z",
       durationMilliseconds: "1000",
