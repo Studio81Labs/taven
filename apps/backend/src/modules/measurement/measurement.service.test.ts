@@ -129,6 +129,26 @@ describe("MeasurementService command boundaries", () => {
     ).toThrow(BadRequestException);
   });
 
+  it("rejects non-string timestamps before date coercion", () => {
+    const service = new MeasurementService({} as never, {} as never);
+    expect(() =>
+      service.recordActualCost(
+        operator,
+        "00000000-0000-4000-8000-000000000011",
+        {
+          category: "MATERIAL",
+          amountMinor: "1",
+          currency: "CZK",
+          occurredAt: null as never,
+          source: "MEASURED",
+          sourceKey: "source-key",
+          sourceEntityType: "measurement",
+        },
+        "valid-key",
+      ),
+    ).toThrow(BadRequestException);
+  });
+
   it("reserves manual measurements for administrators", async () => {
     const service = new MeasurementService({} as never, {} as never);
     await expect(

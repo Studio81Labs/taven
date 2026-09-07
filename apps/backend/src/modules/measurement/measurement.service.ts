@@ -174,12 +174,22 @@ export class MeasurementService {
           where: {
             operatorIdentityId: operator.operatorId,
             source: HandlingSource.TIMER,
-            lifecycle: HandlingSessionLifecycle.OPEN,
+            lifecycle: {
+              in: [
+                HandlingSessionLifecycle.OPEN,
+                HandlingSessionLifecycle.COMPLETED,
+              ],
+            },
+            startedAt: { lt: endedAt },
+            OR: [
+              { lifecycle: HandlingSessionLifecycle.OPEN },
+              { endedAt: { gt: startedAt } },
+            ],
           },
         });
         if (overlappingTimer)
           throw new ConflictException(
-            "Manual handling cannot overlap an open timer",
+            "Manual handling cannot overlap timer evidence",
           );
         const session = await tx.handlingSession.create({
           data: {
@@ -812,13 +822,15 @@ function currency(value: string): string {
 }
 function uuid(value: string, name: string): string {
   assertUuid(value, name);
-  return value;
+  return value.toLowerCase();
 }
 function assertUuid(value: string, name: string): void {
   if (!UUID_PATTERN.test(value))
     throw new BadRequestException(`${name} is invalid`);
 }
 function parseTimestamp(value: string, name: string): Date {
+  if (typeof value !== "string")
+    throw new BadRequestException(`${name} is invalid`);
   const result = new Date(value);
   if (Number.isNaN(result.getTime()))
     throw new BadRequestException(`${name} is invalid`);
