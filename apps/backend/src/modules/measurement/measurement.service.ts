@@ -716,21 +716,25 @@ function parseAllocations(
 ): AllocationInput[] {
   if (!Array.isArray(value) || value.length === 0)
     throw new BadRequestException("allocations must not be empty");
-  const result = value.map((item) => ({
-    orderId: uuid(item.orderId, "orderId"),
-    ...(item.orderItemId !== undefined
-      ? { orderItemId: uuid(item.orderItemId, "orderItemId") }
-      : {}),
-    ...(item.jobId !== undefined ? { jobId: uuid(item.jobId, "jobId") } : {}),
-    ...(item.shipmentId !== undefined
-      ? { shipmentId: uuid(item.shipmentId, "shipmentId") }
-      : {}),
-    servedUnits: positiveBigInt(
-      item.servedUnitCount,
-      "servedUnitCount",
-      MAX_INT32,
-    ),
-  }));
+  const result = value.map((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item))
+      throw new BadRequestException("allocation is invalid");
+    return {
+      orderId: uuid(item.orderId, "orderId"),
+      ...(item.orderItemId !== undefined
+        ? { orderItemId: uuid(item.orderItemId, "orderItemId") }
+        : {}),
+      ...(item.jobId !== undefined ? { jobId: uuid(item.jobId, "jobId") } : {}),
+      ...(item.shipmentId !== undefined
+        ? { shipmentId: uuid(item.shipmentId, "shipmentId") }
+        : {}),
+      servedUnits: positiveBigInt(
+        item.servedUnitCount,
+        "servedUnitCount",
+        MAX_INT32,
+      ),
+    };
+  });
   if (new Set(result.map(allocationTargetKey)).size !== result.length)
     throw new BadRequestException("Allocation targets must be unique");
   return result;
@@ -829,7 +833,7 @@ function requiredKey(value: string | undefined): string {
   return requiredText(value, "Idempotency-Key", 255, 8);
 }
 function currency(value: string): string {
-  if (!/^[A-Z]{3}$/.test(value))
+  if (typeof value !== "string" || !/^[A-Z]{3}$/.test(value))
     throw new BadRequestException("currency is invalid");
   return value;
 }

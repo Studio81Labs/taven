@@ -1980,6 +1980,7 @@ export interface components {
             currency: string;
             /** Format: date-time */
             occurredAt: string;
+            /** @description Required when source is MANUAL or supersedesId is supplied. */
             reason?: string;
             /** @enum {string} */
             source: "MEASURED" | "MANUAL";

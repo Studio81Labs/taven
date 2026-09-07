@@ -149,6 +149,48 @@ describe("MeasurementService command boundaries", () => {
     ).toThrow(BadRequestException);
   });
 
+  it("rejects non-string currency before persistence", () => {
+    const service = new MeasurementService({} as never, {} as never);
+    expect(() =>
+      service.recordActualCost(
+        operator,
+        "00000000-0000-4000-8000-000000000011",
+        {
+          category: "MATERIAL",
+          amountMinor: "1",
+          currency: ["CZK"] as never,
+          occurredAt: "2026-09-06T10:00:00.000Z",
+          source: "MEASURED",
+          sourceKey: "source-key",
+          sourceEntityType: "measurement",
+        },
+        "valid-key",
+      ),
+    ).toThrow(BadRequestException);
+  });
+
+  it("rejects non-object allocation entries before reading their fields", async () => {
+    const service = new MeasurementService({} as never, {} as never);
+    const admin = { ...operator, role: OperatorRole.ADMIN };
+    await expect(
+      service.recordManual(
+        admin,
+        {
+          component: "HANDLING_PACK",
+          laborRateNumerator: "1",
+          laborRateDenominator: "1",
+          currency: "CZK",
+          startedAt: "2026-09-06T10:00:00.000Z",
+          endedAt: "2026-09-06T10:00:01.000Z",
+          durationMilliseconds: "1000",
+          reason: "manual measurement",
+          allocations: [null as never],
+        },
+        "valid-key",
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
   it("reserves manual measurements for administrators", async () => {
     const service = new MeasurementService({} as never, {} as never);
     await expect(

@@ -2972,6 +2972,7 @@
             "type": "string"
           },
           "reason": {
+            "description": "Required when source is MANUAL or supersedesId is supplied.",
             "maxLength": 1000,
             "minLength": 1,
             "type": "string"

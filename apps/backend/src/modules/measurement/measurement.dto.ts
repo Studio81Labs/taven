@@ -105,7 +105,12 @@ export class RecordActualCostDto {
   @ApiPropertyOptional(UUID)
   supersedesId?: string;
 
-  @ApiPropertyOptional({ type: String, minLength: 1, maxLength: 1000 })
+  @ApiPropertyOptional({
+    type: String,
+    minLength: 1,
+    maxLength: 1000,
+    description: "Required when source is MANUAL or supersedesId is supplied.",
+  })
   reason?: string;
 }
 
