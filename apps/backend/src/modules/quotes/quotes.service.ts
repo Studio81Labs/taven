@@ -229,7 +229,6 @@ export class QuotesService {
             transaction,
             request.automaticQuoteHandoffToken,
             requestId,
-            observedAt,
           );
         }
         await transaction.auditEvent.create({
@@ -1583,7 +1582,6 @@ async function consumeAutomaticQuoteHandoff(
   transaction: Transaction,
   token: string,
   quoteRequestId: string,
-  observedAt: Date,
 ): Promise<void> {
   const tokenHash = hashToken(token);
   const rows = await transaction.$queryRaw<Array<{ id: string }>>`
@@ -1597,6 +1595,7 @@ async function consumeAutomaticQuoteHandoff(
       "Automatic quote handoff capability is invalid",
     );
   }
+  const observedAt = await databaseNow(transaction);
   const capability =
     await transaction.automaticQuoteHandoffCapability.findUnique({
       where: { id: rows[0].id },
