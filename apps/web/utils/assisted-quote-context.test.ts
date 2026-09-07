@@ -60,6 +60,7 @@ describe("automatic quote safe-context handoff", () => {
         reasons: ["FIT_SENSITIVE"],
         safeContext: {
           automaticQuoteSessionId: sessionId,
+          handoffToken: "a".repeat(43),
           customerEmail: "must-not-copy@example.test",
           itemSelections: [
             {
@@ -82,6 +83,7 @@ describe("automatic quote safe-context handoff", () => {
     expect(context).toEqual({
       automaticQuoteSessionId: sessionId,
       expiresAt: "2030-01-01T00:00:00.000Z",
+      handoffToken: "a".repeat(43),
       itemSelections: [
         {
           bodyIds: ["body-1"],
@@ -117,6 +119,7 @@ describe("automatic quote safe-context handoff", () => {
     const context = {
       automaticQuoteSessionId: sessionId,
       expiresAt: "2030-01-01T00:00:00.000Z",
+      handoffToken: "a".repeat(43),
       itemSelections: [],
       modelFileIds: [modelFileId],
       reasons: ["NO_CONFIGURATION_AVAILABLE"],
@@ -131,11 +134,30 @@ describe("automatic quote safe-context handoff", () => {
     expect(storage.values.size).toBe(0);
   });
 
+  it("clears a legacy handoff that has no capability token", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      "taven:assisted-quote-handoff:v1",
+      JSON.stringify({
+        automaticQuoteSessionId: sessionId,
+        expiresAt: "2030-01-01T00:00:00.000Z",
+        itemSelections: [],
+        modelFileIds: [modelFileId],
+        reasons: ["FIT_SENSITIVE"],
+      }),
+    );
+    expect(
+      loadAssistedQuoteHandoff(storage, Date.parse("2029-01-01T00:00:00.000Z")),
+    ).toBeUndefined();
+    expect(storage.values.size).toBe(0);
+  });
+
   it("clears stale context before a failed replacement", () => {
     const storage = new MemoryStorage();
     const context = {
       automaticQuoteSessionId: sessionId,
       expiresAt: "2030-01-01T00:00:00.000Z",
+      handoffToken: "a".repeat(43),
       itemSelections: [],
       modelFileIds: [modelFileId],
       reasons: ["NO_CONFIGURATION_AVAILABLE"],

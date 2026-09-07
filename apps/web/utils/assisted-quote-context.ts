@@ -129,6 +129,7 @@ export function sanitizeAssistedQuoteHandoff(
 
   const modelFileIds = safeUuidArray(handoff.safeContext.modelFileIds, 20);
   const handoffToken = safeCapabilityToken(handoff.safeContext.handoffToken);
+  if (!handoffToken) return undefined;
   const itemSelections = Array.isArray(handoff.safeContext.itemSelections)
     ? handoff.safeContext.itemSelections
         .slice(0, 50)
@@ -139,7 +140,7 @@ export function sanitizeAssistedQuoteHandoff(
   return {
     automaticQuoteSessionId,
     expiresAt: new Date(expiresAtMs).toISOString(),
-    ...(handoffToken ? { handoffToken } : {}),
+    handoffToken,
     itemSelections,
     modelFileIds,
     reasons: handoff.reasons
