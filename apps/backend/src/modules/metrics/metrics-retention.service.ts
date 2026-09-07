@@ -25,7 +25,6 @@ export class MetricsRetentionService {
       const deleted = await transaction.businessEvent.deleteMany({
         where: {
           id: { in: due.map(({ id }) => id) },
-          expiresAt: { lte: new Date() },
         },
       });
       return deleted.count;
