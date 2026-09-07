@@ -387,7 +387,8 @@ export class AutomaticQuotesService {
 
     return this.prisma.$transaction(async (transaction) => {
       const session = await lockedSession(transaction, sessionId);
-      assertOpenSession(session, sessionCapability);
+      const sessionObservedAt = await databaseNow(transaction);
+      assertOpenSession(session, sessionCapability, sessionObservedAt);
       const capabilityKey = quoteCapabilityKeyRing().byId.get(
         session.capabilityKeyId ?? "",
       );
@@ -5674,11 +5675,12 @@ function assertOpenSession(
     expiresAt: Date;
   },
   token: string,
+  observedAt = new Date(),
 ): void {
   assertSessionCapability(session, token);
   if (
     session.status !== QuoteSessionStatus.OPEN ||
-    session.expiresAt.getTime() <= Date.now()
+    session.expiresAt.getTime() <= observedAt.getTime()
   ) {
     throw new GoneException("Automatic quote session is no longer editable");
   }
