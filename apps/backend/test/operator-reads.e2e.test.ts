@@ -185,8 +185,29 @@ describe("operator read contracts", () => {
     };
     expect(orderDetail).toMatchObject({
       id: fixture.orderId,
-      items: expect.any(Array),
-      financial: { settlements: expect.any(Array) },
+      items: [
+        {
+          id: fixture.orderItemId,
+          primaryReferenceSlice: {
+            id: fixture.referenceSliceResultId,
+            estimatedPrintSeconds: expect.any(String),
+            estimatedMaterialMilligrams: expect.any(String),
+            slicerEngine: expect.any(String),
+            slicerVersion: expect.any(String),
+          },
+          tailReferenceSlice: null,
+        },
+      ],
+      financial: {
+        settlements: expect.any(Array),
+        payments: [
+          {
+            id: fixture.paymentId,
+            status: expect.any(String),
+            requestedAmountMinor: expect.any(String),
+          },
+        ],
+      },
       fulfilment: { jobs: expect.any(Array), shipments: expect.any(Array) },
     });
     expect(

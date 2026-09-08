@@ -85,8 +85,58 @@ export class OperatorOrderItemDto {
   @ApiProperty({ type: Number, minimum: 1 })
   quantity!: number;
 
+  @ApiPropertyOptional({ type: Number, minimum: 1, nullable: true })
+  referencePartsPerPlate!: number | null;
+
+  @ApiProperty({ type: () => OperatorReferenceSliceDto, nullable: true })
+  primaryReferenceSlice!: OperatorReferenceSliceDto | null;
+
+  @ApiProperty({ type: () => OperatorReferenceSliceDto, nullable: true })
+  tailReferenceSlice!: OperatorReferenceSliceDto | null;
+
   @ApiProperty({ type: [String] })
   preflightFindings!: string[];
+}
+
+export class OperatorReferenceSliceDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty({ type: String })
+  kind!: string;
+
+  @ApiProperty(UUID)
+  modelGeometryId!: string;
+
+  @ApiProperty(UUID)
+  printConfigRevisionId!: string;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  referenceProfileId!: string | null;
+
+  @ApiPropertyOptional({ type: Number, minimum: 1, nullable: true })
+  packageQuantity!: number | null;
+
+  @ApiPropertyOptional({ type: Number, minimum: 1, nullable: true })
+  packagePlateCount!: number | null;
+
+  @ApiProperty({ type: Number, minimum: 1 })
+  partsPerPlate!: number;
+
+  @ApiProperty({ type: String, pattern: "^[0-9]+$" })
+  estimatedPrintSeconds!: string;
+
+  @ApiProperty({ type: String, pattern: "^[0-9]+$" })
+  estimatedMaterialMilligrams!: string;
+
+  @ApiProperty({ type: String })
+  slicerEngine!: string;
+
+  @ApiProperty({ type: String })
+  slicerVersion!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  createdAt!: string;
 }
 
 export class OperatorAcceptedPriceDto {
@@ -144,6 +194,56 @@ export class OperatorSettlementDto {
   settledAt!: string;
 }
 
+export class OperatorPaymentDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty({ type: String })
+  role!: string;
+
+  @ApiProperty({ type: String })
+  provider!: string;
+
+  @ApiProperty({ type: String })
+  checkoutMethod!: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  merchantReference!: string | null;
+
+  @ApiProperty({ type: String, pattern: "^[0-9]+$" })
+  requestedAmountMinor!: string;
+
+  @ApiPropertyOptional({ ...DECIMAL, nullable: true })
+  capturedAmountMinor!: string | null;
+
+  @ApiProperty({ type: String })
+  currency!: string;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty({ type: Boolean })
+  captureAuthorized!: boolean;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  captureCutoffAt!: string | null;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  checkoutCaptureExpiresAt!: string | null;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  balanceDueAt!: string | null;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  capturedAt!: string | null;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  createdAt!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  updatedAt!: string;
+}
+
 export class OperatorFinancialProjectionDto {
   @ApiPropertyOptional({ ...UUID, nullable: true })
   activeContractRevisionId!: string | null;
@@ -159,6 +259,9 @@ export class OperatorFinancialProjectionDto {
 
   @ApiProperty({ type: [OperatorSettlementDto] })
   settlements!: OperatorSettlementDto[];
+
+  @ApiProperty({ type: [OperatorPaymentDto] })
+  payments!: OperatorPaymentDto[];
 }
 
 export class OperatorOrderDetailDto {

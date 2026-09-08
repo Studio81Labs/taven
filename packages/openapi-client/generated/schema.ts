@@ -2864,6 +2864,7 @@ export interface components {
             activeContractRevisionId?: string | null;
             activeContractTotalMinor?: string | null;
             currency?: string | null;
+            payments: components["schemas"]["OperatorPaymentDto"][];
             settlements: components["schemas"]["OperatorSettlementDto"][];
         };
         OperatorJobListItemDto: {
@@ -2907,11 +2908,14 @@ export interface components {
             modelGeometryId: string;
             ordinal: number;
             preflightFindings: string[];
+            primaryReferenceSlice: components["schemas"]["OperatorReferenceSliceDto"] | null;
             /** Format: uuid */
             printConfigRevisionId: string;
             quantity: number;
+            referencePartsPerPlate?: number | null;
             /** Format: uuid */
             sourceModelFileId: string;
+            tailReferenceSlice: components["schemas"]["OperatorReferenceSliceDto"] | null;
         };
         OperatorOrderListItemDto: {
             /** Format: date-time */
@@ -2926,6 +2930,31 @@ export interface components {
         OperatorOrderPageDto: {
             items: components["schemas"]["OperatorOrderListItemDto"][];
             nextCursor?: string;
+        };
+        OperatorPaymentDto: {
+            /** Format: date-time */
+            balanceDueAt?: string | null;
+            captureAuthorized: boolean;
+            /** Format: date-time */
+            captureCutoffAt?: string | null;
+            capturedAmountMinor?: string | null;
+            /** Format: date-time */
+            capturedAt?: string | null;
+            /** Format: date-time */
+            checkoutCaptureExpiresAt?: string | null;
+            checkoutMethod: string;
+            /** Format: date-time */
+            createdAt: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            merchantReference?: string | null;
+            provider: string;
+            requestedAmountMinor: string;
+            role: string;
+            status: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
         OperatorQuoteRequestDetailDto: {
             attachments: components["schemas"]["QuoteAttachmentDto"][];
@@ -2954,6 +2983,26 @@ export interface components {
         OperatorQuoteRequestPageDto: {
             items: components["schemas"]["OperatorQuoteRequestDetailDto"][];
             nextCursor?: string;
+        };
+        OperatorReferenceSliceDto: {
+            /** Format: date-time */
+            createdAt: string;
+            estimatedMaterialMilligrams: string;
+            estimatedPrintSeconds: string;
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            /** Format: uuid */
+            modelGeometryId: string;
+            packagePlateCount?: number | null;
+            packageQuantity?: number | null;
+            partsPerPlate: number;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            /** Format: uuid */
+            referenceProfileId?: string | null;
+            slicerEngine: string;
+            slicerVersion: string;
         };
         OperatorSessionDto: {
             csrfToken: string;

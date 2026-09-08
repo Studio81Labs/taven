@@ -8,6 +8,7 @@ import {
   CapacityReservationStatus,
   JobStatus,
   OrderStatus,
+  Prisma,
   SliceKind,
 } from "@prisma/client";
 import { createHash } from "node:crypto";
@@ -117,9 +118,12 @@ export class OperatorReadsService {
     const cursor = input.cursor
       ? parseTimeCursor(input.cursor, filterHash, "orders cursor")
       : undefined;
-    const keys = await this.prisma.$queryRaw<
-      Array<{ id: string; createdAt: Date }>
-    >`
+    return this.prisma.$transaction(
+      async (transaction) => {
+        await transaction.$executeRaw`SET TRANSACTION READ ONLY`;
+        const keys = await transaction.$queryRaw<
+          Array<{ id: string; createdAt: Date }>
+        >`
       SELECT "order".id, "order".created_at AS "createdAt"
       FROM orders AS "order"
       WHERE (
@@ -183,35 +187,38 @@ export class OperatorReadsService {
       ORDER BY "order".created_at DESC, "order".id DESC
       LIMIT ${limit + 1}
     `;
-    const rows = await this.prisma.order.findMany({
-      where: { id: { in: keys.map((key) => key.id) } },
-      select: {
-        id: true,
-        publicReference: true,
-        status: true,
-        createdAt: true,
-        confirmedAt: true,
+        const rows = await transaction.order.findMany({
+          where: { id: { in: keys.map((key) => key.id) } },
+          select: {
+            id: true,
+            publicReference: true,
+            status: true,
+            createdAt: true,
+            confirmedAt: true,
+          },
+        });
+        const byId = new Map(rows.map((row) => [row.id, row]));
+        const page = keys
+          .slice(0, limit)
+          .map((key) => byId.get(key.id))
+          .filter((row): row is (typeof rows)[number] => row !== undefined)
+          .map(orderListItem);
+        const last = keys.at(limit - 1);
+        return {
+          items: page,
+          ...(keys.length > limit && last
+            ? {
+                nextCursor: encodeCursor({
+                  createdAt: last.createdAt.toISOString(),
+                  id: last.id,
+                  filterHash,
+                }),
+              }
+            : {}),
+        };
       },
-    });
-    const byId = new Map(rows.map((row) => [row.id, row]));
-    const page = keys
-      .slice(0, limit)
-      .map((key) => byId.get(key.id))
-      .filter((row): row is (typeof rows)[number] => row !== undefined)
-      .map(orderListItem);
-    const last = keys.at(limit - 1);
-    return {
-      items: page,
-      ...(keys.length > limit && last
-        ? {
-            nextCursor: encodeCursor({
-              createdAt: last.createdAt.toISOString(),
-              id: last.id,
-              filterHash,
-            }),
-          }
-        : {}),
-    };
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   async orderDetail(
@@ -229,18 +236,36 @@ export class OperatorReadsService {
           include: {
             primaryReferenceSliceResult: {
               select: {
+                id: true,
                 kind: true,
                 modelGeometryId: true,
                 printConfigRevisionId: true,
                 referenceProfileId: true,
+                packageQuantity: true,
+                packagePlateCount: true,
+                partsPerPlate: true,
+                estimatedPrintSeconds: true,
+                estimatedMaterialMilligrams: true,
+                slicerEngine: true,
+                slicerVersion: true,
+                createdAt: true,
               },
             },
             tailReferenceSliceResult: {
               select: {
+                id: true,
                 kind: true,
                 modelGeometryId: true,
                 printConfigRevisionId: true,
                 referenceProfileId: true,
+                packageQuantity: true,
+                packagePlateCount: true,
+                partsPerPlate: true,
+                estimatedPrintSeconds: true,
+                estimatedMaterialMilligrams: true,
+                slicerEngine: true,
+                slicerVersion: true,
+                createdAt: true,
               },
             },
           },
@@ -272,6 +297,9 @@ export class OperatorReadsService {
         },
         activeContractPrice: { include: { contractPriceRevision: true } },
         settlements: { orderBy: { settledAt: "asc" } },
+        priceBindings: {
+          include: { payments: { orderBy: { createdAt: "asc" } } },
+        },
       },
     });
     if (!order) throw new NotFoundException("Order was not found");
@@ -310,6 +338,13 @@ export class OperatorReadsService {
         material: item.material,
         color: item.color,
         quantity: item.quantity,
+        referencePartsPerPlate: item.referencePartsPerPlate,
+        primaryReferenceSlice: operatorReferenceSlice(
+          item.primaryReferenceSliceResult,
+        ),
+        tailReferenceSlice: operatorReferenceSlice(
+          item.tailReferenceSliceResult,
+        ),
         preflightFindings: acceptedPreflightFindingCodes(
           item,
           acceptedQuoteItems.get(item.ordinal),
@@ -331,6 +366,32 @@ export class OperatorReadsService {
           refundableBalanceMinor: settlement.refundableBalanceMinor.toString(),
           settledAt: settlement.settledAt.toISOString(),
         })),
+        payments: order.priceBindings
+          .flatMap((binding) => binding.payments)
+          .sort(
+            (left, right) =>
+              left.createdAt.getTime() - right.createdAt.getTime() ||
+              left.id.localeCompare(right.id),
+          )
+          .map((payment) => ({
+            id: payment.id,
+            role: payment.role,
+            provider: payment.provider,
+            checkoutMethod: payment.checkoutMethod,
+            merchantReference: payment.merchantReference,
+            requestedAmountMinor: payment.requestedAmountMinor.toString(),
+            capturedAmountMinor:
+              payment.capturedAmountMinor?.toString() ?? null,
+            currency: payment.currency,
+            status: payment.status,
+            captureAuthorized: payment.captureAuthorized,
+            captureCutoffAt: iso(payment.captureCutoffAt),
+            checkoutCaptureExpiresAt: iso(payment.checkoutCaptureExpiresAt),
+            balanceDueAt: iso(payment.balanceDueAt),
+            capturedAt: iso(payment.capturedAt),
+            createdAt: payment.createdAt.toISOString(),
+            updatedAt: payment.updatedAt.toISOString(),
+          })),
       },
       fulfilment,
     };
@@ -809,6 +870,41 @@ function acceptedPreflightFindingCodes(
         .map((decision) => decision.preflightFinding.code),
     ),
   ].sort();
+}
+
+function operatorReferenceSlice(
+  slice: Readonly<{
+    id: string;
+    kind: string;
+    modelGeometryId: string;
+    printConfigRevisionId: string;
+    referenceProfileId: string | null;
+    packageQuantity: number | null;
+    packagePlateCount: number | null;
+    partsPerPlate: number;
+    estimatedPrintSeconds: bigint;
+    estimatedMaterialMilligrams: bigint;
+    slicerEngine: string;
+    slicerVersion: string;
+    createdAt: Date;
+  }> | null,
+) {
+  if (!slice) return null;
+  return {
+    id: slice.id,
+    kind: slice.kind,
+    modelGeometryId: slice.modelGeometryId,
+    printConfigRevisionId: slice.printConfigRevisionId,
+    referenceProfileId: slice.referenceProfileId,
+    packageQuantity: slice.packageQuantity,
+    packagePlateCount: slice.packagePlateCount,
+    partsPerPlate: slice.partsPerPlate,
+    estimatedPrintSeconds: slice.estimatedPrintSeconds.toString(),
+    estimatedMaterialMilligrams: slice.estimatedMaterialMilligrams.toString(),
+    slicerEngine: slice.slicerEngine,
+    slicerVersion: slice.slicerVersion,
+    createdAt: slice.createdAt.toISOString(),
+  };
 }
 
 function pageLimit(value: number | undefined): number {
