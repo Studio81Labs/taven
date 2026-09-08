@@ -110,6 +110,7 @@ type ReportOrder = Readonly<{
     capturedTotalMinor: bigint;
     retainedAmountMinor: bigint;
     refundAmountMinor: bigint;
+    amountDueMinor: bigint;
   }>[];
   jobs: readonly Readonly<{ nodeId: string }>[];
   phases: readonly Readonly<{
@@ -121,6 +122,16 @@ type Cursor = Readonly<{
   confirmedAt: string;
   id: string;
   filterHash: string;
+}>;
+
+type OperationalJob = Readonly<{
+  replacesJobId: string | null;
+  status: string;
+  failedAt: Date | null;
+  printingAt: Date | null;
+  printedAt: Date | null;
+  qcApprovedAt: Date | null;
+  qcRejectedAt: Date | null;
 }>;
 
 @Injectable()
@@ -355,23 +366,7 @@ export class MetricsReportService {
         AND "confirmed_at" < ${query.to}
       ORDER BY "customer_id", "confirmed_at" ASC, "id" ASC
     `;
-    const jobs = await transaction.job.findMany({
-      where: {
-        nodeId: query.nodeId,
-        createdAt: { gte: query.from, lt: query.to },
-      },
-      select: {
-        id: true,
-        replacesJobId: true,
-        status: true,
-        createdAt: true,
-        failedAt: true,
-        printingAt: true,
-        printedAt: true,
-        qcApprovedAt: true,
-        qcRejectedAt: true,
-      },
-    });
+    const jobs = await operationalJobs(transaction, query);
     const queue = await transaction.capacityReservation.findMany({
       where: {
         nodeId: query.nodeId,
@@ -465,6 +460,7 @@ const reportOrderInclude = {
       capturedTotalMinor: true,
       retainedAmountMinor: true,
       refundAmountMinor: true,
+      amountDueMinor: true,
     },
   },
   jobs: { select: { nodeId: true } },
@@ -506,6 +502,65 @@ export function parseMetricsQuery(
     nodeId,
     ...(channel ? { channel: channel as Channel } : {}),
   };
+}
+
+async function operationalJobs(
+  transaction: Transaction,
+  query: MetricsQuery,
+): Promise<readonly OperationalJob[]> {
+  const select = {
+    replacesJobId: true,
+    status: true,
+    failedAt: true,
+    printingAt: true,
+    printedAt: true,
+    qcApprovedAt: true,
+    qcRejectedAt: true,
+  } as const;
+  if (!query.channel) {
+    return transaction.job.findMany({
+      where: {
+        nodeId: query.nodeId,
+        createdAt: { gte: query.from, lt: query.to },
+      },
+      select,
+    });
+  }
+  return transaction.$queryRaw<OperationalJob[]>`
+    SELECT
+      job.replaces_job_id AS "replacesJobId",
+      job.status::text AS status,
+      job.failed_at AS "failedAt",
+      job.printing_at AS "printingAt",
+      job.printed_at AS "printedAt",
+      job.qc_approved_at AS "qcApprovedAt",
+      job.qc_rejected_at AS "qcRejectedAt"
+    FROM jobs AS job
+    JOIN orders AS "order" ON "order".id = job.order_id
+    LEFT JOIN automatic_order_origins AS automatic_origin
+      ON automatic_origin.order_id = "order".id
+    LEFT JOIN quote_sessions AS automatic_session
+      ON automatic_session.id = automatic_origin.quote_session_id
+    LEFT JOIN individual_order_origins AS individual_origin
+      ON individual_origin.order_id = "order".id
+    LEFT JOIN quotes AS individual_quote
+      ON individual_quote.id = individual_origin.quote_id
+    LEFT JOIN quote_requests AS individual_request
+      ON individual_request.id = individual_quote.quote_request_id
+    LEFT JOIN customers AS customer ON customer.id = "order".customer_id
+    WHERE job.node_id = ${query.nodeId}::uuid
+      AND job.created_at >= ${query.from}
+      AND job.created_at < ${query.to}
+      AND CASE
+        WHEN automatic_session.attribution IS NOT NULL
+          AND automatic_session.attribution <> 'null'::jsonb
+          THEN COALESCE(automatic_session.attribution->>'channel', 'unknown')
+        WHEN individual_request.attribution IS NOT NULL
+          AND individual_request.attribution <> 'null'::jsonb
+          THEN COALESCE(individual_request.attribution->>'channel', 'unknown')
+        ELSE COALESCE(customer.first_attribution->>'channel', 'unknown')
+      END = ${query.channel}
+  `;
 }
 
 function defaultNode(nodeIds: readonly string[]): string {
@@ -908,15 +963,7 @@ function commercialReport(
 
 export function operationalReport(
   orders: readonly ReportOrder[],
-  jobs: readonly Readonly<{
-    replacesJobId: string | null;
-    status: string;
-    failedAt: Date | null;
-    printingAt: Date | null;
-    printedAt: Date | null;
-    qcApprovedAt: Date | null;
-    qcRejectedAt: Date | null;
-  }>[],
+  jobs: readonly OperationalJob[],
   queue: readonly Readonly<{
     machineId: string;
     startsAt: Date;
@@ -1799,12 +1846,31 @@ function orderDetail(
     activeContract: sumsContract([active], currency),
     capturedCash: money(captured, currency),
     succeededRefunds: money(refunded, currency),
-    outstandingGross: money(active.gross - captured + refunded, currency),
+    outstandingGross: money(outstandingGross(order, currency), currency),
     handlingCost: money(handlingMinor(order, currency), currency),
     actualCosts: costBreakdown([order], currency),
     explicitMarginCoverage: hasExplicitMarginCoverage(order, currency),
     finalContributionMargin: margin === null ? null : money(margin, currency),
   };
+}
+
+export function outstandingGross(order: ReportOrder, currency: string): bigint {
+  if (["REFUNDED", "CANCELLED"].includes(order.status)) return 0n;
+  if (order.status === "CANCELLED_SETTLED") {
+    return (
+      order.settlements.find(
+        (settlement) =>
+          settlement.kind === "BALANCE_SETTLEMENT" &&
+          settlement.currency === currency,
+      )?.amountDueMinor ?? 0n
+    );
+  }
+  const active = activeContract(order, currency);
+  return (
+    active.gross -
+    capturedMinor(order, currency) +
+    refundedMinor(order, currency)
+  );
 }
 
 function money(amountMinor: bigint, currency: string): MetricMoney {

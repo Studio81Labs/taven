@@ -9,6 +9,7 @@ import {
   isFinalMarginTerminal,
   MetricsReportService,
   operationalReport,
+  outstandingGross,
   parseMetricsQuery,
   quoteMetrics,
   type MetricsQuery,
@@ -174,6 +175,33 @@ describe("v0-1 metric classifications", () => {
         }),
       }),
     );
+  });
+
+  it("reports no outstanding balance after terminal financial settlement", () => {
+    expect(
+      outstandingGross(
+        {
+          status: "REFUNDED",
+          settlements: [],
+        } as never,
+        "CZK",
+      ),
+    ).toBe(0n);
+    expect(
+      outstandingGross(
+        {
+          status: "CANCELLED_SETTLED",
+          settlements: [
+            {
+              kind: "BALANCE_SETTLEMENT",
+              currency: "CZK",
+              amountDueMinor: 0n,
+            },
+          ],
+        } as never,
+        "CZK",
+      ),
+    ).toBe(0n);
   });
 
   it("separates persisted assisted handoffs from unresolved automatic uses", () => {
@@ -410,6 +438,7 @@ describe("v0-1 metric classifications", () => {
               capturedTotalMinor: 100n,
               retainedAmountMinor: 50n,
               refundAmountMinor: 50n,
+              amountDueMinor: 0n,
             },
           ],
           actualCosts: [
