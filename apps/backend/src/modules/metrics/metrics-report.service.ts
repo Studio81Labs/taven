@@ -338,6 +338,7 @@ export class MetricsReportService {
                 automaticOrigin: {
                   include: { quoteSession: { select: { attribution: true } } },
                 },
+                items: { select: { sourceModelFileId: true } },
               },
             },
           },
@@ -1060,6 +1061,7 @@ type AutomaticUse = Readonly<{
       automaticOrigin: Readonly<{
         quoteSession: Readonly<{ attribution: Prisma.JsonValue | null }>;
       }> | null;
+      items: readonly Readonly<{ sourceModelFileId: string }>[];
     }>;
   }>;
 }>;
@@ -1088,7 +1090,10 @@ export function automationMetrics(
       .filter(
         (use) =>
           use.draft.order.confirmedAt !== null &&
-          use.draft.order.acceptedOrderPriceBindingId !== null,
+          use.draft.order.acceptedOrderPriceBindingId !== null &&
+          use.draft.order.items.some(
+            (item) => item.sourceModelFileId === use.modelFileId,
+          ),
       )
       .map((use) => use.modelFileId),
   );
@@ -1114,7 +1119,7 @@ export function automationMetrics(
   return {
     scope: "PLATFORM",
     definition:
-      "Confirmed model files are counted once across body/item splits. Successful automatic use requires a completed accepted automatic binding; persisted assisted handoffs, unresolved, and evidence-unavailable states remain separate.",
+      "Confirmed model files are counted once across body/item splits. Successful automatic use requires a completed accepted automatic binding and an accepted order item for the model file; persisted assisted handoffs, unresolved, and evidence-unavailable states remain separate.",
     successfulAutomaticUses: successfulFiles.size,
     confirmedModelFiles: observedFiles.size,
     value: ratio(successfulFiles.size, observedFiles.size),
@@ -1919,7 +1924,7 @@ function encodeCursor(cursor: Cursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
 
-function parseCursor(value: string, filterHash: string): Cursor {
+export function parseCursor(value: string, filterHash: string): Cursor {
   try {
     const parsed: unknown = JSON.parse(
       Buffer.from(value, "base64url").toString("utf8"),
@@ -1938,11 +1943,11 @@ function parseCursor(value: string, filterHash: string): Cursor {
       typeof candidate.id !== "string" ||
       typeof candidate.filterHash !== "string" ||
       !UUID_PATTERN.test(candidate.id) ||
-      !INSTANT_PATTERN.test(candidate.confirmedAt) ||
       candidate.filterHash !== filterHash
     ) {
       throw new Error("invalid");
     }
+    parseInstant("metrics orders cursor confirmedAt", candidate.confirmedAt);
     return {
       confirmedAt: candidate.confirmedAt,
       id: candidate.id,

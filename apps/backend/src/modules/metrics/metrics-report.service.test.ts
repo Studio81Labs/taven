@@ -10,6 +10,7 @@ import {
   MetricsReportService,
   operationalReport,
   outstandingGross,
+  parseCursor,
   parseMetricsQuery,
   quoteMetrics,
   type MetricsQuery,
@@ -75,6 +76,21 @@ describe("parseMetricsQuery", () => {
     expect(() =>
       parseMetricsQuery({ from, to: "2026-01-02T00:00:00Z" }, [nodeId]),
     ).toThrow(BadRequestException);
+  });
+
+  it("rejects a cursor containing a calendar-invalid instant", () => {
+    const cursor = Buffer.from(
+      JSON.stringify({
+        confirmedAt: "2026-02-30T00:00:00Z",
+        id: nodeId,
+        filterHash: "filter-hash",
+      }),
+      "utf8",
+    ).toString("base64url");
+
+    expect(() => parseCursor(cursor, "filter-hash")).toThrow(
+      BadRequestException,
+    );
   });
 });
 
@@ -216,6 +232,7 @@ describe("v0-1 metric classifications", () => {
               automaticOrigin: {
                 quoteSession: { attribution: { channel: "paid" } },
               },
+              items: [],
             },
           },
         },
@@ -236,6 +253,32 @@ describe("v0-1 metric classifications", () => {
       unresolvedOrPending: 0,
       blockedOrHandoff: 1,
       evidenceUnavailable: 0,
+    });
+  });
+
+  it("counts only model files represented by accepted automatic order items", () => {
+    const automaticOrder = {
+      confirmedAt: new Date("2026-01-01T00:00:00.000Z"),
+      acceptedOrderPriceBindingId: "accepted-binding",
+      automaticOrigin: {
+        quoteSession: { attribution: { channel: "paid" } },
+      },
+      items: [{ sourceModelFileId: "selected-model" }],
+    };
+    const report = automationMetrics(
+      [
+        { modelFileId: "selected-model", draft: { order: automaticOrder } },
+        { modelFileId: "unused-model", draft: { order: automaticOrder } },
+      ],
+      [],
+      new Set(["selected-model", "unused-model"]),
+      "paid",
+    );
+
+    expect(report).toMatchObject({
+      confirmedModelFiles: 2,
+      successfulAutomaticUses: 1,
+      unresolvedOrPending: 1,
     });
   });
 
