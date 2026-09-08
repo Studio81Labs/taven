@@ -2965,6 +2965,7 @@ export interface components {
             /** Format: uuid */
             priceSnapshotId: string;
             provider: string;
+            refunds: components["schemas"]["OperatorRefundTransactionDto"][];
             requestedAmountMinor: string;
             role: string;
             status: string;
@@ -3018,6 +3019,21 @@ export interface components {
             referenceProfileId?: string | null;
             slicerEngine: string;
             slicerVersion: string;
+        };
+        OperatorRefundTransactionDto: {
+            amountMinor: string;
+            /** Format: uuid */
+            claimId?: string | null;
+            /** Format: date-time */
+            completedAt?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            priceAdjustmentId?: string | null;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            status: string;
         };
         OperatorSessionDto: {
             csrfToken: string;

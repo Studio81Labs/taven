@@ -38,6 +38,8 @@ describe("operator read contracts", () => {
   let fixture: PersistenceFoundation;
   let fixtureJob: ProductionReservationFixture;
   let viewerCookie: string;
+  let adminCookie: string;
+  let adminCsrfToken: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -119,7 +121,11 @@ describe("operator read contracts", () => {
       client.release();
     }
     nodeId = fixture.nodeId;
-    viewerCookie = await sessionCookie("VIEWER", nodeId);
+    const viewerSession = await sessionCookie("VIEWER", nodeId);
+    viewerCookie = viewerSession.cookie;
+    const adminSession = await sessionCookie("ADMIN", nodeId);
+    adminCookie = adminSession.cookie;
+    adminCsrfToken = adminSession.csrfToken;
   });
 
   afterAll(async () => {
@@ -178,10 +184,25 @@ describe("operator read contracts", () => {
       },
     });
 
+    const cancellation = await cancelOrder();
+    expect(cancellation.status).toBe(200);
+    const cancellationResult = (await cancellation.json()) as {
+      status: string;
+      result: { refundIds: string[] };
+    };
+    expect(cancellationResult).toMatchObject({ status: "ORDER_CANCELLED" });
+    expect(cancellationResult.result.refundIds).toHaveLength(1);
+    const cancellationRefundId = cancellationResult.result.refundIds[0]!;
+
     const order = await read(`/admin/orders/${fixture.orderId}`);
     expect(order.status).toBe(200);
     const orderDetail = (await order.json()) as {
       items: Array<{ id: string; preflightFindings: string[] }>;
+      timeline: Array<{
+        eventType: string;
+        actorKind: string;
+        occurredAt: string;
+      }>;
     };
     expect(orderDetail).toMatchObject({
       id: fixture.orderId,
@@ -207,18 +228,32 @@ describe("operator read contracts", () => {
             priceSnapshotId: fixture.priceSnapshotId,
             status: expect.any(String),
             requestedAmountMinor: expect.any(String),
+            refunds: [
+              {
+                id: cancellationRefundId,
+                claimId: null,
+                priceAdjustmentId: null,
+                amountMinor: expect.any(String),
+                reason: "CUSTOMER_CANCELLATION",
+                status: "PENDING",
+                requestedAt: expect.any(String),
+                completedAt: null,
+              },
+            ],
           },
         ],
       },
       fulfilment: { jobs: expect.any(Array), shipments: expect.any(Array) },
-      timeline: [
-        {
+    });
+    expect(orderDetail.timeline).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
           eventType: "order.quoted",
           actorKind: "SYSTEM",
           occurredAt: expect.any(String),
-        },
-      ],
-    });
+        }),
+      ]),
+    );
     expect(
       orderDetail.items.find((item) => item.id === fixture.orderItemId)
         ?.preflightFindings,
@@ -261,6 +296,23 @@ describe("operator read contracts", () => {
     });
   }
 
+  async function cancelOrder(): Promise<Response> {
+    return fetch(
+      new URL(`/admin/orders/${fixture.orderId}/fulfilment/cancel`, baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json",
+          "idempotency-key": `operator-reads-cancel-${randomUUID()}`,
+          origin: "http://localhost:3002",
+          "x-csrf-token": adminCsrfToken,
+        },
+        body: JSON.stringify({ reason: "Operator detail refund projection" }),
+      },
+    );
+  }
+
   async function findQuoteRequestPageItem(
     filters: Record<string, string>,
     requestId: string,
@@ -286,9 +338,9 @@ describe("operator read contracts", () => {
   }
 
   async function sessionCookie(
-    role: "VIEWER",
+    role: "VIEWER" | "ADMIN",
     grantedNodeId: string,
-  ): Promise<string> {
+  ): Promise<{ cookie: string; csrfToken: string }> {
     const identity = await prisma.operatorIdentity.create({
       data: {
         email: `operator-reads-${randomUUID()}@example.test`,
@@ -313,6 +365,6 @@ describe("operator read contracts", () => {
         absoluteExpiresAt: new Date(Date.now() + 60 * 60 * 1_000),
       },
     });
-    return `taven_admin=${token}`;
+    return { cookie: `taven_admin=${token}`, csrfToken };
   }
 });

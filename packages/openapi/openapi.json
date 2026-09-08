@@ -5352,6 +5352,12 @@
           "provider": {
             "type": "string"
           },
+          "refunds": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorRefundTransactionDto"
+            },
+            "type": "array"
+          },
           "requestedAmountMinor": {
             "pattern": "^[0-9]+$",
             "type": "string"
@@ -5379,7 +5385,8 @@
           "status",
           "captureAuthorized",
           "createdAt",
-          "updatedAt"
+          "updatedAt",
+          "refunds"
         ],
         "type": "object"
       },
@@ -5551,6 +5558,51 @@
           "slicerEngine",
           "slicerVersion",
           "createdAt"
+        ],
+        "type": "object"
+      },
+      "OperatorRefundTransactionDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "claimId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "completedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "priceAdjustmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requestedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "amountMinor",
+          "reason",
+          "status",
+          "requestedAt"
         ],
         "type": "object"
       },
