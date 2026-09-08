@@ -183,29 +183,18 @@ describe("operator read contracts", () => {
       items: [expect.objectContaining({ id: fixtureJob.jobId })],
     });
 
-    let queueCursor: string | undefined;
-    let fixtureQuoteFound = false;
-
-    for (let page = 0; page < 32 && !fixtureQuoteFound; page += 1) {
-      const query = new URLSearchParams({ status: "QUOTED", limit: "100" });
-      if (queueCursor) {
-        query.set("cursor", queueCursor);
-      }
-      const queue = await read(`/admin/quote-requests/page?${query}`);
-      expect(queue.status).toBe(200);
-      const body = (await queue.json()) as {
-        items: Array<{ requestId: string }>;
-        nextCursor: string | null;
-      };
-      fixtureQuoteFound ||= body.items.some(
-        ({ requestId }) => requestId === fixture.quoteRequestId,
-      );
-      queueCursor = body.nextCursor ?? undefined;
-      if (!queueCursor) {
-        break;
-      }
-    }
-    expect(fixtureQuoteFound).toBe(true);
+    await expect(
+      findQuoteRequestPageItem(
+        { status: "QUOTED", sla: "MET" },
+        fixture.quoteRequestId,
+      ),
+    ).resolves.toMatchObject({ slaBreached: false });
+    await expect(
+      findQuoteRequestPageItem(
+        { status: "QUOTED", sla: "PENDING" },
+        fixture.quoteRequestId,
+      ),
+    ).resolves.toBeUndefined();
 
     const invalidCursor = await read(
       "/admin/quote-requests/page?cursor=invalid",
@@ -221,6 +210,30 @@ describe("operator read contracts", () => {
     return fetch(new URL(path, baseUrl), {
       headers: { cookie: viewerCookie },
     });
+  }
+
+  async function findQuoteRequestPageItem(
+    filters: Record<string, string>,
+    requestId: string,
+  ): Promise<{ requestId: string; slaBreached: boolean } | undefined> {
+    let cursor: string | undefined;
+    for (let page = 0; page < 32; page += 1) {
+      const query = new URLSearchParams({ ...filters, limit: "100" });
+      if (cursor) query.set("cursor", cursor);
+      const response = await read(`/admin/quote-requests/page?${query}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        items: Array<{ requestId: string; slaBreached: boolean }>;
+        nextCursor: string | null;
+      };
+      const item = body.items.find(
+        (candidate) => candidate.requestId === requestId,
+      );
+      if (item) return item;
+      cursor = body.nextCursor ?? undefined;
+      if (!cursor) return undefined;
+    }
+    throw new Error("quote request was not found within the page bound");
   }
 
   async function sessionCookie(
