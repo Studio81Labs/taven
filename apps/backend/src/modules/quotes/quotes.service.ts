@@ -442,7 +442,7 @@ export class QuotesService {
         return {
           items: await Promise.all(
             page.map((request) =>
-              this.operatorRequestDetail(request, observedAt),
+              this.operatorRequestDetail(request, observedAt, transaction),
             ),
           ),
           ...(keys.length > limit && last
@@ -1562,8 +1562,10 @@ export class QuotesService {
       quote?: { issuedAt: Date } | null;
     },
     observedAt: Date,
+    attachmentClient: Pick<PrismaService, "photoAsset"> | Transaction = this
+      .prisma,
   ): Promise<QuoteRequestDetailDto> {
-    const attachments = await this.prisma.photoAsset.findMany({
+    const attachments = await attachmentClient.photoAsset.findMany({
       where: {
         scopeKind: PhotoScopeKind.QUOTE_REQUEST,
         scopeId: request.id,
@@ -1618,8 +1620,13 @@ export class QuotesService {
       quote?: { issuedAt: Date } | null;
     },
     observedAt: Date,
+    attachmentClient?: Pick<PrismaService, "photoAsset"> | Transaction,
   ): Promise<OperatorQuoteRequestDetailDto> {
-    const detail = await this.requestDetail(request, observedAt);
+    const detail = await this.requestDetail(
+      request,
+      observedAt,
+      attachmentClient,
+    );
     const handoff = request.automaticQuoteHandoff;
     return {
       ...detail,
