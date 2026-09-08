@@ -16,11 +16,17 @@ export class RecordAutomaticQuoteObservationDto {
 export class AutomaticQuoteHandoffCapabilityDto {
   @ApiProperty({
     type: String,
-    description: "Single-use capability for one assisted quote request",
+    description:
+      "Single-use capability for one assisted quote request. It is replayable only by the original issuance key while the source session remains authorized; replay never restores token usability.",
   })
   handoffToken!: string;
 
-  @ApiProperty({ type: String, format: "date-time" })
+  @ApiProperty({
+    type: String,
+    format: "date-time",
+    description:
+      "Capability consumption deadline; distinct from the seven-day issuance replay deadline",
+  })
   expiresAt!: string;
 }
 

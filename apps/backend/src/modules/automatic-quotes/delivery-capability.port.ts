@@ -66,8 +66,10 @@ const DEFAULT_ENDPOINTS: readonly ConfiguredEndpoint[] = [
  */
 @Injectable()
 export class ConfiguredDeliveryCapabilityAdapter implements DeliveryCapabilityPort {
+  private readonly endpoints = configuredEndpoints();
+
   async list(): Promise<readonly DeliveryCapabilityOption[]> {
-    return configuredEndpoints().map((endpoint) => ({
+    return this.endpoints.map((endpoint) => ({
       providerEndpointId: endpoint.providerEndpointId,
       endpointType: endpoint.endpointType,
       label: publicLabel(endpoint),
@@ -79,8 +81,7 @@ export class ConfiguredDeliveryCapabilityAdapter implements DeliveryCapabilityPo
     providerEndpointId: string;
     endpointType: string;
   }): Promise<ResolvedDeliveryCapability> {
-    const endpoints = configuredEndpoints();
-    const endpoint = endpoints.find(
+    const endpoint = this.endpoints.find(
       (candidate) =>
         candidate.providerEndpointId === input.providerEndpointId &&
         candidate.endpointType === input.endpointType,
@@ -118,7 +119,7 @@ function configuredEndpoints(): readonly ConfiguredEndpoint[] {
         "TAVEN_DELIVERY_ENDPOINTS_JSON is required in production",
       );
     }
-    return DEFAULT_ENDPOINTS;
+    return freezeConfiguredEndpoints(DEFAULT_ENDPOINTS);
   }
   let parsed: unknown;
   try {
@@ -129,40 +130,56 @@ function configuredEndpoints(): readonly ConfiguredEndpoint[] {
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("TAVEN_DELIVERY_ENDPOINTS_JSON must be a non-empty array");
   }
-  return parsed.map((value, index) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error(`Delivery endpoint ${index} must be an object`);
-    }
-    const record = value as Record<string, unknown>;
-    const providerEndpointId = nonBlank(record.providerEndpointId, index);
-    const endpointType = nonBlank(record.endpointType, index);
-    const addressSnapshot = configuredJsonObject(
-      record.addressSnapshot,
-      index,
-      "addressSnapshot",
-    );
-    const supportedCategoryIds = record.supportedCategoryIds;
-    if (
-      !Array.isArray(supportedCategoryIds) ||
-      supportedCategoryIds.length === 0 ||
-      supportedCategoryIds.some(
-        (category) => typeof category !== "string" || !category.trim(),
-      )
-    ) {
-      throw new Error(
-        `Delivery endpoint ${index} supportedCategoryIds must be non-empty strings`,
+  return freezeConfiguredEndpoints(
+    parsed.map((value, index) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`Delivery endpoint ${index} must be an object`);
+      }
+      const record = value as Record<string, unknown>;
+      const providerEndpointId = nonBlank(record.providerEndpointId, index);
+      const endpointType = nonBlank(record.endpointType, index);
+      const addressSnapshot = configuredJsonObject(
+        record.addressSnapshot,
+        index,
+        "addressSnapshot",
       );
-    }
-    return {
-      providerEndpointId,
-      endpointType,
-      addressSnapshot,
-      supportedCategoryIds: [...new Set(supportedCategoryIds)].sort(),
-      ...(typeof record.provider === "string" && record.provider.trim()
-        ? { provider: record.provider.trim() }
-        : {}),
-    };
-  });
+      const supportedCategoryIds = record.supportedCategoryIds;
+      if (
+        !Array.isArray(supportedCategoryIds) ||
+        supportedCategoryIds.length === 0 ||
+        supportedCategoryIds.some(
+          (category) => typeof category !== "string" || !category.trim(),
+        )
+      ) {
+        throw new Error(
+          `Delivery endpoint ${index} supportedCategoryIds must be non-empty strings`,
+        );
+      }
+      return Object.freeze({
+        providerEndpointId,
+        endpointType,
+        addressSnapshot,
+        supportedCategoryIds: [...new Set(supportedCategoryIds)].sort(),
+        ...(typeof record.provider === "string" && record.provider.trim()
+          ? { provider: record.provider.trim() }
+          : {}),
+      });
+    }),
+  );
+}
+
+function freezeConfiguredEndpoints(
+  endpoints: readonly ConfiguredEndpoint[],
+): readonly ConfiguredEndpoint[] {
+  return Object.freeze(
+    endpoints.map((endpoint) =>
+      Object.freeze({
+        ...endpoint,
+        addressSnapshot: freezeJson(endpoint.addressSnapshot),
+        supportedCategoryIds: Object.freeze([...endpoint.supportedCategoryIds]),
+      }),
+    ),
+  );
 }
 
 function nonBlank(value: unknown, index: number): string {
@@ -185,4 +202,19 @@ function configuredJsonObject(
     throw new Error(`Delivery endpoint ${index} ${name} is too large`);
   }
   return JSON.parse(serialized) as Prisma.InputJsonObject;
+}
+
+function freezeJson(value: Prisma.InputJsonObject): Prisma.InputJsonObject {
+  const copied = JSON.parse(JSON.stringify(value)) as Prisma.InputJsonObject;
+  return deepFreeze(copied);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(entry);
+    }
+    Object.freeze(value);
+  }
+  return value;
 }

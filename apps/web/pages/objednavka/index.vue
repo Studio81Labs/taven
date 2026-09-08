@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { formatFileSize } from "../../utils/model-file";
 import {
+  loadOrCreateHandoffIssuanceKey,
   sanitizeAssistedQuoteHandoff,
   saveAssistedQuoteHandoff,
   type AssistedQuoteEntrySource,
@@ -182,6 +183,15 @@ async function openAssistedQuote(): Promise<void> {
       session?.sessionId === activeQuote.sessionId &&
       session.sessionToken
     ) {
+      const issuanceKey = loadOrCreateHandoffIssuanceKey(
+        storage,
+        session.sessionId,
+        () => `automatic-handoff-${crypto.randomUUID()}`,
+      );
+      if (!issuanceKey) {
+        await navigateTo({ path: "/poptavka", query: { source } });
+        return;
+      }
       try {
         const issued = await useNuxtApp().$api.POST(
           "/automatic-quote-sessions/{sessionId}/handoff-capabilities",
@@ -191,7 +201,7 @@ async function openAssistedQuote(): Promise<void> {
             },
             params: {
               header: {
-                "Idempotency-Key": `automatic-handoff-${crypto.randomUUID()}`,
+                "Idempotency-Key": issuanceKey,
               },
               path: { sessionId: session.sessionId },
             },

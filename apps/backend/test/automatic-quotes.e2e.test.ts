@@ -1795,11 +1795,11 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       );
       expect(noDeliveryEndpoint.response.status).toBe(200);
       expect(noDeliveryEndpoint.body).toMatchObject({
-        phase: "HANDOFF_REQUIRED",
-        deliveryOptions: [],
-        handoff: {
-          reasons: expect.arrayContaining(["SHIPMENT_INELIGIBLE"]),
-        },
+        phase: "DESTINATION_REQUIRED",
+        handoff: null,
+        deliveryOptions: expect.arrayContaining([
+          expect.objectContaining({ providerEndpointId: "test-pickup" }),
+        ]),
       });
     } finally {
       if (deliveryEndpointsBeforeHandoff === undefined) {
@@ -3992,7 +3992,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       reasons: ["UNSUPPORTED_FORMAT"],
     });
     const handoffKey = key("step-handoff");
-    const [issued, concurrentIssuance] = await Promise.all([
+    const [firstIssuance, secondIssuance] = await Promise.all([
       api(`automatic-quote-sessions/${sessionId}/handoff-capabilities`, {
         method: "POST",
         headers: capabilityHeaders(sessionToken, handoffKey),
@@ -4002,9 +4002,16 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         headers: capabilityHeaders(sessionToken, key("step-handoff-other")),
       }),
     ]);
-    expect(issued.response.status).toBe(201);
-    expect(concurrentIssuance.response.status).toBe(201);
-    expect(concurrentIssuance.body).toEqual(issued.body);
+    const issuanceResults = [firstIssuance, secondIssuance];
+    expect(
+      issuanceResults.map(({ response }) => response.status).sort(),
+    ).toEqual([201, 409]);
+    const issued = issuanceResults.find(
+      ({ response }) => response.status === 201,
+    );
+    if (!issued) throw new Error("expected one canonical handoff issuance");
+    const canonicalHandoffKey =
+      issued === firstIssuance ? handoffKey : key("step-handoff-other");
     const handoffToken = string(issued.body.handoffToken);
     expect(handoffToken).toHaveLength(43);
     expect(string(issued.body.expiresAt)).toBeTruthy();
@@ -4012,7 +4019,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       `automatic-quote-sessions/${sessionId}/handoff-capabilities`,
       {
         method: "POST",
-        headers: capabilityHeaders(sessionToken, handoffKey),
+        headers: capabilityHeaders(sessionToken, canonicalHandoffKey),
       },
     );
     expect(replayedIssuance.response.status).toBe(201);
@@ -4024,8 +4031,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         headers: capabilityHeaders(sessionToken, key("step-handoff-active")),
       },
     );
-    expect(activeCapability.response.status).toBe(201);
-    expect(activeCapability.body).toEqual(issued.body);
+    expect(activeCapability.response.status).toBe(409);
     expect(
       await prisma.automaticQuoteHandoffCapability.count({
         where: { sourceQuoteSessionId: sessionId },
@@ -4036,6 +4042,24 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         where: { namespace: `automatic-quote.handoff:${sessionId}` },
       }),
     ).toBe(1);
+    const storedIssuance =
+      await prisma.automaticQuoteHandoffCapability.findUniqueOrThrow({
+        where: { sourceQuoteSessionId: sessionId },
+        include: { issuanceIdempotencyRecord: true },
+      });
+    expect(storedIssuance).toMatchObject({
+      issuanceKeyHash: sha(canonicalHandoffKey),
+      issuanceReplayUntil: expect.any(Date),
+      issuanceLegacyExhausted: false,
+      issuanceIdempotencyRecord: {
+        generation: 1,
+        requestFingerprint: expect.any(String),
+        status: "COMPLETED",
+      },
+    });
+    expect(storedIssuance.issuanceReplayUntil!.getTime()).toBeGreaterThan(
+      storedIssuance.expiresAt.getTime(),
+    );
 
     const requestKey = key("step-assisted-request");
     const requestBody = {
@@ -4074,6 +4098,16 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       }),
     ).toMatchObject({ consumedAt: expect.any(Date) });
 
+    const replayAfterConsumption = await api(
+      `automatic-quote-sessions/${sessionId}/handoff-capabilities`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, canonicalHandoffKey),
+      },
+    );
+    expect(replayAfterConsumption.response.status).toBe(201);
+    expect(replayAfterConsumption.body).toEqual(issued.body);
+
     const reused = await api("quote-requests", {
       method: "POST",
       headers: jsonHeaders(key("step-assisted-request-reuse")),
@@ -4097,6 +4131,31 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     );
     expect(replacement.response.status).toBe(409);
+
+    const expiryClient = await pool.connect();
+    try {
+      // The session expiry is correctly immutable in normal operation. The
+      // isolated E2E fixture bypasses that guard solely to exercise replay's
+      // source-authorization precedence after an otherwise valid issuance.
+      await expiryClient.query("SET session_replication_role = 'replica'");
+      await expiryClient.query(
+        "UPDATE quote_sessions SET status = 'EXPIRED', expires_at = created_at + interval '1 millisecond' WHERE id = $1",
+        [sessionId],
+      );
+    } finally {
+      await expiryClient
+        .query("SET session_replication_role = 'origin'")
+        .catch(() => undefined);
+      expiryClient.release();
+    }
+    const replayAfterSourceExpiry = await api(
+      `automatic-quote-sessions/${sessionId}/handoff-capabilities`,
+      {
+        method: "POST",
+        headers: capabilityHeaders(sessionToken, canonicalHandoffKey),
+      },
+    );
+    expect(replayAfterSourceExpiry.response.status).toBe(410);
     expect(
       await prisma.outboxMessage.count({
         where: {

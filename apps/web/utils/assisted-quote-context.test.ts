@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assistedQuotePrefill,
+  loadOrCreateHandoffIssuanceKey,
   loadAssistedQuoteHandoff,
   normalizeAssistedQuoteSource,
   sanitizeAssistedQuoteHandoff,
@@ -54,6 +55,38 @@ describe("assisted quote entry", () => {
 });
 
 describe("automatic quote safe-context handoff", () => {
+  it("persists one issuance key across retry and replaces it for a new source", () => {
+    const storage = new MemoryStorage();
+    let sequence = 0;
+    const create = () => `automatic-handoff-${++sequence}-abcdefghijklmnop`;
+
+    expect(loadOrCreateHandoffIssuanceKey(storage, sessionId, create)).toBe(
+      "automatic-handoff-1-abcdefghijklmnop",
+    );
+    expect(loadOrCreateHandoffIssuanceKey(storage, sessionId, create)).toBe(
+      "automatic-handoff-1-abcdefghijklmnop",
+    );
+    expect(
+      loadOrCreateHandoffIssuanceKey(
+        storage,
+        "0198a6c8-7c2b-7f35-8ea8-5f181f490443",
+        create,
+      ),
+    ).toBe("automatic-handoff-2-abcdefghijklmnop");
+  });
+
+  it("falls back when issuance-key storage is unavailable", () => {
+    const storage = new MemoryStorage();
+    storage.failWrites = true;
+    expect(
+      loadOrCreateHandoffIssuanceKey(
+        storage,
+        sessionId,
+        () => "automatic-handoff-abcdefghijklmnop",
+      ),
+    ).toBeUndefined();
+  });
+
   it("allowlists bounded technical fields and drops arbitrary data", () => {
     const context = sanitizeAssistedQuoteHandoff(
       {
