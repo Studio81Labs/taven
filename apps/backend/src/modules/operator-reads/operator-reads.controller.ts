@@ -122,6 +122,14 @@ export class OperatorReadsController {
   @Get("admin/catalog/reference-profiles")
   @ApiOperation({ summary: "List immutable reference-profile revisions" })
   @ApiOkResponse({ type: ReferenceProfilePageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   referenceProfiles(
     @CurrentOperator() operator: OperatorContext,
     @Query() query: Record<string, string | string[] | undefined>,
@@ -135,6 +143,14 @@ export class OperatorReadsController {
   @Get("admin/catalog/machine-profiles")
   @ApiOperation({ summary: "List immutable machine-profile revisions" })
   @ApiOkResponse({ type: MachineProfilePageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   machineProfiles(
     @CurrentOperator() operator: OperatorContext,
     @Query() query: Record<string, string | string[] | undefined>,
@@ -145,6 +161,14 @@ export class OperatorReadsController {
   @Get("admin/catalog/print-config-revisions")
   @ApiOperation({ summary: "List immutable print-config revisions" })
   @ApiOkResponse({ type: PrintConfigRevisionPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   printConfigRevisions(
     @CurrentOperator() operator: OperatorContext,
     @Query() query: Record<string, string | string[] | undefined>,
@@ -158,6 +182,14 @@ export class OperatorReadsController {
   @Get("admin/catalog/price-lists")
   @ApiOperation({ summary: "List global immutable price lists" })
   @ApiOkResponse({ type: PriceListPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   priceLists(
     @CurrentOperator() operator: OperatorContext,
     @Query() query: Record<string, string | string[] | undefined>,
@@ -168,6 +200,14 @@ export class OperatorReadsController {
   @Get("admin/catalog/machine-capabilities")
   @ApiOperation({ summary: "List global machine capabilities" })
   @ApiOkResponse({ type: MachineCapabilityPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   machineCapabilities(
     @CurrentOperator() operator: OperatorContext,
     @Query() query: Record<string, string | string[] | undefined>,
@@ -182,6 +222,14 @@ export class OperatorReadsController {
   @ApiOperation({ summary: "List machines in the granted node" })
   @ApiParam({ name: "nodeId", type: String, format: "uuid" })
   @ApiOkResponse({ type: MachinePageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   machines(
     @CurrentOperator() operator: OperatorContext,
     @Param("nodeId") nodeId: string,
@@ -199,6 +247,14 @@ export class OperatorReadsController {
     required: false,
     type: String,
     format: "uuid",
+  })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
   })
   inventories(
     @CurrentOperator() operator: OperatorContext,
@@ -221,6 +277,14 @@ export class OperatorReadsController {
     required: false,
     type: String,
     format: "uuid",
+  })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
   })
   calibrations(
     @CurrentOperator() operator: OperatorContext,
@@ -248,6 +312,14 @@ export class OperatorReadsController {
     required: false,
     type: String,
     format: "uuid",
+  })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
   })
   capacityReservations(
     @CurrentOperator() operator: OperatorContext,
