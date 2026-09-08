@@ -1263,6 +1263,59 @@
         ],
         "type": "object"
       },
+      "CapacityReservationPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CapacityReservationReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "CapacityReservationReadDto": {
+        "properties": {
+          "endsAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "startsAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "machineId",
+          "status",
+          "startsAt",
+          "endsAt",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
       "CheckoutBillingDto": {
         "properties": {
           "addressLine1": {
@@ -2448,6 +2501,71 @@
         ],
         "type": "object"
       },
+      "InventoryPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InventoryReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "InventoryReadDto": {
+        "properties": {
+          "availableMilligrams": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "color": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "remainingMilligrams": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "reservedMilligrams": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "machineId",
+          "sku",
+          "material",
+          "remainingMilligrams",
+          "reservedMilligrams",
+          "availableMilligrams",
+          "status"
+        ],
+        "type": "object"
+      },
       "IssueOfferDto": {
         "properties": {
           "components": {
@@ -2625,6 +2743,263 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "MachineCalibrationPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MachineCalibrationReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "MachineCalibrationReadDto": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "elephantFootCompensationMicrometers": {
+            "type": "number"
+          },
+          "flowRatioPartsPerMillion": {
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "xyCompensationMicrometers": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "machineId",
+          "digest",
+          "state",
+          "flowRatioPartsPerMillion",
+          "xyCompensationMicrometers",
+          "elephantFootCompensationMicrometers"
+        ],
+        "type": "object"
+      },
+      "MachineCapabilityPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MachineCapabilityReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "MachineCapabilityReadDto": {
+        "properties": {
+          "buildVolumeXMicrometers": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "buildVolumeYMicrometers": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "buildVolumeZMicrometers": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "capabilityKey": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "manufacturer": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "supportedMaterials": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "supportedNozzleMicrometers": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "capabilityKey",
+          "manufacturer",
+          "model",
+          "buildVolumeXMicrometers",
+          "buildVolumeYMicrometers",
+          "buildVolumeZMicrometers",
+          "supportedNozzleMicrometers",
+          "supportedMaterials"
+        ],
+        "type": "object"
+      },
+      "MachinePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MachineReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "MachineProfilePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MachineProfileReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "MachineProfileReadDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineCapabilityId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "nozzleDiameterMicrometers": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "productionArtifactFormat": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "slicerEngine": {
+            "type": "string"
+          },
+          "slicerVersion": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "digest",
+          "material",
+          "quality",
+          "slicerEngine",
+          "slicerVersion",
+          "state",
+          "createdAt",
+          "machineCapabilityId",
+          "referenceProfileId",
+          "nozzleDiameterMicrometers",
+          "productionArtifactFormat"
+        ],
+        "type": "object"
+      },
+      "MachineReadDto": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "installedNozzleMicrometers": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "machineCapabilityId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "nodeId",
+          "machineCapabilityId",
+          "code",
+          "displayName",
+          "status",
+          "installedNozzleMicrometers"
+        ],
         "type": "object"
       },
       "MarginCoverageDto": {
@@ -3598,6 +3973,50 @@
         ],
         "type": "object"
       },
+      "OperatorAcceptedPriceDto": {
+        "properties": {
+          "bindingId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "contractTotalMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "netAmountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "priceListRevision": {
+            "type": "string"
+          },
+          "snapshotId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "termsRevision": {
+            "type": "string"
+          },
+          "vatAmountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bindingId",
+          "snapshotId",
+          "contractTotalMinor",
+          "netAmountMinor",
+          "vatAmountMinor",
+          "currency",
+          "priceListRevision",
+          "termsRevision"
+        ],
+        "type": "object"
+      },
       "OperatorAuthMethodsDto": {
         "properties": {
           "methods": {
@@ -3613,6 +4032,251 @@
         },
         "required": [
           "methods"
+        ],
+        "type": "object"
+      },
+      "OperatorFinancialProjectionDto": {
+        "properties": {
+          "activeContractNetMinor": {
+            "nullable": true,
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "activeContractRevisionId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "activeContractTotalMinor": {
+            "nullable": true,
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "currency": {
+            "nullable": true,
+            "type": "string"
+          },
+          "settlements": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorSettlementDto"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "settlements"
+        ],
+        "type": "object"
+      },
+      "OperatorJobListItemDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "replacesJobId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "orderPhaseId",
+          "machineId",
+          "status",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "OperatorJobPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorJobListItemDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "OperatorOrderDetailDto": {
+        "properties": {
+          "acceptedPrice": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperatorAcceptedPriceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "acceptedTermsRevision": {
+            "nullable": true,
+            "type": "string"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "financial": {
+            "$ref": "#/components/schemas/OperatorFinancialProjectionDto"
+          },
+          "fulfilment": {
+            "$ref": "#/components/schemas/FulfilmentProjectionDto"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorOrderItemDto"
+            },
+            "type": "array"
+          },
+          "publicReference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "publicReference",
+          "status",
+          "items",
+          "financial",
+          "fulfilment"
+        ],
+        "type": "object"
+      },
+      "OperatorOrderItemDto": {
+        "properties": {
+          "color": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "modelGeometryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "preflightFindings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "sourceModelFileId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ordinal",
+          "sourceModelFileId",
+          "modelGeometryId",
+          "printConfigRevisionId",
+          "material",
+          "quantity",
+          "preflightFindings"
+        ],
+        "type": "object"
+      },
+      "OperatorOrderListItemDto": {
+        "properties": {
+          "confirmedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "publicReference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "publicReference",
+          "status",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "OperatorOrderPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorOrderListItemDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -3700,6 +4364,24 @@
         ],
         "type": "object"
       },
+      "OperatorQuoteRequestPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorQuoteRequestDetailDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "OperatorSessionDto": {
         "properties": {
           "csrfToken": {
@@ -3749,6 +4431,56 @@
           "role",
           "nodeIds",
           "authenticationMethod"
+        ],
+        "type": "object"
+      },
+      "OperatorSettlementDto": {
+        "properties": {
+          "amountDueMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "capturedTotalMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "contractTotalMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "refundableBalanceMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "refundAmountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "settledAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "currency",
+          "contractTotalMinor",
+          "capturedTotalMinor",
+          "refundAmountMinor",
+          "amountDueMinor",
+          "refundableBalanceMinor",
+          "settledAt"
         ],
         "type": "object"
       },
@@ -4006,6 +4738,112 @@
           "50000_to_99999",
           "100000_to_199999",
           "200000_or_more"
+        ],
+        "type": "object"
+      },
+      "PriceListPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PriceListReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "PriceListReadDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "termsRevision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "termsRevision",
+          "currency",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "PrintConfigRevisionPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PrintConfigRevisionReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "PrintConfigRevisionReadDto": {
+        "properties": {
+          "brimEnabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "infillPercent": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "layerHeightMicrometers": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "supportsEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "digest",
+          "quality",
+          "infillPercent",
+          "layerHeightMicrometers",
+          "supportsEnabled",
+          "brimEnabled",
+          "createdAt"
         ],
         "type": "object"
       },
@@ -4450,6 +5288,64 @@
           "durationMilliseconds",
           "reason",
           "allocations"
+        ],
+        "type": "object"
+      },
+      "ReferenceProfilePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceProfileReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ReferenceProfileReadDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "slicerEngine": {
+            "type": "string"
+          },
+          "slicerVersion": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "digest",
+          "material",
+          "quality",
+          "slicerEngine",
+          "slicerVersion",
+          "state",
+          "createdAt"
         ],
         "type": "object"
       },
@@ -5251,6 +6147,201 @@
         ]
       }
     },
+    "/admin/catalog/machine-capabilities": {
+      "get": {
+        "operationId": "OperatorReadsController_machineCapabilities",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineCapabilityPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List global machine capabilities",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/catalog/machine-profiles": {
+      "get": {
+        "operationId": "OperatorReadsController_machineProfiles",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineProfilePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List immutable machine-profile revisions",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/catalog/price-lists": {
+      "get": {
+        "operationId": "OperatorReadsController_priceLists",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceListPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List global immutable price lists",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/catalog/print-config-revisions": {
+      "get": {
+        "operationId": "OperatorReadsController_printConfigRevisions",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintConfigRevisionPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List immutable print-config revisions",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/catalog/reference-profiles": {
+      "get": {
+        "operationId": "OperatorReadsController_referenceProfiles",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferenceProfilePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List immutable reference-profile revisions",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/handling-sessions/{sessionId}/stop": {
       "post": {
         "operationId": "MeasurementController_stop",
@@ -5505,6 +6596,81 @@
         ]
       }
     },
+    "/admin/jobs": {
+      "get": {
+        "operationId": "OperatorReadsController_jobs",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "machineId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorJobPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List node-scoped production jobs",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/metrics": {
       "get": {
         "description": "Uses one read-only repeatable-read database snapshot. Commercial sections are platform aggregates; operational sections are limited to one granted node.",
@@ -5707,6 +6873,365 @@
         "summary": "Read node-scoped order metric details",
         "tags": [
           "operator metrics"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/calibrations": {
+      "get": {
+        "operationId": "OperatorReadsController_calibrations",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "machineId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineCalibrationPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List calibration revisions in the granted node",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/capacity-reservations": {
+      "get": {
+        "operationId": "OperatorReadsController_capacityReservations",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "machineId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityReservationPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List bounded capacity intervals in the granted node",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/inventories": {
+      "get": {
+        "operationId": "OperatorReadsController_inventories",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "machineId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List inventory in the granted node",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/machines": {
+      "get": {
+        "operationId": "OperatorReadsController_machines",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachinePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List machines in the granted node",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/orders": {
+      "get": {
+        "operationId": "OperatorReadsController_orders",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOrderPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List node-scoped orders",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}": {
+      "get": {
+        "operationId": "OperatorReadsController_order",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOrderDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read one node-scoped order and its authoritative fulfilment projection",
+        "tags": [
+          "operator reads"
         ]
       }
     },
@@ -8142,6 +9667,94 @@
           }
         ],
         "summary": "Move a new request into operator review",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/page": {
+      "get": {
+        "operationId": "OperatorQuoteRequestsController_page",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sla",
+            "required": false,
+            "schema": {
+              "enum": [
+                "PENDING",
+                "MET",
+                "BREACHED"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Defaults to actionable NEW, IN_REVIEW, and QUOTED requests; select a terminal status explicitly to read history",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "NEW",
+                "IN_REVIEW",
+                "QUOTED",
+                "ACCEPTED",
+                "REJECTED",
+                "EXPIRED"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorQuoteRequestPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Page the operator quote-request queue",
         "tags": [
           "operator quote requests"
         ]

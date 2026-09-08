@@ -59,6 +59,7 @@ import type {
   OfferPreviewDto,
   OfferPreviewPriceComponentDto,
   OperatorQuoteRequestDetailDto,
+  OperatorQuoteRequestPageDto,
   OfferShipmentPlanDto,
   QuoteContactDto,
   QuoteRequestCreatedDto,
@@ -76,6 +77,8 @@ const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const OFFER_PACKING_UNIT_MAX = 1_000;
 const QUOTE_WRITE_BATCH_SIZE = 500;
 const JSON_MAXIMUM_DEPTH = 64;
+const OPERATOR_QUEUE_DEFAULT_LIMIT = 25;
+const OPERATOR_QUEUE_MAX_LIMIT = 100;
 const REQUIRED_ITEM_COMPONENTS = new Set<PriceComponentKind>([
   PriceComponentKind.ITEM_PRODUCTION,
   PriceComponentKind.ITEM_QUANTITY,
@@ -113,6 +116,20 @@ type IdempotencyResponseCodec<T> = Readonly<{
     requestFingerprint: string,
     generation: number,
   ) => T;
+}>;
+type OperatorQueueSla = "PENDING" | "MET" | "BREACHED";
+type OperatorQueueCursor = Readonly<{
+  slaDueAt: string;
+  createdAt: string;
+  id: string;
+  filterHash: string;
+}>;
+
+export type OperatorQuoteRequestPageInput = Readonly<{
+  status?: string;
+  sla?: string;
+  cursor?: string;
+  limit?: number;
 }>;
 type IdempotencyOptions<T> = Readonly<{
   responseCodec?: IdempotencyResponseCodec<T>;
@@ -355,6 +372,82 @@ export class QuotesService {
         this.operatorRequestDetail(request, observedAt),
       ),
     );
+  }
+
+  async listRequestsPage(
+    operator: OperatorContext,
+    input: OperatorQuoteRequestPageInput,
+  ): Promise<OperatorQuoteRequestPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    const status = input.status ? parseStatus(input.status) : undefined;
+    const sla = input.sla ? parseOperatorQueueSla(input.sla) : undefined;
+    const limit = operatorQueuePageLimit(input.limit);
+    const filterHash = fingerprintOf({ status, sla });
+    const cursor = input.cursor
+      ? parseOperatorQueueCursor(input.cursor, filterHash)
+      : undefined;
+    const observedAt = await databaseNow(this.prisma);
+    const statusFilter = status
+      ? Prisma.sql`AND request.status = ${status}::quote_request_status`
+      : Prisma.sql`
+          AND request.status IN (
+            'NEW'::quote_request_status,
+            'IN_REVIEW'::quote_request_status,
+            'QUOTED'::quote_request_status
+          )
+        `;
+    const slaFilter = operatorQueueSlaFilter(sla, observedAt);
+    const keyset = cursor
+      ? Prisma.sql`
+          AND (request.sla_due_at, request.created_at, request.id) > (
+            ${new Date(cursor.slaDueAt)}::timestamptz,
+            ${new Date(cursor.createdAt)}::timestamptz,
+            ${cursor.id}::uuid
+          )
+        `
+      : Prisma.empty;
+    const keys = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT request.id
+      FROM quote_requests AS request
+      WHERE TRUE
+        ${statusFilter}
+        ${slaFilter}
+        ${keyset}
+      ORDER BY request.sla_due_at ASC, request.created_at ASC, request.id ASC
+      LIMIT ${limit + 1}
+    `;
+    const requests = await this.prisma.quoteRequest.findMany({
+      where: { id: { in: keys.map((key) => key.id) } },
+      include: {
+        quoteSession: true,
+        customer: true,
+        automaticQuoteHandoff: true,
+      },
+    });
+    const byId = new Map(requests.map((request) => [request.id, request]));
+    const page = keys
+      .slice(0, limit)
+      .map((key) => byId.get(key.id))
+      .filter(
+        (request): request is (typeof requests)[number] =>
+          request !== undefined,
+      );
+    const last = page.at(-1);
+    return {
+      items: await Promise.all(
+        page.map((request) => this.operatorRequestDetail(request, observedAt)),
+      ),
+      ...(keys.length > limit && last
+        ? {
+            nextCursor: encodeOperatorQueueCursor({
+              slaDueAt: last.slaDueAt.toISOString(),
+              createdAt: last.createdAt.toISOString(),
+              id: last.id,
+              filterHash,
+            }),
+          }
+        : {}),
+    };
   }
 
   async getOperatorRequest(
@@ -2927,6 +3020,143 @@ function parseStatus(value: string): QuoteRequestStatus {
     throw new BadRequestException("status is invalid");
   }
   return normalized as QuoteRequestStatus;
+}
+
+function parseOperatorQueueSla(value: string): OperatorQueueSla {
+  const normalized = value.trim().toUpperCase();
+  if (
+    normalized !== "PENDING" &&
+    normalized !== "MET" &&
+    normalized !== "BREACHED"
+  ) {
+    throw new BadRequestException("sla is invalid");
+  }
+  return normalized;
+}
+
+function operatorQueuePageLimit(value: number | undefined): number {
+  if (value === undefined) return OPERATOR_QUEUE_DEFAULT_LIMIT;
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > OPERATOR_QUEUE_MAX_LIMIT
+  ) {
+    throw new BadRequestException("limit is invalid");
+  }
+  return value;
+}
+
+function operatorQueueSlaFilter(
+  sla: OperatorQueueSla | undefined,
+  observedAt: Date,
+): Prisma.Sql {
+  switch (sla) {
+    case "PENDING":
+      return Prisma.sql`AND request.sla_responded_at IS NULL`;
+    case "MET":
+      return Prisma.sql`
+        AND request.sla_responded_at IS NOT NULL
+        AND request.sla_responded_at <= request.sla_due_at
+      `;
+    case "BREACHED":
+      return Prisma.sql`
+        AND (
+          request.sla_responded_at > request.sla_due_at
+          OR (
+            request.sla_responded_at IS NULL
+            AND request.sla_due_at < ${observedAt}::timestamptz
+          )
+        )
+      `;
+    default:
+      return Prisma.empty;
+  }
+}
+
+function parseOperatorQueueCursor(
+  value: string,
+  filterHash: string,
+): OperatorQueueCursor {
+  try {
+    const parsed: unknown = JSON.parse(
+      Buffer.from(value, "base64url").toString("utf8"),
+    );
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error();
+    }
+    const cursor = parsed as Record<string, unknown>;
+    if (
+      Object.keys(cursor).length !== 4 ||
+      typeof cursor.slaDueAt !== "string" ||
+      typeof cursor.createdAt !== "string" ||
+      typeof cursor.id !== "string" ||
+      typeof cursor.filterHash !== "string" ||
+      !UUID_PATTERN.test(cursor.id) ||
+      cursor.filterHash !== filterHash
+    ) {
+      throw new Error();
+    }
+    strictOperatorQueueInstant("cursor slaDueAt", cursor.slaDueAt);
+    strictOperatorQueueInstant("cursor createdAt", cursor.createdAt);
+    return cursor as OperatorQueueCursor;
+  } catch {
+    throw new BadRequestException("cursor is invalid");
+  }
+}
+
+function encodeOperatorQueueCursor(value: OperatorQueueCursor): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function strictOperatorQueueInstant(name: string, value: string): Date {
+  const parts =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(
+      value,
+    );
+  if (!parts) throw new BadRequestException(`${name} is an ISO instant`);
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    ,
+    offsetHourText,
+    offsetMinuteText,
+  ] = parts;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const offsetHour = offsetHourText === undefined ? 0 : Number(offsetHourText);
+  const offsetMinute =
+    offsetMinuteText === undefined ? 0 : Number(offsetMinuteText);
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(hour, minute, second, 0);
+  if (
+    month < 1 ||
+    month > 12 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59 ||
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() !== month - 1 ||
+    calendar.getUTCDate() !== day
+  ) {
+    throw new BadRequestException(`${name} is an ISO instant`);
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    throw new BadRequestException(`${name} is an ISO instant`);
+  }
+  return date;
 }
 
 async function databaseNow(

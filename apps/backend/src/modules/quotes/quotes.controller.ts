@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -44,6 +45,7 @@ import {
   OfferIssuedDto,
   OfferPreviewDto,
   OperatorQuoteRequestDetailDto,
+  OperatorQuoteRequestPageDto,
   QuoteRequestCreatedDto,
   QuoteRequestDetailDto,
   QuoteRequestStatusDto,
@@ -62,6 +64,12 @@ const IDEMPOTENCY_HEADER = {
     pattern: TRIMMED_IDEMPOTENCY_KEY_PATTERN,
   },
 };
+const OPERATOR_QUEUE_PAGE_FIELDS = new Set([
+  "status",
+  "sla",
+  "cursor",
+  "limit",
+]);
 
 @ApiTags("quote requests")
 @Controller("quote-requests")
@@ -204,6 +212,40 @@ export class OperatorQuoteRequestsController {
     return this.quotes.listRequests(operator, status);
   }
 
+  @Get("page")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_READ)
+  @ApiOperation({ summary: "Page the operator quote-request queue" })
+  @ApiQuery({
+    name: "status",
+    required: false,
+    enum: ["NEW", "IN_REVIEW", "QUOTED", "ACCEPTED", "REJECTED", "EXPIRED"],
+    description:
+      "Defaults to actionable NEW, IN_REVIEW, and QUOTED requests; select a terminal status explicitly to read history",
+  })
+  @ApiQuery({
+    name: "sla",
+    required: false,
+    enum: ["PENDING", "MET", "BREACHED"],
+  })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  @ApiOkResponse({ type: OperatorQuoteRequestPageDto })
+  page(
+    @CurrentOperator() operator: OperatorContext,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorQuoteRequestPageDto> {
+    return this.quotes.listRequestsPage(
+      operator,
+      operatorQueuePageQuery(query),
+    );
+  }
+
   @Get(":requestId")
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_READ)
   @ApiOperation({ summary: "Read one operator quote-request detail" })
@@ -285,4 +327,27 @@ export class OperatorQuoteRequestsController {
   ): Promise<QuoteRequestStatusDto> {
     return this.quotes.expireOffer(operator, requestId, idempotencyKey);
   }
+}
+
+function operatorQueuePageQuery(
+  query: Readonly<Record<string, string | string[] | undefined>>,
+): Readonly<{
+  status?: string;
+  sla?: string;
+  cursor?: string;
+  limit?: number;
+}> {
+  const values: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(query)) {
+    if (!OPERATOR_QUEUE_PAGE_FIELDS.has(key) || typeof value !== "string") {
+      throw new BadRequestException(`${key} is invalid`);
+    }
+    values[key] = value;
+  }
+  if (values.limit === undefined) return values;
+  const limit = Number(values.limit);
+  if (!Number.isSafeInteger(limit)) {
+    throw new BadRequestException("limit is invalid");
+  }
+  return { ...values, limit };
 }
