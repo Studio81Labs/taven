@@ -84,6 +84,23 @@ describe("v0-1 metrics reports", () => {
     expect(response.status).toBe(400);
   });
 
+  it("reads only a bounded node-proven order page", async () => {
+    const response = await fetch(
+      new URL(
+        "/admin/metrics/orders?from=2026-01-01T00:00:00.000Z&to=2026-01-02T00:00:00.000Z&limit=1",
+        baseUrl,
+      ),
+      { headers: { cookie: adminCookie } },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      metricDefinition: "v0-1",
+      scope: "OPERATIONAL_NODE",
+      items: expect.any(Array),
+    });
+  });
+
   async function sessionCookie(
     role: "ADMIN" | "OPERATOR",
     nodeId: string,

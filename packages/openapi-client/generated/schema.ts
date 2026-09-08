@@ -1286,10 +1286,36 @@ export interface components {
             termsRevision: string;
             version: number;
         };
+        AcquisitionMetricsDto: {
+            acquisitionSpend: components["schemas"]["MetricMoneyDto"];
+            cac: components["schemas"]["MetricMoneyRatioDto"];
+            definition: string;
+            firstOrderCustomers: number;
+            partialPeriodSpendExcluded: number;
+            repeatOrders: number;
+            repeatRate: components["schemas"]["MetricRatioDto"];
+            unknownCustomerOrAttribution: number;
+        };
+        ActualCostBreakdownDto: {
+            carrier: components["schemas"]["MetricMoneyDto"];
+            material: components["schemas"]["MetricMoneyDto"];
+            packaging: components["schemas"]["MetricMoneyDto"];
+            payment_fee: components["schemas"]["MetricMoneyDto"];
+            variable_machine: components["schemas"]["MetricMoneyDto"];
+        };
         ApproveLegacyClaimWindowDto: {
             approvalReference: string;
             claimPolicyRevision: string;
             claimWindowDays: number;
+        };
+        AssistedSlaMetricsDto: {
+            definition: string;
+            pendingOverdue: number;
+            requests: number;
+            responded: number;
+            responseRate: components["schemas"]["MetricRatioDto"];
+            /** @enum {string} */
+            scope: "PLATFORM";
         };
         AttachAutomaticQuoteModelFileDto: {
             /** Format: uuid */
@@ -1525,6 +1551,29 @@ export interface components {
             /** Format: uuid */
             sessionId: string;
         };
+        AutomationMetricsDto: {
+            blockedOrHandoff: number;
+            confirmedModelFiles: number;
+            definition: string;
+            evidenceUnavailable: number;
+            /** @enum {string} */
+            scope: "PLATFORM";
+            successfulAutomaticUses: number;
+            unresolvedOrPending: number;
+            value: components["schemas"]["MetricRatioDto"];
+        };
+        BindingBreakdownDto: {
+            acceptedBindings: number;
+            acceptedGross: components["schemas"]["MetricMoneyDto"];
+            conversion: components["schemas"]["MetricRatioDto"];
+            offersIssued: number;
+            preflight: components["schemas"]["PreflightCoverageDto"];
+        };
+        BusinessEventCoverageDto: {
+            /** @enum {string} */
+            historicalBackfill: "not_performed";
+            retainedClientObservations: boolean;
+        };
         CancellationPrintingConsumptionDto: {
             actualMaterialMilligrams: string;
             /** Format: uuid */
@@ -1575,6 +1624,19 @@ export interface components {
             /** Format: uuid */
             sourceJobId: string;
         };
+        CommercialMetricsDto: {
+            acquisitionAndRepeat: components["schemas"]["AcquisitionMetricsDto"];
+            assistedSla: components["schemas"]["AssistedSlaMetricsDto"];
+            automationShare: components["schemas"]["AutomationMetricsDto"];
+            commercialTurnover: components["schemas"]["TurnoverMetricsDto"];
+            funnel: components["schemas"]["FunnelMetricsDto"];
+            handlingAndContributionMargin: components["schemas"]["HandlingAndMarginMetricsDto"];
+            orders: components["schemas"]["OrderMetricsDto"];
+            quoteToPaid: components["schemas"]["QuoteToPaidMetricsDto"];
+            refundsAndAdjustments: components["schemas"]["RefundMetricsDto"];
+            /** @enum {string} */
+            scope: "PLATFORM";
+        };
         CompleteHandlingSessionDto: {
             allocations: components["schemas"]["HandlingAllocationInputDto"][];
         };
@@ -1620,6 +1682,17 @@ export interface components {
             uploadedAt: string;
             /** Format: uuid */
             uploadId: string;
+        };
+        ContractAmountsDto: {
+            gross: components["schemas"]["MetricMoneyDto"];
+            net: components["schemas"]["MetricMoneyDto"];
+            vat: components["schemas"]["MetricMoneyDto"];
+        };
+        ContributionMarginMetricsDto: {
+            explicitCoverage: components["schemas"]["MarginCoverageDto"];
+            knownOrders: number;
+            provisionalOrders: number;
+            value: components["schemas"]["MetricMoneyDto"] | null;
         };
         CreateAutomaticQuoteSessionDto: {
             attribution?: components["schemas"]["AttributionDto"];
@@ -1709,6 +1782,19 @@ export interface components {
             printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
             reason: string;
         };
+        ExpressShareDto: {
+            denominator: number;
+            numerator: number;
+            value: number | null;
+        };
+        FirstPassYieldMetricsDto: {
+            cancelledBeforeProduction: number;
+            definition: string;
+            firstQcPasses: number;
+            originalTerminalFailures: number;
+            pending: number;
+            value: components["schemas"]["MetricRatioDto"];
+        };
         FulfilmentCommandResultDto: {
             /** Format: uuid */
             orderId: string;
@@ -1726,6 +1812,17 @@ export interface components {
             replacementRequests: Record<string, never>[];
             shipments: Record<string, never>[];
             slots: Record<string, never>[];
+        };
+        FunnelMetricsDto: {
+            automaticBindingPriceQuoteViews: number;
+            checkoutStarts: number;
+            /** @enum {string} */
+            clicks: "not_collected";
+            confirmedOrders: number;
+            definition: string;
+            /** @enum {string} */
+            impressions: "not_collected";
+            uploads: number;
         };
         GithubLoginStartDto: {
             /** Format: uri */
@@ -1746,6 +1843,12 @@ export interface components {
             servedUnitCount: string;
             /** Format: uuid */
             shipmentId?: string;
+        };
+        HandlingAndMarginMetricsDto: {
+            actualCosts: components["schemas"]["ActualCostBreakdownDto"];
+            definition: string;
+            finalContributionMargin: components["schemas"]["ContributionMarginMetricsDto"];
+            handlingCost: components["schemas"]["MetricMoneyDto"];
         };
         HandoffReshipmentDto: {
             carrier: string;
@@ -1851,23 +1954,76 @@ export interface components {
             /** Format: uuid */
             photoAssetId?: string;
         };
+        MarginCoverageDto: {
+            completeOrders: number;
+            incompleteOrders: number;
+        };
         MeasurementCommandResultDto: {
             /** Format: uuid */
             id: string;
             status: string;
         };
+        MetricMoneyDto: {
+            /**
+             * @description Signed decimal minor units.
+             * @example 12500
+             */
+            amountMinor: string;
+            /** @enum {string} */
+            currency: "CZK";
+        };
+        MetricMoneyRatioDto: {
+            denominator: number;
+            numerator: components["schemas"]["MetricMoneyDto"];
+            value: components["schemas"]["MetricMoneyDto"] | null;
+        };
+        MetricRatioDto: {
+            denominator: number;
+            numerator: number;
+            value: number | null;
+        };
+        MetricsCompletenessDto: {
+            flags: string[];
+            /** @enum {string} */
+            status: "complete" | "warning" | "unknown";
+        };
+        MetricsIntervalDto: {
+            /** @enum {string} */
+            channel?: "direct" | "organic" | "paid" | "referral" | "unknown";
+            /** @enum {string} */
+            currency: "CZK";
+            /** Format: date-time */
+            from: string;
+            /** Format: uuid */
+            nodeId: string;
+            /** Format: date-time */
+            to: string;
+        };
+        MetricsOrderDetailDto: {
+            acceptedGross: components["schemas"]["MetricMoneyDto"];
+            activeContract: components["schemas"]["ContractAmountsDto"];
+            actualCosts: components["schemas"]["ActualCostBreakdownDto"];
+            capturedCash: components["schemas"]["MetricMoneyDto"];
+            /** Format: date-time */
+            confirmedAt: string;
+            explicitMarginCoverage: boolean;
+            finalContributionMargin: components["schemas"]["MetricMoneyDto"] | null;
+            handlingCost: components["schemas"]["MetricMoneyDto"];
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            origin: "automatic" | "individual" | "unknown";
+            outstandingGross: components["schemas"]["MetricMoneyDto"];
+            publicReference: string;
+            status: string;
+            succeededRefunds: components["schemas"]["MetricMoneyDto"];
+        };
         MetricsOrderPageDto: {
-            completeness: {
-                [key: string]: unknown;
-            };
+            completeness: components["schemas"]["MetricsCompletenessDto"];
             /** Format: date-time */
             generatedAt: string;
-            interval: {
-                [key: string]: unknown;
-            };
-            items: {
-                [key: string]: unknown;
-            }[];
+            interval: components["schemas"]["MetricsIntervalDto"];
+            items: components["schemas"]["MetricsOrderDetailDto"][];
             /** @enum {string} */
             metricDefinition: "v0-1";
             nextCursor?: string;
@@ -1875,30 +2031,24 @@ export interface components {
             nodeId: string;
             /** @enum {string} */
             scope: "OPERATIONAL_NODE";
-            sourceCoverage: {
-                [key: string]: unknown;
-            };
+            sourceCoverage: components["schemas"]["MetricsSourceCoverageDto"];
         };
         MetricsReportDto: {
-            commercial: {
-                [key: string]: unknown;
-            };
-            completeness: {
-                [key: string]: unknown;
-            };
+            commercial: components["schemas"]["CommercialMetricsDto"];
+            completeness: components["schemas"]["MetricsCompletenessDto"];
             /** Format: date-time */
             generatedAt: string;
-            interval: {
-                [key: string]: unknown;
-            };
+            interval: components["schemas"]["MetricsIntervalDto"];
             /** @enum {string} */
             metricDefinition: "v0-1";
-            operational: {
-                [key: string]: unknown;
-            };
-            sourceCoverage: {
-                [key: string]: unknown;
-            };
+            operational: components["schemas"]["OperationalMetricsDto"];
+            sourceCoverage: components["schemas"]["MetricsSourceCoverageDto"];
+        };
+        MetricsSourceCoverageDto: {
+            businessEvents: components["schemas"]["BusinessEventCoverageDto"];
+            directRelationalFacts: boolean;
+            excludedCurrencyOrders: number;
+            selectedCurrencyOrders: number;
         };
         ModelOfferItemDto: {
             color?: string;
@@ -1918,6 +2068,16 @@ export interface components {
             sourceModelFileId: string;
             /** Format: uuid */
             tailReferenceSliceResultId?: string;
+        };
+        MonthlyTurnoverMetricsDto: {
+            capturedCash: components["schemas"]["MetricMoneyDto"];
+            confirmedOrderValue: components["schemas"]["MetricMoneyDto"];
+            definition?: string;
+            month: string;
+            netReceipts: components["schemas"]["MetricMoneyDto"];
+            /** @enum {string} */
+            scope?: "PLATFORM";
+            succeededRefunds: components["schemas"]["MetricMoneyDto"];
         };
         OfferDeliveryDestinationDto: {
             addressSnapshot: {
@@ -2040,6 +2200,15 @@ export interface components {
             plannedWeightMilligrams: number;
             shippingAmountMinor: number;
         };
+        OperationalMetricsDto: {
+            firstPassYield: components["schemas"]["FirstPassYieldMetricsDto"];
+            monthlyTurnover: components["schemas"]["MonthlyTurnoverMetricsDto"][];
+            /** Format: uuid */
+            nodeId: string;
+            queue: components["schemas"]["QueueMetricsDto"];
+            /** @enum {string} */
+            scope: "OPERATIONAL_NODE";
+        };
         OperatorAuthMethodsDto: {
             methods: ("EMAIL_PASSWORD" | "GITHUB")[];
         };
@@ -2080,6 +2249,23 @@ export interface components {
             /** @enum {string} */
             role: "ADMIN" | "OPERATOR" | "VIEWER";
         };
+        OrderMetricsDto: {
+            acceptedGross: components["schemas"]["MetricMoneyDto"];
+            acceptedGrossBands: components["schemas"]["PriceBandsDto"];
+            activeContract: components["schemas"]["ContractAmountsDto"];
+            averageOrderValue: components["schemas"]["MetricMoneyRatioDto"];
+            capturedCash: components["schemas"]["MetricMoneyDto"];
+            confirmedOrders: number;
+            definition: string;
+            express: components["schemas"]["ExpressShareDto"];
+            origins: components["schemas"]["OriginCountsDto"];
+            succeededRefunds: components["schemas"]["MetricMoneyDto"];
+        };
+        OriginCountsDto: {
+            automatic: number;
+            individual: number;
+            unknown: number;
+        };
         PackJobDto: {
             /** Format: uuid */
             shipmentId: string;
@@ -2093,6 +2279,11 @@ export interface components {
         PaymentWebhookAcceptedDto: {
             outcome: string;
         };
+        PreflightCoverageDto: {
+            clean: number;
+            unknown: number;
+            warning: number;
+        };
         PriceAdjustmentAllocationDto: {
             /** @description Exact per-slot credit allocation; required for non-express adjustments and derived from the immutable express component when omitted for express adjustments */
             slotCredits?: components["schemas"]["PriceAdjustmentSlotCreditDto"][];
@@ -2101,6 +2292,20 @@ export interface components {
             amountMinor: string;
             /** Format: uuid */
             fulfilmentSlotId: string;
+        };
+        PriceBandsDto: {
+            "100000_to_199999": number;
+            "200000_or_more": number;
+            "25000_to_49999": number;
+            "50000_to_99999": number;
+            under_25000: number;
+        };
+        QueueMetricsDto: {
+            definition: string;
+            machineCount: number;
+            reservations: number;
+            /** @description Signed decimal seconds. */
+            scheduledRemainingSeconds: string;
         };
         QuoteAttachmentDto: {
             /** Format: date-time */
@@ -2158,6 +2363,15 @@ export interface components {
             /** @enum {string} */
             status: "IN_REVIEW" | "REJECTED" | "EXPIRED";
         };
+        QuoteToPaidMetricsDto: {
+            acceptedBindings: number;
+            acceptedGrossBands: components["schemas"]["PriceBandsDto"];
+            automatic: components["schemas"]["BindingBreakdownDto"];
+            conversion: components["schemas"]["MetricRatioDto"];
+            definition: string;
+            individual: components["schemas"]["BindingBreakdownDto"];
+            offersIssued: number;
+        };
         RecordAcquisitionSpendDto: {
             amountMinor: string;
             /** @enum {string} */
@@ -2208,6 +2422,13 @@ export interface components {
         };
         RefundDto: {
             reason: string;
+        };
+        RefundMetricsDto: {
+            activeContract: components["schemas"]["ContractAmountsDto"];
+            capturedCash: components["schemas"]["MetricMoneyDto"];
+            definition: string;
+            pendingOrSuspendedRefunds: number;
+            succeededRefunds: components["schemas"]["MetricMoneyDto"];
         };
         RejectClaimDto: {
             reason: string;
@@ -2266,6 +2487,15 @@ export interface components {
         StartHandlingSessionDto: {
             /** @enum {string} */
             component: "HANDLING_ORDER_FIX" | "HANDLING_PLATE" | "HANDLING_PIECE" | "HANDLING_PACK" | "SHIPPING_TRIP" | "POSTPROCESSING_ITEM";
+        };
+        TurnoverMetricsDto: {
+            capturedCash: components["schemas"]["MetricMoneyDto"];
+            confirmedOrderValue: components["schemas"]["MetricMoneyDto"];
+            definition?: string;
+            netReceipts: components["schemas"]["MetricMoneyDto"];
+            /** @enum {string} */
+            scope?: "PLATFORM";
+            succeededRefunds: components["schemas"]["MetricMoneyDto"];
         };
         UploadIntentResponseDto: {
             /** @description One-time capability used to confirm and later read this upload. It is returned only when the intent is created. */

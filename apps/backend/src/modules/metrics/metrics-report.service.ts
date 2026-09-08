@@ -195,7 +195,7 @@ export class MetricsReportService {
           completeness: metricFacts.completeness,
           commercial: metricFacts.commercial,
           operational: metricFacts.operational,
-        };
+        } as unknown as MetricsReportDto;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
@@ -223,24 +223,19 @@ export class MetricsReportService {
       async (transaction) => {
         await transaction.$executeRaw`SET TRANSACTION READ ONLY`;
         const generatedAt = await databaseNow(transaction);
-        const orders = (await transaction.order.findMany({
-          where: {
-            confirmedAt: { gte: query.from, lt: query.to },
-          },
-          orderBy: [{ confirmedAt: "desc" }, { id: "desc" }],
+        const keys = await pageOrderKeys(transaction, query, keyset, limit);
+        const rows = (await transaction.order.findMany({
+          where: { id: { in: keys.map((key) => key.id) } },
           include: reportOrderInclude,
         })) as unknown as readonly ReportOrder[];
-        const scoped = orders.filter(
-          (order) =>
-            selectedCurrency(order, query.currency) &&
-            matchesChannel(orderChannel(order), query.channel) &&
-            hasProvenOperationalScope(order, query.nodeId) &&
-            afterCursor(order, keyset),
-        );
+        const byId = new Map(rows.map((order) => [order.id, order]));
+        const scoped = keys
+          .map((key) => byId.get(key.id))
+          .filter((order): order is ReportOrder => order !== undefined);
         const page = scoped.slice(0, limit);
         const last = page.at(-1);
-        const more = scoped.length > limit;
-        const coverage = sourceCoverage(orders, query.currency);
+        const more = keys.length > limit;
+        const coverage = await pageSourceCoverage(transaction, query);
         return {
           metricDefinition: "v0-1",
           generatedAt: generatedAt.toISOString(),
@@ -259,7 +254,7 @@ export class MetricsReportService {
                 }),
               }
             : {}),
-        };
+        } as unknown as MetricsOrderPageDto;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
@@ -367,6 +362,7 @@ export class MetricsReportService {
       where: { createdAt: { gte: query.from, lt: query.to } },
       select: {
         id: true,
+        attribution: true,
         createdAt: true,
         slaDueAt: true,
         slaRespondedAt: true,
@@ -500,6 +496,128 @@ async function databaseNow(transaction: Transaction): Promise<Date> {
   const now = rows[0]?.now;
   if (!now) throw new Error("Metrics database clock is unavailable");
   return now;
+}
+
+async function pageOrderKeys(
+  transaction: Transaction,
+  query: MetricsQuery,
+  cursor: Cursor | undefined,
+  limit: number,
+): Promise<readonly Readonly<{ id: string; confirmedAt: Date }>[]> {
+  const channel = query.channel
+    ? Prisma.sql`
+        AND CASE
+          WHEN automatic_origin.order_id IS NOT NULL
+            THEN COALESCE(automatic_session.attribution->>'channel', 'unknown')
+          WHEN individual_origin.order_id IS NOT NULL
+            THEN COALESCE(individual_request.attribution->>'channel', 'unknown')
+          ELSE COALESCE(customer.first_attribution->>'channel', 'unknown')
+        END = ${query.channel}
+      `
+    : Prisma.empty;
+  const keyset = cursor
+    ? Prisma.sql`
+        AND (
+          "order".confirmed_at < ${new Date(cursor.confirmedAt)}
+          OR (
+            "order".confirmed_at = ${new Date(cursor.confirmedAt)}
+            AND "order".id < ${cursor.id}::uuid
+          )
+        )
+      `
+    : Prisma.empty;
+  return transaction.$queryRaw<
+    Array<Readonly<{ id: string; confirmedAt: Date }>>
+  >`
+    SELECT "order".id, "order".confirmed_at AS "confirmedAt"
+    FROM orders AS "order"
+    JOIN order_price_bindings AS accepted_binding
+      ON accepted_binding.id = "order".accepted_order_price_binding_id
+    JOIN price_snapshots AS accepted_price
+      ON accepted_price.id = accepted_binding.price_snapshot_id
+    LEFT JOIN automatic_order_origins AS automatic_origin
+      ON automatic_origin.order_id = "order".id
+    LEFT JOIN quote_sessions AS automatic_session
+      ON automatic_session.id = automatic_origin.quote_session_id
+    LEFT JOIN individual_order_origins AS individual_origin
+      ON individual_origin.order_id = "order".id
+    LEFT JOIN quotes AS individual_quote
+      ON individual_quote.id = individual_origin.quote_id
+    LEFT JOIN quote_requests AS individual_request
+      ON individual_request.id = individual_quote.quote_request_id
+    LEFT JOIN customers AS customer ON customer.id = "order".customer_id
+    WHERE "order".confirmed_at >= ${query.from}
+      AND "order".confirmed_at < ${query.to}
+      AND accepted_price.currency = ${query.currency}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM jobs AS job
+        WHERE job.order_id = "order".id
+          AND job.node_id <> ${query.nodeId}::uuid
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM order_phases AS phase
+        JOIN eligibility_snapshots AS eligibility
+          ON eligibility.order_phase_id = phase.id
+        WHERE phase.order_id = "order".id
+          AND eligibility.node_id <> ${query.nodeId}::uuid
+      )
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM jobs AS job
+          WHERE job.order_id = "order".id
+            AND job.node_id = ${query.nodeId}::uuid
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM order_phases AS phase
+          JOIN eligibility_snapshots AS eligibility
+            ON eligibility.order_phase_id = phase.id
+          WHERE phase.order_id = "order".id
+            AND eligibility.node_id = ${query.nodeId}::uuid
+        )
+      )
+      ${channel}
+      ${keyset}
+    ORDER BY "order".confirmed_at DESC, "order".id DESC
+    LIMIT ${limit + 1}
+  `;
+}
+
+async function pageSourceCoverage(
+  transaction: Transaction,
+  query: MetricsQuery,
+): Promise<Record<string, unknown>> {
+  const rows = await transaction.$queryRaw<
+    Array<{ selectedCurrencyOrders: bigint; excludedCurrencyOrders: bigint }>
+  >`
+    SELECT
+      count(*) FILTER (
+        WHERE accepted_price.currency = ${query.currency}
+      ) AS "selectedCurrencyOrders",
+      count(*) FILTER (
+        WHERE accepted_price.currency <> ${query.currency}
+      ) AS "excludedCurrencyOrders"
+    FROM orders AS "order"
+    LEFT JOIN order_price_bindings AS accepted_binding
+      ON accepted_binding.id = "order".accepted_order_price_binding_id
+    LEFT JOIN price_snapshots AS accepted_price
+      ON accepted_price.id = accepted_binding.price_snapshot_id
+    WHERE "order".confirmed_at >= ${query.from}
+      AND "order".confirmed_at < ${query.to}
+  `;
+  const coverage = rows[0];
+  return {
+    businessEvents: {
+      retainedClientObservations: true,
+      historicalBackfill: "not_performed",
+    },
+    directRelationalFacts: true,
+    selectedCurrencyOrders: boundedCount(coverage?.selectedCurrencyOrders),
+    excludedCurrencyOrders: boundedCount(coverage?.excludedCurrencyOrders),
+  };
 }
 
 function intervalDto(query: MetricsQuery): MetricsInterval {
@@ -700,7 +818,7 @@ function commercialReport(
       spend,
       query,
     ),
-    assistedSla: assistedSlaMetrics(requests, generatedAt),
+    assistedSla: assistedSlaMetrics(requests, generatedAt, query.channel),
   };
 }
 
@@ -723,15 +841,18 @@ function operationalReport(
   query: MetricsQuery,
 ): Record<string, unknown> {
   const original = jobs.filter((job) => job.replacesJobId === null);
-  const passed = original.filter((job) => job.status === "QC_APPROVED").length;
-  const failed = original.filter((job) =>
-    ["FAILED", "QC_REJECTED"].includes(job.status),
+  const passed = original.filter((job) => job.qcApprovedAt !== null).length;
+  const failed = original.filter(
+    (job) =>
+      job.qcApprovedAt === null &&
+      (job.failedAt !== null || job.qcRejectedAt !== null),
   ).length;
   const unresolved = original.filter(
     (job) =>
-      !["QC_APPROVED", "FAILED", "QC_REJECTED", "CANCELLED"].includes(
-        job.status,
-      ),
+      job.qcApprovedAt === null &&
+      job.failedAt === null &&
+      job.qcRejectedAt === null &&
+      job.status !== "CANCELLED",
   ).length;
   const cancelled = original.filter((job) => job.status === "CANCELLED").length;
   const queueByMachine = new Map<string, bigint>();
@@ -781,6 +902,7 @@ type BindingFact = Readonly<{
 }>;
 
 type AssistedRequest = Readonly<{
+  attribution: Prisma.JsonValue | null;
   createdAt: Date;
   slaDueAt: Date;
   slaRespondedAt: Date | null;
@@ -885,8 +1007,11 @@ function eventMatchesChannel(
 function assistedSlaMetrics(
   requests: readonly AssistedRequest[],
   generatedAt: Date,
+  channel: Channel | undefined,
 ): Record<string, unknown> {
-  const assisted = requests.filter((request) => request.status !== "EXPIRED");
+  const assisted = requests.filter((request) =>
+    matchesChannel(attributionChannel(request.attribution), channel),
+  );
   const responded = assisted.filter(
     (request) => request.quote || request.slaRespondedAt,
   );
@@ -1138,6 +1263,15 @@ function sourceCoverage(
     selectedCurrencyOrders: selected.length,
     excludedCurrencyOrders: orders.length - selected.length,
   };
+}
+
+function boundedCount(value: bigint | undefined): number {
+  if (value === undefined || value < 0n) return 0;
+  return Number(
+    value > BigInt(Number.MAX_SAFE_INTEGER)
+      ? BigInt(Number.MAX_SAFE_INTEGER)
+      : value,
+  );
 }
 
 function completenessFor(
@@ -1541,15 +1675,6 @@ function parseCursor(value: string, filterHash: string): Cursor {
   } catch {
     throw new BadRequestException("metrics orders cursor is invalid");
   }
-}
-
-function afterCursor(order: ReportOrder, cursor: Cursor | undefined): boolean {
-  if (!cursor) return true;
-  const confirmedAt = requiredConfirmedAt(order).toISOString();
-  return (
-    confirmedAt < cursor.confirmedAt ||
-    (confirmedAt === cursor.confirmedAt && order.id < cursor.id)
-  );
 }
 
 function requiredConfirmedAt(order: ReportOrder): Date {
