@@ -307,7 +307,16 @@ export class OperatorReadsService {
           activeContractPrice: { include: { contractPriceRevision: true } },
           settlements: { orderBy: { settledAt: "asc" } },
           priceBindings: {
-            include: { payments: { orderBy: { createdAt: "asc" } } },
+            include: {
+              payments: {
+                orderBy: { createdAt: "asc" },
+                include: {
+                  refunds: {
+                    orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
+                  },
+                },
+              },
+            },
           },
           auditEvents: {
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -415,6 +424,16 @@ export class OperatorReadsService {
               capturedAt: iso(payment.capturedAt),
               createdAt: payment.createdAt.toISOString(),
               updatedAt: payment.updatedAt.toISOString(),
+              refunds: payment.refunds.map((refund) => ({
+                id: refund.id,
+                claimId: refund.claimId,
+                priceAdjustmentId: refund.priceAdjustmentId,
+                amountMinor: refund.amountMinor.toString(),
+                reason: refund.reason,
+                status: refund.status,
+                requestedAt: refund.requestedAt.toISOString(),
+                completedAt: iso(refund.completedAt),
+              })),
             })),
         },
         fulfilment,

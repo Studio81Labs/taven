@@ -194,6 +194,32 @@ export class OperatorSettlementDto {
   settledAt!: string;
 }
 
+export class OperatorRefundTransactionDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  claimId!: string | null;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  priceAdjustmentId!: string | null;
+
+  @ApiProperty({ ...DECIMAL })
+  amountMinor!: string;
+
+  @ApiProperty({ type: String })
+  reason!: string;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  requestedAt!: string;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  completedAt!: string | null;
+}
+
 export class OperatorPaymentDto {
   @ApiProperty(UUID)
   id!: string;
@@ -248,6 +274,9 @@ export class OperatorPaymentDto {
 
   @ApiProperty({ type: String, format: "date-time" })
   updatedAt!: string;
+
+  @ApiProperty({ type: [OperatorRefundTransactionDto] })
+  refunds!: OperatorRefundTransactionDto[];
 }
 
 export class OperatorOrderTimelineEventDto {
