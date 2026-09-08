@@ -160,6 +160,31 @@ export class PreflightCoverageDto {
   unknown!: number;
 }
 
+export class PreflightCohortDto {
+  @ApiProperty({ type: Number, minimum: 0 })
+  offersIssued!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  acceptedBindings!: number;
+
+  @ApiProperty({ type: MetricRatioDto })
+  conversion!: MetricRatioDto;
+
+  @ApiProperty({ type: MetricMoneyDto })
+  acceptedGross!: MetricMoneyDto;
+}
+
+export class PreflightCohortsDto {
+  @ApiProperty({ type: PreflightCohortDto })
+  clean!: PreflightCohortDto;
+
+  @ApiProperty({ type: PreflightCohortDto })
+  warning!: PreflightCohortDto;
+
+  @ApiProperty({ type: PreflightCohortDto })
+  unknown!: PreflightCohortDto;
+}
+
 export class BindingBreakdownDto {
   @ApiProperty({ type: Number, minimum: 0 })
   offersIssued!: number;
@@ -175,6 +200,9 @@ export class BindingBreakdownDto {
 
   @ApiProperty({ type: PreflightCoverageDto })
   preflight!: PreflightCoverageDto;
+
+  @ApiProperty({ type: PreflightCohortsDto })
+  preflightCohorts!: PreflightCohortsDto;
 }
 
 export class QuoteToPaidMetricsDto {
@@ -410,6 +438,12 @@ export class AssistedSlaMetricsDto {
 
   @ApiProperty({ type: Number, minimum: 0 })
   responded!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  respondedOnTime!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  respondedLate!: number;
 
   @ApiProperty({ type: Number, minimum: 0 })
   pendingOverdue!: number;

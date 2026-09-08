@@ -25,7 +25,8 @@ The aggregate covers these definitions:
   and clicks are explicitly not collected.
 - Quote-to-paid cohorts use immutable binding offers issued in the interval;
   expired offers remain in the denominator and deposits do not create a second
-  order.
+  order. Automatic clean, warning, and unknown preflight cohorts each report
+  their own issued, accepted, and conversion values.
 - Order value, express share, and price bands use immutable accepted pricing.
   Current contract amounts, captured cash, and successful refunds remain
   separate.
@@ -41,8 +42,10 @@ The aggregate covers these definitions:
 - FPY considers original jobs only. Queue time comes from unconsumed planned or
   active machine capacity intervals, never measured labour time.
 - Assisted SLA uses persisted request/offer timestamps against the database
-  clock. Operational monthly turnover uses Europe/Prague months and keeps
-  confirmed value, captured cash, successful refunds, and net receipts apart.
+  clock; responses are split into on-time and late populations, and its rate
+  is the on-time cohort rate. Operational monthly turnover uses Europe/Prague
+  months and keeps confirmed value, captured cash, successful refunds, and net
+  receipts apart.
 
 Raw client observations are intentionally not backfilled. The report therefore
 signals coverage uncertainty instead of inventing historical funnel facts.

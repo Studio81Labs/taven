@@ -2,9 +2,12 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { describe, expect, it } from "vitest";
 import {
   acquisitionMetrics,
+  assistedSlaMetrics,
   automationMetrics,
   completenessFor,
+  isFinalMarginTerminal,
   parseMetricsQuery,
+  quoteMetrics,
   type MetricsQuery,
 } from "./metrics-report.service";
 
@@ -142,5 +145,82 @@ describe("v0-1 metric classifications", () => {
         query,
       ).flags,
     ).toContain("partial_period_acquisition_spend_excluded");
+  });
+
+  it("keeps late assisted offers measurable without treating them as timely", () => {
+    const report = assistedSlaMetrics(
+      [
+        {
+          attribution: { channel: "paid" },
+          createdAt: new Date("2026-01-01T00:00:00.000Z"),
+          slaDueAt: new Date("2026-01-01T01:00:00.000Z"),
+          slaRespondedAt: new Date("2026-01-01T02:00:00.000Z"),
+          status: "QUOTED",
+          quote: { issuedAt: new Date("2026-01-01T02:00:00.000Z") },
+        },
+      ],
+      new Date("2026-01-01T03:00:00.000Z"),
+      "paid",
+    );
+
+    expect(report).toMatchObject({
+      requests: 1,
+      responded: 1,
+      respondedOnTime: 0,
+      respondedLate: 1,
+      pendingOverdue: 0,
+      responseRate: { numerator: 0, denominator: 1, value: 0 },
+    });
+  });
+
+  it("reports separate automatic preflight cohort conversion", () => {
+    const report = quoteMetrics(
+      [
+        {
+          kind: "automatic",
+          channel: "paid",
+          accepted: true,
+          grossMinor: 10_000n,
+          preflight: "clean",
+        },
+        {
+          kind: "automatic",
+          channel: "paid",
+          accepted: false,
+          grossMinor: 10_000n,
+          preflight: "warning",
+        },
+        {
+          kind: "automatic",
+          channel: "paid",
+          accepted: true,
+          grossMinor: 10_000n,
+          preflight: "warning",
+        },
+      ],
+      "CZK",
+      "paid",
+    );
+
+    expect(report).toMatchObject({
+      automatic: {
+        preflightCohorts: {
+          clean: {
+            offersIssued: 1,
+            acceptedBindings: 1,
+            conversion: { value: 1 },
+          },
+          warning: {
+            offersIssued: 2,
+            acceptedBindings: 1,
+            conversion: { value: 0.5 },
+          },
+        },
+      },
+    });
+  });
+
+  it("treats partially fulfilled orders as terminal for final margin eligibility", () => {
+    expect(isFinalMarginTerminal("PARTIALLY_FULFILLED")).toBe(true);
   });
 });
