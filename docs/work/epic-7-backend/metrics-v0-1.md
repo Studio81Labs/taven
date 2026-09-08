@@ -29,8 +29,8 @@ The aggregate covers these definitions:
 - Order value, express share, and price bands use immutable accepted pricing.
   Current contract amounts, captured cash, and successful refunds remain
   separate.
-- Automation is counted once per model file, with successful, unresolved, and
-  unavailable evidence called out separately.
+- Automation is counted once per model file, with successful, persisted
+  assisted-handoff, unresolved, and unavailable evidence called out separately.
 - Actual-cost reports use leaf (not superseded) costs and completed,
   non-voided handling allocations. Final contribution margin stays null unless
   the order has terminal settlement evidence, no unresolved refund, explicit

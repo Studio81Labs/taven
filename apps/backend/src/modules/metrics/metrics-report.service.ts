@@ -323,6 +323,16 @@ export class MetricsReportService {
         },
       },
     });
+    const automaticHandoffs =
+      uploadModelFileIds.size === 0
+        ? []
+        : await transaction.automaticQuoteRequestHandoff.findMany({
+            where: { modelFileIds: { hasSome: [...uploadModelFileIds] } },
+            select: {
+              modelFileIds: true,
+              sourceQuoteSession: { select: { attribution: true } },
+            },
+          });
     const firstConfirmedOrders = await transaction.$queryRaw<
       Array<{ customerId: string; id: string }>
     >`
@@ -391,6 +401,7 @@ export class MetricsReportService {
         sessionChannels,
         bound,
         automaticUses,
+        automaticHandoffs,
         uploadModelFileIds,
         firstOrderIds,
         spend,
@@ -507,9 +518,9 @@ async function pageOrderKeys(
   const channel = query.channel
     ? Prisma.sql`
         AND CASE
-          WHEN automatic_origin.order_id IS NOT NULL
+          WHEN automatic_session.attribution IS NOT NULL
             THEN COALESCE(automatic_session.attribution->>'channel', 'unknown')
-          WHEN individual_origin.order_id IS NOT NULL
+          WHEN individual_request.attribution IS NOT NULL
             THEN COALESCE(individual_request.attribution->>'channel', 'unknown')
           ELSE COALESCE(customer.first_attribution->>'channel', 'unknown')
         END = ${query.channel}
@@ -682,6 +693,7 @@ function commercialReport(
   sessionChannels: ReadonlyMap<string, Channel>,
   bound: readonly BindingFact[],
   automaticUses: readonly AutomaticUse[],
+  automaticHandoffs: readonly AutomaticHandoff[],
   uploadModelFileIds: ReadonlySet<string>,
   firstOrderIds: ReadonlySet<string>,
   spend: readonly SpendFact[],
@@ -760,6 +772,7 @@ function commercialReport(
     },
     automationShare: automationMetrics(
       automaticUses,
+      automaticHandoffs,
       uploadModelFileIds,
       query.channel,
     ),
@@ -923,8 +936,14 @@ type AutomaticUse = Readonly<{
   }>;
 }>;
 
-function automationMetrics(
+type AutomaticHandoff = Readonly<{
+  modelFileIds: readonly string[];
+  sourceQuoteSession: Readonly<{ attribution: Prisma.JsonValue | null }>;
+}>;
+
+export function automationMetrics(
   uses: readonly AutomaticUse[],
+  handoffs: readonly AutomaticHandoff[],
   uploadModelFileIds: ReadonlySet<string>,
   channel: Channel | undefined,
 ): Record<string, unknown> {
@@ -945,27 +964,42 @@ function automationMetrics(
       )
       .map((use) => use.modelFileId),
   );
+  const handoffFiles = new Set(
+    handoffs
+      .filter((handoff) =>
+        matchesChannel(
+          attributionChannel(handoff.sourceQuoteSession.attribution),
+          channel,
+        ),
+      )
+      .flatMap((handoff) => handoff.modelFileIds)
+      .filter((modelFileId) => uploadModelFileIds.has(modelFileId)),
+  );
+  const usedFiles = new Set(eligibleUses.map((use) => use.modelFileId));
   const observedFiles = new Set(
     [...uploadModelFileIds].filter((modelFileId) =>
       channel === undefined
         ? true
-        : eligibleUses.some((use) => use.modelFileId === modelFileId),
+        : usedFiles.has(modelFileId) || handoffFiles.has(modelFileId),
     ),
   );
-  const usedFiles = new Set(eligibleUses.map((use) => use.modelFileId));
   return {
     scope: "PLATFORM",
     definition:
-      "Confirmed model files are counted once across body/item splits. Successful automatic use requires a completed accepted automatic binding; unresolved, blocked, and evidence-unavailable states remain separate.",
+      "Confirmed model files are counted once across body/item splits. Successful automatic use requires a completed accepted automatic binding; persisted assisted handoffs, unresolved, and evidence-unavailable states remain separate.",
     successfulAutomaticUses: successfulFiles.size,
     confirmedModelFiles: observedFiles.size,
     value: ratio(successfulFiles.size, observedFiles.size),
     unresolvedOrPending: [...usedFiles].filter(
+      (modelFileId) =>
+        !successfulFiles.has(modelFileId) && !handoffFiles.has(modelFileId),
+    ).length,
+    blockedOrHandoff: [...handoffFiles].filter(
       (modelFileId) => !successfulFiles.has(modelFileId),
     ).length,
-    blockedOrHandoff: 0,
     evidenceUnavailable: [...observedFiles].filter(
-      (modelFileId) => !usedFiles.has(modelFileId),
+      (modelFileId) =>
+        !usedFiles.has(modelFileId) && !handoffFiles.has(modelFileId),
     ).length,
   };
 }
@@ -1198,26 +1232,24 @@ type SpendFact = Readonly<{
   successor: Readonly<{ id: string }> | null;
 }>;
 
-function acquisitionMetrics(
+export function acquisitionMetrics(
   orders: readonly ReportOrder[],
   firstOrder: readonly ReportOrder[],
   firstOrderIds: ReadonlySet<string>,
   spend: readonly SpendFact[],
   query: MetricsQuery,
 ): Record<string, unknown> {
-  const whole = spend.filter(
+  const scoped = spend.filter(
     (item) =>
       item.successor === null &&
       item.currency === query.currency &&
-      item.periodStart >= query.from &&
-      item.periodEnd <= query.to &&
-      (!query.channel || item.channel.toLowerCase() === query.channel),
+      matchesChannel(item.channel.toLowerCase() as Channel, query.channel),
   );
-  const partial = spend.filter(
-    (item) =>
-      item.successor === null &&
-      item.currency === query.currency &&
-      !(item.periodStart >= query.from && item.periodEnd <= query.to),
+  const whole = scoped.filter(
+    (item) => item.periodStart >= query.from && item.periodEnd <= query.to,
+  );
+  const partial = scoped.filter(
+    (item) => item.periodStart < query.from || item.periodEnd > query.to,
   );
   const firstByCustomer = new Set(
     firstOrder
@@ -1274,7 +1306,7 @@ function boundedCount(value: bigint | undefined): number {
   );
 }
 
-function completenessFor(
+export function completenessFor(
   coverage: Record<string, unknown>,
   channel: Channel | undefined,
   spend: readonly SpendFact[] = [],
@@ -1290,6 +1322,8 @@ function completenessFor(
     spend.some(
       (item) =>
         item.successor === null &&
+        item.currency === query.currency &&
+        matchesChannel(item.channel.toLowerCase() as Channel, query.channel) &&
         (item.periodStart < query.from || item.periodEnd > query.to),
     )
   ) {
