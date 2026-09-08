@@ -1040,7 +1040,7 @@ function eventMatchesChannel(
   );
 }
 
-function assistedSlaMetrics(
+export function assistedSlaMetrics(
   requests: readonly AssistedRequest[],
   generatedAt: Date,
   channel: Channel | undefined,
@@ -1048,14 +1048,15 @@ function assistedSlaMetrics(
   const assisted = requests.filter((request) =>
     matchesChannel(attributionChannel(request.attribution), channel),
   );
-  const responded = assisted.filter(
-    (request) => request.quote || request.slaRespondedAt,
+  const responded = assisted.filter((request) => responseAt(request) !== null);
+  const respondedOnTime = responded.filter(
+    (request) => responseAt(request)! <= request.slaDueAt,
+  );
+  const respondedLate = responded.filter(
+    (request) => responseAt(request)! > request.slaDueAt,
   );
   const pendingOverdue = assisted.filter(
-    (request) =>
-      !request.quote &&
-      !request.slaRespondedAt &&
-      request.slaDueAt < generatedAt,
+    (request) => responseAt(request) === null && request.slaDueAt < generatedAt,
   );
   return {
     scope: "PLATFORM",
@@ -1063,9 +1064,21 @@ function assistedSlaMetrics(
       "Assisted SLA uses persisted request creation, due, and first issued-offer evidence against the database clock.",
     requests: assisted.length,
     responded: responded.length,
+    respondedOnTime: respondedOnTime.length,
+    respondedLate: respondedLate.length,
     pendingOverdue: pendingOverdue.length,
-    responseRate: ratio(responded.length, assisted.length),
+    responseRate: ratio(respondedOnTime.length, assisted.length),
   };
+}
+
+function responseAt(request: AssistedRequest): Date | null {
+  const timestamps = [request.slaRespondedAt, request.quote?.issuedAt].filter(
+    (value): value is Date => value !== null && value !== undefined,
+  );
+  if (timestamps.length === 0) return null;
+  return timestamps.reduce((earliest, candidate) =>
+    candidate.getTime() < earliest.getTime() ? candidate : earliest,
+  );
 }
 
 async function bindingFacts(
@@ -1168,7 +1181,7 @@ function automaticPreflight(
     : "warning";
 }
 
-function quoteMetrics(
+export function quoteMetrics(
   bound: readonly BindingFact[],
   currency: string,
   channel: Channel | undefined,
@@ -1222,6 +1235,33 @@ function bindingBreakdown(
       unknown: bindings.filter((binding) => binding.preflight === "unknown")
         .length,
     },
+    preflightCohorts: {
+      clean: preflightCohort(bindings, "clean", currency),
+      warning: preflightCohort(bindings, "warning", currency),
+      unknown: preflightCohort(bindings, "unknown", currency),
+    },
+  };
+}
+
+function preflightCohort(
+  bindings: readonly BindingFact[],
+  preflight: BindingFact["preflight"],
+  currency: string,
+): Record<string, unknown> {
+  const cohort = bindings.filter((binding) => binding.preflight === preflight);
+  const accepted = cohort.filter((binding) => binding.accepted);
+  return {
+    offersIssued: cohort.length,
+    acceptedBindings: accepted.length,
+    conversion: ratio(accepted.length, cohort.length),
+    acceptedGross: money(
+      sum(
+        accepted
+          .map((binding) => binding.grossMinor)
+          .filter((value): value is bigint => value !== null),
+      ),
+      currency,
+    ),
   };
 }
 
@@ -1487,9 +1527,7 @@ function finalContributionMargin(
   const unresolvedRefund = paymentsFor(order)
     .flatMap((payment) => payment.refunds)
     .some((refund) => ["PENDING", "SUSPENDED"].includes(refund.status));
-  const terminal = ["COMPLETED", "REFUNDED", "CANCELLED_SETTLED"].includes(
-    order.status,
-  );
+  const terminal = isFinalMarginTerminal(order.status);
   const active = activeContract(order, currency);
   if (
     !terminal ||
@@ -1507,6 +1545,15 @@ function finalContributionMargin(
   const revenue =
     capturedMinor(order, currency) - refundedMinor(order, currency);
   return revenue - costs - handlingMinor(order, currency);
+}
+
+export function isFinalMarginTerminal(status: string): boolean {
+  return [
+    "COMPLETED",
+    "PARTIALLY_FULFILLED",
+    "REFUNDED",
+    "CANCELLED_SETTLED",
+  ].includes(status);
 }
 
 function hasExplicitMarginCoverage(

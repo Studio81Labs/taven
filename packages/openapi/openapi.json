@@ -156,6 +156,14 @@
             "minimum": 0,
             "type": "number"
           },
+          "respondedLate": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "respondedOnTime": {
+            "minimum": 0,
+            "type": "number"
+          },
           "responseRate": {
             "$ref": "#/components/schemas/MetricRatioDto"
           },
@@ -171,6 +179,8 @@
           "definition",
           "requests",
           "responded",
+          "respondedOnTime",
+          "respondedLate",
           "pendingOverdue",
           "responseRate"
         ],
@@ -1183,6 +1193,9 @@
           },
           "preflight": {
             "$ref": "#/components/schemas/PreflightCoverageDto"
+          },
+          "preflightCohorts": {
+            "$ref": "#/components/schemas/PreflightCohortsDto"
           }
         },
         "required": [
@@ -1190,7 +1203,8 @@
           "acceptedBindings",
           "conversion",
           "acceptedGross",
-          "preflight"
+          "preflight",
+          "preflightCohorts"
         ],
         "type": "object"
       },
@@ -3864,6 +3878,50 @@
         },
         "required": [
           "outcome"
+        ],
+        "type": "object"
+      },
+      "PreflightCohortDto": {
+        "properties": {
+          "acceptedBindings": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "acceptedGross": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          },
+          "offersIssued": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "offersIssued",
+          "acceptedBindings",
+          "conversion",
+          "acceptedGross"
+        ],
+        "type": "object"
+      },
+      "PreflightCohortsDto": {
+        "properties": {
+          "clean": {
+            "$ref": "#/components/schemas/PreflightCohortDto"
+          },
+          "unknown": {
+            "$ref": "#/components/schemas/PreflightCohortDto"
+          },
+          "warning": {
+            "$ref": "#/components/schemas/PreflightCohortDto"
+          }
+        },
+        "required": [
+          "clean",
+          "warning",
+          "unknown"
         ],
         "type": "object"
       },

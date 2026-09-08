@@ -1313,6 +1313,8 @@ export interface components {
             pendingOverdue: number;
             requests: number;
             responded: number;
+            respondedLate: number;
+            respondedOnTime: number;
             responseRate: components["schemas"]["MetricRatioDto"];
             /** @enum {string} */
             scope: "PLATFORM";
@@ -1568,6 +1570,7 @@ export interface components {
             conversion: components["schemas"]["MetricRatioDto"];
             offersIssued: number;
             preflight: components["schemas"]["PreflightCoverageDto"];
+            preflightCohorts: components["schemas"]["PreflightCohortsDto"];
         };
         BusinessEventCoverageDto: {
             /** @enum {string} */
@@ -2278,6 +2281,17 @@ export interface components {
         };
         PaymentWebhookAcceptedDto: {
             outcome: string;
+        };
+        PreflightCohortDto: {
+            acceptedBindings: number;
+            acceptedGross: components["schemas"]["MetricMoneyDto"];
+            conversion: components["schemas"]["MetricRatioDto"];
+            offersIssued: number;
+        };
+        PreflightCohortsDto: {
+            clean: components["schemas"]["PreflightCohortDto"];
+            unknown: components["schemas"]["PreflightCohortDto"];
+            warning: components["schemas"]["PreflightCohortDto"];
         };
         PreflightCoverageDto: {
             clean: number;
