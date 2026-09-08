@@ -7,6 +7,7 @@ import {
   applyTransition,
   QuotesService,
 } from "./quotes.service";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -138,6 +139,73 @@ describe("quote capability expiry clock", () => {
       netAmountMinor: 1_000,
       vatAmountMinor: 0,
     });
+  });
+});
+
+describe("operator quote-request page", () => {
+  it("hydrates attachments through the page transaction", async () => {
+    const observedAt = new Date("2026-09-08T21:00:00.000Z");
+    const requestId = "11111111-1111-4111-8111-111111111111";
+    const transactionAttachments = { findMany: vi.fn().mockResolvedValue([]) };
+    const rootAttachments = { findMany: vi.fn() };
+    const transaction = {
+      $executeRaw: vi.fn().mockResolvedValue(undefined),
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([{ now: observedAt }])
+        .mockResolvedValueOnce([{ id: requestId }]),
+      quoteRequest: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: requestId,
+            publicReference: "QR-111111111111",
+            status: QuoteRequestStatus.NEW,
+            description: "A valid request description",
+            purpose: null,
+            measurements: null,
+            requestedDate: null,
+            contactSnapshot: { name: "Customer", email: "test@example.test" },
+            attribution: null,
+            slaDueAt: new Date("2026-09-09T21:00:00.000Z"),
+            slaRespondedAt: null,
+            createdAt: observedAt,
+            quoteSession: null,
+            customer: null,
+            quote: null,
+            automaticQuoteHandoff: null,
+            photoPublicationConsentGrantedAt: null,
+          },
+        ]),
+      },
+      photoAsset: transactionAttachments,
+    };
+    const prisma = {
+      $transaction: vi.fn(
+        async (work: (client: typeof transaction) => unknown) =>
+          work(transaction),
+      ),
+      photoAsset: rootAttachments,
+    };
+    const service = new QuotesService(prisma as never, {} as never);
+
+    await service.listRequestsPage(
+      {
+        operatorId: "22222222-2222-4222-8222-222222222222",
+        role: "VIEWER",
+        permissions: [OPERATOR_PERMISSIONS.OPERATIONS_READ],
+        nodeIds: ["33333333-3333-4333-8333-333333333333"],
+        authenticationMethod: "DEVELOPMENT_PASSWORD",
+        sessionId: "44444444-4444-4444-8444-444444444444",
+      },
+      { limit: 1 },
+    );
+
+    expect(transactionAttachments.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ scopeId: requestId }),
+      }),
+    );
+    expect(rootAttachments.findMany).not.toHaveBeenCalled();
   });
 });
 
