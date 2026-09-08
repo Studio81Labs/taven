@@ -227,208 +227,207 @@ export class OperatorReadsService {
   ): Promise<OperatorOrderDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
     assertUuid(orderId, "orderId");
-    return this.prisma.$transaction(
-      async (transaction) => {
-        const fulfilment = await this.orders.getFulfilmentInTransaction(
-          operator,
-          orderId,
-          transaction,
-        );
-        const order = await transaction.order.findUnique({
-          where: { id: orderId },
-          include: {
-            items: {
-              orderBy: { ordinal: "asc" },
-              include: {
-                primaryReferenceSliceResult: {
-                  select: {
-                    id: true,
-                    kind: true,
-                    modelGeometryId: true,
-                    printConfigRevisionId: true,
-                    referenceProfileId: true,
-                    packageQuantity: true,
-                    packagePlateCount: true,
-                    partsPerPlate: true,
-                    estimatedPrintSeconds: true,
-                    estimatedMaterialMilligrams: true,
-                    slicerEngine: true,
-                    slicerVersion: true,
-                    createdAt: true,
-                  },
+    // Scope validation locks the envelope, so read committed avoids a
+    // serialization failure when a concurrent fulfilment command releases it.
+    return this.prisma.$transaction(async (transaction) => {
+      const fulfilment = await this.orders.getFulfilmentInTransaction(
+        operator,
+        orderId,
+        transaction,
+      );
+      const order = await transaction.order.findUnique({
+        where: { id: orderId },
+        include: {
+          items: {
+            orderBy: { ordinal: "asc" },
+            include: {
+              primaryReferenceSliceResult: {
+                select: {
+                  id: true,
+                  kind: true,
+                  modelGeometryId: true,
+                  printConfigRevisionId: true,
+                  referenceProfileId: true,
+                  packageQuantity: true,
+                  packagePlateCount: true,
+                  partsPerPlate: true,
+                  estimatedPrintSeconds: true,
+                  estimatedMaterialMilligrams: true,
+                  slicerEngine: true,
+                  slicerVersion: true,
+                  createdAt: true,
                 },
-                tailReferenceSliceResult: {
-                  select: {
-                    id: true,
-                    kind: true,
-                    modelGeometryId: true,
-                    printConfigRevisionId: true,
-                    referenceProfileId: true,
-                    packageQuantity: true,
-                    packagePlateCount: true,
-                    partsPerPlate: true,
-                    estimatedPrintSeconds: true,
-                    estimatedMaterialMilligrams: true,
-                    slicerEngine: true,
-                    slicerVersion: true,
-                    createdAt: true,
-                  },
+              },
+              tailReferenceSliceResult: {
+                select: {
+                  id: true,
+                  kind: true,
+                  modelGeometryId: true,
+                  printConfigRevisionId: true,
+                  referenceProfileId: true,
+                  packageQuantity: true,
+                  packagePlateCount: true,
+                  partsPerPlate: true,
+                  estimatedPrintSeconds: true,
+                  estimatedMaterialMilligrams: true,
+                  slicerEngine: true,
+                  slicerVersion: true,
+                  createdAt: true,
                 },
               },
             },
-            automaticQuoteDraft: {
-              select: {
-                items: {
-                  select: {
-                    ordinal: true,
-                    sourceModelFileId: true,
-                    targetModelGeometryId: true,
-                    printConfigRevisionId: true,
-                    referenceProfileId: true,
-                    referencePartsPerPlate: true,
-                    configurationFingerprint: true,
-                    riskDecisions: {
-                      where: {
-                        decision: AutomaticQuoteRiskDecision.ACKNOWLEDGED,
-                      },
-                      select: {
-                        configurationFingerprint: true,
-                        preflightFinding: { select: { code: true } },
-                      },
+          },
+          automaticQuoteDraft: {
+            select: {
+              items: {
+                select: {
+                  ordinal: true,
+                  sourceModelFileId: true,
+                  targetModelGeometryId: true,
+                  printConfigRevisionId: true,
+                  referenceProfileId: true,
+                  referencePartsPerPlate: true,
+                  configurationFingerprint: true,
+                  riskDecisions: {
+                    where: {
+                      decision: AutomaticQuoteRiskDecision.ACKNOWLEDGED,
+                    },
+                    select: {
+                      configurationFingerprint: true,
+                      preflightFinding: { select: { code: true } },
                     },
                   },
                 },
               },
             },
-            acceptedPriceBinding: {
-              include: { priceSnapshot: { include: { priceList: true } } },
-            },
-            activeContractPrice: { include: { contractPriceRevision: true } },
-            settlements: { orderBy: { settledAt: "asc" } },
-            priceBindings: {
-              include: { payments: { orderBy: { createdAt: "asc" } } },
-            },
-            auditEvents: {
-              orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-              select: {
-                id: true,
-                eventType: true,
-                actorKind: true,
-                reasonCode: true,
-                reason: true,
-                createdAt: true,
-              },
+          },
+          acceptedPriceBinding: {
+            include: { priceSnapshot: { include: { priceList: true } } },
+          },
+          activeContractPrice: { include: { contractPriceRevision: true } },
+          settlements: { orderBy: { settledAt: "asc" } },
+          priceBindings: {
+            include: { payments: { orderBy: { createdAt: "asc" } } },
+          },
+          auditEvents: {
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            select: {
+              id: true,
+              eventType: true,
+              actorKind: true,
+              reasonCode: true,
+              reason: true,
+              createdAt: true,
             },
           },
-        });
-        if (!order) throw new NotFoundException("Order was not found");
-        const accepted = order.acceptedPriceBinding?.priceSnapshot;
-        const active = order.activeContractPrice?.contractPriceRevision;
-        const acceptedQuoteItems = new Map(
-          (order.automaticQuoteDraft?.items ?? []).map((item) => [
-            item.ordinal,
+        },
+      });
+      if (!order) throw new NotFoundException("Order was not found");
+      const accepted = order.acceptedPriceBinding?.priceSnapshot;
+      const active = order.activeContractPrice?.contractPriceRevision;
+      const acceptedQuoteItems = new Map(
+        (order.automaticQuoteDraft?.items ?? []).map((item) => [
+          item.ordinal,
+          item,
+        ]),
+      );
+      return {
+        id: order.id,
+        publicReference: order.publicReference,
+        status: order.status,
+        confirmedAt: iso(order.confirmedAt),
+        acceptedTermsRevision: order.acceptedTermsRevision,
+        acceptedPrice: accepted
+          ? {
+              bindingId: order.acceptedPriceBinding!.id,
+              snapshotId: accepted.id,
+              contractTotalMinor: accepted.contractTotalMinor.toString(),
+              netAmountMinor: accepted.netAmountMinor.toString(),
+              vatAmountMinor: accepted.vatAmountMinor.toString(),
+              currency: accepted.currency,
+              priceListRevision: accepted.priceList.revision,
+              termsRevision: accepted.priceList.termsRevision,
+            }
+          : null,
+        items: order.items.map((item) => ({
+          id: item.id,
+          ordinal: item.ordinal,
+          sourceModelFileId: item.sourceModelFileId,
+          modelGeometryId: item.modelGeometryId,
+          printConfigRevisionId: item.printConfigRevisionId,
+          material: item.material,
+          color: item.color,
+          quantity: item.quantity,
+          referencePartsPerPlate: item.referencePartsPerPlate,
+          primaryReferenceSlice: operatorReferenceSlice(
+            item.primaryReferenceSliceResult,
+          ),
+          tailReferenceSlice: operatorReferenceSlice(
+            item.tailReferenceSliceResult,
+          ),
+          preflightFindings: acceptedPreflightFindingCodes(
             item,
-          ]),
-        );
-        return {
-          id: order.id,
-          publicReference: order.publicReference,
-          status: order.status,
-          confirmedAt: iso(order.confirmedAt),
-          acceptedTermsRevision: order.acceptedTermsRevision,
-          acceptedPrice: accepted
-            ? {
-                bindingId: order.acceptedPriceBinding!.id,
-                snapshotId: accepted.id,
-                contractTotalMinor: accepted.contractTotalMinor.toString(),
-                netAmountMinor: accepted.netAmountMinor.toString(),
-                vatAmountMinor: accepted.vatAmountMinor.toString(),
-                currency: accepted.currency,
-                priceListRevision: accepted.priceList.revision,
-                termsRevision: accepted.priceList.termsRevision,
-              }
-            : null,
-          items: order.items.map((item) => ({
-            id: item.id,
-            ordinal: item.ordinal,
-            sourceModelFileId: item.sourceModelFileId,
-            modelGeometryId: item.modelGeometryId,
-            printConfigRevisionId: item.printConfigRevisionId,
-            material: item.material,
-            color: item.color,
-            quantity: item.quantity,
-            referencePartsPerPlate: item.referencePartsPerPlate,
-            primaryReferenceSlice: operatorReferenceSlice(
-              item.primaryReferenceSliceResult,
-            ),
-            tailReferenceSlice: operatorReferenceSlice(
-              item.tailReferenceSliceResult,
-            ),
-            preflightFindings: acceptedPreflightFindingCodes(
-              item,
-              acceptedQuoteItems.get(item.ordinal),
-            ),
+            acceptedQuoteItems.get(item.ordinal),
+          ),
+        })),
+        financial: {
+          activeContractRevisionId: active?.id ?? null,
+          activeContractTotalMinor:
+            active?.contractTotalMinor.toString() ?? null,
+          activeContractNetMinor: active?.netAmountMinor.toString() ?? null,
+          currency: active?.currency ?? null,
+          settlements: order.settlements.map((settlement) => ({
+            id: settlement.id,
+            kind: settlement.kind,
+            currency: settlement.currency,
+            contractTotalMinor: settlement.contractTotalMinor.toString(),
+            capturedTotalMinor: settlement.capturedTotalMinor.toString(),
+            refundAmountMinor: settlement.refundAmountMinor.toString(),
+            amountDueMinor: settlement.amountDueMinor.toString(),
+            refundableBalanceMinor:
+              settlement.refundableBalanceMinor.toString(),
+            settledAt: settlement.settledAt.toISOString(),
           })),
-          financial: {
-            activeContractRevisionId: active?.id ?? null,
-            activeContractTotalMinor:
-              active?.contractTotalMinor.toString() ?? null,
-            activeContractNetMinor: active?.netAmountMinor.toString() ?? null,
-            currency: active?.currency ?? null,
-            settlements: order.settlements.map((settlement) => ({
-              id: settlement.id,
-              kind: settlement.kind,
-              currency: settlement.currency,
-              contractTotalMinor: settlement.contractTotalMinor.toString(),
-              capturedTotalMinor: settlement.capturedTotalMinor.toString(),
-              refundAmountMinor: settlement.refundAmountMinor.toString(),
-              amountDueMinor: settlement.amountDueMinor.toString(),
-              refundableBalanceMinor:
-                settlement.refundableBalanceMinor.toString(),
-              settledAt: settlement.settledAt.toISOString(),
+          payments: order.priceBindings
+            .flatMap((binding) => binding.payments)
+            .sort(
+              (left, right) =>
+                left.createdAt.getTime() - right.createdAt.getTime() ||
+                left.id.localeCompare(right.id),
+            )
+            .map((payment) => ({
+              id: payment.id,
+              orderPriceBindingId: payment.orderPriceBindingId,
+              priceSnapshotId: payment.priceSnapshotId,
+              role: payment.role,
+              provider: payment.provider,
+              checkoutMethod: payment.checkoutMethod,
+              merchantReference: payment.merchantReference,
+              requestedAmountMinor: payment.requestedAmountMinor.toString(),
+              capturedAmountMinor:
+                payment.capturedAmountMinor?.toString() ?? null,
+              currency: payment.currency,
+              status: payment.status,
+              captureAuthorized: payment.captureAuthorized,
+              captureCutoffAt: iso(payment.captureCutoffAt),
+              checkoutCaptureExpiresAt: iso(payment.checkoutCaptureExpiresAt),
+              balanceDueAt: iso(payment.balanceDueAt),
+              capturedAt: iso(payment.capturedAt),
+              createdAt: payment.createdAt.toISOString(),
+              updatedAt: payment.updatedAt.toISOString(),
             })),
-            payments: order.priceBindings
-              .flatMap((binding) => binding.payments)
-              .sort(
-                (left, right) =>
-                  left.createdAt.getTime() - right.createdAt.getTime() ||
-                  left.id.localeCompare(right.id),
-              )
-              .map((payment) => ({
-                id: payment.id,
-                orderPriceBindingId: payment.orderPriceBindingId,
-                priceSnapshotId: payment.priceSnapshotId,
-                role: payment.role,
-                provider: payment.provider,
-                checkoutMethod: payment.checkoutMethod,
-                merchantReference: payment.merchantReference,
-                requestedAmountMinor: payment.requestedAmountMinor.toString(),
-                capturedAmountMinor:
-                  payment.capturedAmountMinor?.toString() ?? null,
-                currency: payment.currency,
-                status: payment.status,
-                captureAuthorized: payment.captureAuthorized,
-                captureCutoffAt: iso(payment.captureCutoffAt),
-                checkoutCaptureExpiresAt: iso(payment.checkoutCaptureExpiresAt),
-                balanceDueAt: iso(payment.balanceDueAt),
-                capturedAt: iso(payment.capturedAt),
-                createdAt: payment.createdAt.toISOString(),
-                updatedAt: payment.updatedAt.toISOString(),
-              })),
-          },
-          fulfilment,
-          timeline: order.auditEvents.map((event) => ({
-            id: event.id,
-            eventType: event.eventType,
-            actorKind: event.actorKind,
-            reasonCode: event.reasonCode,
-            reason: event.reason,
-            occurredAt: event.createdAt.toISOString(),
-          })),
-        };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
-    );
+        },
+        fulfilment,
+        timeline: order.auditEvents.map((event) => ({
+          id: event.id,
+          eventType: event.eventType,
+          actorKind: event.actorKind,
+          reasonCode: event.reasonCode,
+          reason: event.reason,
+          occurredAt: event.createdAt.toISOString(),
+        })),
+      };
+    });
   }
 
   async jobsPage(
