@@ -160,4 +160,26 @@ describe("AuditService legacy projection", () => {
       data: expect.objectContaining({ createdAt, quoteId }),
     });
   });
+
+  it("uses the database clock when an operator audit timestamp is not supplied", async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const createdAt = new Date("2026-01-01T00:00:02.000Z");
+    const queryRaw = vi.fn().mockResolvedValue([{ now: createdAt }]);
+    const service = new AuditService({} as never);
+    const transaction = {
+      $queryRaw: queryRaw,
+      auditEvent: { create },
+    } as never;
+
+    await service.recordOperator(transaction, operator, {
+      eventType: "fulfilment.command_completed",
+      nodeId,
+      payload: { operation: "fulfilment:ship", status: "SHIPPED" },
+    });
+
+    expect(queryRaw).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ createdAt }),
+    });
+  });
 });

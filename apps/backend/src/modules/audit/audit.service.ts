@@ -71,6 +71,7 @@ export class AuditService {
     if (reasonCode && !/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
       throw new BadRequestException("Audit reason code is invalid");
     }
+    const createdAt = input.createdAt ?? (await databaseNow(transaction));
     await transaction.auditEvent.create({
       data: {
         eventType: input.eventType,
@@ -88,7 +89,7 @@ export class AuditService {
         correlationId: input.correlationId ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
         payload: input.payload,
-        ...(input.createdAt ? { createdAt: input.createdAt } : {}),
+        createdAt,
       },
     });
   }
@@ -150,6 +151,17 @@ export class AuditService {
       ...(nextCursor ? { nextCursor } : {}),
     };
   }
+}
+
+async function databaseNow(
+  transaction: Pick<Transaction, "$queryRaw">,
+): Promise<Date> {
+  const rows = await transaction.$queryRaw<Array<{ now: Date }>>`
+    SELECT clock_timestamp() AS now
+  `;
+  const observedAt = rows[0]?.now;
+  if (!observedAt) throw new Error("Audit database clock is unavailable");
+  return observedAt;
 }
 
 function toSummary(
