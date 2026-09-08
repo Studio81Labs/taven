@@ -32,6 +32,7 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
+import { writeBusinessEvent } from "../metrics/business-event.writer";
 import {
   ApproveLegacyClaimWindowDto,
   CancelOrderDto,
@@ -510,6 +511,13 @@ export class OrdersService {
           where: { id: jobId },
           data: { status: JobStatus.QC_APPROVED, qcApprovedAt },
         });
+        await writeBusinessEvent(tx, {
+          eventType: "job.qc-approved",
+          jobId,
+          orderId,
+          nodeId: job.nodeId,
+          observedAt: qcApprovedAt,
+        });
         const blockers = await tx.$queryRaw<Array<{ blocked: boolean }>>`
         SELECT EXISTS (
           SELECT 1 FROM jobs job
@@ -658,6 +666,13 @@ export class OrdersService {
                   failureStage: stage,
                   failureReason: reason,
                 },
+        });
+        await writeBusinessEvent(tx, {
+          eventType: "job.failed",
+          jobId,
+          orderId,
+          nodeId: job.nodeId,
+          observedAt: failedAt,
         });
         const request = await tx.replacementRequest.create({
           data: {
@@ -1933,6 +1948,13 @@ export class OrdersService {
             handedOverAt: verifiedAt,
           },
         });
+        await writeBusinessEvent(tx, {
+          eventType: "shipment.handed-off",
+          shipmentId,
+          orderId,
+          nodeId: operatorNode(operator),
+          observedAt: verifiedAt,
+        });
         const cancellationPendingHandoff =
           shipment.status === ShipmentStatus.CANCELLATION_PENDING;
         await tx.orderPhase.updateMany({
@@ -2075,6 +2097,13 @@ export class OrdersService {
           await tx.shipment.update({
             where: { id: shipmentId },
             data: { status: ShipmentStatus.DELIVERED, deliveredAt: verifiedAt },
+          });
+          await writeBusinessEvent(tx, {
+            eventType: "shipment.delivered",
+            shipmentId,
+            orderId,
+            nodeId: operatorNode(operator),
+            observedAt: verifiedAt,
           });
           if (reshipmentAuthorization) {
             const resolutionCount = await tx.claimSlotResolution.count({
@@ -4288,6 +4317,11 @@ export class OrdersService {
       await tx.order.update({
         where: { id: orderId },
         data: { status: OrderStatus.COMPLETED, updatedAt: at },
+      });
+      await writeBusinessEvent(tx, {
+        eventType: "order.completed",
+        orderId,
+        observedAt: at,
       });
       return result(orderId, "ORDER_COMPLETED", { completedAt: at });
     });

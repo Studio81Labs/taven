@@ -37,6 +37,7 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
+import { writeBusinessEvent } from "../metrics/business-event.writer";
 import type {
   ConfirmedUploadResponseDto,
   InitiateModelUploadDto,
@@ -439,6 +440,11 @@ export class UploadService {
             sourceDeleteAfter: deleteAfter,
             sourceRetentionDays: RETENTION_DAYS,
           },
+        });
+        await writeBusinessEvent(transaction, {
+          eventType: "upload.confirmed",
+          modelFileId: current.intendedAssetId,
+          observedAt: uploadedAt,
         });
         return transaction.uploadIntent.update({
           where: { id: current.id },

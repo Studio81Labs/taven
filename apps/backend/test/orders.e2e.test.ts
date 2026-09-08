@@ -2285,6 +2285,52 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(releasedPhoto.photoDeleteAfter.getTime()).toBeGreaterThan(
       originalPhotoDeadline.getTime(),
     );
+    await expect(
+      prisma.businessEvent.findMany({
+        where: { orderId: fixture.foundation.orderId },
+        select: {
+          eventType: true,
+          dedupeKey: true,
+          jobId: true,
+          payload: true,
+        },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          eventType: "job.qc-approved",
+          dedupeKey: fixture.productions[0]!.jobId,
+          jobId: fixture.productions[0]!.jobId,
+          payload: {},
+        },
+        {
+          eventType: "shipment.handed-off",
+          dedupeKey: fixture.foundation.shipmentId,
+          jobId: null,
+          payload: { shipmentId: fixture.foundation.shipmentId },
+        },
+        {
+          eventType: "shipment.delivered",
+          dedupeKey: fixture.foundation.shipmentId,
+          jobId: null,
+          payload: { shipmentId: fixture.foundation.shipmentId },
+        },
+        {
+          eventType: "order.completed",
+          dedupeKey: fixture.foundation.orderId,
+          jobId: null,
+          payload: {},
+        },
+      ]),
+    );
+    await expect(
+      prisma.businessEvent.count({
+        where: {
+          eventType: "shipment.delivered",
+          dedupeKey: fixture.foundation.shipmentId,
+        },
+      }),
+    ).resolves.toBe(1);
   });
 
   it("rejects a clean quality Claim atomically and releases its evidence", async () => {

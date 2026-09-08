@@ -3581,6 +3581,38 @@ describe("checkout payment capture protocol", () => {
         providerCaptureId: lateTransactionId,
         refunds: [{ status: "PENDING" }],
       });
+      await expect(
+        prisma.businessEvent.findUniqueOrThrow({
+          where: {
+            eventType_dedupeKey: {
+              eventType: "payment.captured",
+              dedupeKey: ambiguousPayment.id,
+            },
+          },
+          select: {
+            schemaVersion: true,
+            source: true,
+            orderId: true,
+            payload: true,
+          },
+        }),
+      ).resolves.toEqual({
+        schemaVersion: 1,
+        source: "SERVER",
+        orderId: outageFoundation.orderId,
+        payload: {
+          paymentId: ambiguousPayment.id,
+          providerTransactionId: lateTransactionId,
+        },
+      });
+      await expect(
+        prisma.businessEvent.count({
+          where: {
+            eventType: "order.confirmed",
+            orderId: outageFoundation.orderId,
+          },
+        }),
+      ).resolves.toBe(0);
 
       const reconciledReplay = await createOutagePayment(ambiguousKey);
       expect(reconciledReplay.status).toBe(200);

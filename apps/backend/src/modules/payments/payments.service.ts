@@ -28,6 +28,7 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
+import { writeBusinessEvent } from "../metrics/business-event.writer";
 import {
   DELIVERY_CAPABILITY,
   type DeliveryCapabilityPort,
@@ -910,17 +911,27 @@ export class PaymentsService {
           : event.status === "FAILED"
             ? "PAYMENT_FAILED"
             : "PAYMENT_PENDING";
-      const rows = await this.prisma.$queryRaw<Array<{ outcome: string }>>`
-        SELECT taven_apply_balance_payment_event(
-          ${event.provider}, ${event.providerEventId},
-          ${event.providerTransactionId},
-          ${kind}::payment_provider_event_kind,
-          ${event.amountMinor}, ${event.currency}::char(3),
-          ${event.occurredAt}, ${jsonInput(event.evidence)}::jsonb,
-          ${event.merchantReference}
-        ) AS outcome
-      `;
-      return { outcome: rows[0]?.outcome ?? "IGNORED" };
+      const outcome = await this.prisma.$transaction(async (transaction) => {
+        const rows = await transaction.$queryRaw<Array<{ outcome: string }>>`
+          SELECT taven_apply_balance_payment_event(
+            ${event.provider}, ${event.providerEventId},
+            ${event.providerTransactionId},
+            ${kind}::payment_provider_event_kind,
+            ${event.amountMinor}, ${event.currency}::char(3),
+            ${event.occurredAt}, ${jsonInput(event.evidence)}::jsonb,
+            ${event.merchantReference}
+          ) AS outcome
+        `;
+        const outcome = rows[0]?.outcome ?? "IGNORED";
+        if (
+          event.status === "CAPTURED" &&
+          (outcome === "CAPTURED" || outcome === "REFUND_PENDING")
+        ) {
+          await this.recordPaymentCapture(transaction, event, false);
+        }
+        return outcome;
+      });
+      return { outcome };
     }
     const captureContextCurrent =
       event.status === "CAPTURED"
@@ -968,18 +979,74 @@ export class PaymentsService {
     captureContextCurrent: boolean,
     captureReacquisitionResolved: boolean,
   ): Promise<string> {
-    const rows = await this.prisma.$queryRaw<Array<{ outcome: string }>>`
-      SELECT taven_apply_checkout_payment_event(
-        ${event.provider}, ${event.providerEventId},
-        ${event.providerTransactionId},
-        ${kind}::payment_provider_event_kind,
-        ${event.amountMinor}, ${event.currency}::char(3),
-        ${event.occurredAt}, ${jsonInput(event.evidence)}::jsonb,
-        ${captureContextCurrent}, ${event.merchantReference},
-        ${captureReacquisitionResolved}
-      ) AS outcome
-    `;
-    return rows[0]?.outcome ?? "IGNORED";
+    return this.prisma.$transaction(async (transaction) => {
+      const rows = await transaction.$queryRaw<Array<{ outcome: string }>>`
+        SELECT taven_apply_checkout_payment_event(
+          ${event.provider}, ${event.providerEventId},
+          ${event.providerTransactionId},
+          ${kind}::payment_provider_event_kind,
+          ${event.amountMinor}, ${event.currency}::char(3),
+          ${event.occurredAt}, ${jsonInput(event.evidence)}::jsonb,
+          ${captureContextCurrent}, ${event.merchantReference},
+          ${captureReacquisitionResolved}
+        ) AS outcome
+      `;
+      const outcome = rows[0]?.outcome ?? "IGNORED";
+      if (
+        event.status === "CAPTURED" &&
+        (outcome === "CAPTURED" || outcome === "REFUND_PENDING")
+      ) {
+        await this.recordPaymentCapture(
+          transaction,
+          event,
+          outcome === "CAPTURED",
+        );
+      }
+      return outcome;
+    });
+  }
+
+  private async recordPaymentCapture(
+    transaction: Transaction,
+    event: VerifiedPaymentEvent,
+    confirmOrder: boolean,
+  ): Promise<void> {
+    const receipt = await transaction.paymentProviderEvent.findUnique({
+      where: {
+        provider_providerEventId: {
+          provider: event.provider,
+          providerEventId: event.providerEventId,
+        },
+      },
+      select: {
+        payment: {
+          select: {
+            id: true,
+            orderId: true,
+            role: true,
+            capturedAt: true,
+          },
+        },
+      },
+    });
+    const payment = receipt?.payment;
+    if (!payment?.capturedAt) {
+      throw new Error("Captured payment is unavailable for metric evidence");
+    }
+    await writeBusinessEvent(transaction, {
+      eventType: "payment.captured",
+      paymentId: payment.id,
+      orderId: payment.orderId,
+      providerTransactionId: event.providerTransactionId,
+      observedAt: payment.capturedAt,
+    });
+    if (confirmOrder && payment.role !== "BALANCE") {
+      await writeBusinessEvent(transaction, {
+        eventType: "order.confirmed",
+        orderId: payment.orderId,
+        observedAt: payment.capturedAt,
+      });
+    }
   }
 
   private async prefilterProviderEvent(

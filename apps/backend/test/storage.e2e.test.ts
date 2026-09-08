@@ -166,6 +166,20 @@ describe("secure object storage and retention", () => {
     const persistedModel = await prisma.modelFile.findUniqueOrThrow({
       where: { id: created.assetId },
     });
+    const uploadFact = await prisma.businessEvent.findUniqueOrThrow({
+      where: {
+        eventType_dedupeKey: {
+          eventType: "upload.confirmed",
+          dedupeKey: created.assetId,
+        },
+      },
+    });
+    expect(uploadFact).toMatchObject({
+      schemaVersion: 1,
+      source: "SERVER",
+      payload: { modelFileId: created.assetId },
+    });
+    expect(uploadFact.observedAt).toEqual(persistedModel.uploadedAt);
     expect(confirmed.body.uploadedAt).toBe(
       persistedModel.uploadedAt.toISOString(),
     );
@@ -185,6 +199,14 @@ describe("secure object storage and retention", () => {
       uploadedAt: persistedModel.uploadedAt.toISOString(),
       deleteAfter: persistedModel.sourceDeleteAfter.toISOString(),
     });
+    expect(
+      await prisma.businessEvent.count({
+        where: {
+          eventType: "upload.confirmed",
+          dedupeKey: created.assetId,
+        },
+      }),
+    ).toBe(1);
 
     const denied = await apiJson(
       `storage/model-files/${created.assetId}/reorder-eligibility`,

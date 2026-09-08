@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { AuditService } from "../audit/audit.service";
+import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { HANDLING_RATE_POLICY } from "./handling-rate-policy";
 import type {
   CompleteHandlingSessionDto,
@@ -319,16 +320,13 @@ export class MeasurementService {
             idempotencyKey: requiredKey(key),
             payload: { operation: "record_actual_cost", status: "RECORDED" },
           });
-          await tx.businessEvent.create({
-            data: {
-              eventType: "actual-cost.recorded",
-              dedupeKey: cost.id,
-              observedAt: cost.recordedAt,
-              source: "SERVER",
-              orderId,
-              nodeId,
-              payload: { category: cost.category },
-            },
+          await writeBusinessEvent(tx, {
+            eventType: "actual-cost.recorded",
+            actualCostId: cost.id,
+            orderId,
+            nodeId,
+            category: cost.category,
+            observedAt: cost.recordedAt,
           });
           return { id: cost.id, status: "RECORDED" };
         } catch (error) {
@@ -492,15 +490,12 @@ export class MeasurementService {
       idempotencyKey: key,
       payload: { operation: "complete", status: "COMPLETED" },
     });
-    await tx.businessEvent.create({
-      data: {
-        eventType: "handling.completed",
-        dedupeKey: session.id,
-        observedAt: await databaseNow(tx),
-        source: "SERVER",
-        nodeId: session.nodeId,
-        payload: { component: session.component },
-      },
+    await writeBusinessEvent(tx, {
+      eventType: "handling.completed",
+      handlingSessionId: session.id,
+      nodeId: session.nodeId,
+      component: session.component,
+      observedAt: await databaseNow(tx),
     });
   }
 

@@ -1,4 +1,4 @@
-import { GoneException } from "@nestjs/common";
+import { ConflictException, GoneException } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -104,5 +104,108 @@ describe("AutomaticQuotesService", () => {
 
     expect(transaction.automaticOrderOrigin.findUnique).not.toHaveBeenCalled();
     expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it("records a quote view against the current immutable price binding", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000001";
+    const orderId = "00000000-0000-4000-8000-000000000002";
+    const bindingId = "00000000-0000-4000-8000-000000000003";
+    const token = "a".repeat(43);
+    const observedAt = new Date("2026-09-07T12:00:00.000Z");
+    const upsert = vi.fn();
+    const transaction = {
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: sessionId }])
+        .mockResolvedValueOnce([{ observed_at: observedAt }]),
+      quoteSession: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          id: sessionId,
+          publicTokenHash: createHash("sha256").update(token).digest("hex"),
+          status: "OPEN",
+          expiresAt: new Date("2026-09-09T12:00:00.000Z"),
+        }),
+      },
+      automaticOrderOrigin: {
+        findUnique: vi.fn().mockResolvedValue({ orderId }),
+      },
+      orderActivePriceBinding: {
+        findUnique: vi.fn().mockResolvedValue({
+          orderPriceBindingId: bindingId,
+          orderPriceBinding: { invalidatedAt: null },
+        }),
+      },
+      businessEvent: { upsert },
+    };
+    const service = new AutomaticQuotesService(
+      {
+        $transaction: (operation: (client: typeof transaction) => unknown) =>
+          operation(transaction),
+      } as unknown as PrismaService,
+      null as never,
+      null as never,
+      null as never,
+      null as never,
+    );
+
+    await expect(
+      service.recordObservation(
+        sessionId,
+        { eventType: "quote.viewed" },
+        `Bearer ${token}`,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(upsert.mock.calls[0]?.[0]?.create).toMatchObject({
+      schemaVersion: 2,
+      eventType: "quote.viewed",
+      orderId,
+      quoteSessionId: sessionId,
+      payload: { orderPriceBindingId: bindingId },
+    });
+  });
+
+  it("rejects a quote view when no current price binding exists", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000001";
+    const token = "a".repeat(43);
+    const transaction = {
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: sessionId }])
+        .mockResolvedValueOnce([{ observed_at: new Date() }]),
+      quoteSession: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          id: sessionId,
+          publicTokenHash: createHash("sha256").update(token).digest("hex"),
+          status: "OPEN",
+          expiresAt: new Date("2026-09-09T12:00:00.000Z"),
+        }),
+      },
+      automaticOrderOrigin: {
+        findUnique: vi.fn().mockResolvedValue({
+          orderId: "00000000-0000-4000-8000-000000000002",
+        }),
+      },
+      orderActivePriceBinding: { findUnique: vi.fn().mockResolvedValue(null) },
+      businessEvent: { upsert: vi.fn() },
+    };
+    const service = new AutomaticQuotesService(
+      {
+        $transaction: (operation: (client: typeof transaction) => unknown) =>
+          operation(transaction),
+      } as unknown as PrismaService,
+      null as never,
+      null as never,
+      null as never,
+      null as never,
+    );
+
+    await expect(
+      service.recordObservation(
+        sessionId,
+        { eventType: "quote.viewed" },
+        `Bearer ${token}`,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 });
