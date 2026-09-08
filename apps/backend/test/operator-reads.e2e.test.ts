@@ -183,15 +183,29 @@ describe("operator read contracts", () => {
       items: [expect.objectContaining({ id: fixtureJob.jobId })],
     });
 
-    const queue = await read(
-      "/admin/quote-requests/page?status=QUOTED&limit=100",
-    );
-    expect(queue.status).toBe(200);
-    await expect(queue.json()).resolves.toMatchObject({
-      items: expect.arrayContaining([
-        expect.objectContaining({ requestId: fixture.quoteRequestId }),
-      ]),
-    });
+    let queueCursor: string | undefined;
+    let fixtureQuoteFound = false;
+
+    for (let page = 0; page < 32 && !fixtureQuoteFound; page += 1) {
+      const query = new URLSearchParams({ status: "QUOTED", limit: "100" });
+      if (queueCursor) {
+        query.set("cursor", queueCursor);
+      }
+      const queue = await read(`/admin/quote-requests/page?${query}`);
+      expect(queue.status).toBe(200);
+      const body = (await queue.json()) as {
+        items: Array<{ requestId: string }>;
+        nextCursor: string | null;
+      };
+      fixtureQuoteFound ||= body.items.some(
+        ({ requestId }) => requestId === fixture.quoteRequestId,
+      );
+      queueCursor = body.nextCursor ?? undefined;
+      if (!queueCursor) {
+        break;
+      }
+    }
+    expect(fixtureQuoteFound).toBe(true);
 
     const invalidCursor = await read(
       "/admin/quote-requests/page?cursor=invalid",
