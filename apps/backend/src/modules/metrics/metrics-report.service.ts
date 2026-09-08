@@ -1871,11 +1871,11 @@ export function outstandingGross(order: ReportOrder, currency: string): bigint {
     );
   }
   const active = activeContract(order, currency);
-  return (
+  const outstanding =
     active.gross -
     capturedMinor(order, currency) +
-    refundedMinor(order, currency)
-  );
+    refundedMinor(order, currency);
+  return outstanding > 0n ? outstanding : 0n;
 }
 
 function money(amountMinor: bigint, currency: string): MetricMoney {
