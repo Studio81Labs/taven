@@ -4,6 +4,8 @@ import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
+import type { OperatorContext } from "../src/modules/admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import {
   configureHttpBodyParsers,
   HTTP_BODY_LIMIT_BYTES,
@@ -38,6 +40,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let defaultOfferItem: Record<string, unknown>;
   let operatorCookie: string;
   let operatorCsrfToken: string;
+  let operator: OperatorContext;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -54,7 +57,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const node = await prisma.node.findFirstOrThrow({
       where: { active: true },
     });
-    const operator = await prisma.operatorIdentity.create({
+    const identity = await prisma.operatorIdentity.create({
       data: {
         email: `quotes-e2e-${randomUUID()}@example.test`,
         role: "ADMIN",
@@ -72,12 +75,20 @@ describe("QuoteRequest and tokenized individual offers", () => {
       data: {
         tokenHash: createHash("sha256").update(token).digest("hex"),
         csrfHash: createHash("sha256").update(operatorCsrfToken).digest("hex"),
-        operatorId: operator.id,
+        operatorId: identity.id,
         authenticationMethod: "DEVELOPMENT_PASSWORD",
         credentialVersion: 1,
         absoluteExpiresAt: new Date(Date.now() + 60 * 60 * 1_000),
       },
     });
+    operator = {
+      operatorId: identity.id,
+      role: "ADMIN",
+      permissions: Object.values(OPERATOR_PERMISSIONS),
+      nodeIds: [node.id],
+      authenticationMethod: "DEVELOPMENT_PASSWORD",
+      sessionId: randomUUID(),
+    };
     operatorCookie = `taven_admin=${token}`;
     const priceList = await prisma.priceList.findFirstOrThrow({
       where: { currency: "CZK" },
@@ -857,7 +868,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
       "198.51.100.81",
       key("vat-payer-offer-create"),
     );
-    await quotes.beginReview(created.requestId, key("vat-payer-offer-review"));
+    await quotes.beginReview(
+      operator,
+      created.requestId,
+      key("vat-payer-offer-review"),
+    );
     const priceList = await prisma.priceList.create({
       data: {
         revision: `vat-payer-${randomUUID()}`,
@@ -1032,6 +1047,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       key("batched-acceptance-create"),
     );
     await quotes.beginReview(
+      operator,
       created.requestId,
       key("batched-acceptance-review"),
     );
@@ -1069,6 +1085,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       key("batched-reference-lookups-create"),
     );
     await quotes.beginReview(
+      operator,
       created.requestId,
       key("batched-reference-lookups-review"),
     );
@@ -1198,7 +1215,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
       "198.51.100.49",
       key("spaced-terms-create"),
     );
-    await quotes.beginReview(created.requestId, key("spaced-terms-review"));
+    await quotes.beginReview(
+      operator,
+      created.requestId,
+      key("spaced-terms-review"),
+    );
 
     const issued = await issueOffer(
       created.requestId,
@@ -1349,6 +1370,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       key("acceptance-deadline-race-create"),
     );
     await quotes.beginReview(
+      operator,
       created.requestId,
       key("acceptance-deadline-race-review"),
     );

@@ -231,7 +231,12 @@ describe("UploadService confirmation response", () => {
       readObjectRange: async () => bytes,
       copyObject,
     });
-    const service = new UploadService(prisma as never, storage, config);
+    const service = new UploadService(
+      prisma as never,
+      storage,
+      config,
+      {} as never,
+    );
 
     await expect(
       service.confirmUpload(uploadId, `Bearer ${token}`),
@@ -276,7 +281,12 @@ describe("UploadService confirmation response", () => {
         }),
       },
     };
-    const service = new UploadService(prisma as never, storageWith({}), config);
+    const service = new UploadService(
+      prisma as never,
+      storageWith({}),
+      config,
+      {} as never,
+    );
 
     await expect(
       service.confirmUpload(uploadId, `Bearer ${token}`),
@@ -328,7 +338,7 @@ function serviceWithSigner(
   };
   const storage = storageWith({ createUploadUrl });
   return {
-    service: new UploadService(prisma as never, storage, config),
+    service: new UploadService(prisma as never, storage, config, {} as never),
     create,
     updateMany,
   };
@@ -360,6 +370,7 @@ function downloadService(
       prisma as never,
       storageWith({ createDownloadUrl }),
       config,
+      {} as never,
     ),
     modelFileId,
     authorization: `Bearer ${token}`,

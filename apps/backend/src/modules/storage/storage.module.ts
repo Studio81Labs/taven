@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { PrismaModule } from "../../prisma/prisma.module";
+import { AuditModule } from "../audit/audit.module";
 import { S3ObjectStorageAdapter } from "./s3-object-storage.adapter";
 import { OBJECT_STORAGE } from "./object-storage.port";
 import { RetentionService } from "./retention.service";
@@ -12,7 +13,7 @@ import { StorageController } from "./storage.controller";
 import { UploadService } from "./upload.service";
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, AuditModule],
   controllers: [StorageController],
   providers: [
     {

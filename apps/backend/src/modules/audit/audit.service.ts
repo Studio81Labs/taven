@@ -7,6 +7,8 @@ import { AuditActorKind, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { OperatorContext } from "../admin-access/operator-context";
+import { requireOperatorPermission } from "../admin-access/operator-command";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import type { AuditEventPageDto, AuditEventSummaryDto } from "./audit.dto";
 
 type Transaction = Prisma.TransactionClient;
@@ -36,6 +38,7 @@ export class AuditService {
       paymentId?: string;
       quoteRequestId?: string;
       nodeId: string;
+      createdAt?: Date;
       correlationId?: string;
       idempotencyKey?: string;
       reasonCode?: string;
@@ -48,10 +51,20 @@ export class AuditService {
       throw new BadRequestException("Operator is not granted the audit node");
     }
     const reason = input.reason?.trim();
-    if ((reason === undefined) !== (input.reasonCode === undefined)) {
+    const reasonCode = input.reasonCode?.trim();
+    if ((reason === undefined) !== (reasonCode === undefined)) {
       throw new BadRequestException(
         "Audit reason and reason code must be paired",
       );
+    }
+    if (reason === "") {
+      throw new BadRequestException("Audit reason is invalid");
+    }
+    if (reason && reason.length > 1_000) {
+      throw new BadRequestException("Audit reason is too long");
+    }
+    if (reasonCode && !/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
+      throw new BadRequestException("Audit reason code is invalid");
     }
     await transaction.auditEvent.create({
       data: {
@@ -61,7 +74,7 @@ export class AuditService {
         operatorIdentityId: operator.operatorId,
         nodeId,
         schemaVersion: 2,
-        reasonCode: input.reasonCode ?? null,
+        reasonCode: reasonCode ?? null,
         reason: reason ?? null,
         orderId: input.orderId ?? null,
         paymentId: input.paymentId ?? null,
@@ -69,6 +82,7 @@ export class AuditService {
         correlationId: input.correlationId ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
         payload: input.payload,
+        ...(input.createdAt ? { createdAt: input.createdAt } : {}),
       },
     });
   }
@@ -79,6 +93,7 @@ export class AuditService {
     cursor?: string,
     limit = 25,
   ): Promise<AuditEventPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.AUDIT_READ);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw new BadRequestException("Audit limit is invalid");
     }
@@ -94,7 +109,12 @@ export class AuditService {
       cursor !== undefined ? parseCursor(cursor, filterHash) : undefined;
     const where: Prisma.AuditEventWhereInput = {
       AND: [
-        { nodeId: { in: [...operator.nodeIds] } },
+        {
+          OR: [
+            { nodeId: { in: [...operator.nodeIds] } },
+            legacyVisibleScope(operator.nodeIds),
+          ],
+        },
         normalizedFilters,
         ...(keyset
           ? [
@@ -136,10 +156,84 @@ function toSummary(
     ...(row.operatorIdentityId
       ? { operatorIdentityId: row.operatorIdentityId }
       : {}),
+    ...(row.schemaVersion === 1 ? { legacy: true } : {}),
     ...(row.nodeId ? { nodeId: row.nodeId } : {}),
+    ...(row.orderId ? { orderId: row.orderId } : {}),
+    ...(row.paymentId ? { paymentId: row.paymentId } : {}),
+    ...(row.quoteRequestId ? { quoteRequestId: row.quoteRequestId } : {}),
+    ...(row.quoteId ? { quoteId: row.quoteId } : {}),
+    ...(row.correlationId ? { correlationId: row.correlationId } : {}),
     ...(row.reasonCode ? { reasonCode: row.reasonCode } : {}),
     ...(row.reason ? { reason: row.reason } : {}),
     payload: redactPayload(row.payload),
+  };
+}
+
+function legacyVisibleScope(
+  nodeIds: readonly string[],
+): Prisma.AuditEventWhereInput {
+  const orderScope = operationalOrderScope(nodeIds);
+  return {
+    schemaVersion: 1,
+    nodeId: null,
+    OR: [
+      // Assisted intake is platform-level until it becomes an operational
+      // Order; it is still protected by the staff-only audit permission.
+      {
+        AND: [
+          { quoteRequestId: { not: null } },
+          { orderId: null },
+          { paymentId: null },
+          { refundTransactionId: null },
+        ],
+      },
+      {
+        AND: [
+          { quoteId: { not: null } },
+          { orderId: null },
+          { paymentId: null },
+          { refundTransactionId: null },
+        ],
+      },
+      { order: orderScope },
+      { payment: { orderPriceBinding: { order: orderScope } } },
+      {
+        refundTransaction: {
+          payment: { orderPriceBinding: { order: orderScope } },
+        },
+      },
+    ],
+  };
+}
+
+function operationalOrderScope(
+  nodeIds: readonly string[],
+): Prisma.OrderWhereInput {
+  return {
+    AND: [
+      { jobs: { none: { nodeId: { notIn: [...nodeIds] } } } },
+      {
+        phases: {
+          none: {
+            eligibilitySnapshots: { some: { nodeId: { notIn: [...nodeIds] } } },
+          },
+        },
+      },
+      {
+        OR: [
+          { jobs: { some: { nodeId: { in: [...nodeIds] } } } },
+          {
+            phases: {
+              some: {
+                eligibilitySnapshots: {
+                  some: { nodeId: { in: [...nodeIds] } },
+                },
+              },
+            },
+          },
+        ],
+      },
+    ],
   };
 }
 

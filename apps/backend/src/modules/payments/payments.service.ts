@@ -21,6 +21,14 @@ import {
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
+  assertOperationalOrderScope,
+  operatorNode,
+  requireOperatorPermission,
+} from "../admin-access/operator-command";
+import type { OperatorContext } from "../admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { AuditService } from "../audit/audit.service";
+import {
   DELIVERY_CAPABILITY,
   type DeliveryCapabilityPort,
   type ResolvedDeliveryCapability,
@@ -66,6 +74,7 @@ export class PaymentsService {
     private readonly eligibilityPlans: EligibilityPlanService,
     @Inject(ResourceReservationService)
     private readonly reservations: ResourceReservationService,
+    private readonly audit: AuditService,
   ) {}
 
   async capabilities(env: NodeJS.ProcessEnv = process.env) {
@@ -99,10 +108,13 @@ export class PaymentsService {
   }
 
   async createBalancePayment(
+    operator: OperatorContext,
     orderIdInput: string,
     bodyInput: CreateBalancePaymentDto,
     idempotencyKeyInput?: string,
   ): Promise<CheckoutPaymentDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.PAYMENTS_WRITE);
+    const nodeId = operatorNode(operator);
     const orderId = normalizedUuid(orderIdInput, "orderId");
     const method = paymentMethod(bodyInput?.method);
     const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
@@ -111,6 +123,7 @@ export class PaymentsService {
     const initialIdempotency = await this.prisma.$transaction(
       async (transaction) => {
         await lockNamedIdempotencyKey(transaction, namespace, idempotencyKey);
+        await assertOperationalOrderScope(transaction, orderId, nodeId);
         return balanceIdempotencyAfterLock(
           transaction,
           namespace,
@@ -148,6 +161,7 @@ export class PaymentsService {
 
     const staged = await this.prisma.$transaction(async (transaction) => {
       await lockNamedIdempotencyKey(transaction, namespace, idempotencyKey);
+      await assertOperationalOrderScope(transaction, orderId, nodeId);
       const idempotency = await balanceIdempotencyAfterLock(
         transaction,
         namespace,
@@ -293,6 +307,19 @@ export class PaymentsService {
               createdAt: observedAt,
             },
           });
+      await this.audit.recordOperator(transaction, operator, {
+        orderId,
+        paymentId: payment.id,
+        nodeId,
+        eventType: "balance_payment.intent_requested",
+        correlationId: record.id,
+        idempotencyKey,
+        payload: {
+          operation: "balance_payment",
+          status: "CREATED",
+          method,
+        },
+      });
       return {
         payment,
         idempotencyRecordId: record.id,
@@ -350,6 +377,7 @@ export class PaymentsService {
     try {
       return await this.prisma.$transaction(async (transaction) => {
         await lockPaymentEnvelope(transaction, staged.payment.id);
+        await assertOperationalOrderScope(transaction, orderId, nodeId);
         let payment = await transaction.payment.findUniqueOrThrow({
           where: { id: staged.payment.id },
         });

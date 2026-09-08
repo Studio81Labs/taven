@@ -142,6 +142,10 @@
       },
       "AuditEventSummaryDto": {
         "properties": {
+          "correlationId": {
+            "format": "uuid",
+            "type": "string"
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -153,6 +157,9 @@
             "format": "uuid",
             "type": "string"
           },
+          "legacy": {
+            "type": "boolean"
+          },
           "nodeId": {
             "format": "uuid",
             "type": "string"
@@ -161,9 +168,25 @@
             "format": "uuid",
             "type": "string"
           },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
           "payload": {
             "additionalProperties": true,
             "type": "object"
+          },
+          "paymentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quoteId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quoteRequestId": {
+            "format": "uuid",
+            "type": "string"
           },
           "reason": {
             "type": "string"
@@ -1011,7 +1034,7 @@
             "type": "array"
           },
           "reason": {
-            "maxLength": 2000,
+            "maxLength": 1000,
             "minLength": 1,
             "type": "string"
           }
@@ -1460,7 +1483,7 @@
             "type": "string"
           },
           "reason": {
-            "maxLength": 2000,
+            "maxLength": 1000,
             "minLength": 1,
             "type": "string"
           }
@@ -1480,6 +1503,11 @@
             "minLength": 1,
             "type": "string"
           },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
           "replacements": {
             "items": {
               "$ref": "#/components/schemas/ClaimReprintJobDto"
@@ -1489,7 +1517,8 @@
           }
         },
         "required": [
-          "replacements"
+          "replacements",
+          "reason"
         ],
         "type": "object"
       },
@@ -1510,6 +1539,11 @@
             "format": "uuid",
             "type": "string"
           },
+          "rationale": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
           "reason": {
             "enum": [
               "EXPRESS_BREACH",
@@ -1522,6 +1556,7 @@
         },
         "required": [
           "reason",
+          "rationale",
           "amountMinor",
           "allocation"
         ],
@@ -1583,10 +1618,16 @@
             "maxLength": 255,
             "minLength": 1,
             "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
           }
         },
         "required": [
-          "candidateResourceEstimateId"
+          "candidateResourceEstimateId",
+          "reason"
         ],
         "type": "object"
       },
@@ -1634,8 +1675,16 @@
               "$ref": "#/components/schemas/CancellationPrintingConsumptionDto"
             },
             "type": "array"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
           }
         },
+        "required": [
+          "reason"
+        ],
         "type": "object"
       },
       "FulfilmentCommandResultDto": {
@@ -1801,6 +1850,11 @@
             "minLength": 1,
             "type": "string"
           },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
           "reQcEvidence": {
             "maxLength": 500,
             "minLength": 1,
@@ -1819,6 +1873,7 @@
           "providerEventId",
           "providerTransactionId",
           "occurredAt",
+          "reason",
           "carrier",
           "providerShipmentId",
           "carrierLabelId",
@@ -2071,7 +2126,7 @@
             "type": "array"
           },
           "reason": {
-            "maxLength": 2000,
+            "maxLength": 1000,
             "minLength": 1,
             "type": "string"
           },
@@ -3311,10 +3366,23 @@
         ],
         "type": "object"
       },
+      "RefundDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "RejectClaimDto": {
         "properties": {
           "reason": {
-            "maxLength": 2000,
+            "maxLength": 1000,
             "minLength": 1,
             "type": "string"
           }
@@ -3443,12 +3511,18 @@
             "maxLength": 255,
             "minLength": 1,
             "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
           }
         },
         "required": [
           "providerEventId",
           "providerTransactionId",
           "occurredAt",
+          "reason",
           "kind"
         ],
         "type": "object"
@@ -3470,6 +3544,11 @@
             "minLength": 1,
             "type": "string"
           },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
           "trackingCode": {
             "maxLength": 255,
             "type": "string"
@@ -3478,7 +3557,8 @@
         "required": [
           "carrier",
           "providerShipmentId",
-          "carrierLabelId"
+          "carrierLabelId",
+          "reason"
         ],
         "type": "object"
       },
@@ -3497,12 +3577,18 @@
             "maxLength": 255,
             "minLength": 1,
             "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
           }
         },
         "required": [
           "providerEventId",
           "providerTransactionId",
-          "occurredAt"
+          "occurredAt",
+          "reason"
         ],
         "type": "object"
       },
@@ -3602,7 +3688,7 @@
       "WithdrawClaimDto": {
         "properties": {
           "reason": {
-            "maxLength": 2000,
+            "maxLength": 1000,
             "minLength": 1,
             "type": "string"
           }
@@ -4580,6 +4666,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundDto"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -4855,6 +4951,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundDto"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

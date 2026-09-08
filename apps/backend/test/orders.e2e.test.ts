@@ -3,6 +3,9 @@ import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { OrdersService } from "../src/modules/orders/orders.service";
+import type { OperatorContext } from "../src/modules/admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
+import { AuditService } from "../src/modules/audit/audit.service";
 import type { DeliveryCapabilityPort } from "../src/modules/automatic-quotes/delivery-capability.port";
 import type { PaymentProviderPort } from "../src/modules/payments/payment-provider.port";
 import { PaymentsService } from "../src/modules/payments/payments.service";
@@ -20,8 +23,10 @@ const databaseUrl = process.env.DATABASE_URL;
 const testScope = `orders-${randomUUID()}`;
 let pool: Pool;
 let prisma: PrismaService;
-let orders: OrdersService;
-let payments: PaymentsService;
+let orders: LegacyOrdersClient;
+let scopedOrders: OrdersService;
+let payments: LegacyPaymentsClient;
+let testOperatorId: string;
 let createdBalanceIntent:
   | { paymentId: string; amountMinor: bigint; merchantReference: string }
   | undefined;
@@ -29,6 +34,134 @@ let balanceProviderCapabilityCalls = 0;
 let balanceProviderIntentCalls = 0;
 let pauseBalanceIntentBeforeReturn: (() => Promise<void>) | undefined;
 let previousCheckoutEnvironment: Record<string, string | undefined>;
+
+type LegacyOrdersClient = {
+  [Method in keyof OrdersService]: OrdersService[Method] extends (
+    operator: OperatorContext,
+    ...arguments_: infer _Arguments
+  ) => infer Result
+    ? (...arguments_: unknown[]) => Result
+    : OrdersService[Method];
+};
+
+type DropFirst<Arguments extends readonly unknown[]> = Arguments extends [
+  unknown,
+  ...infer Rest,
+]
+  ? Rest
+  : never;
+
+type LegacyPaymentsClient = Omit<PaymentsService, "createBalancePayment"> & {
+  createBalancePayment(
+    ...arguments_: DropFirst<
+      Parameters<PaymentsService["createBalancePayment"]>
+    >
+  ): ReturnType<PaymentsService["createBalancePayment"]>;
+};
+
+function operatorForTest(operatorId: string, nodeId: string): OperatorContext {
+  return {
+    operatorId,
+    role: "ADMIN",
+    permissions: Object.values(OPERATOR_PERMISSIONS),
+    nodeIds: [nodeId],
+    authenticationMethod: "DEVELOPMENT_PASSWORD",
+    sessionId: randomUUID(),
+  };
+}
+
+function legacyOrdersClient(
+  service: OrdersService,
+  operatorId: string,
+): LegacyOrdersClient {
+  return new Proxy(service, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      return async (orderId: string, ...arguments_: unknown[]) => {
+        const job = await prisma.job.findFirst({
+          where: { orderId },
+          select: { nodeId: true },
+        });
+        if (!job) throw new Error("fixture order has no operational node");
+        const commandArguments = legacyCommandArguments(
+          String(property),
+          arguments_,
+        );
+        return Reflect.apply(value, target, [
+          operatorForTest(operatorId, job.nodeId),
+          orderId,
+          ...commandArguments,
+        ]);
+      };
+    },
+  }) as unknown as LegacyOrdersClient;
+}
+
+function legacyCommandArguments(
+  method: string,
+  arguments_: readonly unknown[],
+): unknown[] {
+  const result = [...arguments_];
+  const reasonBodyIndex = new Map<string, number>([
+    ["createReplacement", 1],
+    ["expireReplacement", 1],
+    ["labelShipment", 1],
+    ["confirmLabelVoid", 1],
+    ["handoffShipment", 1],
+    ["applyShipmentEvent", 1],
+    ["createClaimReprint", 1],
+    ["handoffReshipment", 1],
+  ]).get(method);
+  if (reasonBodyIndex !== undefined) {
+    result[reasonBodyIndex] = testReason(result[reasonBodyIndex]);
+  }
+  if (method === "createPriceAdjustment") {
+    const body = testReason(result[0]);
+    result[0] = {
+      ...body,
+      rationale: body.rationale ?? "test adjustment rationale",
+    };
+  }
+  if (method === "refundAdjustment" || method === "refundClaim") {
+    result.splice(1, 0, { reason: "test refund rationale" });
+  }
+  return result;
+}
+
+function testReason(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("fixture command body is invalid");
+  }
+  const body = value as Record<string, unknown>;
+  return { ...body, reason: body.reason ?? "test operator rationale" };
+}
+
+function legacyPaymentsClient(
+  service: PaymentsService,
+  operatorId: string,
+): LegacyPaymentsClient {
+  return new Proxy(service, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property !== "createBalancePayment") {
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (orderId: string, ...arguments_: unknown[]) => {
+        const job = await prisma.job.findFirst({
+          where: { orderId },
+          select: { nodeId: true },
+        });
+        if (!job) throw new Error("fixture order has no operational node");
+        return Reflect.apply(service.createBalancePayment, service, [
+          operatorForTest(operatorId, job.nodeId),
+          orderId,
+          ...arguments_,
+        ]) as ReturnType<PaymentsService["createBalancePayment"]>;
+      };
+    },
+  }) as unknown as LegacyPaymentsClient;
+}
 
 type FulfilmentFixture = {
   foundation: PersistenceFoundation;
@@ -620,7 +753,15 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     pool = new Pool({ connectionString: databaseUrl });
     prisma = new PrismaService();
     await prisma.onModuleInit();
-    orders = new OrdersService(prisma);
+    const operator = await prisma.operatorIdentity.create({
+      data: {
+        email: `orders-e2e-${randomUUID()}@example.test`,
+        role: "ADMIN",
+      },
+    });
+    testOperatorId = operator.id;
+    scopedOrders = new OrdersService(prisma, new AuditService(prisma));
+    orders = legacyOrdersClient(scopedOrders, operator.id);
     const provider: PaymentProviderPort = {
       providerName: () => "test",
       capabilities: async () => {
@@ -674,12 +815,16 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         evidence: {},
       }),
     };
-    payments = new PaymentsService(
-      prisma,
-      provider,
-      null as unknown as DeliveryCapabilityPort,
-      null as unknown as EligibilityPlanService,
-      null as unknown as ResourceReservationService,
+    payments = legacyPaymentsClient(
+      new PaymentsService(
+        prisma,
+        provider,
+        null as unknown as DeliveryCapabilityPort,
+        null as unknown as EligibilityPlanService,
+        null as unknown as ResourceReservationService,
+        new AuditService(prisma),
+      ),
+      operator.id,
     );
   });
 
@@ -717,6 +862,61 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         },
       }),
     ).resolves.toBe(1);
+  });
+
+  it("fails closed for foreign node scope and direct insufficient permissions", async () => {
+    const fixture = await preparePaidOrder("operator-scope-boundary");
+    const { orderId, nodeId } = fixture.foundation;
+    const jobId = fixture.productions[0]!.jobId;
+
+    await expect(
+      scopedOrders.getFulfilment(
+        operatorForTest(testOperatorId, randomUUID()),
+        orderId,
+      ),
+    ).rejects.toMatchObject({ name: "NotFoundException" });
+    expect(() =>
+      scopedOrders.acceptJob(
+        {
+          ...operatorForTest(testOperatorId, nodeId),
+          permissions: [OPERATOR_PERMISSIONS.OPERATIONS_READ],
+        },
+        orderId,
+        jobId,
+        "operator-scope-insufficient-permission",
+      ),
+    ).toThrow("Operator permission is insufficient");
+  });
+
+  it("audits a maximum-length provider event without using its identifier as a reason code", async () => {
+    const fixture = await preparePaidOrder("provider-event-audit-code");
+    const { orderId, shipmentId } = fixture.foundation;
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    const key = "provider-event-audit-code-key";
+
+    const applied = await orders.applyShipmentEvent(
+      orderId,
+      shipmentId,
+      {
+        kind: "TRANSIT_SCAN",
+        providerEventId: "event-".padEnd(255, "x"),
+        providerTransactionId: "provider-transaction",
+        occurredAt: new Date().toISOString(),
+      },
+      key,
+    );
+
+    expect(applied.status).toBe("SHIPMENT_EVENT_APPLIED");
+    await expect(
+      prisma.auditEvent.findFirstOrThrow({
+        where: {
+          eventType: "fulfilment.command_completed",
+          idempotencyKey: key,
+        },
+      }),
+    ).resolves.toMatchObject({ reasonCode: "SHIPMENT_EVENT_TRANSIT_SCAN" });
   });
 
   it("records explicit legal evidence before repairing a legacy Claim window", async () => {
@@ -2098,7 +2298,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma.photoAsset.findUniqueOrThrow({ where: { id: photoAssetId } }),
     ).resolves.toMatchObject({ retentionHold: "NONE" });
 
-    expect(() =>
+    await expect(
       orders.createClaim(
         fixture.foundation.orderId,
         {
@@ -2109,7 +2309,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         },
         "post-delivery-quality-incident-rejected",
       ),
-    ).toThrow(
+    ).rejects.toThrow(
       "incidentShipmentId is not allowed for a post-delivery quality Claim",
     );
     await expect(
@@ -3324,7 +3524,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       reQcEvidence: "operator repeated the final visual and dimensional QC",
     };
 
-    expect(() =>
+    await expect(
       orders.handoffReshipment(
         fixture.foundation.orderId,
         claim.id,
@@ -3334,7 +3534,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         },
         "returned-custody-reship-equal-qc-time",
       ),
-    ).toThrow(
+    ).rejects.toThrow(
       "custodyConfirmedAt, reQcPassedAt, and occurredAt must be chronological",
     );
 

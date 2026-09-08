@@ -7,12 +7,15 @@ import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { crc32, deflateRawSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
+import type { OperatorContext } from "../src/modules/admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 import {
   OBJECT_STORAGE,
   type ObjectStorage,
 } from "../src/modules/storage/object-storage.port";
 import { RetentionService } from "../src/modules/storage/retention.service";
+import { UploadService } from "../src/modules/storage/upload.service";
 import {
   modelSourceObjectKey,
   photoExifObjectKey,
@@ -47,6 +50,7 @@ describe("secure object storage and retention", () => {
   let quotes: QuotesService;
   let retention: RetentionService;
   let s3: S3Client;
+  let operator: OperatorContext;
   const cleanupKeys = new Set<string>();
 
   beforeAll(async () => {
@@ -61,6 +65,24 @@ describe("secure object storage and retention", () => {
     objects = app.get<ObjectStorage>(OBJECT_STORAGE);
     quotes = app.get(QuotesService);
     retention = app.get(RetentionService);
+    const node = await prisma.node.findFirstOrThrow({
+      where: { active: true },
+    });
+    const identity = await prisma.operatorIdentity.create({
+      data: {
+        email: `storage-e2e-${randomUUID()}@example.test`,
+        role: "ADMIN",
+        nodeGrants: { create: { nodeId: node.id } },
+      },
+    });
+    operator = {
+      operatorId: identity.id,
+      role: "ADMIN",
+      permissions: Object.values(OPERATOR_PERMISSIONS),
+      nodeIds: [node.id],
+      authenticationMethod: "DEVELOPMENT_PASSWORD",
+      sessionId: randomUUID(),
+    };
     s3 = new S3Client({
       endpoint: s3Config.endpoint,
       region: s3Config.region,
@@ -452,6 +474,28 @@ describe("secure object storage and retention", () => {
       storageObjectKey: photoOriginalObjectKey(initiated.body.assetId),
       mediaType: "image/png",
     });
+
+    const download = await app
+      .get(UploadService)
+      .createOperatorQuotePhotoDownload(
+        operator,
+        scopeId,
+        initiated.body.assetId,
+      );
+    expect(download.downloadUrl).toContain("X-Amz-Signature");
+    await expect(
+      prisma.auditEvent.findFirst({
+        where: {
+          eventType: "quote_request.attachment_download_issued",
+          quoteRequestId: scopeId,
+          operatorIdentityId: operator.operatorId,
+          nodeId: operator.nodeIds[0]!,
+        },
+      }),
+    ).resolves.toMatchObject({
+      actorKind: "OPERATOR",
+      payload: { operation: "attachment_download", status: "ISSUED" },
+    });
   });
 
   it("fails closed before issuing or promoting a quote photo", async () => {
@@ -579,6 +623,7 @@ describe("secure object storage and retention", () => {
     cleanupKeys.add(photoOriginalObjectKey(initiated.body.assetId));
     await putSigned(initiated.body, bytes);
     await quotes.beginReview(
+      operator,
       scopeId,
       `storage-terminal-review-${randomUUID()}`,
     );
@@ -638,6 +683,7 @@ describe("secure object storage and retention", () => {
       });
     });
     const issued = await quotes.issueOffer(
+      operator,
       scopeId,
       {
         summary: "Storage confirmation race offer",

@@ -38,7 +38,7 @@ export class JobFailureDto {
   })
   stage!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
   reason!: string;
 
   @ApiProperty({ type: String, enum: ["REPLACE", "REFUND"] })
@@ -71,9 +71,15 @@ export class CreateReplacementDto {
       "Stable resource-plan identity; omitted values derive from the command key",
   })
   planKey?: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  reason!: string;
 }
 
 export class ExpireReplacementDto {
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  reason!: string;
+
   @ApiPropertyOptional({
     type: [CancellationPrintingConsumptionDto],
     description:
@@ -106,6 +112,9 @@ export class CreateClaimReprintDto {
       "Stable reprint identity; omitted values derive from the command key",
   })
   planKey?: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  reason!: string;
 }
 
 export class PackJobDto {
@@ -133,6 +142,9 @@ export class ShipmentLabelDto {
 
   @ApiPropertyOptional({ type: String, maxLength: 255 })
   trackingCode?: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  reason!: string;
 }
 
 export class ShipmentProviderEvidenceDto {
@@ -144,6 +156,9 @@ export class ShipmentProviderEvidenceDto {
 
   @ApiProperty({ type: String, format: "date-time" })
   occurredAt!: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  reason!: string;
 }
 
 export class ShipmentEventDto extends ShipmentProviderEvidenceDto {
@@ -184,6 +199,9 @@ export class CreatePriceAdjustmentDto {
   })
   reason!: string;
 
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  rationale!: string;
+
   @ApiProperty({ type: String, pattern: "^[1-9][0-9]*$" })
   amountMinor!: string;
 
@@ -204,7 +222,7 @@ export class CreateClaimDto {
   })
   origin!: "SHIPMENT_INCIDENT" | "POST_DELIVERY_QUALITY";
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
   reason!: string;
 
   @ApiProperty({ type: [String], format: "uuid", minItems: 1 })
@@ -226,12 +244,17 @@ export class ApproveLegacyClaimWindowDto {
 }
 
 export class RejectClaimDto {
-  @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
   reason!: string;
 }
 
 export class WithdrawClaimDto {
-  @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  reason!: string;
+}
+
+export class RefundDto {
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
   reason!: string;
 }
 
@@ -259,7 +282,7 @@ export class HandoffReshipmentDto extends ShipmentProviderEvidenceDto {
 }
 
 export class CancelOrderDto {
-  @ApiProperty({ type: String, minLength: 1, maxLength: 2_000 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
   reason!: string;
 
   @ApiPropertyOptional({

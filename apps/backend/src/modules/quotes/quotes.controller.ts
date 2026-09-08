@@ -29,7 +29,9 @@ import {
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { CurrentOperator } from "../admin-access/current-operator.decorator";
 import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
+import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import { SignedDownloadResponseDto } from "../storage/storage.dto";
@@ -196,9 +198,10 @@ export class OperatorQuoteRequestsController {
   })
   @ApiOkResponse({ type: OperatorQuoteRequestDetailDto, isArray: true })
   list(
+    @CurrentOperator() operator: OperatorContext,
     @Query("status") status?: string,
   ): Promise<OperatorQuoteRequestDetailDto[]> {
-    return this.quotes.listRequests(status);
+    return this.quotes.listRequests(operator, status);
   }
 
   @Get(":requestId")
@@ -207,9 +210,10 @@ export class OperatorQuoteRequestsController {
   @ApiParam({ name: "requestId", type: String, format: "uuid" })
   @ApiOkResponse({ type: OperatorQuoteRequestDetailDto })
   get(
+    @CurrentOperator() operator: OperatorContext,
     @Param("requestId") requestId: string,
   ): Promise<OperatorQuoteRequestDetailDto> {
-    return this.quotes.getOperatorRequest(requestId);
+    return this.quotes.getOperatorRequest(operator, requestId);
   }
 
   @Post(":requestId/attachments/:photoAssetId/download")
@@ -223,10 +227,12 @@ export class OperatorQuoteRequestsController {
   })
   @ApiGoneResponse({ description: "Quote attachment is expired or deleted" })
   downloadAttachment(
+    @CurrentOperator() operator: OperatorContext,
     @Param("requestId") requestId: string,
     @Param("photoAssetId") photoAssetId: string,
   ): Promise<SignedDownloadResponseDto> {
     return this.uploads.createOperatorQuotePhotoDownload(
+      operator,
       requestId,
       photoAssetId,
     );
@@ -239,10 +245,11 @@ export class OperatorQuoteRequestsController {
   @ApiParam({ name: "requestId", type: String, format: "uuid" })
   @ApiOkResponse({ type: QuoteRequestStatusDto })
   review(
+    @CurrentOperator() operator: OperatorContext,
     @Param("requestId") requestId: string,
     @Headers("idempotency-key") idempotencyKey?: string,
   ): Promise<QuoteRequestStatusDto> {
-    return this.quotes.beginReview(requestId, idempotencyKey);
+    return this.quotes.beginReview(operator, requestId, idempotencyKey);
   }
 
   @Post(":requestId/offers")
@@ -256,11 +263,12 @@ export class OperatorQuoteRequestsController {
     description: "Binding offer flows await launch approval",
   })
   issue(
+    @CurrentOperator() operator: OperatorContext,
     @Param("requestId") requestId: string,
     @Body() body: IssueOfferDto,
     @Headers("idempotency-key") idempotencyKey?: string,
   ): Promise<OfferIssuedDto> {
-    return this.quotes.issueOffer(requestId, body, idempotencyKey);
+    return this.quotes.issueOffer(operator, requestId, body, idempotencyKey);
   }
 
   @Post(":requestId/expire")
@@ -271,9 +279,10 @@ export class OperatorQuoteRequestsController {
   @ApiOkResponse({ type: QuoteRequestStatusDto })
   @ApiConflictResponse({ description: "Offer is not overdue" })
   expire(
+    @CurrentOperator() operator: OperatorContext,
     @Param("requestId") requestId: string,
     @Headers("idempotency-key") idempotencyKey?: string,
   ): Promise<QuoteRequestStatusDto> {
-    return this.quotes.expireOffer(requestId, idempotencyKey);
+    return this.quotes.expireOffer(operator, requestId, idempotencyKey);
   }
 }
