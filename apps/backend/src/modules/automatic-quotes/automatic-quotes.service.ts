@@ -6205,7 +6205,12 @@ function retryableHandoffTransactionError(error: unknown): boolean {
     candidate?.cause?.cause?.code,
   ];
   return codes.some(
-    (code) => code === "P2034" || code === "40001" || code === "40P01",
+    (code) =>
+      code === "P2034" ||
+      code === "P2002" ||
+      code === "40001" ||
+      code === "40P01" ||
+      code === "23505",
   );
 }
 

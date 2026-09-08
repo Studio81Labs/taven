@@ -5,6 +5,34 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { AutomaticQuotesService } from "./automatic-quotes.service";
 
 describe("AutomaticQuotesService", () => {
+  it.each(["P2002", "23505"])(
+    "retries a handoff issuance uniqueness race (%s)",
+    async (code) => {
+      const transaction = vi
+        .fn()
+        .mockRejectedValueOnce({ code })
+        .mockResolvedValueOnce("canonical response");
+      const service = new AutomaticQuotesService(
+        { $transaction: transaction } as unknown as PrismaService,
+        null as never,
+        null as never,
+        null as never,
+        null as never,
+      );
+
+      const handoffIssuance = service as unknown as {
+        serializableHandoffIssuance: (
+          operation: () => Promise<string>,
+        ) => Promise<string>;
+      };
+
+      await expect(
+        handoffIssuance.serializableHandoffIssuance(async () => "issued"),
+      ).resolves.toBe("canonical response");
+      expect(transaction).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("uses the locked transaction's database clock to reject expired observations", async () => {
     const sessionId = "00000000-0000-4000-8000-000000000001";
     const token = "a".repeat(43);
