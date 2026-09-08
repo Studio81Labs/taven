@@ -2898,6 +2898,7 @@ export interface components {
             items: components["schemas"]["OperatorOrderItemDto"][];
             publicReference: string;
             status: string;
+            timeline: components["schemas"]["OperatorOrderTimelineEventDto"][];
         };
         OperatorOrderItemDto: {
             color?: string | null;
@@ -2931,6 +2932,16 @@ export interface components {
             items: components["schemas"]["OperatorOrderListItemDto"][];
             nextCursor?: string;
         };
+        OperatorOrderTimelineEventDto: {
+            actorKind: string;
+            eventType: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            occurredAt: string;
+            reason?: string | null;
+            reasonCode?: string | null;
+        };
         OperatorPaymentDto: {
             /** Format: date-time */
             balanceDueAt?: string | null;
@@ -2949,6 +2960,10 @@ export interface components {
             /** Format: uuid */
             id: string;
             merchantReference?: string | null;
+            /** Format: uuid */
+            orderPriceBindingId: string;
+            /** Format: uuid */
+            priceSnapshotId: string;
             provider: string;
             requestedAmountMinor: string;
             role: string;
