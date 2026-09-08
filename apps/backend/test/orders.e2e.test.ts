@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { BadRequestException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
@@ -834,6 +835,30 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     for (const [name, value] of Object.entries(previousCheckoutEnvironment)) {
       restoreEnvironment(name, value);
     }
+  });
+
+  it("rejects absent refund request bodies before command execution", async () => {
+    const operator = operatorForTest(testOperatorId, randomUUID());
+    const orderId = randomUUID();
+
+    expect(() =>
+      scopedOrders.refundAdjustment(
+        operator,
+        orderId,
+        randomUUID(),
+        undefined as never,
+        "missing-adjustment-refund-body",
+      ),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      scopedOrders.refundClaim(
+        operator,
+        orderId,
+        randomUUID(),
+        undefined as never,
+        "missing-claim-refund-body",
+      ),
+    ).toThrow(BadRequestException);
   });
 
   it("freezes the platform-owned payout tuple and replays acceptance", async () => {

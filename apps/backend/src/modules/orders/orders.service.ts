@@ -3804,7 +3804,7 @@ export class OrdersService {
       OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
     );
     assertUuid(adjustmentId, "adjustmentId");
-    const reason = requiredText(body.reason, "reason", 1_000);
+    const reason = requiredText(body?.reason, "reason", 1_000);
     return this.command(
       operator,
       orderId,
@@ -3932,7 +3932,7 @@ export class OrdersService {
       OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
     );
     assertUuid(claimId, "claimId");
-    const reason = requiredText(body.reason, "reason", 1_000);
+    const reason = requiredText(body?.reason, "reason", 1_000);
     return this.command(
       operator,
       orderId,
