@@ -362,6 +362,7 @@ export class QuotesService {
       include: {
         quoteSession: true,
         customer: true,
+        quote: { select: { issuedAt: true } },
         automaticQuoteHandoff: true,
       },
       orderBy: [{ slaDueAt: "asc" }, { createdAt: "asc" }],
@@ -409,6 +410,7 @@ export class QuotesService {
     const keys = await this.prisma.$queryRaw<Array<{ id: string }>>`
       SELECT request.id
       FROM quote_requests AS request
+      LEFT JOIN quotes AS quote ON quote.quote_request_id = request.id
       WHERE TRUE
         ${statusFilter}
         ${slaFilter}
@@ -421,6 +423,7 @@ export class QuotesService {
       include: {
         quoteSession: true,
         customer: true,
+        quote: { select: { issuedAt: true } },
         automaticQuoteHandoff: true,
       },
     });
@@ -462,6 +465,7 @@ export class QuotesService {
       include: {
         quoteSession: true,
         customer: true,
+        quote: { select: { issuedAt: true } },
         automaticQuoteHandoff: true,
       },
     });
@@ -1547,6 +1551,7 @@ export class QuotesService {
         displayName: string | null;
         phone: string | null;
       } | null;
+      quote?: { issuedAt: Date } | null;
     },
     observedAt: Date,
   ): Promise<QuoteRequestDetailDto> {
@@ -1559,7 +1564,10 @@ export class QuotesService {
       orderBy: { uploadedAt: "asc" },
     });
     const respondedAt =
-      request.slaRespondedAt?.getTime() ?? observedAt.getTime();
+      slaResponseEvidenceAt(
+        request.slaRespondedAt,
+        request.quote?.issuedAt,
+      )?.getTime() ?? observedAt.getTime();
     return {
       requestId: request.id,
       publicReference: request.publicReference,
@@ -1599,6 +1607,7 @@ export class QuotesService {
         modelFileIds: string[];
         itemSelections: Prisma.JsonValue;
       } | null;
+      quote?: { issuedAt: Date } | null;
     },
     observedAt: Date,
   ): Promise<OperatorQuoteRequestDetailDto> {
@@ -3050,20 +3059,21 @@ function operatorQueueSlaFilter(
   sla: OperatorQueueSla | undefined,
   observedAt: Date,
 ): Prisma.Sql {
+  const respondedAt = Prisma.sql`LEAST(request.sla_responded_at, quote.issued_at)`;
   switch (sla) {
     case "PENDING":
-      return Prisma.sql`AND request.sla_responded_at IS NULL`;
+      return Prisma.sql`AND ${respondedAt} IS NULL`;
     case "MET":
       return Prisma.sql`
-        AND request.sla_responded_at IS NOT NULL
-        AND request.sla_responded_at <= request.sla_due_at
+        AND ${respondedAt} IS NOT NULL
+        AND ${respondedAt} <= request.sla_due_at
       `;
     case "BREACHED":
       return Prisma.sql`
         AND (
-          request.sla_responded_at > request.sla_due_at
+          ${respondedAt} > request.sla_due_at
           OR (
-            request.sla_responded_at IS NULL
+            ${respondedAt} IS NULL
             AND request.sla_due_at < ${observedAt}::timestamptz
           )
         )
@@ -3071,6 +3081,19 @@ function operatorQueueSlaFilter(
     default:
       return Prisma.empty;
   }
+}
+
+function slaResponseEvidenceAt(
+  slaRespondedAt: Date | null,
+  quoteIssuedAt: Date | null | undefined,
+): Date | null {
+  const timestamps = [slaRespondedAt, quoteIssuedAt].filter(
+    (value): value is Date => value !== null && value !== undefined,
+  );
+  if (timestamps.length === 0) return null;
+  return timestamps.reduce((earliest, candidate) =>
+    candidate.getTime() < earliest.getTime() ? candidate : earliest,
+  );
 }
 
 function parseOperatorQueueCursor(
