@@ -220,6 +220,35 @@ describe("v0-1 metric classifications", () => {
     ).toBe(0n);
   });
 
+  it("does not report negative outstanding balance while a contract credit refunds", () => {
+    expect(
+      outstandingGross(
+        {
+          status: "PARTIALLY_FULFILLED",
+          activeContractPrice: {
+            contractPriceRevision: {
+              contractTotalMinor: 80n,
+              currency: "CZK",
+            },
+          },
+          priceBindings: [
+            {
+              payments: [
+                {
+                  capturedAmountMinor: 100n,
+                  currency: "CZK",
+                  status: "CAPTURED",
+                  refunds: [],
+                },
+              ],
+            },
+          ],
+        } as never,
+        "CZK",
+      ),
+    ).toBe(0n);
+  });
+
   it("separates persisted assisted handoffs from unresolved automatic uses", () => {
     const report = automationMetrics(
       [
