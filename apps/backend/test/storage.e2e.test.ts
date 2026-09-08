@@ -494,7 +494,11 @@ describe("secure object storage and retention", () => {
       }),
     ).resolves.toMatchObject({
       actorKind: "OPERATOR",
-      payload: { operation: "attachment_download", status: "ISSUED" },
+      payload: {
+        operation: "attachment_download",
+        status: "ISSUED",
+        photoAssetId: initiated.body.assetId,
+      },
     });
   });
 

@@ -193,6 +193,10 @@
           },
           "reasonCode": {
             "type": "string"
+          },
+          "refundTransactionId": {
+            "format": "uuid",
+            "type": "string"
           }
         },
         "required": [

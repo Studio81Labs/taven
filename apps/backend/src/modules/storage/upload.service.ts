@@ -556,7 +556,11 @@ export class UploadService {
         nodeId,
         eventType: "quote_request.attachment_download_issued",
         correlationId: randomUUID(),
-        payload: { operation: "attachment_download", status: "ISSUED" },
+        payload: {
+          operation: "attachment_download",
+          status: "ISSUED",
+          photoAssetId,
+        },
       }),
     );
     return download;

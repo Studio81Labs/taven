@@ -160,6 +160,9 @@ function toSummary(
     ...(row.nodeId ? { nodeId: row.nodeId } : {}),
     ...(row.orderId ? { orderId: row.orderId } : {}),
     ...(row.paymentId ? { paymentId: row.paymentId } : {}),
+    ...(row.refundTransactionId
+      ? { refundTransactionId: row.refundTransactionId }
+      : {}),
     ...(row.quoteRequestId ? { quoteRequestId: row.quoteRequestId } : {}),
     ...(row.quoteId ? { quoteId: row.quoteId } : {}),
     ...(row.correlationId ? { correlationId: row.correlationId } : {}),
@@ -242,7 +245,13 @@ function redactPayload(
 ): Record<string, boolean | number | string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const result: Record<string, boolean | number | string> = {};
-  for (const key of ["operation", "status", "outcome", "version"] as const) {
+  for (const key of [
+    "operation",
+    "status",
+    "outcome",
+    "version",
+    "photoAssetId",
+  ] as const) {
     const field = value[key];
     if (
       typeof field === "boolean" ||
