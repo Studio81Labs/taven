@@ -44,6 +44,76 @@
         ],
         "type": "object"
       },
+      "AcquisitionMetricsDto": {
+        "properties": {
+          "acquisitionSpend": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "cac": {
+            "$ref": "#/components/schemas/MetricMoneyRatioDto"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "firstOrderCustomers": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "partialPeriodSpendExcluded": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "repeatOrders": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "repeatRate": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          },
+          "unknownCustomerOrAttribution": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "definition",
+          "acquisitionSpend",
+          "partialPeriodSpendExcluded",
+          "cac",
+          "firstOrderCustomers",
+          "unknownCustomerOrAttribution",
+          "repeatOrders",
+          "repeatRate"
+        ],
+        "type": "object"
+      },
+      "ActualCostBreakdownDto": {
+        "properties": {
+          "carrier": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "material": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "packaging": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "payment_fee": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "variable_machine": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          }
+        },
+        "required": [
+          "material",
+          "variable_machine",
+          "carrier",
+          "packaging",
+          "payment_fee"
+        ],
+        "type": "object"
+      },
       "ApproveLegacyClaimWindowDto": {
         "properties": {
           "approvalReference": {
@@ -66,6 +136,43 @@
           "claimPolicyRevision",
           "claimWindowDays",
           "approvalReference"
+        ],
+        "type": "object"
+      },
+      "AssistedSlaMetricsDto": {
+        "properties": {
+          "definition": {
+            "type": "string"
+          },
+          "pendingOverdue": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "requests": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "responded": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "responseRate": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          },
+          "scope": {
+            "enum": [
+              "PLATFORM"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "definition",
+          "requests",
+          "responded",
+          "pendingOverdue",
+          "responseRate"
         ],
         "type": "object"
       },
@@ -1011,6 +1118,100 @@
         ],
         "type": "object"
       },
+      "AutomationMetricsDto": {
+        "properties": {
+          "blockedOrHandoff": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "confirmedModelFiles": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "evidenceUnavailable": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "scope": {
+            "enum": [
+              "PLATFORM"
+            ],
+            "type": "string"
+          },
+          "successfulAutomaticUses": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "unresolvedOrPending": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "value": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          }
+        },
+        "required": [
+          "scope",
+          "definition",
+          "successfulAutomaticUses",
+          "confirmedModelFiles",
+          "value",
+          "unresolvedOrPending",
+          "blockedOrHandoff",
+          "evidenceUnavailable"
+        ],
+        "type": "object"
+      },
+      "BindingBreakdownDto": {
+        "properties": {
+          "acceptedBindings": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "acceptedGross": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          },
+          "offersIssued": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "preflight": {
+            "$ref": "#/components/schemas/PreflightCoverageDto"
+          }
+        },
+        "required": [
+          "offersIssued",
+          "acceptedBindings",
+          "conversion",
+          "acceptedGross",
+          "preflight"
+        ],
+        "type": "object"
+      },
+      "BusinessEventCoverageDto": {
+        "properties": {
+          "historicalBackfill": {
+            "enum": [
+              "not_performed"
+            ],
+            "type": "string"
+          },
+          "retainedClientObservations": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "retainedClientObservations",
+          "historicalBackfill"
+        ],
+        "type": "object"
+      },
       "CancellationPrintingConsumptionDto": {
         "properties": {
           "actualMaterialMilligrams": {
@@ -1205,6 +1406,56 @@
         ],
         "type": "object"
       },
+      "CommercialMetricsDto": {
+        "properties": {
+          "acquisitionAndRepeat": {
+            "$ref": "#/components/schemas/AcquisitionMetricsDto"
+          },
+          "assistedSla": {
+            "$ref": "#/components/schemas/AssistedSlaMetricsDto"
+          },
+          "automationShare": {
+            "$ref": "#/components/schemas/AutomationMetricsDto"
+          },
+          "commercialTurnover": {
+            "$ref": "#/components/schemas/TurnoverMetricsDto"
+          },
+          "funnel": {
+            "$ref": "#/components/schemas/FunnelMetricsDto"
+          },
+          "handlingAndContributionMargin": {
+            "$ref": "#/components/schemas/HandlingAndMarginMetricsDto"
+          },
+          "orders": {
+            "$ref": "#/components/schemas/OrderMetricsDto"
+          },
+          "quoteToPaid": {
+            "$ref": "#/components/schemas/QuoteToPaidMetricsDto"
+          },
+          "refundsAndAdjustments": {
+            "$ref": "#/components/schemas/RefundMetricsDto"
+          },
+          "scope": {
+            "enum": [
+              "PLATFORM"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "funnel",
+          "quoteToPaid",
+          "orders",
+          "commercialTurnover",
+          "automationShare",
+          "handlingAndContributionMargin",
+          "refundsAndAdjustments",
+          "acquisitionAndRepeat",
+          "assistedSla"
+        ],
+        "type": "object"
+      },
       "CompleteHandlingSessionDto": {
         "properties": {
           "allocations": {
@@ -1372,6 +1623,56 @@
           "assetKind",
           "uploadedAt",
           "deleteAfter"
+        ],
+        "type": "object"
+      },
+      "ContractAmountsDto": {
+        "properties": {
+          "gross": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "net": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "vat": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          }
+        },
+        "required": [
+          "gross",
+          "net",
+          "vat"
+        ],
+        "type": "object"
+      },
+      "ContributionMarginMetricsDto": {
+        "properties": {
+          "explicitCoverage": {
+            "$ref": "#/components/schemas/MarginCoverageDto"
+          },
+          "knownOrders": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "provisionalOrders": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "value": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MetricMoneyDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "knownOrders",
+          "provisionalOrders",
+          "value",
+          "explicitCoverage"
         ],
         "type": "object"
       },
@@ -1691,6 +1992,63 @@
         ],
         "type": "object"
       },
+      "ExpressShareDto": {
+        "properties": {
+          "denominator": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "numerator": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "value": {
+            "nullable": true,
+            "type": "number"
+          }
+        },
+        "required": [
+          "numerator",
+          "denominator",
+          "value"
+        ],
+        "type": "object"
+      },
+      "FirstPassYieldMetricsDto": {
+        "properties": {
+          "cancelledBeforeProduction": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "firstQcPasses": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "originalTerminalFailures": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "pending": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "value": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          }
+        },
+        "required": [
+          "definition",
+          "firstQcPasses",
+          "originalTerminalFailures",
+          "pending",
+          "cancelledBeforeProduction",
+          "value"
+        ],
+        "type": "object"
+      },
       "FulfilmentCommandResultDto": {
         "properties": {
           "orderId": {
@@ -1773,6 +2131,51 @@
         ],
         "type": "object"
       },
+      "FunnelMetricsDto": {
+        "properties": {
+          "automaticBindingPriceQuoteViews": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "checkoutStarts": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "clicks": {
+            "enum": [
+              "not_collected"
+            ],
+            "type": "string"
+          },
+          "confirmedOrders": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "impressions": {
+            "enum": [
+              "not_collected"
+            ],
+            "type": "string"
+          },
+          "uploads": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "definition",
+          "uploads",
+          "automaticBindingPriceQuoteViews",
+          "checkoutStarts",
+          "confirmedOrders",
+          "impressions",
+          "clicks"
+        ],
+        "type": "object"
+      },
       "GithubLoginStartDto": {
         "properties": {
           "authorizationUrl": {
@@ -1816,6 +2219,29 @@
         "required": [
           "orderId",
           "servedUnitCount"
+        ],
+        "type": "object"
+      },
+      "HandlingAndMarginMetricsDto": {
+        "properties": {
+          "actualCosts": {
+            "$ref": "#/components/schemas/ActualCostBreakdownDto"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "finalContributionMargin": {
+            "$ref": "#/components/schemas/ContributionMarginMetricsDto"
+          },
+          "handlingCost": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          }
+        },
+        "required": [
+          "definition",
+          "handlingCost",
+          "actualCosts",
+          "finalContributionMargin"
         ],
         "type": "object"
       },
@@ -2187,6 +2613,23 @@
         },
         "type": "object"
       },
+      "MarginCoverageDto": {
+        "properties": {
+          "completeOrders": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "incompleteOrders": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "completeOrders",
+          "incompleteOrders"
+        ],
+        "type": "object"
+      },
       "MeasurementCommandResultDto": {
         "properties": {
           "id": {
@@ -2203,24 +2646,227 @@
         ],
         "type": "object"
       },
+      "MetricMoneyDto": {
+        "properties": {
+          "amountMinor": {
+            "description": "Signed decimal minor units.",
+            "example": "12500",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "CZK"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "amountMinor",
+          "currency"
+        ],
+        "type": "object"
+      },
+      "MetricMoneyRatioDto": {
+        "properties": {
+          "denominator": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "numerator": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "value": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MetricMoneyDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "numerator",
+          "denominator",
+          "value"
+        ],
+        "type": "object"
+      },
+      "MetricRatioDto": {
+        "properties": {
+          "denominator": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "numerator": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "value": {
+            "nullable": true,
+            "type": "number"
+          }
+        },
+        "required": [
+          "numerator",
+          "denominator",
+          "value"
+        ],
+        "type": "object"
+      },
+      "MetricsCompletenessDto": {
+        "properties": {
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "warning",
+              "unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "flags"
+        ],
+        "type": "object"
+      },
+      "MetricsIntervalDto": {
+        "properties": {
+          "channel": {
+            "enum": [
+              "direct",
+              "organic",
+              "paid",
+              "referral",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "CZK"
+            ],
+            "type": "string"
+          },
+          "from": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "to": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "currency",
+          "nodeId"
+        ],
+        "type": "object"
+      },
+      "MetricsOrderDetailDto": {
+        "properties": {
+          "acceptedGross": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "activeContract": {
+            "$ref": "#/components/schemas/ContractAmountsDto"
+          },
+          "actualCosts": {
+            "$ref": "#/components/schemas/ActualCostBreakdownDto"
+          },
+          "capturedCash": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "explicitMarginCoverage": {
+            "type": "boolean"
+          },
+          "finalContributionMargin": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MetricMoneyDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "handlingCost": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "automatic",
+              "individual",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "outstandingGross": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "publicReference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "succeededRefunds": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          }
+        },
+        "required": [
+          "id",
+          "publicReference",
+          "confirmedAt",
+          "status",
+          "origin",
+          "acceptedGross",
+          "activeContract",
+          "capturedCash",
+          "succeededRefunds",
+          "outstandingGross",
+          "handlingCost",
+          "actualCosts",
+          "finalContributionMargin",
+          "explicitMarginCoverage"
+        ],
+        "type": "object"
+      },
       "MetricsOrderPageDto": {
         "properties": {
           "completeness": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/components/schemas/MetricsCompletenessDto"
           },
           "generatedAt": {
             "format": "date-time",
             "type": "string"
           },
           "interval": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/components/schemas/MetricsIntervalDto"
           },
           "items": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/MetricsOrderDetailDto"
             },
             "type": "array"
           },
@@ -2245,8 +2891,7 @@
             "type": "string"
           },
           "sourceCoverage": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/components/schemas/MetricsSourceCoverageDto"
           }
         },
         "required": [
@@ -2264,20 +2909,17 @@
       "MetricsReportDto": {
         "properties": {
           "commercial": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/components/schemas/CommercialMetricsDto"
           },
           "completeness": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/components/schemas/MetricsCompletenessDto"
           },
           "generatedAt": {
             "format": "date-time",
             "type": "string"
           },
           "interval": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/components/schemas/MetricsIntervalDto"
           },
           "metricDefinition": {
             "enum": [
@@ -2286,12 +2928,10 @@
             "type": "string"
           },
           "operational": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/components/schemas/OperationalMetricsDto"
           },
           "sourceCoverage": {
-            "additionalProperties": true,
-            "type": "object"
+            "$ref": "#/components/schemas/MetricsSourceCoverageDto"
           }
         },
         "required": [
@@ -2302,6 +2942,31 @@
           "completeness",
           "commercial",
           "operational"
+        ],
+        "type": "object"
+      },
+      "MetricsSourceCoverageDto": {
+        "properties": {
+          "businessEvents": {
+            "$ref": "#/components/schemas/BusinessEventCoverageDto"
+          },
+          "directRelationalFacts": {
+            "type": "boolean"
+          },
+          "excludedCurrencyOrders": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "selectedCurrencyOrders": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "businessEvents",
+          "directRelationalFacts",
+          "selectedCurrencyOrders",
+          "excludedCurrencyOrders"
         ],
         "type": "object"
       },
@@ -2362,6 +3027,43 @@
           "modelGeometryId",
           "printConfigRevisionId",
           "material"
+        ],
+        "type": "object"
+      },
+      "MonthlyTurnoverMetricsDto": {
+        "properties": {
+          "capturedCash": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "confirmedOrderValue": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "month": {
+            "pattern": "^\\d{4}-\\d{2}$",
+            "type": "string"
+          },
+          "netReceipts": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "scope": {
+            "enum": [
+              "PLATFORM"
+            ],
+            "type": "string"
+          },
+          "succeededRefunds": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          }
+        },
+        "required": [
+          "confirmedOrderValue",
+          "capturedCash",
+          "succeededRefunds",
+          "netReceipts",
+          "month"
         ],
         "type": "object"
       },
@@ -2848,6 +3550,40 @@
         ],
         "type": "object"
       },
+      "OperationalMetricsDto": {
+        "properties": {
+          "firstPassYield": {
+            "$ref": "#/components/schemas/FirstPassYieldMetricsDto"
+          },
+          "monthlyTurnover": {
+            "items": {
+              "$ref": "#/components/schemas/MonthlyTurnoverMetricsDto"
+            },
+            "type": "array"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueMetricsDto"
+          },
+          "scope": {
+            "enum": [
+              "OPERATIONAL_NODE"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "nodeId",
+          "firstPassYield",
+          "queue",
+          "monthlyTurnover"
+        ],
+        "type": "object"
+      },
       "OperatorAuthMethodsDto": {
         "properties": {
           "methods": {
@@ -3002,6 +3738,76 @@
         ],
         "type": "object"
       },
+      "OrderMetricsDto": {
+        "properties": {
+          "acceptedGross": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "acceptedGrossBands": {
+            "$ref": "#/components/schemas/PriceBandsDto"
+          },
+          "activeContract": {
+            "$ref": "#/components/schemas/ContractAmountsDto"
+          },
+          "averageOrderValue": {
+            "$ref": "#/components/schemas/MetricMoneyRatioDto"
+          },
+          "capturedCash": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "confirmedOrders": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "express": {
+            "$ref": "#/components/schemas/ExpressShareDto"
+          },
+          "origins": {
+            "$ref": "#/components/schemas/OriginCountsDto"
+          },
+          "succeededRefunds": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          }
+        },
+        "required": [
+          "definition",
+          "confirmedOrders",
+          "acceptedGross",
+          "averageOrderValue",
+          "acceptedGrossBands",
+          "origins",
+          "express",
+          "capturedCash",
+          "succeededRefunds",
+          "activeContract"
+        ],
+        "type": "object"
+      },
+      "OriginCountsDto": {
+        "properties": {
+          "automatic": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "individual": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "unknown": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "automatic",
+          "individual",
+          "unknown"
+        ],
+        "type": "object"
+      },
       "PackJobDto": {
         "properties": {
           "shipmentId": {
@@ -3061,6 +3867,28 @@
         ],
         "type": "object"
       },
+      "PreflightCoverageDto": {
+        "properties": {
+          "clean": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "unknown": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "warning": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "clean",
+          "warning",
+          "unknown"
+        ],
+        "type": "object"
+      },
       "PriceAdjustmentAllocationDto": {
         "properties": {
           "slotCredits": {
@@ -3088,6 +3916,64 @@
         "required": [
           "fulfilmentSlotId",
           "amountMinor"
+        ],
+        "type": "object"
+      },
+      "PriceBandsDto": {
+        "properties": {
+          "100000_to_199999": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "200000_or_more": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "25000_to_49999": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "50000_to_99999": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "under_25000": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "under_25000",
+          "25000_to_49999",
+          "50000_to_99999",
+          "100000_to_199999",
+          "200000_or_more"
+        ],
+        "type": "object"
+      },
+      "QueueMetricsDto": {
+        "properties": {
+          "definition": {
+            "type": "string"
+          },
+          "machineCount": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "reservations": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "scheduledRemainingSeconds": {
+            "description": "Signed decimal seconds.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "definition",
+          "machineCount",
+          "scheduledRemainingSeconds",
+          "reservations"
         ],
         "type": "object"
       },
@@ -3273,6 +4159,43 @@
         "required": [
           "requestId",
           "status"
+        ],
+        "type": "object"
+      },
+      "QuoteToPaidMetricsDto": {
+        "properties": {
+          "acceptedBindings": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "acceptedGrossBands": {
+            "$ref": "#/components/schemas/PriceBandsDto"
+          },
+          "automatic": {
+            "$ref": "#/components/schemas/BindingBreakdownDto"
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "individual": {
+            "$ref": "#/components/schemas/BindingBreakdownDto"
+          },
+          "offersIssued": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "definition",
+          "offersIssued",
+          "acceptedBindings",
+          "conversion",
+          "automatic",
+          "individual",
+          "acceptedGrossBands"
         ],
         "type": "object"
       },
@@ -3482,6 +4405,34 @@
         },
         "required": [
           "reason"
+        ],
+        "type": "object"
+      },
+      "RefundMetricsDto": {
+        "properties": {
+          "activeContract": {
+            "$ref": "#/components/schemas/ContractAmountsDto"
+          },
+          "capturedCash": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "pendingOrSuspendedRefunds": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "succeededRefunds": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          }
+        },
+        "required": [
+          "definition",
+          "capturedCash",
+          "succeededRefunds",
+          "pendingOrSuspendedRefunds",
+          "activeContract"
         ],
         "type": "object"
       },
@@ -3731,6 +4682,38 @@
         },
         "required": [
           "component"
+        ],
+        "type": "object"
+      },
+      "TurnoverMetricsDto": {
+        "properties": {
+          "capturedCash": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "confirmedOrderValue": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "netReceipts": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          },
+          "scope": {
+            "enum": [
+              "PLATFORM"
+            ],
+            "type": "string"
+          },
+          "succeededRefunds": {
+            "$ref": "#/components/schemas/MetricMoneyDto"
+          }
+        },
+        "required": [
+          "confirmedOrderValue",
+          "capturedCash",
+          "succeededRefunds",
+          "netReceipts"
         ],
         "type": "object"
       },
