@@ -496,12 +496,27 @@ describe("QuoteRequest and tokenized individual offers", () => {
       new Date(operatorAttachment.body.expiresAt).getTime(),
     ).toBeGreaterThan(Date.now());
 
+    const reviewKey = key("review");
     const reviewed = await operatorCommand(
       `admin/quote-requests/${created.body.requestId}/review`,
-      key("review"),
+      reviewKey,
     );
     expect(reviewed.response.status).toBe(200);
     expect(reviewed.body.status).toBe("IN_REVIEW");
+    const [reviewAudit, reviewedRequest] = await Promise.all([
+      prisma.auditEvent.findFirstOrThrow({
+        where: {
+          eventType: "quote_request.review_started",
+          idempotencyKey: reviewKey,
+        },
+      }),
+      prisma.quoteRequest.findUniqueOrThrow({
+        where: { id: created.body.requestId },
+      }),
+    ]);
+    expect(reviewAudit.createdAt.getTime()).toBe(
+      reviewedRequest.updatedAt.getTime(),
+    );
 
     const offerExpiry = new Date(
       Math.floor((Date.now() + 60 * 60 * 1_000) / 1_000) * 1_000,
@@ -514,14 +529,19 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(issued.response.status).toBe(201);
     expect(issued.body.version).toBe(1);
-    await expect(
-      prisma.auditEvent.findFirstOrThrow({
-        where: {
-          eventType: "quote_offer.issued",
-          idempotencyKey: issueKey,
-        },
-      }),
-    ).resolves.toMatchObject({ quoteId: issued.body.quoteId });
+    const issuedAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        eventType: "quote_offer.issued",
+        idempotencyKey: issueKey,
+      },
+    });
+    expect(issuedAudit).toMatchObject({ quoteId: issued.body.quoteId });
+    const issuedQuote = await prisma.quote.findUniqueOrThrow({
+      where: { id: issued.body.quoteId },
+    });
+    expect(issuedAudit.createdAt.getTime()).toBe(
+      issuedQuote.issuedAt.getTime(),
+    );
 
     const lateReferencePhotoId = randomUUID();
     const latePhotoUploadedAt = new Date();

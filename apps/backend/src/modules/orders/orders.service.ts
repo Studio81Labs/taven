@@ -6296,9 +6296,13 @@ function addAuditTargetIdentifiers(
 ): void {
   const values = Array.isArray(candidate) ? candidate : [candidate];
   const identifiers = targets.get(key) ?? [];
+  const capacity =
+    MAX_AUDIT_TARGET_IDENTIFIERS -
+    auditTargetIdentifierCount(targets) +
+    identifiers.length;
   for (const value of values) {
     if (
-      auditTargetIdentifierCount(targets) === MAX_AUDIT_TARGET_IDENTIFIERS ||
+      identifiers.length >= capacity ||
       typeof value !== "string" ||
       !UUID_PATTERN.test(value) ||
       identifiers.includes(value)
