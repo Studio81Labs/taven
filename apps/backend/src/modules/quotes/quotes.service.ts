@@ -409,6 +409,7 @@ export class QuotesService {
         await this.audit.recordOperator(transaction, operator, {
           quoteRequestId: requestId,
           nodeId,
+          createdAt: observedAt,
           eventType: "quote_request.review_started",
           idempotencyKey: commandKey,
           correlationId: resultId,
@@ -742,6 +743,7 @@ export class QuotesService {
           quoteRequestId: requestId,
           quoteId,
           nodeId,
+          createdAt: issuedAt,
           eventType: "quote_offer.issued",
           idempotencyKey: commandKey,
           correlationId: resultId,
