@@ -3481,6 +3481,20 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       status: "HANDED_OVER",
       replacesShipmentId: reprintShipmentId,
     });
+    await expect(
+      prisma.businessEvent.findUniqueOrThrow({
+        where: {
+          eventType_dedupeKey: {
+            eventType: "shipment.handed-off",
+            dedupeKey: reshipped.result.reshipmentShipmentId as string,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      orderId,
+      nodeId: fixture.foundation.nodeId,
+      payload: { shipmentId: reshipped.result.reshipmentShipmentId as string },
+    });
     await expect(prisma.claim.count({ where: { orderId } })).resolves.toBe(1);
   }, 20_000);
 
@@ -4538,6 +4552,20 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
 
     expect(reconciled.status).toBe("SHIPMENT_HANDOFF_RECONCILED");
     expect(replay.status).toBe("SHIPMENT_HANDOFF_ALREADY_APPLIED");
+    await expect(
+      prisma.businessEvent.findUniqueOrThrow({
+        where: {
+          eventType_dedupeKey: {
+            eventType: "shipment.handed-off",
+            dedupeKey: fixture.foundation.shipmentId,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      orderId: fixture.foundation.orderId,
+      nodeId: fixture.foundation.nodeId,
+      payload: { shipmentId: fixture.foundation.shipmentId },
+    });
     await expect(
       prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
     ).resolves.toMatchObject({ status: "SUPERSEDED" });
