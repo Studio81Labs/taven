@@ -4997,6 +4997,12 @@
             "nullable": true,
             "type": "string"
           },
+          "payments": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorPaymentDto"
+            },
+            "type": "array"
+          },
           "settlements": {
             "items": {
               "$ref": "#/components/schemas/OperatorSettlementDto"
@@ -5005,7 +5011,8 @@
           }
         },
         "required": [
-          "settlements"
+          "settlements",
+          "payments"
         ],
         "type": "object"
       },
@@ -5148,6 +5155,15 @@
             },
             "type": "array"
           },
+          "primaryReferenceSlice": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperatorReferenceSliceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
           "printConfigRevisionId": {
             "format": "uuid",
             "type": "string"
@@ -5156,9 +5172,23 @@
             "minimum": 1,
             "type": "number"
           },
+          "referencePartsPerPlate": {
+            "minimum": 1,
+            "nullable": true,
+            "type": "number"
+          },
           "sourceModelFileId": {
             "format": "uuid",
             "type": "string"
+          },
+          "tailReferenceSlice": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperatorReferenceSliceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
           }
         },
         "required": [
@@ -5169,6 +5199,8 @@
           "printConfigRevisionId",
           "material",
           "quantity",
+          "primaryReferenceSlice",
+          "tailReferenceSlice",
           "preflightFindings"
         ],
         "type": "object"
@@ -5218,6 +5250,86 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "OperatorPaymentDto": {
+        "properties": {
+          "balanceDueAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "captureAuthorized": {
+            "type": "boolean"
+          },
+          "captureCutoffAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "capturedAmountMinor": {
+            "nullable": true,
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "capturedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "checkoutCaptureExpiresAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "checkoutMethod": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "merchantReference": {
+            "nullable": true,
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "requestedAmountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "provider",
+          "checkoutMethod",
+          "requestedAmountMinor",
+          "currency",
+          "status",
+          "captureAuthorized",
+          "createdAt",
+          "updatedAt"
         ],
         "type": "object"
       },
@@ -5320,6 +5432,75 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "OperatorReferenceSliceDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "estimatedMaterialMilligrams": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "estimatedPrintSeconds": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "modelGeometryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "packagePlateCount": {
+            "minimum": 1,
+            "nullable": true,
+            "type": "number"
+          },
+          "packageQuantity": {
+            "minimum": 1,
+            "nullable": true,
+            "type": "number"
+          },
+          "partsPerPlate": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "slicerEngine": {
+            "type": "string"
+          },
+          "slicerVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "modelGeometryId",
+          "printConfigRevisionId",
+          "partsPerPlate",
+          "estimatedPrintSeconds",
+          "estimatedMaterialMilligrams",
+          "slicerEngine",
+          "slicerVersion",
+          "createdAt"
         ],
         "type": "object"
       },

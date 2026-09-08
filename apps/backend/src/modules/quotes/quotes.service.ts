@@ -387,27 +387,30 @@ export class QuotesService {
     const cursor = input.cursor
       ? parseOperatorQueueCursor(input.cursor, filterHash)
       : undefined;
-    const observedAt = await databaseNow(this.prisma);
-    const statusFilter = status
-      ? Prisma.sql`AND request.status = ${status}::quote_request_status`
-      : Prisma.sql`
+    return this.prisma.$transaction(
+      async (transaction) => {
+        await transaction.$executeRaw`SET TRANSACTION READ ONLY`;
+        const observedAt = await databaseNow(transaction);
+        const statusFilter = status
+          ? Prisma.sql`AND request.status = ${status}::quote_request_status`
+          : Prisma.sql`
           AND request.status IN (
             'NEW'::quote_request_status,
             'IN_REVIEW'::quote_request_status,
             'QUOTED'::quote_request_status
           )
         `;
-    const slaFilter = operatorQueueSlaFilter(sla, observedAt);
-    const keyset = cursor
-      ? Prisma.sql`
+        const slaFilter = operatorQueueSlaFilter(sla, observedAt);
+        const keyset = cursor
+          ? Prisma.sql`
           AND (request.sla_due_at, request.created_at, request.id) > (
             ${new Date(cursor.slaDueAt)}::timestamptz,
             ${new Date(cursor.createdAt)}::timestamptz,
             ${cursor.id}::uuid
           )
         `
-      : Prisma.empty;
-    const keys = await this.prisma.$queryRaw<Array<{ id: string }>>`
+          : Prisma.empty;
+        const keys = await transaction.$queryRaw<Array<{ id: string }>>`
       SELECT request.id
       FROM quote_requests AS request
       LEFT JOIN quotes AS quote ON quote.quote_request_id = request.id
@@ -418,39 +421,44 @@ export class QuotesService {
       ORDER BY request.sla_due_at ASC, request.created_at ASC, request.id ASC
       LIMIT ${limit + 1}
     `;
-    const requests = await this.prisma.quoteRequest.findMany({
-      where: { id: { in: keys.map((key) => key.id) } },
-      include: {
-        quoteSession: true,
-        customer: true,
-        quote: { select: { issuedAt: true } },
-        automaticQuoteHandoff: true,
+        const requests = await transaction.quoteRequest.findMany({
+          where: { id: { in: keys.map((key) => key.id) } },
+          include: {
+            quoteSession: true,
+            customer: true,
+            quote: { select: { issuedAt: true } },
+            automaticQuoteHandoff: true,
+          },
+        });
+        const byId = new Map(requests.map((request) => [request.id, request]));
+        const page = keys
+          .slice(0, limit)
+          .map((key) => byId.get(key.id))
+          .filter(
+            (request): request is (typeof requests)[number] =>
+              request !== undefined,
+          );
+        const last = page.at(-1);
+        return {
+          items: await Promise.all(
+            page.map((request) =>
+              this.operatorRequestDetail(request, observedAt),
+            ),
+          ),
+          ...(keys.length > limit && last
+            ? {
+                nextCursor: encodeOperatorQueueCursor({
+                  slaDueAt: last.slaDueAt.toISOString(),
+                  createdAt: last.createdAt.toISOString(),
+                  id: last.id,
+                  filterHash,
+                }),
+              }
+            : {}),
+        };
       },
-    });
-    const byId = new Map(requests.map((request) => [request.id, request]));
-    const page = keys
-      .slice(0, limit)
-      .map((key) => byId.get(key.id))
-      .filter(
-        (request): request is (typeof requests)[number] =>
-          request !== undefined,
-      );
-    const last = page.at(-1);
-    return {
-      items: await Promise.all(
-        page.map((request) => this.operatorRequestDetail(request, observedAt)),
-      ),
-      ...(keys.length > limit && last
-        ? {
-            nextCursor: encodeOperatorQueueCursor({
-              slaDueAt: last.slaDueAt.toISOString(),
-              createdAt: last.createdAt.toISOString(),
-              id: last.id,
-              filterHash,
-            }),
-          }
-        : {}),
-    };
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   async getOperatorRequest(
