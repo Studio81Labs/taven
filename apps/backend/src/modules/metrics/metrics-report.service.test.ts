@@ -5,6 +5,7 @@ import {
   assistedSlaMetrics,
   automationMetrics,
   completenessFor,
+  finalContributionMargin,
   isFinalMarginTerminal,
   parseMetricsQuery,
   quoteMetrics,
@@ -222,5 +223,51 @@ describe("v0-1 metric classifications", () => {
 
   it("treats partially fulfilled orders as terminal for final margin eligibility", () => {
     expect(isFinalMarginTerminal("PARTIALLY_FULFILLED")).toBe(true);
+    expect(
+      finalContributionMargin(
+        {
+          status: "PARTIALLY_FULFILLED",
+          activeContractPrice: {
+            contractPriceRevision: {
+              contractTotalMinor: 100n,
+              netAmountMinor: 80n,
+              currency: "CZK",
+            },
+          },
+          priceBindings: [
+            {
+              payments: [
+                {
+                  status: "CAPTURED",
+                  currency: "CZK",
+                  capturedAmountMinor: 100n,
+                  refunds: [],
+                },
+              ],
+            },
+          ],
+          actualCosts: [
+            "MATERIAL",
+            "VARIABLE_MACHINE",
+            "CARRIER",
+            "PACKAGING",
+            "PAYMENT_FEE",
+          ].map((category) => ({
+            category,
+            amountMinor: 0n,
+            currency: "CZK",
+            successor: null,
+          })),
+          handlingAllocations: [
+            {
+              allocatedCostMinor: 0n,
+              currency: "CZK",
+              session: { lifecycle: "COMPLETED", voidedAt: null },
+            },
+          ],
+        } as never,
+        "CZK",
+      ),
+    ).toBe(80n);
   });
 });

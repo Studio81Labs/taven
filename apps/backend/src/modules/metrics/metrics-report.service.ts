@@ -1520,7 +1520,7 @@ function costBreakdown(
   );
 }
 
-function finalContributionMargin(
+export function finalContributionMargin(
   order: ReportOrder,
   currency: string,
 ): bigint | null {
@@ -1528,11 +1528,11 @@ function finalContributionMargin(
     .flatMap((payment) => payment.refunds)
     .some((refund) => ["PENDING", "SUSPENDED"].includes(refund.status));
   const terminal = isFinalMarginTerminal(order.status);
-  const active = activeContract(order, currency);
+  const revenue = finalMarginRevenue(order, currency);
   if (
     !terminal ||
     unresolvedRefund ||
-    active.gross === 0n ||
+    revenue === null ||
     !hasExplicitMarginCoverage(order, currency)
   ) {
     return null;
@@ -1542,9 +1542,23 @@ function finalContributionMargin(
       .filter((cost) => cost.successor === null && cost.currency === currency)
       .map((cost) => cost.amountMinor),
   );
-  const revenue =
-    capturedMinor(order, currency) - refundedMinor(order, currency);
   return revenue - costs - handlingMinor(order, currency);
+}
+
+function finalMarginRevenue(
+  order: ReportOrder,
+  currency: string,
+): bigint | null {
+  const netCash =
+    capturedMinor(order, currency) - refundedMinor(order, currency);
+  if (["REFUNDED", "CANCELLED_SETTLED"].includes(order.status)) {
+    return netCash === 0n ? 0n : null;
+  }
+  const contract = order.activeContractPrice?.contractPriceRevision;
+  if (!contract || contract.currency !== currency) return null;
+  return netCash === contract.contractTotalMinor
+    ? contract.netAmountMinor
+    : null;
 }
 
 export function isFinalMarginTerminal(status: string): boolean {
