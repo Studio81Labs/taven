@@ -71,20 +71,32 @@ describe("PaymentOutboxDispatcherService", () => {
         action: "refund_payment",
       },
     });
-    const claim = vi
-      .fn()
-      .mockResolvedValueOnce([message(1)])
-      .mockResolvedValueOnce([message(2)]);
     const queryRaw = vi
       .fn()
       .mockResolvedValueOnce([{ claimed_at: new Date() }])
-      .mockResolvedValueOnce([{ claimed_at: null }])
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([{ claimed_at: null }]);
     const executeRaw = vi.fn().mockResolvedValue(1);
+    const transactionQuery = vi
+      .fn()
+      .mockResolvedValueOnce([message(1)])
+      .mockResolvedValueOnce([message(2)])
+      .mockResolvedValueOnce([{ applied: true }]);
+    const eventUpsert = vi.fn();
+    const findUniqueOrThrow = vi.fn().mockResolvedValue({
+      id: "00000000-0000-4000-8000-000000000011",
+      paymentId: "00000000-0000-4000-8000-000000000012",
+      providerRefundId: "sandbox-refund-1",
+      completedAt: new Date("2026-09-04T12:00:00Z"),
+      payment: { orderId: "00000000-0000-4000-8000-000000000013" },
+    });
     const prisma = {
       $transaction: vi.fn(
-        async (work: (transaction: { $queryRaw: typeof claim }) => unknown) =>
-          work({ $queryRaw: claim }),
+        async (work: (transaction: Record<string, unknown>) => unknown) =>
+          work({
+            $queryRaw: transactionQuery,
+            refundTransaction: { findUniqueOrThrow },
+            businessEvent: { upsert: eventUpsert },
+          }),
       ),
       $queryRaw: queryRaw,
       refundTransaction: {
@@ -127,7 +139,7 @@ describe("PaymentOutboxDispatcherService", () => {
       "available_at = clock_timestamp()",
     );
     expect(sqlText(executeRaw.mock.calls[0])).toContain("make_interval");
-    expect(sqlText(claim.mock.calls[0])).toContain(
+    expect(sqlText(transactionQuery.mock.calls[0])).toContain(
       "locked_at < clock_timestamp()",
     );
 
@@ -139,7 +151,8 @@ describe("PaymentOutboxDispatcherService", () => {
     expect(refund.mock.calls[1]?.[0].idempotencyKey).toBe(
       "late_initial_capture:event-1",
     );
-    expect(queryRaw).toHaveBeenCalledTimes(3);
+    expect(queryRaw).toHaveBeenCalledTimes(2);
+    expect(eventUpsert).toHaveBeenCalledTimes(1);
     expect(sqlText(executeRaw.mock.calls[1])).toContain(
       "delivered_at = clock_timestamp()",
     );
@@ -222,17 +235,31 @@ describe("PaymentOutboxDispatcherService", () => {
         action: "refund_payment",
       },
     };
-    const claim = vi.fn().mockResolvedValue([message]);
     const queryRaw = vi
       .fn()
-      .mockResolvedValueOnce([{ claimed_at: new Date() }])
-      .mockRejectedValueOnce(new Error("database temporarily unavailable"))
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([{ claimed_at: new Date() }]);
     const executeRaw = vi.fn().mockResolvedValue(1);
+    const transactionQuery = vi
+      .fn()
+      .mockResolvedValueOnce([message])
+      .mockRejectedValueOnce(new Error("database temporarily unavailable"))
+      .mockResolvedValueOnce([{ applied: true }]);
+    const eventUpsert = vi.fn();
+    const findUniqueOrThrow = vi.fn().mockResolvedValue({
+      id: message.aggregate_id,
+      paymentId: "00000000-0000-4000-8000-000000000032",
+      providerRefundId: "comgate-refund-1",
+      completedAt: new Date("2026-09-04T12:00:00Z"),
+      payment: { orderId: "00000000-0000-4000-8000-000000000033" },
+    });
     const prisma = {
       $transaction: vi.fn(
-        async (work: (transaction: { $queryRaw: typeof claim }) => unknown) =>
-          work({ $queryRaw: claim }),
+        async (work: (transaction: Record<string, unknown>) => unknown) =>
+          work({
+            $queryRaw: transactionQuery,
+            refundTransaction: { findUniqueOrThrow },
+            businessEvent: { upsert: eventUpsert },
+          }),
       ),
       $queryRaw: queryRaw,
       refundTransaction: {
@@ -269,8 +296,8 @@ describe("PaymentOutboxDispatcherService", () => {
 
     await expect(service.runOnce()).resolves.toBe(1);
     expect(refund).toHaveBeenCalledTimes(1);
-    expect(queryRaw).toHaveBeenCalledTimes(3);
-    expect(queryRaw.mock.calls[1]?.[4]).toBeNull();
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+    expect(eventUpsert).toHaveBeenCalledTimes(1);
     expect(executeRaw).toHaveBeenCalledTimes(1);
     expect(sqlText(executeRaw.mock.calls[0])).toContain(
       "delivered_at = clock_timestamp()",

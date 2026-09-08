@@ -183,6 +183,7 @@ describe("provider event verification time", () => {
           async (
             work: (transaction: {
               payment: { findFirst: () => Promise<{ id: string }> };
+              $queryRaw: typeof queryRaw;
             }) => unknown,
           ) =>
             work({
@@ -191,6 +192,7 @@ describe("provider event verification time", () => {
                   id: "00000000-0000-4000-8000-000000000001",
                 }),
               },
+              $queryRaw: queryRaw,
             }),
         ),
         $queryRaw: queryRaw,

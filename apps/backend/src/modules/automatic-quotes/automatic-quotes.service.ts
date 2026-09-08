@@ -38,6 +38,7 @@ import {
 import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import { normalizeAttribution } from "../metrics/attribution";
+import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
 import { EligibilityPlanService } from "../resources/eligibility-plan.service";
 import {
@@ -356,24 +357,35 @@ export class AutomaticQuotesService {
         select: { orderId: true },
       });
       if (!origin) throw new ConflictException("Automatic order is missing");
-      await transaction.businessEvent.upsert({
-        where: {
-          eventType_dedupeKey: {
-            eventType,
-            dedupeKey: `${sessionId}:${eventType}`,
-          },
-        },
-        create: {
-          eventType,
-          dedupeKey: `${sessionId}:${eventType}`,
-          observedAt,
-          expiresAt: addDays(observedAt, 90),
-          source: "CLIENT",
+      const expiresAt = addDays(observedAt, 90);
+      if (eventType === "quote.viewed") {
+        const activeBinding =
+          await transaction.orderActivePriceBinding.findUnique({
+            where: { orderId: origin.orderId },
+            select: {
+              orderPriceBindingId: true,
+              orderPriceBinding: { select: { invalidatedAt: true } },
+            },
+          });
+        if (!activeBinding || activeBinding.orderPriceBinding.invalidatedAt) {
+          throw new ConflictException("Automatic quote has no current binding");
+        }
+        await writeBusinessEvent(transaction, {
+          eventType: "quote.viewed",
           quoteSessionId: sessionId,
           orderId: origin.orderId,
-          payload: {},
-        },
-        update: {},
+          orderPriceBindingId: activeBinding.orderPriceBindingId,
+          observedAt,
+          expiresAt,
+        });
+        return;
+      }
+      await writeBusinessEvent(transaction, {
+        eventType: "checkout.started",
+        quoteSessionId: sessionId,
+        orderId: origin.orderId,
+        observedAt,
+        expiresAt,
       });
     });
   }
@@ -2978,6 +2990,19 @@ export class AutomaticQuotesService {
       where: { orderId: input.orderId },
       create: { orderId: input.orderId, orderPriceBindingId: input.bindingId },
       update: { orderPriceBindingId: input.bindingId },
+    });
+    const origin = await transaction.automaticOrderOrigin.findUnique({
+      where: { orderId: input.orderId },
+      select: { quoteSessionId: true },
+    });
+    if (!origin)
+      throw new Error("Automatic quote binding has no quote session");
+    await writeBusinessEvent(transaction, {
+      eventType: "quote.bound",
+      bindingId: input.bindingId,
+      orderId: input.orderId,
+      quoteSessionId: origin.quoteSessionId,
+      observedAt,
     });
     await transaction.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
   }

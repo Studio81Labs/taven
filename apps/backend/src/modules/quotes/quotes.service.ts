@@ -42,6 +42,7 @@ import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
 import { normalizeAttribution } from "../metrics/attribution";
+import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
@@ -253,6 +254,12 @@ export class QuotesService {
             payload: jsonInput({ requestId, publicReference })!,
             createdAt: observedAt,
           },
+        });
+        await writeBusinessEvent(transaction, {
+          eventType: "quote-request.created",
+          quoteRequestId: requestId,
+          quoteSessionId: sessionId,
+          observedAt,
         });
 
         return {
@@ -637,6 +644,12 @@ export class QuotesService {
         });
         await transaction.quotePriceBinding.create({
           data: { quoteId, priceSnapshotId: snapshotId },
+        });
+        await writeBusinessEvent(transaction, {
+          eventType: "quote.bound",
+          bindingId: quoteId,
+          quoteId,
+          observedAt: issuedAt,
         });
         await transaction.quoteDeliveryDestination.create({
           data: {

@@ -266,7 +266,7 @@ describe("MeasurementService command boundaries", () => {
       job: { findMany: async () => [{ nodeId: operator.nodeIds[0] }] },
       shipment: { findFirst: async () => ({ id: "shipment" }) },
       handlingAllocation: { createMany: async () => undefined },
-      businessEvent: { create: async () => undefined },
+      businessEvent: { upsert: async () => undefined },
     };
     const service = new MeasurementService(
       {

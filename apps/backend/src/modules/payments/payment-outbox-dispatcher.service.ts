@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
+import { writeBusinessEvent } from "../metrics/business-event.writer";
 import {
   PAYMENT_PROVIDER,
   type PaymentProviderPort,
@@ -149,15 +150,43 @@ export class PaymentOutboxDispatcherService {
       attempt += 1
     ) {
       try {
-        await this.prisma.$queryRaw`
-          SELECT taven_apply_checkout_refund_success(
-            ${refund.id}::uuid,
-            ${providerRefundId},
-            ${resultEventId},
-            ${result.occurredAt},
-            ${jsonInput(result.evidence)}::jsonb
-          )
-        `;
+        await this.prisma.$transaction(async (transaction) => {
+          const rows = await transaction.$queryRaw<Array<{ applied: boolean }>>`
+            SELECT taven_apply_checkout_refund_success(
+              ${refund.id}::uuid,
+              ${providerRefundId},
+              ${resultEventId},
+              ${result.occurredAt},
+              ${jsonInput(result.evidence)}::jsonb
+            ) AS applied
+          `;
+          if (!rows[0]?.applied) return;
+          const persistedRefund =
+            await transaction.refundTransaction.findUniqueOrThrow({
+              where: { id: refund.id },
+              select: {
+                id: true,
+                paymentId: true,
+                providerRefundId: true,
+                completedAt: true,
+                payment: { select: { orderId: true } },
+              },
+            });
+          if (
+            !persistedRefund.providerRefundId ||
+            !persistedRefund.completedAt
+          ) {
+            throw new Error("Successful refund has incomplete metric evidence");
+          }
+          await writeBusinessEvent(transaction, {
+            eventType: "refund.succeeded",
+            refundTransactionId: persistedRefund.id,
+            paymentId: persistedRefund.paymentId,
+            orderId: persistedRefund.payment.orderId,
+            providerRefundId: persistedRefund.providerRefundId,
+            observedAt: persistedRefund.completedAt,
+          });
+        });
         return;
       } catch (error) {
         if (attempt === REFUND_RESULT_PERSISTENCE_ATTEMPTS) throw error;
