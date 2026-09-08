@@ -37,8 +37,10 @@ The aggregate covers these definitions:
   the order has terminal settlement evidence, no unresolved refund, explicit
   zero-or-measured coverage for every v0 cost category, and completed handling
   allocation evidence. A partially fulfilled order is terminal when those
-  conditions hold; fully refunded or cancelled settled orders retain zero
-  revenue and their incurred costs.
+  conditions hold. Fully refunded orders retain zero revenue and their
+  incurred costs. A `CANCELLED_SETTLED` order uses its immutable reconciled
+  balance settlement's retained cash, converted to net under the accepted tax
+  policy, only after it matches succeeded captures and refunds.
 - CAC includes only leaf acquisition spend wholly inside the interval. Repeat
   status uses the historical first confirmed order for the customer.
 - FPY considers original jobs only. Queue time comes from unconsumed planned or

@@ -2674,6 +2674,7 @@ model Job {
   @@unique([phaseResourcePlanJobId])
   @@index([shipmentPlanId, status])
   @@index([nodeId, status])
+  @@index([orderId, nodeId])
   @@index([productionSliceResultId])
   @@map("jobs")
 }

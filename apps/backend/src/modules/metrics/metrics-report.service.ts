@@ -76,6 +76,8 @@ type ReportOrder = Readonly<{
       contractTotalMinor: bigint;
       netAmountMinor: bigint;
       vatAmountMinor: bigint;
+      taxRegime: "NON_VAT_PAYER" | "VAT_PAYER";
+      vatRateBasisPoints: number;
       currency: string;
     }>;
   }> | null;
@@ -100,6 +102,14 @@ type ReportOrder = Readonly<{
     allocatedCostMinor: bigint;
     currency: string;
     session: Readonly<{ lifecycle: string; voidedAt: Date | null }>;
+  }>[];
+  settlements: readonly Readonly<{
+    kind: string;
+    currency: string;
+    contractTotalMinor: bigint;
+    capturedTotalMinor: bigint;
+    retainedAmountMinor: bigint;
+    refundAmountMinor: bigint;
   }>[];
   jobs: readonly Readonly<{ nodeId: string }>[];
   phases: readonly Readonly<{
@@ -356,6 +366,8 @@ export class MetricsReportService {
         status: true,
         createdAt: true,
         failedAt: true,
+        printingAt: true,
+        printedAt: true,
         qcApprovedAt: true,
         qcRejectedAt: true,
       },
@@ -365,6 +377,10 @@ export class MetricsReportService {
         nodeId: query.nodeId,
         status: { in: ["RESERVED", "HELD", "SCHEDULED", "PRINTING"] },
         endsAt: { gt: generatedAt },
+        OR: [
+          { status: { not: "RESERVED" } },
+          { expiresAt: { gt: generatedAt } },
+        ],
       },
       select: { machineId: true, startsAt: true, endsAt: true, status: true },
     });
@@ -441,6 +457,16 @@ const reportOrderInclude = {
   handlingAllocations: {
     include: { session: { select: { lifecycle: true, voidedAt: true } } },
   },
+  settlements: {
+    select: {
+      kind: true,
+      currency: true,
+      contractTotalMinor: true,
+      capturedTotalMinor: true,
+      retainedAmountMinor: true,
+      refundAmountMinor: true,
+    },
+  },
   jobs: { select: { nodeId: true } },
   phases: { include: { eligibilitySnapshots: { select: { nodeId: true } } } },
 } as const;
@@ -491,6 +517,49 @@ function defaultNode(nodeIds: readonly string[]): string {
 
 function parseInstant(name: string, value: string | undefined): Date {
   if (!value || !INSTANT_PATTERN.test(value)) {
+    throw new BadRequestException(`${name} is an ISO instant`);
+  }
+  const parts =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(
+      value,
+    );
+  if (!parts) throw new BadRequestException(`${name} is an ISO instant`);
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    ,
+    offsetHourText,
+    offsetMinuteText,
+  ] = parts;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const offsetHour = offsetHourText === undefined ? 0 : Number(offsetHourText);
+  const offsetMinute =
+    offsetMinuteText === undefined ? 0 : Number(offsetMinuteText);
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(hour, minute, second, 0);
+  if (
+    month < 1 ||
+    month > 12 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59 ||
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() !== month - 1 ||
+    calendar.getUTCDate() !== day
+  ) {
     throw new BadRequestException(`${name} is an ISO instant`);
   }
   const date = new Date(value);
@@ -837,12 +906,14 @@ function commercialReport(
   };
 }
 
-function operationalReport(
+export function operationalReport(
   orders: readonly ReportOrder[],
   jobs: readonly Readonly<{
     replacesJobId: string | null;
     status: string;
     failedAt: Date | null;
+    printingAt: Date | null;
+    printedAt: Date | null;
     qcApprovedAt: Date | null;
     qcRejectedAt: Date | null;
   }>[],
@@ -869,7 +940,15 @@ function operationalReport(
       job.qcRejectedAt === null &&
       job.status !== "CANCELLED",
   ).length;
-  const cancelled = original.filter((job) => job.status === "CANCELLED").length;
+  const cancelled = original.filter(
+    (job) =>
+      job.status === "CANCELLED" &&
+      job.failedAt === null &&
+      job.printingAt === null &&
+      job.printedAt === null &&
+      job.qcApprovedAt === null &&
+      job.qcRejectedAt === null,
+  ).length;
   const queueByMachine = new Map<string, bigint>();
   for (const reservation of queue) {
     const startsAt = Math.max(
@@ -1551,14 +1630,48 @@ function finalMarginRevenue(
 ): bigint | null {
   const netCash =
     capturedMinor(order, currency) - refundedMinor(order, currency);
-  if (["REFUNDED", "CANCELLED_SETTLED"].includes(order.status)) {
+  if (order.status === "REFUNDED") {
     return netCash === 0n ? 0n : null;
   }
   const contract = order.activeContractPrice?.contractPriceRevision;
   if (!contract || contract.currency !== currency) return null;
+  if (order.status === "CANCELLED_SETTLED") {
+    const settlement = order.settlements.find(
+      (candidate) =>
+        candidate.kind === "BALANCE_SETTLEMENT" &&
+        candidate.currency === currency,
+    );
+    if (
+      !settlement ||
+      settlement.contractTotalMinor !== contract.contractTotalMinor ||
+      settlement.capturedTotalMinor - settlement.refundAmountMinor !==
+        settlement.retainedAmountMinor ||
+      netCash !== settlement.retainedAmountMinor
+    ) {
+      return null;
+    }
+    if (
+      (contract.taxRegime === "NON_VAT_PAYER" &&
+        contract.vatRateBasisPoints !== 0) ||
+      (contract.taxRegime === "VAT_PAYER" && contract.vatRateBasisPoints === 0)
+    ) {
+      return null;
+    }
+    return netFromGross(
+      settlement.retainedAmountMinor,
+      contract.vatRateBasisPoints,
+    );
+  }
   return netCash === contract.contractTotalMinor
     ? contract.netAmountMinor
     : null;
+}
+
+function netFromGross(grossMinor: bigint, vatRateBasisPoints: number): bigint {
+  const denominator = 10_000n + BigInt(vatRateBasisPoints);
+  const vatMinor =
+    (grossMinor * BigInt(vatRateBasisPoints) + denominator / 2n) / denominator;
+  return grossMinor - vatMinor;
 }
 
 export function isFinalMarginTerminal(status: string): boolean {

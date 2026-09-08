@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from "@nestjs/common";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   acquisitionMetrics,
   assistedSlaMetrics,
@@ -7,6 +7,8 @@ import {
   completenessFor,
   finalContributionMargin,
   isFinalMarginTerminal,
+  MetricsReportService,
+  operationalReport,
   parseMetricsQuery,
   quoteMetrics,
   type MetricsQuery,
@@ -61,6 +63,18 @@ describe("parseMetricsQuery", () => {
       ),
     ).toThrow(NotFoundException);
   });
+
+  it.each([
+    ["2026-02-30T00:00:00Z"],
+    ["2026-01-01T24:00:00Z"],
+    ["2026-01-01T00:60:00Z"],
+    ["2026-01-01T00:00:60Z"],
+    ["2026-01-01T00:00:00+24:00"],
+  ])("rejects a calendar-invalid ISO instant: %s", (from) => {
+    expect(() =>
+      parseMetricsQuery({ from, to: "2026-01-02T00:00:00Z" }, [nodeId]),
+    ).toThrow(BadRequestException);
+  });
 });
 
 describe("v0-1 metric classifications", () => {
@@ -71,6 +85,96 @@ describe("v0-1 metric classifications", () => {
     channel: "paid",
     nodeId,
   };
+
+  it("keeps post-production cancellations out of the pre-production bucket", () => {
+    const report = operationalReport(
+      [],
+      [
+        {
+          replacesJobId: null,
+          status: "CANCELLED",
+          failedAt: null,
+          printingAt: null,
+          printedAt: null,
+          qcApprovedAt: new Date("2026-01-01T00:00:00Z"),
+          qcRejectedAt: null,
+        },
+        {
+          replacesJobId: null,
+          status: "CANCELLED",
+          failedAt: null,
+          printingAt: new Date("2026-01-01T00:00:00Z"),
+          printedAt: null,
+          qcApprovedAt: null,
+          qcRejectedAt: null,
+        },
+        {
+          replacesJobId: null,
+          status: "CANCELLED",
+          failedAt: null,
+          printingAt: null,
+          printedAt: null,
+          qcApprovedAt: null,
+          qcRejectedAt: null,
+        },
+      ],
+      [],
+      new Date("2026-01-02T00:00:00Z"),
+      query,
+    ) as {
+      firstPassYield: {
+        firstQcPasses: number;
+        cancelledBeforeProduction: number;
+      };
+    };
+
+    expect(report.firstPassYield).toMatchObject({
+      firstQcPasses: 1,
+      cancelledBeforeProduction: 1,
+    });
+  });
+
+  it("excludes expired reserved capacity in the database query", async () => {
+    const capacityReservation = { findMany: vi.fn().mockResolvedValue([]) };
+    const service = new MetricsReportService({} as never);
+    const generatedAt = new Date("2026-01-02T00:00:00Z");
+    await service["readMetricFacts"](
+      {
+        businessEvent: { findMany: vi.fn().mockResolvedValue([]) },
+        quoteSession: { findMany: vi.fn().mockResolvedValue([]) },
+        automaticQuoteModelFile: { findMany: vi.fn().mockResolvedValue([]) },
+        order: { findMany: vi.fn().mockResolvedValue([]) },
+        orderPriceBinding: { findMany: vi.fn().mockResolvedValue([]) },
+        automaticQuoteRiskDecisionRecord: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        quote: { findMany: vi.fn().mockResolvedValue([]) },
+        job: { findMany: vi.fn().mockResolvedValue([]) },
+        capacityReservation,
+        quoteRequest: { findMany: vi.fn().mockResolvedValue([]) },
+        acquisitionSpend: { findMany: vi.fn().mockResolvedValue([]) },
+        $queryRaw: vi.fn().mockResolvedValue([]),
+      } as never,
+      query,
+      generatedAt,
+      [],
+      new Map(),
+      [],
+      [],
+      [],
+    );
+
+    expect(capacityReservation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { status: { not: "RESERVED" } },
+            { expiresAt: { gt: generatedAt } },
+          ],
+        }),
+      }),
+    );
+  });
 
   it("separates persisted assisted handoffs from unresolved automatic uses", () => {
     const report = automationMetrics(
@@ -269,5 +373,67 @@ describe("v0-1 metric classifications", () => {
         "CZK",
       ),
     ).toBe(80n);
+  });
+
+  it("uses reconciled retained balance cash for cancelled-settled margin", () => {
+    expect(
+      finalContributionMargin(
+        {
+          status: "CANCELLED_SETTLED",
+          activeContractPrice: {
+            contractPriceRevision: {
+              contractTotalMinor: 100n,
+              netAmountMinor: 80n,
+              vatAmountMinor: 20n,
+              taxRegime: "VAT_PAYER",
+              vatRateBasisPoints: 2_500,
+              currency: "CZK",
+            },
+          },
+          priceBindings: [
+            {
+              payments: [
+                {
+                  status: "CAPTURED",
+                  currency: "CZK",
+                  capturedAmountMinor: 100n,
+                  refunds: [{ amountMinor: 50n, status: "SUCCEEDED" }],
+                },
+              ],
+            },
+          ],
+          settlements: [
+            {
+              kind: "BALANCE_SETTLEMENT",
+              currency: "CZK",
+              contractTotalMinor: 100n,
+              capturedTotalMinor: 100n,
+              retainedAmountMinor: 50n,
+              refundAmountMinor: 50n,
+            },
+          ],
+          actualCosts: [
+            "MATERIAL",
+            "VARIABLE_MACHINE",
+            "CARRIER",
+            "PACKAGING",
+            "PAYMENT_FEE",
+          ].map((category) => ({
+            category,
+            amountMinor: 0n,
+            currency: "CZK",
+            successor: null,
+          })),
+          handlingAllocations: [
+            {
+              allocatedCostMinor: 0n,
+              currency: "CZK",
+              session: { lifecycle: "COMPLETED", voidedAt: null },
+            },
+          ],
+        } as never,
+        "CZK",
+      ),
+    ).toBe(40n);
   });
 });
