@@ -65,6 +65,11 @@ type TimeCursor = Readonly<{
   id: string;
   filterHash: string;
 }>;
+type StartsAtCursor = Readonly<{
+  startsAt: string;
+  id: string;
+  filterHash: string;
+}>;
 
 type SelectedReferenceSlice = Readonly<{
   kind: SliceKind;
@@ -750,7 +755,10 @@ export class OperatorReadsService {
       to: to.toISOString(),
       kind: "capacity-reservations",
     });
-    const cursor = pageCursor(input.cursor, filterHash, "capacity cursor");
+    const limit = pageLimit(input.limit);
+    const cursor = input.cursor
+      ? parseStartsAtCursor(input.cursor, filterHash, "capacity cursor")
+      : undefined;
     const rows = await this.prisma.capacityReservation.findMany({
       where: {
         nodeId,
@@ -758,19 +766,42 @@ export class OperatorReadsService {
         ...(status ? { status } : {}),
         startsAt: { lt: to },
         endsAt: { gt: from },
+        ...(cursor
+          ? {
+              OR: [
+                { startsAt: { gt: new Date(cursor.startsAt) } },
+                {
+                  startsAt: new Date(cursor.startsAt),
+                  id: { gt: cursor.id },
+                },
+              ],
+            }
+          : {}),
       },
       orderBy: [{ startsAt: "asc" }, { id: "asc" }],
-      ...(cursor ? { cursor: { id: cursor.id }, skip: 1 } : {}),
-      take: pageLimit(input.limit) + 1,
+      take: limit + 1,
     });
-    return pageResult(rows, pageLimit(input.limit), filterHash, (row) => ({
-      id: row.id,
-      machineId: row.machineId,
-      status: row.status,
-      startsAt: row.startsAt.toISOString(),
-      endsAt: row.endsAt.toISOString(),
-      expiresAt: row.expiresAt.toISOString(),
-    }));
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return {
+      items: page.map((row) => ({
+        id: row.id,
+        machineId: row.machineId,
+        status: row.status,
+        startsAt: row.startsAt.toISOString(),
+        endsAt: row.endsAt.toISOString(),
+        expiresAt: row.expiresAt.toISOString(),
+      })),
+      ...(rows.length > limit && last
+        ? {
+            nextCursor: encodeCursor({
+              startsAt: last.startsAt.toISOString(),
+              id: last.id,
+              filterHash,
+            }),
+          }
+        : {}),
+    };
   }
 
   private requireRead(operator: OperatorContext): void {
@@ -1016,6 +1047,22 @@ function parseTimeCursor(
   return cursor as TimeCursor;
 }
 
+function parseStartsAtCursor(
+  value: string,
+  filterHash: string,
+  name: string,
+): StartsAtCursor {
+  const cursor = parseCursor(
+    value,
+    filterHash,
+    name,
+  ) as Partial<StartsAtCursor>;
+  if (typeof cursor.startsAt !== "string")
+    throw new BadRequestException(`${name} is invalid`);
+  strictInstant(`${name} startsAt`, cursor.startsAt);
+  return cursor as StartsAtCursor;
+}
+
 function parseCursor(value: string, filterHash: string, name: string): Cursor {
   try {
     const parsed: unknown = JSON.parse(
@@ -1037,7 +1084,7 @@ function parseCursor(value: string, filterHash: string, name: string): Cursor {
   }
 }
 
-function encodeCursor(value: Cursor | TimeCursor): string {
+function encodeCursor(value: Cursor | TimeCursor | StartsAtCursor): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
 
