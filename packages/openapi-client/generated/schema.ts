@@ -124,6 +124,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/catalog/machine-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List global machine capabilities */
+        get: operations["OperatorReadsController_machineCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/machine-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List immutable machine-profile revisions */
+        get: operations["OperatorReadsController_machineProfiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/price-lists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List global immutable price lists */
+        get: operations["OperatorReadsController_priceLists"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/print-config-revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List immutable print-config revisions */
+        get: operations["OperatorReadsController_printConfigRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/reference-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List immutable reference-profile revisions */
+        get: operations["OperatorReadsController_referenceProfiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/handling-sessions/{sessionId}/stop": {
         parameters: {
             query?: never;
@@ -192,6 +277,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List node-scoped production jobs */
+        get: operations["OperatorReadsController_jobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/metrics": {
         parameters: {
             query?: never;
@@ -224,6 +326,108 @@ export interface paths {
          * @description Every item is proven to have exactly the requested operational node scope. The opaque cursor is bound to the complete filter set.
          */
         get: operations["MetricsReportController_orders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/calibrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List calibration revisions in the granted node */
+        get: operations["OperatorReadsController_calibrations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/capacity-reservations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List bounded capacity intervals in the granted node */
+        get: operations["OperatorReadsController_capacityReservations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/inventories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List inventory in the granted node */
+        get: operations["OperatorReadsController_inventories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/machines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List machines in the granted node */
+        get: operations["OperatorReadsController_machines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List node-scoped orders */
+        get: operations["OperatorReadsController_orders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one node-scoped order and its authoritative fulfilment projection */
+        get: operations["OperatorReadsController_order"];
         put?: never;
         post?: never;
         delete?: never;
@@ -804,6 +1008,23 @@ export interface paths {
         put?: never;
         /** Move a new request into operator review */
         post: operations["OperatorQuoteRequestsController_review"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/page": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page the operator quote-request queue */
+        get: operations["OperatorQuoteRequestsController_page"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1587,6 +1808,23 @@ export interface components {
             printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
             reason: string;
         };
+        CapacityReservationPageDto: {
+            items: components["schemas"]["CapacityReservationReadDto"][];
+            nextCursor?: string;
+        };
+        CapacityReservationReadDto: {
+            /** Format: date-time */
+            endsAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            machineId: string;
+            /** Format: date-time */
+            startsAt: string;
+            status: string;
+        };
         CheckoutBillingDto: {
             addressLine1: string;
             addressLine2?: string;
@@ -1912,6 +2150,23 @@ export interface components {
             /** @example 256000 */
             sizeBytes: number;
         };
+        InventoryPageDto: {
+            items: components["schemas"]["InventoryReadDto"][];
+            nextCursor?: string;
+        };
+        InventoryReadDto: {
+            availableMilligrams: string;
+            color?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            machineId: string;
+            material: string;
+            remainingMilligrams: string;
+            reservedMilligrams: string;
+            sku: string;
+            status: string;
+        };
         IssueOfferDto: {
             components: components["schemas"]["OfferPriceComponentDto"][];
             contractTotalMinor: number;
@@ -1956,6 +2211,75 @@ export interface components {
             omissionReason?: string;
             /** Format: uuid */
             photoAssetId?: string;
+        };
+        MachineCalibrationPageDto: {
+            items: components["schemas"]["MachineCalibrationReadDto"][];
+            nextCursor?: string;
+        };
+        MachineCalibrationReadDto: {
+            digest: string;
+            elephantFootCompensationMicrometers: number;
+            flowRatioPartsPerMillion: number;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            machineId: string;
+            state: string;
+            xyCompensationMicrometers: number;
+        };
+        MachineCapabilityPageDto: {
+            items: components["schemas"]["MachineCapabilityReadDto"][];
+            nextCursor?: string;
+        };
+        MachineCapabilityReadDto: {
+            buildVolumeXMicrometers: string;
+            buildVolumeYMicrometers: string;
+            buildVolumeZMicrometers: string;
+            capabilityKey: string;
+            /** Format: uuid */
+            id: string;
+            manufacturer: string;
+            model: string;
+            supportedMaterials: string[];
+            supportedNozzleMicrometers: number[];
+        };
+        MachinePageDto: {
+            items: components["schemas"]["MachineReadDto"][];
+            nextCursor?: string;
+        };
+        MachineProfilePageDto: {
+            items: components["schemas"]["MachineProfileReadDto"][];
+            nextCursor?: string;
+        };
+        MachineProfileReadDto: {
+            /** Format: date-time */
+            createdAt: string;
+            digest: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            machineCapabilityId: string;
+            material: string;
+            nozzleDiameterMicrometers: number;
+            productionArtifactFormat: string;
+            quality: string;
+            /** Format: uuid */
+            referenceProfileId: string;
+            slicerEngine: string;
+            slicerVersion: string;
+            state: string;
+        };
+        MachineReadDto: {
+            code: string;
+            displayName: string;
+            /** Format: uuid */
+            id: string;
+            installedNozzleMicrometers: number;
+            /** Format: uuid */
+            machineCapabilityId: string;
+            /** Format: uuid */
+            nodeId: string;
+            status: string;
         };
         MarginCoverageDto: {
             completeOrders: number;
@@ -2212,8 +2536,89 @@ export interface components {
             /** @enum {string} */
             scope: "OPERATIONAL_NODE";
         };
+        OperatorAcceptedPriceDto: {
+            /** Format: uuid */
+            bindingId: string;
+            contractTotalMinor: string;
+            currency: string;
+            netAmountMinor: string;
+            priceListRevision: string;
+            /** Format: uuid */
+            snapshotId: string;
+            termsRevision: string;
+            vatAmountMinor: string;
+        };
         OperatorAuthMethodsDto: {
             methods: ("EMAIL_PASSWORD" | "GITHUB")[];
+        };
+        OperatorFinancialProjectionDto: {
+            activeContractNetMinor?: string | null;
+            /** Format: uuid */
+            activeContractRevisionId?: string | null;
+            activeContractTotalMinor?: string | null;
+            currency?: string | null;
+            settlements: components["schemas"]["OperatorSettlementDto"][];
+        };
+        OperatorJobListItemDto: {
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            machineId: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            /** Format: uuid */
+            replacesJobId?: string | null;
+            status: string;
+        };
+        OperatorJobPageDto: {
+            items: components["schemas"]["OperatorJobListItemDto"][];
+            nextCursor?: string;
+        };
+        OperatorOrderDetailDto: {
+            acceptedPrice?: components["schemas"]["OperatorAcceptedPriceDto"] | null;
+            acceptedTermsRevision?: string | null;
+            /** Format: date-time */
+            confirmedAt?: string | null;
+            financial: components["schemas"]["OperatorFinancialProjectionDto"];
+            fulfilment: components["schemas"]["FulfilmentProjectionDto"];
+            /** Format: uuid */
+            id: string;
+            items: components["schemas"]["OperatorOrderItemDto"][];
+            publicReference: string;
+            status: string;
+        };
+        OperatorOrderItemDto: {
+            color?: string | null;
+            /** Format: uuid */
+            id: string;
+            material: string;
+            /** Format: uuid */
+            modelGeometryId: string;
+            ordinal: number;
+            preflightFindings: string[];
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            quantity: number;
+            /** Format: uuid */
+            sourceModelFileId: string;
+        };
+        OperatorOrderListItemDto: {
+            /** Format: date-time */
+            confirmedAt?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            publicReference: string;
+            status: string;
+        };
+        OperatorOrderPageDto: {
+            items: components["schemas"]["OperatorOrderListItemDto"][];
+            nextCursor?: string;
         };
         OperatorQuoteRequestDetailDto: {
             attachments: components["schemas"]["QuoteAttachmentDto"][];
@@ -2239,6 +2644,10 @@ export interface components {
             /** @enum {string} */
             status: "NEW" | "IN_REVIEW" | "QUOTED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
         };
+        OperatorQuoteRequestPageDto: {
+            items: components["schemas"]["OperatorQuoteRequestDetailDto"][];
+            nextCursor?: string;
+        };
         OperatorSessionDto: {
             csrfToken: string;
             operator: components["schemas"]["OperatorSessionOperatorDto"];
@@ -2251,6 +2660,19 @@ export interface components {
             operatorId: string;
             /** @enum {string} */
             role: "ADMIN" | "OPERATOR" | "VIEWER";
+        };
+        OperatorSettlementDto: {
+            amountDueMinor: string;
+            capturedTotalMinor: string;
+            contractTotalMinor: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            refundableBalanceMinor: string;
+            refundAmountMinor: string;
+            /** Format: date-time */
+            settledAt: string;
         };
         OrderMetricsDto: {
             acceptedGross: components["schemas"]["MetricMoneyDto"];
@@ -2313,6 +2735,35 @@ export interface components {
             "25000_to_49999": number;
             "50000_to_99999": number;
             under_25000: number;
+        };
+        PriceListPageDto: {
+            items: components["schemas"]["PriceListReadDto"][];
+            nextCursor?: string;
+        };
+        PriceListReadDto: {
+            /** Format: date-time */
+            createdAt: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            revision: string;
+            termsRevision: string;
+        };
+        PrintConfigRevisionPageDto: {
+            items: components["schemas"]["PrintConfigRevisionReadDto"][];
+            nextCursor?: string;
+        };
+        PrintConfigRevisionReadDto: {
+            brimEnabled: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            digest: string;
+            /** Format: uuid */
+            id: string;
+            infillPercent: number;
+            layerHeightMicrometers: number;
+            quality: string;
+            supportsEnabled: boolean;
         };
         QueueMetricsDto: {
             definition: string;
@@ -2433,6 +2884,22 @@ export interface components {
             reason: string;
             /** Format: date-time */
             startedAt: string;
+        };
+        ReferenceProfilePageDto: {
+            items: components["schemas"]["ReferenceProfileReadDto"][];
+            nextCursor?: string;
+        };
+        ReferenceProfileReadDto: {
+            /** Format: date-time */
+            createdAt: string;
+            digest: string;
+            /** Format: uuid */
+            id: string;
+            material: string;
+            quality: string;
+            slicerEngine: string;
+            slicerVersion: string;
+            state: string;
         };
         RefundDto: {
             reason: string;
@@ -2789,6 +3256,116 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_machineCapabilities: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineCapabilityPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_machineProfiles: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineProfilePageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_priceLists: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PriceListPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_printConfigRevisions: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrintConfigRevisionPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_referenceProfiles: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceProfilePageDto"];
+                };
+            };
+        };
+    };
     MeasurementController_stop: {
         parameters: {
             query?: never;
@@ -2901,6 +3478,33 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_jobs: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+                machineId?: string;
+                status?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorJobPageDto"];
+                };
+            };
+        };
+    };
     MetricsReportController_report: {
         parameters: {
             query: {
@@ -2955,6 +3559,161 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MetricsOrderPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_calibrations: {
+        parameters: {
+            query?: {
+                machineId?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineCalibrationPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_capacityReservations: {
+        parameters: {
+            query: {
+                machineId?: string;
+                status?: string;
+                to: string;
+                from: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapacityReservationPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_inventories: {
+        parameters: {
+            query?: {
+                machineId?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_machines: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachinePageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_orders: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+                status?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorOrderPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_order: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorOrderDetailDto"];
                 };
             };
         };
@@ -4052,6 +4811,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuoteRequestStatusDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_page: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+                sla?: "PENDING" | "MET" | "BREACHED";
+                /** @description Defaults to actionable NEW, IN_REVIEW, and QUOTED requests; select a terminal status explicitly to read history */
+                status?: "NEW" | "IN_REVIEW" | "QUOTED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorQuoteRequestPageDto"];
                 };
             };
         };

@@ -197,6 +197,14 @@ export class OperatorQuoteRequestDetailDto extends QuoteRequestDetailDto {
   automaticQuoteHandoff!: AutomaticQuoteRequestHandoffDto | null;
 }
 
+export class OperatorQuoteRequestPageDto {
+  @ApiProperty({ type: [OperatorQuoteRequestDetailDto] })
+  items!: OperatorQuoteRequestDetailDto[];
+
+  @ApiPropertyOptional({ type: String, minLength: 1 })
+  nextCursor?: string;
+}
+
 export class ModelOfferItemDto {
   @ApiProperty({ type: String, enum: ["MODEL"] })
   kind!: "MODEL";
