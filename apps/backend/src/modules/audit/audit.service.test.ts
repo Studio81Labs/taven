@@ -101,6 +101,13 @@ describe("AuditService legacy projection", () => {
         payload: {
           operation: "attachment_download",
           photoAssetId,
+          response: {
+            status: "ISSUED",
+            targets: {
+              refundIds: [refundTransactionId],
+              providerEventId: "99999999-9999-4999-8999-999999999999",
+            },
+          },
           storageObjectKey: "quote-photos/private-key",
         },
       },
@@ -112,6 +119,8 @@ describe("AuditService legacy projection", () => {
     expect(page.items[0]?.payload).toEqual({
       operation: "attachment_download",
       photoAssetId,
+      status: "ISSUED",
+      refundIds: [refundTransactionId],
     });
   });
 
@@ -141,13 +150,14 @@ describe("AuditService legacy projection", () => {
     await service.recordOperator(transaction, operator, {
       eventType: "quote_offer.expired",
       quoteRequestId: orderId,
+      quoteId,
       nodeId,
       createdAt,
       payload: { operation: "expire_offer", status: "EXPIRED" },
     });
 
     expect(create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ createdAt }),
+      data: expect.objectContaining({ createdAt, quoteId }),
     });
   });
 });

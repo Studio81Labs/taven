@@ -6067,10 +6067,7 @@ export class OrdersService {
           correlationId: record.id,
           idempotencyKey,
           ...auditReason(operation, input),
-          payload: {
-            operation,
-            status: response.status,
-          },
+          payload: auditCommandPayload(operation, input, response),
         });
         await tx.idempotencyRecord.update({
           where: { id: record.id },
@@ -6188,6 +6185,138 @@ function auditReason(
       ? record.reason.trim()
       : operationReasonCode(operation, record);
   return { reasonCode, reason: reason.trim() };
+}
+
+const AUDIT_TARGET_IDENTIFIER_FIELDS = new Set([
+  "authorizationId",
+  "claimId",
+  "fulfilmentSlotId",
+  "fulfilmentSlotIds",
+  "jobId",
+  "originalShipmentId",
+  "phaseReservationSetId",
+  "priceAdjustmentId",
+  "predecessorShipmentId",
+  "replacementJobId",
+  "replacementRequestId",
+  "replacementShipmentId",
+  "refundIds",
+  "reshipmentShipmentId",
+  "shipmentId",
+  "shipmentIds",
+  "shipmentPlanId",
+  "sourceJobId",
+]);
+const MAX_AUDIT_TARGET_IDENTIFIERS = 100;
+
+function auditCommandPayload(
+  operation: string,
+  input: unknown,
+  response: FulfilmentCommandResultDto,
+): Prisma.InputJsonObject {
+  return {
+    operation,
+    input: auditCommandInput(input),
+    response: {
+      status: response.status,
+      ...auditCommandTargets(response.result),
+    },
+  };
+}
+
+function auditCommandInput(input: unknown): Prisma.InputJsonObject {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  const printingConsumptions = (input as Record<string, unknown>)
+    .printingConsumptions;
+  if (!Array.isArray(printingConsumptions)) return {};
+  return {
+    printingConsumptions: printingConsumptions.flatMap((consumption) => {
+      if (!consumption || typeof consumption !== "object") return [];
+      const { actualMaterialMilligrams, jobId } = consumption as Record<
+        string,
+        unknown
+      >;
+      return typeof actualMaterialMilligrams === "string" &&
+        /^[0-9]+$/.test(actualMaterialMilligrams) &&
+        typeof jobId === "string" &&
+        UUID_PATTERN.test(jobId)
+        ? [{ jobId, actualMaterialMilligrams }]
+        : [];
+    }),
+  };
+}
+
+function auditCommandTargets(
+  result: Record<string, unknown>,
+): Prisma.InputJsonObject {
+  const targets = new Map<string, string[]>();
+  collectAuditTargetIdentifiers(result, targets, 0);
+  if (targets.size === 0) return {};
+  return {
+    targets: Object.fromEntries(
+      [...targets.entries()].map(([key, identifiers]) => [
+        key,
+        key.endsWith("Ids") || identifiers.length > 1
+          ? identifiers
+          : identifiers[0]!,
+      ]),
+    ),
+  };
+}
+
+function collectAuditTargetIdentifiers(
+  value: unknown,
+  targets: Map<string, string[]>,
+  depth: number,
+): void {
+  if (!value || typeof value !== "object" || depth > 3) return;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (auditTargetIdentifierCount(targets) === MAX_AUDIT_TARGET_IDENTIFIERS)
+        return;
+      collectAuditTargetIdentifiers(item, targets, depth + 1);
+    }
+    return;
+  }
+  for (const [key, candidate] of Object.entries(value)) {
+    if (auditTargetIdentifierCount(targets) === MAX_AUDIT_TARGET_IDENTIFIERS)
+      return;
+    if (AUDIT_TARGET_IDENTIFIER_FIELDS.has(key)) {
+      addAuditTargetIdentifiers(key, candidate, targets);
+      continue;
+    }
+    collectAuditTargetIdentifiers(candidate, targets, depth + 1);
+  }
+}
+
+function addAuditTargetIdentifiers(
+  key: string,
+  candidate: unknown,
+  targets: Map<string, string[]>,
+): void {
+  const values = Array.isArray(candidate) ? candidate : [candidate];
+  const identifiers = targets.get(key) ?? [];
+  for (const value of values) {
+    if (
+      auditTargetIdentifierCount(targets) === MAX_AUDIT_TARGET_IDENTIFIERS ||
+      typeof value !== "string" ||
+      !UUID_PATTERN.test(value) ||
+      identifiers.includes(value)
+    ) {
+      continue;
+    }
+    identifiers.push(value);
+  }
+  if (identifiers.length > 0) targets.set(key, identifiers);
+}
+
+function auditTargetIdentifierCount(
+  targets: ReadonlyMap<string, string[]>,
+): number {
+  return [...targets.values()].reduce(
+    (total, identifiers) => total + identifiers.length,
+    0,
+  );
 }
 
 function operationReasonCode(

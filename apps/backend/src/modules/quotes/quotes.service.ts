@@ -740,6 +740,7 @@ export class QuotesService {
         });
         await this.audit.recordOperator(transaction, operator, {
           quoteRequestId: requestId,
+          quoteId,
           nodeId,
           eventType: "quote_offer.issued",
           idempotencyKey: commandKey,
@@ -1763,6 +1764,7 @@ async function expireLockedOffer(
       operatorAudit.operator,
       {
         quoteRequestId: quote.quoteRequestId,
+        quoteId: quote.id,
         nodeId: operatorAudit.nodeId,
         createdAt: observedAt,
         eventType: "quote_offer.expired",

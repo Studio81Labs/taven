@@ -5375,6 +5375,26 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     const refundId = (pending.result.refundIds as string[])[0];
     if (!refundId) throw new Error("slot credit refund was not created");
+    await expect(
+      prisma.auditEvent.findFirstOrThrow({
+        where: {
+          eventType: "fulfilment.command_completed",
+          idempotencyKey: "slot-credit-cap-refund",
+        },
+      }),
+    ).resolves.toMatchObject({
+      payload: {
+        operation: `price-adjustment:${first.result.priceAdjustmentId as string}:refund`,
+        input: {},
+        response: {
+          status: "PRICE_ADJUSTMENT_REFUND_PENDING",
+          targets: {
+            priceAdjustmentId: first.result.priceAdjustmentId,
+            refundIds: [refundId],
+          },
+        },
+      },
+    });
     await succeedRefund(refundId);
 
     await expect(

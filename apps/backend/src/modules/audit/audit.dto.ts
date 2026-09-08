@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
+export type AuditPayloadValue = boolean | number | string | string[];
+
 export class AuditEventSummaryDto {
   @ApiProperty({ type: String, format: "uuid" })
   id!: string;
@@ -44,7 +46,7 @@ export class AuditEventSummaryDto {
   reason?: string;
 
   @ApiProperty({ type: Object, additionalProperties: true })
-  payload!: Record<string, boolean | number | string>;
+  payload!: Record<string, AuditPayloadValue>;
 }
 
 export class AuditEventPageDto {
