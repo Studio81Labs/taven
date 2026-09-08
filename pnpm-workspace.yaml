@@ -48,8 +48,9 @@ overrides:
   # Nest's tooling accepts ^4.0.0, so route it to the last attested release.
   # Remove when a later reachable release restores attestations.
   chokidar@4.0.3: 4.0.1
-  # GHSA-5p4m-2wfm-xmqj. Remove when all parents resolve js-yaml >= 4.3.1.
-  "js-yaml@4": ">=4.3.1 <5"
+  # GHSA-5p4m-2wfm-xmqj, GHSA-2883-xcg3-v3hh. Remove when all parents resolve
+  # js-yaml >= 4.3.2.
+  "js-yaml@4": ">=4.3.2 <5"
   # GHSA-pm4m-ph32-ghv5. Remove when @nestjs/swagger stops pinning 5.2.1.
   js-yaml@5.2.1: 5.2.3
   # CVE-2026-40345. Prisma 7 pins 7.1.5; remove when it adopts >= 8.
