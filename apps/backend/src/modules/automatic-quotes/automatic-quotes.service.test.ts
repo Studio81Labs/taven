@@ -5,6 +5,34 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { AutomaticQuotesService } from "./automatic-quotes.service";
 
 describe("AutomaticQuotesService", () => {
+  it("filters configured delivery options when pricing is unavailable", async () => {
+    const priceList = { findUnique: vi.fn().mockResolvedValue(null) };
+    const service = new AutomaticQuotesService(
+      { priceList } as unknown as PrismaService,
+      null as never,
+      null as never,
+      null as never,
+      null as never,
+    );
+    const deliveryOptions = service as unknown as {
+      deliveryOptions: (
+        input: undefined,
+        client: { priceList: typeof priceList },
+        configuredOptions: readonly unknown[],
+      ) => Promise<unknown[]>;
+    };
+
+    await expect(
+      deliveryOptions.deliveryOptions(undefined, { priceList }, [
+        {
+          endpointType: "pickup_point",
+          providerEndpointId: "configured-pickup",
+          supportedCategoryIds: ["pickup"],
+        },
+      ]),
+    ).resolves.toEqual([]);
+  });
+
   it.each(["P2002", "23505"])(
     "retries a handoff issuance uniqueness race (%s)",
     async (code) => {

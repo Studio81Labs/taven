@@ -4502,6 +4502,9 @@ export class AutomaticQuotesService {
             deliveryOptions,
           )
         : null;
+    const availableDeliveryOptions =
+      rough?.deliveryOptions ??
+      (await this.deliveryOptions(undefined, transaction, deliveryOptions));
 
     const reasons: string[] = [];
     if (
@@ -4569,7 +4572,7 @@ export class AutomaticQuotesService {
     if (
       readyItems &&
       !checkoutReady &&
-      (rough?.deliveryOptions ?? deliveryOptions).length === 0 &&
+      availableDeliveryOptions.length === 0 &&
       !reasons.includes("SHIPMENT_INELIGIBLE")
     ) {
       reasons.push("SHIPMENT_INELIGIBLE");
