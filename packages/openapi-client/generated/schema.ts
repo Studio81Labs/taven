@@ -3258,7 +3258,10 @@ export interface operations {
     };
     OperatorReadsController_machineCapabilities: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token"?: string;
@@ -3280,7 +3283,10 @@ export interface operations {
     };
     OperatorReadsController_machineProfiles: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token"?: string;
@@ -3302,7 +3308,10 @@ export interface operations {
     };
     OperatorReadsController_priceLists: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token"?: string;
@@ -3324,7 +3333,10 @@ export interface operations {
     };
     OperatorReadsController_printConfigRevisions: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token"?: string;
@@ -3346,7 +3358,10 @@ export interface operations {
     };
     OperatorReadsController_referenceProfiles: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token"?: string;
@@ -3566,6 +3581,8 @@ export interface operations {
     OperatorReadsController_calibrations: {
         parameters: {
             query?: {
+                limit?: number;
+                cursor?: string;
                 machineId?: string;
             };
             header?: {
@@ -3592,6 +3609,8 @@ export interface operations {
     OperatorReadsController_capacityReservations: {
         parameters: {
             query: {
+                limit?: number;
+                cursor?: string;
                 machineId?: string;
                 status?: string;
                 to: string;
@@ -3621,6 +3640,8 @@ export interface operations {
     OperatorReadsController_inventories: {
         parameters: {
             query?: {
+                limit?: number;
+                cursor?: string;
                 machineId?: string;
             };
             header?: {
@@ -3646,7 +3667,10 @@ export interface operations {
     };
     OperatorReadsController_machines: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token"?: string;
