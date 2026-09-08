@@ -203,12 +203,21 @@ describe("operator read contracts", () => {
         payments: [
           {
             id: fixture.paymentId,
+            orderPriceBindingId: fixture.orderPriceBindingId,
+            priceSnapshotId: fixture.priceSnapshotId,
             status: expect.any(String),
             requestedAmountMinor: expect.any(String),
           },
         ],
       },
       fulfilment: { jobs: expect.any(Array), shipments: expect.any(Array) },
+      timeline: [
+        {
+          eventType: "order.quoted",
+          actorKind: "SYSTEM",
+          occurredAt: expect.any(String),
+        },
+      ],
     });
     expect(
       orderDetail.items.find((item) => item.id === fixture.orderItemId)

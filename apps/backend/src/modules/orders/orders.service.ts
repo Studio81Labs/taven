@@ -84,39 +84,47 @@ export class OrdersService {
     operator: OperatorContext,
     orderId: string,
   ): Promise<FulfilmentProjectionDto> {
+    return this.prisma.$transaction((transaction) =>
+      this.getFulfilmentInTransaction(operator, orderId, transaction),
+    );
+  }
+
+  async getFulfilmentInTransaction(
+    operator: OperatorContext,
+    orderId: string,
+    transaction: Transaction,
+  ): Promise<FulfilmentProjectionDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
     assertUuid(orderId, "orderId");
     const nodeId = operatorNode(operator);
-    const order = await this.prisma.$transaction(async (tx) => {
-      await assertOperationalOrderScope(tx, orderId, nodeId);
-      return tx.order.findUnique({
-        where: { id: orderId },
-        include: {
-          phases: true,
-          jobs: {
-            include: {
-              shipmentAssignment: true,
-              replacementRequestSource: true,
-            },
-            orderBy: { createdAt: "asc" },
+    await assertOperationalOrderScope(transaction, orderId, nodeId);
+    const order = await transaction.order.findUnique({
+      where: { id: orderId },
+      include: {
+        phases: true,
+        jobs: {
+          include: {
+            shipmentAssignment: true,
+            replacementRequestSource: true,
           },
-          shipments: {
-            include: { jobAssignments: true },
-            orderBy: { createdAt: "asc" },
-          },
-          fulfilmentSlots: { orderBy: { createdAt: "asc" } },
-          replacementRequests: { orderBy: { createdAt: "asc" } },
-          claims: {
-            include: {
-              resolutions: true,
-              refunds: true,
-              reshipmentAuthorizations: true,
-            },
-            orderBy: { createdAt: "asc" },
-          },
-          priceAdjustments: { orderBy: { createdAt: "asc" } },
+          orderBy: { createdAt: "asc" },
         },
-      });
+        shipments: {
+          include: { jobAssignments: true },
+          orderBy: { createdAt: "asc" },
+        },
+        fulfilmentSlots: { orderBy: { createdAt: "asc" } },
+        replacementRequests: { orderBy: { createdAt: "asc" } },
+        claims: {
+          include: {
+            resolutions: true,
+            refunds: true,
+            reshipmentAuthorizations: true,
+          },
+          orderBy: { createdAt: "asc" },
+        },
+        priceAdjustments: { orderBy: { createdAt: "asc" } },
+      },
     });
     if (!order) throw new NotFoundException("Order was not found");
     const phase = order.phases[0];

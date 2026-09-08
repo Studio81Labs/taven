@@ -198,6 +198,12 @@ export class OperatorPaymentDto {
   @ApiProperty(UUID)
   id!: string;
 
+  @ApiProperty(UUID)
+  orderPriceBindingId!: string;
+
+  @ApiProperty(UUID)
+  priceSnapshotId!: string;
+
   @ApiProperty({ type: String })
   role!: string;
 
@@ -242,6 +248,26 @@ export class OperatorPaymentDto {
 
   @ApiProperty({ type: String, format: "date-time" })
   updatedAt!: string;
+}
+
+export class OperatorOrderTimelineEventDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty({ type: String })
+  eventType!: string;
+
+  @ApiProperty({ type: String })
+  actorKind!: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  reasonCode!: string | null;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  reason!: string | null;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  occurredAt!: string;
 }
 
 export class OperatorFinancialProjectionDto {
@@ -291,6 +317,9 @@ export class OperatorOrderDetailDto {
 
   @ApiProperty({ type: FulfilmentProjectionDto })
   fulfilment!: FulfilmentProjectionDto;
+
+  @ApiProperty({ type: [OperatorOrderTimelineEventDto] })
+  timeline!: OperatorOrderTimelineEventDto[];
 }
 
 export class ReferenceProfileReadDto {

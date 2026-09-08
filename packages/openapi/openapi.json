@@ -5116,6 +5116,12 @@
           },
           "status": {
             "type": "string"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorOrderTimelineEventDto"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -5124,7 +5130,8 @@
           "status",
           "items",
           "financial",
-          "fulfilment"
+          "fulfilment",
+          "timeline"
         ],
         "type": "object"
       },
@@ -5253,6 +5260,39 @@
         ],
         "type": "object"
       },
+      "OperatorOrderTimelineEventDto": {
+        "properties": {
+          "actorKind": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "reasonCode": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "eventType",
+          "actorKind",
+          "occurredAt"
+        ],
+        "type": "object"
+      },
       "OperatorPaymentDto": {
         "properties": {
           "balanceDueAt": {
@@ -5301,6 +5341,14 @@
             "nullable": true,
             "type": "string"
           },
+          "orderPriceBindingId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "priceSnapshotId": {
+            "format": "uuid",
+            "type": "string"
+          },
           "provider": {
             "type": "string"
           },
@@ -5321,6 +5369,8 @@
         },
         "required": [
           "id",
+          "orderPriceBindingId",
+          "priceSnapshotId",
           "role",
           "provider",
           "checkoutMethod",
