@@ -1928,6 +1928,13 @@ export class OrdersService {
             evidence.providerEventId,
             verifiedAt,
           );
+          await writeBusinessEvent(tx, {
+            eventType: "shipment.handed-off",
+            shipmentId,
+            orderId,
+            nodeId: operatorNode(operator),
+            observedAt: verifiedAt,
+          });
           return result(orderId, "SHIPMENT_HANDOFF_RECONCILED", {
             shipmentId,
             handedOverAt: verifiedAt,
@@ -3559,6 +3566,13 @@ export class OrdersService {
             providerAcceptanceScanId: evidence.providerEventId,
             handedOverAt: verifiedAt,
           },
+        });
+        await writeBusinessEvent(tx, {
+          eventType: "shipment.handed-off",
+          shipmentId: reshipment.id,
+          orderId,
+          nodeId: operatorNode(operator),
+          observedAt: verifiedAt,
         });
         return result(orderId, "CLAIM_RESHIPMENT_HANDED_OVER", {
           claimId,

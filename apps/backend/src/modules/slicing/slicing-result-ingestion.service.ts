@@ -14,6 +14,7 @@ import type {
   SlicingResult,
 } from "@taven/slicer-contracts" with { "resolution-mode": "import" };
 import { PrismaService } from "../../prisma/prisma.service";
+import { writeBusinessEvent } from "../metrics/business-event.writer";
 import {
   OBJECT_STORAGE,
   type ObjectStorage,
@@ -530,6 +531,7 @@ export class SlicingResultIngestionService {
       where: { id: result.jobId },
       select: {
         id: true,
+        nodeId: true,
         orderId: true,
         status: true,
         productionSliceResultId: true,
@@ -601,6 +603,7 @@ export class SlicingResultIngestionService {
         await this.failProduction(transaction, {
           dispatchId,
           jobId: job.id,
+          nodeId: job.nodeId,
           orderId: job.orderId,
           failureReason: `${result.outcome.failureClass}/${result.outcome.code}: ${result.outcome.message}`,
         });
@@ -901,6 +904,7 @@ export class SlicingResultIngestionService {
     input: {
       dispatchId: string;
       jobId: string;
+      nodeId: string;
       orderId: string;
       failureReason: string;
     },
@@ -914,6 +918,13 @@ export class SlicingResultIngestionService {
         failureStage: JobFailureStage.GCODE,
         failureReason: input.failureReason,
       },
+    });
+    await writeBusinessEvent(transaction, {
+      eventType: "job.failed",
+      jobId: input.jobId,
+      orderId: input.orderId,
+      nodeId: input.nodeId,
+      observedAt: failedAt,
     });
 
     await transaction.$executeRaw`

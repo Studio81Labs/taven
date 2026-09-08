@@ -180,6 +180,55 @@ describe("slicing result ingestion", () => {
     expect(queryRaw).toHaveBeenCalledOnce();
   });
 
+  it("records a business fact when automatic G-code ingestion fails a Job", async () => {
+    const businessEventUpsert = vi.fn().mockResolvedValue(undefined);
+    const transaction = {
+      $executeRaw: vi.fn().mockResolvedValue(undefined),
+      businessEvent: { upsert: businessEventUpsert },
+      job: { update: vi.fn().mockResolvedValue(undefined) },
+      payment: { findMany: vi.fn().mockResolvedValue([]) },
+      refundTransaction: { create: vi.fn().mockResolvedValue(undefined) },
+    } as unknown as Prisma.TransactionClient;
+    const service = new SlicingResultIngestionService(
+      {} as PrismaService,
+      {} as ObjectStorage,
+    ) as unknown as {
+      failProduction(
+        transaction: Prisma.TransactionClient,
+        input: {
+          dispatchId: string;
+          jobId: string;
+          nodeId: string;
+          orderId: string;
+          failureReason: string;
+        },
+      ): Promise<void>;
+    };
+
+    await service.failProduction(transaction, {
+      dispatchId,
+      jobId,
+      nodeId: "00000000-0000-4000-8000-000000000004",
+      orderId: "00000000-0000-4000-8000-000000000005",
+      failureReason: "deterministic_invalid/INVALID_GEOMETRY",
+    });
+
+    expect(businessEventUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          eventType_dedupeKey: { eventType: "job.failed", dedupeKey: jobId },
+        },
+        create: expect.objectContaining({
+          eventType: "job.failed",
+          jobId,
+          nodeId: "00000000-0000-4000-8000-000000000004",
+          orderId: "00000000-0000-4000-8000-000000000005",
+          payload: {},
+        }),
+      }),
+    );
+  });
+
   it("deletes a successful production artifact when its Job is stale", async () => {
     const harness = staleProductionHarness();
 
