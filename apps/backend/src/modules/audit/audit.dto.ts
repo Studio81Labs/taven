@@ -26,6 +26,9 @@ export class AuditEventSummaryDto {
   paymentId?: string;
 
   @ApiPropertyOptional({ type: String, format: "uuid" })
+  refundTransactionId?: string;
+
+  @ApiPropertyOptional({ type: String, format: "uuid" })
   quoteRequestId?: string;
 
   @ApiPropertyOptional({ type: String, format: "uuid" })

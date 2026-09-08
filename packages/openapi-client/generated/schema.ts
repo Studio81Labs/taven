@@ -1297,6 +1297,8 @@ export interface components {
             quoteRequestId?: string;
             reason?: string;
             reasonCode?: string;
+            /** Format: uuid */
+            refundTransactionId?: string;
         };
         AutomaticQuoteConfigurationOptionDto: {
             color?: string | null;
