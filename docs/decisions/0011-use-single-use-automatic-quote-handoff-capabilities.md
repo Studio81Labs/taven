@@ -1,6 +1,6 @@
 # ADR 0011: Use single-use capabilities for automatic-quote handoff
 
-- **Status:** accepted
+- **Status:** accepted, amended by Epic #7 / #90 resolution on 2026-09-08
 - **Date:** 2026-09-07
 - **Decision authority:** architecture resolution of epic #7 escalations 002 and 003
 - **Implementation:** issue #24, P4, PR #89; no production implementation in this decision
@@ -51,22 +51,22 @@ Add a dedicated server-minted `ASSISTED_QUOTE_REQUEST` handoff capability.
    Consumption is terminal and cannot be reset by the browser or source
    session.
 
-The source handoff issuance command is idempotent. A retry with the same
-source session, bearer capability and idempotency key returns the original
-stored issuance response, even if that token has since been consumed; a
-changed request fingerprint conflicts. Issuance does not consume the source
-session bearer.
+The source handoff issuance command has one permanent **canonical** command
+identity. The first successful issuance creates one generation-one
+`IdempotencyRecord`, bound immutably to its one handoff capability, and stores
+only a hash of that issuance key. Only that key with its original fingerprint
+may replay the saved response, for seven days from original issuance and only
+while the source bearer/session remains authorized. An alternate key conflicts
+before an idempotency row is created. At or after the replay deadline, even
+the canonical key conflicts: no generation two, replacement token or source
+session reopening is permitted. Replay after capability consumption or token
+expiry returns the original response but never makes the token usable again.
 
 There is at most one handoff capability row for a source quote session over
-its lifetime. If a new idempotency key arrives while that row is unconsumed
-and unexpired, the command returns the same handoff ID and derives the same
-opaque token from it. The database stores only the token hash; the existing
-issuance response and deterministic token derivation make this replay safe
-without retaining plaintext or an encrypted token envelope. Once the
-capability is consumed or expires, no replacement may be issued. The caller
-falls back to the manual assisted flow. An expired, unconsumed row remains
-retained as immutable issuance evidence and is never deleted by capability
-issuance or routine expiry cleanup.
+its lifetime. Once issued, consumed or expired, it remains immutable evidence
+and the caller falls back to the manual assisted flow. Legacy rows whose
+canonical command cannot be uniquely proved are legacy-exhausted: they retain
+their original consume window, but cannot issue or replay a handoff.
 
 The one-row bound is enforced in the database with a unique source-session
 constraint and in the issuance transaction by locking the source session and
@@ -105,6 +105,9 @@ for what the assisted request actually disclosed.
 - **Use a reusable signed/JWT handoff.** Signature validity alone does not
   provide single-use consumption or a durable replay fence; a database-backed
   opaque capability is required.
+- **Return an active token to an alternate issuance key.** That key has no
+  durable command-effect replay identity after a lost response, consumption or
+  expiry. Recording it would weaken the one-canonical-record bound.
 
 ## Consequences and rollout
 
@@ -121,7 +124,12 @@ local context solely for display copy; the server response is authoritative.
 No existing automatic session, quote request, attribution JSON or customer
 record is backfilled. Existing browser contexts without a handoff token, and
 sessions whose one capability has expired or been consumed, fall back to the
-manual assisted form. Deploy the source endpoint, generated contract,
+manual assisted form. Issuance reads its bounded server-owned snapshot in one
+SERIALIZABLE transaction, using one database decision instant for all expiry
+predicates and immutable process-lifetime delivery configuration.
+Serialization/deadlock retries restart the complete transaction at most three
+times. Stop/drain old issuers before enabling this bound protocol; do not
+re-enable a binary that can mint an alternate issuance key. Deploy the source endpoint, generated contract,
 quote-request consumer and web consumer together before enabling the automatic
 handoff path.
 

@@ -307,11 +307,12 @@
       "AutomaticQuoteHandoffCapabilityDto": {
         "properties": {
           "expiresAt": {
+            "description": "Capability consumption deadline; distinct from the seven-day issuance replay deadline",
             "format": "date-time",
             "type": "string"
           },
           "handoffToken": {
-            "description": "Single-use capability for one assisted quote request",
+            "description": "Single-use capability for one assisted quote request. It is replayable only by the original issuance key while the source session remains authorized; replay never restores token usability.",
             "type": "string"
           }
         },
@@ -7152,10 +7153,10 @@
             "description": "Session capability is invalid"
           },
           "409": {
-            "description": "Idempotency input changed or the source session's handoff capability is no longer available"
+            "description": "Only the original issuance key may replay the stored response for seven days. Alternate keys, changed input, expired replay windows, and exhausted legacy issuance conflict."
           },
           "410": {
-            "description": "Session or handoff is no longer available"
+            "description": "The source capability/session is no longer authorized; this takes precedence over an otherwise replayable issuance response"
           }
         },
         "security": [
@@ -7163,7 +7164,7 @@
             "bearer": []
           }
         ],
-        "summary": "Mint one single-use assisted quote-request handoff capability",
+        "summary": "Mint one single-use assisted quote-request handoff capability with a canonical issuance key",
         "tags": [
           "automatic quotes"
         ]

@@ -1,6 +1,7 @@
 import type { StorageLike } from "./quote-session-storage";
 
 const STORAGE_KEY = "taven:assisted-quote-handoff:v1";
+const ISSUANCE_KEY_STORAGE_KEY = "taven:automatic-quote-handoff-issuance:v1";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -28,6 +29,47 @@ export interface AssistedQuoteHandoffContext {
 export interface AssistedQuotePrefill {
   description: string;
   note: string;
+}
+
+interface HandoffIssuanceKeyState {
+  automaticQuoteSessionId: string;
+  idempotencyKey: string;
+}
+
+/**
+ * This key is distinct from the short-lived capability. Keeping it per source
+ * session means reloads and lost responses reuse the canonical issuance key
+ * instead of silently creating an alternate command identity.
+ */
+export function loadOrCreateHandoffIssuanceKey(
+  storage: StorageLike,
+  automaticQuoteSessionId: string,
+  createKey: () => string,
+): string | undefined {
+  if (!safeUuid(automaticQuoteSessionId)) return undefined;
+  try {
+    const raw = storage.getItem(ISSUANCE_KEY_STORAGE_KEY);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (
+        isRecord(parsed) &&
+        parsed.automaticQuoteSessionId === automaticQuoteSessionId &&
+        isIssuanceKey(parsed.idempotencyKey)
+      ) {
+        return parsed.idempotencyKey;
+      }
+    }
+    const idempotencyKey = createKey();
+    if (!isIssuanceKey(idempotencyKey)) return undefined;
+    const state: HandoffIssuanceKeyState = {
+      automaticQuoteSessionId,
+      idempotencyKey,
+    };
+    storage.setItem(ISSUANCE_KEY_STORAGE_KEY, JSON.stringify(state));
+    return idempotencyKey;
+  } catch {
+    return undefined;
+  }
 }
 
 export function normalizeAssistedQuoteSource(
@@ -238,6 +280,15 @@ function safeUuid(value: unknown): string | undefined {
   return typeof value === "string" && UUID_PATTERN.test(value)
     ? value.toLowerCase()
     : undefined;
+}
+
+function isIssuanceKey(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 16 &&
+    value.length <= 255 &&
+    /^[a-z0-9-]+$/iu.test(value)
+  );
 }
 
 function safeCapabilityToken(value: unknown): string | undefined {

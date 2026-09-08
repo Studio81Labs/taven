@@ -10,6 +10,172 @@ function databaseIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
+async function applyMigrationWithCommittedEnumValues(
+  client: Client,
+  migrationSql: string,
+): Promise<void> {
+  // pg sends a whole SQL file as one implicit transaction. PostgreSQL makes a
+  // newly added enum value usable only after that transaction commits, whereas
+  // Prisma's migration runner commits these ALTER TYPE statements separately.
+  const enumValueStatements =
+    migrationSql.match(/^ALTER TYPE .+ ADD VALUE(?: IF NOT EXISTS)? .+;$/gmu) ??
+    [];
+  for (const statement of enumValueStatements) {
+    await client.query(statement);
+  }
+  const remainingSql = migrationSql.replace(
+    /^ALTER TYPE .+ ADD VALUE(?: IF NOT EXISTS)? .+;$/gmu,
+    "",
+  );
+  if (remainingSql.trim()) await client.query(remainingSql);
+}
+
+it("binds only uniquely provable legacy automatic-quote handoff issuance", async () => {
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is required for migration upgrade tests");
+  }
+
+  const sourceUrl = new URL(databaseUrl);
+  const databaseName = `taven_handoff_upgrade_${randomUUID().replaceAll("-", "")}`;
+  const targetUrl = new URL(sourceUrl);
+  targetUrl.pathname = `/${databaseName}`;
+  targetUrl.searchParams.delete("schema");
+  const adminUrl = new URL(sourceUrl);
+  adminUrl.pathname = "/postgres";
+  adminUrl.searchParams.delete("schema");
+  const admin = new Client({ connectionString: adminUrl.toString() });
+  let target: Client | undefined;
+
+  const migration = "20260908090000_harden_automatic_quote_handoff_issuance";
+  const provableCapabilityId = "92000000-0000-4000-8000-000000000001";
+  const ambiguousCapabilityId = "92000000-0000-4000-8000-000000000002";
+  const provableRecordId = "93000000-0000-4000-8000-000000000001";
+
+  await admin.connect();
+  try {
+    await admin.query(`CREATE DATABASE ${databaseIdentifier(databaseName)}`);
+    target = new Client({ connectionString: targetUrl.toString() });
+    await target.connect();
+
+    const migrationsRoot = join(process.cwd(), "prisma/migrations");
+    const migrations = (await readdir(migrationsRoot))
+      .filter((name) => /^20/.test(name))
+      .sort();
+    for (const name of migrations.filter((name) => name < migration)) {
+      await applyMigrationWithCommittedEnumValues(
+        target,
+        await readFile(join(migrationsRoot, name, "migration.sql"), "utf8"),
+      );
+    }
+
+    await target.query(`
+      SET session_replication_role = 'replica';
+
+      INSERT INTO automatic_quote_handoff_capabilities
+        (id, source_quote_session_id, token_hash, scope, reasons, model_file_ids,
+         item_selections, issued_at, expires_at)
+      VALUES
+        ('${provableCapabilityId}', '91000000-0000-4000-8000-000000000001',
+         repeat('a', 64), 'ASSISTED_QUOTE_REQUEST', ARRAY['UNSUPPORTED_FORMAT'],
+         ARRAY[]::text[], '[]'::jsonb,
+         '2026-09-01T00:00:00.000Z', '2026-09-01T00:15:00.000Z'),
+        ('${ambiguousCapabilityId}', '91000000-0000-4000-8000-000000000002',
+         repeat('b', 64), 'ASSISTED_QUOTE_REQUEST', ARRAY['UNSUPPORTED_FORMAT'],
+         ARRAY[]::text[], '[]'::jsonb,
+         '2026-09-01T00:00:00.000Z', '2026-09-01T00:15:00.000Z');
+
+      INSERT INTO idempotency_records
+        (id, namespace, idempotency_key, generation, request_fingerprint, status,
+         response_status_code, response_body, expires_at, created_at, updated_at)
+      VALUES
+        ('${provableRecordId}',
+         'automatic-quote.handoff:91000000-0000-4000-8000-000000000001',
+         'legacy-canonical-key', 1, repeat('c', 64), 'COMPLETED', 200,
+         '{"handoffId":"${provableCapabilityId}","expiresAt":"2026-09-01T00:15:00.000Z"}'::jsonb,
+         '2026-09-08T00:00:00.000Z', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'),
+        ('93000000-0000-4000-8000-000000000002',
+         'automatic-quote.handoff:91000000-0000-4000-8000-000000000002',
+         'ambiguous-key-one', 1, repeat('d', 64), 'COMPLETED', 200,
+         '{"handoffId":"${ambiguousCapabilityId}","expiresAt":"2026-09-01T00:15:00.000Z"}'::jsonb,
+         '2026-09-08T00:00:00.000Z', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'),
+        ('93000000-0000-4000-8000-000000000003',
+         'automatic-quote.handoff:91000000-0000-4000-8000-000000000002',
+         'ambiguous-key-two', 1, repeat('e', 64), 'COMPLETED', 200,
+         '{"handoffId":"${ambiguousCapabilityId}","expiresAt":"2026-09-01T00:15:00.000Z"}'::jsonb,
+         '2026-09-08T00:00:00.000Z', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z');
+
+      SET session_replication_role = 'origin';
+    `);
+    await target.query(
+      await readFile(join(migrationsRoot, migration, "migration.sql"), "utf8"),
+    );
+
+    expect(
+      (
+        await target.query<{
+          issuance_idempotency_record_id: string | null;
+          issuance_key_hash: string | null;
+          issuance_replay_until: Date | null;
+          issuance_legacy_exhausted: boolean;
+          consumed_at: Date | null;
+        }>(`
+          SELECT issuance_idempotency_record_id, issuance_key_hash,
+                 issuance_replay_until, issuance_legacy_exhausted, consumed_at
+          FROM automatic_quote_handoff_capabilities
+          WHERE id = '${provableCapabilityId}'
+        `)
+      ).rows,
+    ).toEqual([
+      {
+        issuance_idempotency_record_id: provableRecordId,
+        issuance_key_hash:
+          "451b8e1e788408a843bcc5d4a699e603d2a476699562f12640bd120aaa54dc7a",
+        issuance_replay_until: new Date("2026-09-08T00:00:00.000Z"),
+        issuance_legacy_exhausted: false,
+        consumed_at: null,
+      },
+    ]);
+    expect(
+      (
+        await target.query<{
+          issuance_idempotency_record_id: string | null;
+          issuance_key_hash: string | null;
+          issuance_replay_until: Date | null;
+          issuance_legacy_exhausted: boolean;
+          consumed_at: Date | null;
+        }>(`
+          SELECT issuance_idempotency_record_id, issuance_key_hash,
+                 issuance_replay_until, issuance_legacy_exhausted, consumed_at
+          FROM automatic_quote_handoff_capabilities
+          WHERE id = '${ambiguousCapabilityId}'
+        `)
+      ).rows,
+    ).toEqual([
+      {
+        issuance_idempotency_record_id: null,
+        issuance_key_hash: null,
+        issuance_replay_until: null,
+        issuance_legacy_exhausted: true,
+        consumed_at: null,
+      },
+    ]);
+
+    await expect(
+      target.query(`
+        UPDATE automatic_quote_handoff_capabilities
+        SET consumed_at = issued_at + interval '1 second'
+        WHERE id = '${ambiguousCapabilityId}'
+      `),
+    ).resolves.toMatchObject({ rowCount: 1 });
+  } finally {
+    await target?.end().catch(() => undefined);
+    await admin.query(
+      `DROP DATABASE IF EXISTS ${databaseIdentifier(databaseName)} WITH (FORCE)`,
+    );
+    await admin.end();
+  }
+}, 30_000);
+
 it("upgrades sealed legacy individual FULL contracts and outstanding quotes without rewriting them", async () => {
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required for migration upgrade tests");

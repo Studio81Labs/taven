@@ -1708,6 +1708,7 @@ model IdempotencyRecord {
   updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   checkoutPayment Payment? @relation("CheckoutPaymentCommand")
+  automaticQuoteHandoffCapability AutomaticQuoteHandoffCapability? @relation("AutomaticQuoteHandoffIssuance")
 
   @@unique([namespace, idempotencyKey, generation], map: "idempotency_records_namespace_key_generation_key")
   @@index([expiresAt])
@@ -2258,9 +2259,14 @@ model AutomaticQuoteHandoffCapability {
   issuedAt             DateTime                   @default(now()) @map("issued_at") @db.Timestamptz(3)
   expiresAt            DateTime                   @map("expires_at") @db.Timestamptz(3)
   consumedAt           DateTime?                  @map("consumed_at") @db.Timestamptz(3)
+  issuanceIdempotencyRecordId String?             @unique(map: "automatic_quote_handoff_issuance_idempotency_key") @map("issuance_idempotency_record_id") @db.Uuid
+  issuanceKeyHash      String?                    @map("issuance_key_hash") @db.VarChar(64)
+  issuanceReplayUntil  DateTime?                  @map("issuance_replay_until") @db.Timestamptz(3)
+  issuanceLegacyExhausted Boolean                 @default(false) @map("issuance_legacy_exhausted")
 
   sourceQuoteSession QuoteSession                   @relation("AutomaticQuoteHandoffSourceSession", fields: [sourceQuoteSessionId], references: [id], onDelete: Restrict)
   requestHandoff     AutomaticQuoteRequestHandoff?
+  issuanceIdempotencyRecord IdempotencyRecord? @relation("AutomaticQuoteHandoffIssuance", fields: [issuanceIdempotencyRecordId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "automatic_quote_handoff_issuance_idempotency_fkey")
 
   @@index([expiresAt])
   @@map("automatic_quote_handoff_capabilities")

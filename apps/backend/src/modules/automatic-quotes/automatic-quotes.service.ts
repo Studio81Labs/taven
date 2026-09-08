@@ -73,6 +73,7 @@ import type {
 import {
   DELIVERY_CAPABILITY,
   type DeliveryCapabilityPort,
+  type DeliveryCapabilityOption,
 } from "./delivery-capability.port";
 import {
   nextReferenceOccupancyProbe,
@@ -83,6 +84,7 @@ import {
 const SESSION_DAYS = 30;
 const HANDOFF_CAPABILITY_MINUTES = 15;
 const IDEMPOTENCY_DAYS = 7;
+const HANDOFF_ISSUANCE_MAX_ATTEMPTS = 3;
 const INSPECTION_REVISION = "inspection-v1";
 const CANONICALIZER_REVISION = "canonical-v1";
 const INSPECTION_CONFIG_SHA256 = createHash("sha256")
@@ -384,87 +386,82 @@ export class AutomaticQuotesService {
     sessionId = normalizedUuid(sessionId, "sessionId");
     const sessionCapability = bearerCapability(authorization);
     const commandKey = requireIdempotencyKey(idempotencyKey);
+    return this.serializableHandoffIssuance(async (transaction) => {
+      const namespace = `automatic-quote.handoff:${sessionId}`;
+      const fingerprint = fingerprintOf({
+        sessionId,
+        sessionCapabilityHash: hashToken(sessionCapability),
+      });
 
-    return this.prisma.$transaction(async (transaction) => {
+      // All handoff issuers take the command identity before the source row.
+      // That makes a command retry and a competing browser tab converge on one
+      // canonical key without creating an alternate idempotency record.
+      await lockIdempotencyKey(transaction, namespace, commandKey);
       const session = await lockedSession(transaction, sessionId);
-      const sessionObservedAt = await databaseNow(transaction);
-      assertOpenSession(session, sessionCapability, sessionObservedAt);
+      const decisionAt = await databaseNow(transaction);
+      assertOpenSession(session, sessionCapability, decisionAt);
       const capabilityKey = quoteCapabilityKeyRing().byId.get(
         session.capabilityKeyId ?? "",
       );
       if (!capabilityKey) {
         throw new Error("Automatic quote capability key is unavailable");
       }
-      const namespace = `automatic-quote.handoff:${sessionId}`;
-      const fingerprint = fingerprintOf({
-        sessionId,
-        sessionCapabilityHash: hashToken(sessionCapability),
-      });
-      await lockIdempotencyKey(transaction, namespace, commandKey);
-      const replayed = await replayedIdempotencyAfterLock(
-        transaction,
-        namespace,
-        commandKey,
-        fingerprint,
-      );
-      if (replayed) {
-        return handoffCapabilityResponse(
-          capabilityKey.key,
-          replayed.response as { handoffId: string; expiresAt: string },
-        );
-      }
 
       const existing = await lockedHandoffCapability(transaction, sessionId);
-      const observedAt = await databaseNow(transaction);
       if (existing) {
-        if (
-          existing.consumedAt !== null ||
-          existing.expiresAt.getTime() <= observedAt.getTime()
-        ) {
-          throw new ConflictException(
-            "Automatic quote handoff is no longer available",
-          );
-        }
-        return handoffCapabilityResponse(capabilityKey.key, {
-          handoffId: existing.id,
-          expiresAt: existing.expiresAt.toISOString(),
+        return replayCanonicalHandoffIssuance({
+          capability: existing,
+          commandKey,
+          fingerprint,
+          decisionAt,
+          secret: capabilityKey.key,
         });
       }
 
-      const record = await idempotencyRecordAfterLock(
-        transaction,
-        namespace,
-        commandKey,
-        fingerprint,
-      );
-      if (record.replayed) {
-        return handoffCapabilityResponse(
-          capabilityKey.key,
-          record.response as { handoffId: string; expiresAt: string },
-        );
+      // A source with no capability must not silently turn a legacy orphaned
+      // command into a fresh generation. Failed issuance transactions roll
+      // back, so any surviving namespace/key row is immutable evidence.
+      const priorCommand = await transaction.idempotencyRecord.findFirst({
+        where: { namespace, idempotencyKey: commandKey },
+        select: { id: true },
+      });
+      if (priorCommand) {
+        throw new ConflictException("Automatic quote handoff is unavailable");
       }
 
-      const source = await this.loadSession(sessionId, transaction);
-      const snapshot = handoffSnapshot(
-        await this.readModel(source, transaction),
+      // This adapter is configuration-backed and immutable for its process
+      // lifetime. It has no carrier I/O; the snapshot only consumes this
+      // already validated process-local configuration.
+      const deliveryOptions = await this.deliveryCapabilities.list();
+      const snapshot = await this.buildHandoffSnapshot(
+        transaction,
+        sessionId,
+        decisionAt,
+        deliveryOptions,
       );
-      const issuedAt = await databaseNow(transaction);
       const expiresAt = new Date(
         Math.min(
           session.expiresAt.getTime(),
-          issuedAt.getTime() + HANDOFF_CAPABILITY_MINUTES * 60_000,
+          decisionAt.getTime() + HANDOFF_CAPABILITY_MINUTES * 60_000,
         ),
       );
-      if (expiresAt.getTime() <= issuedAt.getTime()) {
+      if (expiresAt.getTime() <= decisionAt.getTime()) {
         throw new GoneException(
           "Automatic quote session is no longer available",
         );
       }
+      const replayUntil = addDays(decisionAt, IDEMPOTENCY_DAYS);
+      const record = await transaction.idempotencyRecord.create({
+        data: {
+          namespace,
+          idempotencyKey: commandKey,
+          generation: 1,
+          requestFingerprint: fingerprint,
+          expiresAt: replayUntil,
+        },
+      });
       const handoffId = randomUUID();
-      const response = {
-        handoffId,
-        expiresAt: expiresAt.toISOString(),
-      };
+      const response = { handoffId, expiresAt: expiresAt.toISOString() };
       await transaction.automaticQuoteHandoffCapability.create({
         data: {
           id: handoffId,
@@ -476,8 +473,11 @@ export class AutomaticQuotesService {
           reasons: snapshot.reasons,
           modelFileIds: snapshot.modelFileIds,
           itemSelections: jsonSafe(snapshot.itemSelections),
-          issuedAt,
+          issuedAt: decisionAt,
           expiresAt,
+          issuanceIdempotencyRecordId: record.id,
+          issuanceKeyHash: hashToken(commandKey),
+          issuanceReplayUntil: replayUntil,
         },
       });
       await completeIdempotency(transaction, record.id, response);
@@ -3888,6 +3888,7 @@ export class AutomaticQuotesService {
   private async candidateEstimationRequiresHandoff(
     orderId: string,
     client: Transaction | PrismaService = this.prisma,
+    decisionAt?: Date,
   ): Promise<boolean> {
     const active = await client.orderActivePriceBinding.findUnique({
       where: { orderId },
@@ -3905,7 +3906,7 @@ export class AutomaticQuotesService {
     ) {
       return false;
     }
-    const observedAt = await databaseNow(client);
+    const observedAt = decisionAt ?? (await databaseNow(client));
     if (
       await this.hasLiveCandidatePlan(
         client,
@@ -4244,6 +4245,7 @@ export class AutomaticQuotesService {
     orderId: string,
     candidateAdmissionSatisfied = false,
     client: Transaction | PrismaService = this.prisma,
+    configuredDeliveryOptions?: readonly DeliveryCapabilityOption[],
   ): Promise<{
     quote: AutomaticQuoteSessionDto["roughEstimate"];
     deliveryOptions: AutomaticQuoteSessionDto["deliveryOptions"];
@@ -4282,6 +4284,7 @@ export class AutomaticQuotesService {
         priceList,
       },
       client,
+      configuredDeliveryOptions,
     );
     const itemOrdinals = new Map(
       pricing.items.map((item, index) => [
@@ -4335,6 +4338,258 @@ export class AutomaticQuotesService {
       deliveryOptions,
       express: result.expressEligibility,
       reasons: pricing.allReferenceSliced ? result.reasons : [],
+    };
+  }
+
+  private async serializableHandoffIssuance<T>(
+    operation: (transaction: Transaction) => Promise<T>,
+  ): Promise<T> {
+    for (
+      let attempt = 1;
+      attempt <= HANDOFF_ISSUANCE_MAX_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        return await this.prisma.$transaction(operation, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error) {
+        if (!retryableHandoffTransactionError(error)) throw error;
+        if (attempt === HANDOFF_ISSUANCE_MAX_ATTEMPTS) {
+          throw new ConflictException(
+            "Automatic quote handoff issuance conflicted",
+          );
+        }
+      }
+    }
+    throw new Error("Automatic quote handoff issuance retry exhausted");
+  }
+
+  /**
+   * The issuance snapshot intentionally does not reuse readModel(). The latter
+   * is a presentation projection with parallel, independently timed reads.
+   * This bounded builder performs only authoritative reads on the one
+   * serializable transaction and receives the transaction's sole clock value.
+   */
+  private async buildHandoffSnapshot(
+    transaction: Transaction,
+    sessionId: string,
+    decisionAt: Date,
+    deliveryOptions: readonly DeliveryCapabilityOption[],
+  ): Promise<AutomaticQuoteHandoffSnapshot> {
+    const source = await this.loadSession(sessionId, transaction);
+    const order = source.automaticOrderOrigin!.order;
+    const draft = order.automaticQuoteDraft!;
+
+    const modelFiles = await this.mapSnapshotReads(
+      transaction,
+      draft.modelFiles,
+      async (attached) => {
+        if (attached.modelFile.format === ModelFileFormat.STEP) {
+          return { inspectionStatus: "UNSUPPORTED" as const };
+        }
+        const result = await terminalResultForJob(
+          transaction,
+          attached.inspectionJobId,
+          "model_inspection",
+        );
+        const dispatch = await this.latestPreprocessingDispatch(
+          transaction,
+          attached.inspectionJobId,
+          "slicing.model-inspection.requested",
+        );
+        return {
+          inspectionStatus: dispatch?.deadLettered
+            ? ("FAILED" as const)
+            : terminalStatus(result),
+        };
+      },
+    );
+    const configurationCapabilities =
+      await this.configurationCapabilities(transaction);
+    const itemStates = await this.mapSnapshotReads(
+      transaction,
+      draft.items,
+      async (item) => {
+        const geometry = await transaction.modelGeometry.findUnique({
+          where: { id: item.targetModelGeometryId },
+        });
+        const occupancy = geometry
+          ? await this.resolveReferenceOccupancy(
+              transaction,
+              item,
+              geometry,
+              order.id,
+              false,
+            )
+          : null;
+        const missing =
+          geometry && occupancy?.kind === "resolved"
+            ? await this.missingReferenceSlices(
+                transaction,
+                item,
+                geometry,
+                referenceOccupancies(item.quantity, occupancy.partsPerPlate),
+              )
+            : [];
+        const findings = await this.currentRiskFindings(transaction, item);
+        const decisions = new Map(
+          item.riskDecisions
+            .filter(
+              (decision) =>
+                decision.configurationFingerprint ===
+                item.configurationFingerprint,
+            )
+            .map((decision) => [
+              decision.preflightFindingId,
+              decision.decision,
+            ]),
+        );
+        return {
+          ready:
+            Boolean(geometry) &&
+            occupancy?.kind === "resolved" &&
+            item.referencePartsPerPlate === occupancy.partsPerPlate &&
+            missing.length === 0,
+          blocking: findings.some(
+            (finding) => finding.severity === PreflightSeverity.BLOCKING,
+          ),
+          declined: [...decisions.values()].some(
+            (decision) => decision === AutomaticQuoteRiskDecision.DECLINED,
+          ),
+          warnings: findings.filter(
+            (finding) => finding.severity === PreflightSeverity.WARNING,
+          ).length,
+        };
+      },
+    );
+
+    const candidateActive = order.activePriceBinding?.orderPriceBinding;
+    const active =
+      candidateActive && bindingMatchesAutomaticDraft(candidateActive, draft)
+        ? candidateActive
+        : undefined;
+    const currentPlan = active
+      ? await transaction.phaseResourcePlan.findFirst({
+          where: {
+            expiresAt: { gt: decisionAt },
+            orderPhaseId: { in: order.phases.map((phase) => phase.id) },
+            jobs: {
+              some: {
+                candidateResourceEstimate: {
+                  shipmentPlan: { orderPriceBindingId: active.id },
+                },
+              },
+            },
+          },
+          include: { reservationSets: true },
+          orderBy: { createdAt: "desc" },
+        })
+      : null;
+    const hasLiveReservation = Boolean(
+      currentPlan?.reservationSets.some(
+        (reservation) =>
+          reservation.status === "RESERVED" &&
+          reservation.expiresAt.getTime() > decisionAt.getTime(),
+      ),
+    );
+    const rough =
+      itemStates.length > 0
+        ? await this.roughQuote(
+            order.id,
+            hasLiveReservation,
+            transaction,
+            deliveryOptions,
+          )
+        : null;
+
+    const reasons: string[] = [];
+    if (
+      await this.preprocessingRequiresHandoff(
+        order.id,
+        draft.items,
+        transaction,
+      )
+    ) {
+      reasons.push("PREPROCESSING_FAILED");
+    }
+    if (
+      await this.candidateEstimationRequiresHandoff(
+        order.id,
+        transaction,
+        decisionAt,
+      )
+    ) {
+      reasons.push("CANDIDATE_ESTIMATION_FAILED");
+    }
+    if (modelFiles.some((file) => file.inspectionStatus === "UNSUPPORTED")) {
+      reasons.push("UNSUPPORTED_FORMAT");
+    }
+    if (modelFiles.some((file) => file.inspectionStatus === "FAILED")) {
+      reasons.push("INSPECTION_FAILED");
+    }
+    if (
+      modelFiles.length > 0 &&
+      modelFiles.every((file) => file.inspectionStatus === "SUCCEEDED") &&
+      itemStates.length === 0 &&
+      configurationCapabilities.length === 0
+    ) {
+      reasons.push("NO_CONFIGURATION_AVAILABLE");
+    }
+    if (itemStates.some((item) => item.blocking)) {
+      reasons.push("BLOCKING_PREFLIGHT_FINDING");
+    }
+    if (itemStates.some((item) => item.declined)) {
+      reasons.push("RISK_DECLINED");
+    }
+    if (draft.items.some((item) => item.fitSensitive)) {
+      reasons.push("FIT_SENSITIVE");
+    }
+    if (itemStates.reduce((total, item) => total + item.warnings, 0) > 3) {
+      reasons.push("RISK_ACKNOWLEDGEMENT_LIMIT_EXCEEDED");
+    }
+    const permanentRoughReasons = new Set([
+      "UNSUPPORTED_FORMAT",
+      "BLOCKING_PREFLIGHT_FINDING",
+      "AUTOMATIC_QUANTITY_LIMIT_EXCEEDED",
+      "AUTOMATIC_AMOUNT_LIMIT_EXCEEDED",
+      "BUILD_LIMIT_EXCEEDED",
+      "EXPRESS_INELIGIBLE",
+    ]);
+    for (const reason of rough?.reasons ?? []) {
+      if (permanentRoughReasons.has(reason) && !reasons.includes(reason)) {
+        reasons.push(reason);
+      }
+    }
+    const readyItems =
+      itemStates.length > 0 && itemStates.every((item) => item.ready);
+    const checkoutReady =
+      order.status === OrderStatus.QUOTED &&
+      Boolean(active && hasLiveReservation);
+    if (
+      readyItems &&
+      !checkoutReady &&
+      (rough?.deliveryOptions ?? deliveryOptions).length === 0 &&
+      !reasons.includes("SHIPMENT_INELIGIBLE")
+    ) {
+      reasons.push("SHIPMENT_INELIGIBLE");
+    }
+    if (reasons.length === 0) {
+      throw new ConflictException(
+        "Automatic quote does not require an assisted request",
+      );
+    }
+    return {
+      reasons,
+      modelFileIds: draft.modelFiles.map(({ modelFileId }) => modelFileId),
+      itemSelections: draft.items.map((item) => ({
+        ordinal: item.ordinal,
+        modelFileId: item.sourceModelFileId,
+        bodyIds: [...item.bodyIds],
+        material: item.material,
+        quantity: item.quantity,
+        fitSensitive: item.fitSensitive,
+      })),
     };
   }
 
@@ -4844,6 +5099,7 @@ export class AutomaticQuotesService {
         }
       | undefined,
     client: Transaction | PrismaService = this.prisma,
+    configuredOptions?: readonly DeliveryCapabilityOption[],
   ) {
     const priceList =
       input?.priceList ??
@@ -4855,7 +5111,8 @@ export class AutomaticQuotesService {
           },
         },
       }));
-    const options = await this.deliveryCapabilities.list();
+    const options =
+      configuredOptions ?? (await this.deliveryCapabilities.list());
     if (!priceList) return [];
     const pricedCategories = new Set(
       parseAutomaticQuotePricingParameters(
@@ -5665,6 +5922,7 @@ async function lockedHandoffCapability(
   if (!rows[0]) return null;
   return transaction.automaticQuoteHandoffCapability.findUniqueOrThrow({
     where: { id: rows[0].id },
+    include: { issuanceIdempotencyRecord: true },
   });
 }
 
@@ -5739,24 +5997,6 @@ async function lockIdempotencyKey(
       hashtextextended(${`${namespace}:${idempotencyKey}`}, 0)
     )::text
   `;
-}
-
-async function replayedIdempotencyAfterLock(
-  transaction: Transaction,
-  namespace: string,
-  idempotencyKey: string,
-  requestFingerprint: string | readonly string[],
-) {
-  const observedAt = await databaseNow(transaction);
-  const existing = await transaction.idempotencyRecord.findFirst({
-    where: { namespace, idempotencyKey },
-    orderBy: { generation: "desc" },
-  });
-  return replayedIdempotency(
-    existing,
-    observedAt,
-    idempotencyFingerprints(requestFingerprint),
-  );
 }
 
 function idempotencyFingerprints(
@@ -5896,53 +6136,77 @@ function handoffCapabilityResponse(
   };
 }
 
-function handoffSnapshot(
-  view: AutomaticQuoteSessionDto,
-): AutomaticQuoteHandoffSnapshot {
-  const handoff = view.handoff;
-  const context = handoff?.safeContext;
-  if (!handoff || !context) {
-    throw new ConflictException(
-      "Automatic quote does not require an assisted request",
-    );
+function replayCanonicalHandoffIssuance(input: {
+  capability: Awaited<
+    ReturnType<typeof lockedHandoffCapability>
+  > extends infer T
+    ? Exclude<T, null>
+    : never;
+  commandKey: string;
+  fingerprint: string;
+  decisionAt: Date;
+  secret: string;
+}): AutomaticQuoteHandoffCapabilityDto {
+  const { capability, commandKey, fingerprint, decisionAt, secret } = input;
+  if (
+    capability.issuanceLegacyExhausted ||
+    !capability.issuanceKeyHash ||
+    !capability.issuanceReplayUntil ||
+    !capability.issuanceIdempotencyRecord
+  ) {
+    throw new ConflictException("Automatic quote handoff is unavailable");
   }
-  const modelFileIds = context.modelFileIds;
-  const itemSelections = context.itemSelections;
-  if (!Array.isArray(modelFileIds) || !Array.isArray(itemSelections)) {
-    throw new Error("Automatic quote handoff context is invalid");
+  if (capability.issuanceReplayUntil.getTime() <= decisionAt.getTime()) {
+    throw new ConflictException("Automatic quote handoff is unavailable");
   }
-  return {
-    reasons: [...handoff.reasons],
-    modelFileIds: modelFileIds.map((value) =>
-      normalizedUuid(value, "modelFileId"),
-    ),
-    itemSelections: itemSelections.map((value) => {
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("Automatic quote handoff item is invalid");
-      }
-      const item = value as JsonRecord;
-      if (
-        typeof item.ordinal !== "number" ||
-        !Number.isSafeInteger(item.ordinal) ||
-        typeof item.material !== "string" ||
-        typeof item.quantity !== "number" ||
-        !Number.isSafeInteger(item.quantity) ||
-        typeof item.fitSensitive !== "boolean" ||
-        !Array.isArray(item.bodyIds) ||
-        item.bodyIds.some((bodyId) => typeof bodyId !== "string")
-      ) {
-        throw new Error("Automatic quote handoff item is invalid");
-      }
-      return {
-        ordinal: item.ordinal,
-        modelFileId: normalizedUuid(item.modelFileId, "modelFileId"),
-        bodyIds: [...item.bodyIds] as string[],
-        material: item.material,
-        quantity: item.quantity,
-        fitSensitive: item.fitSensitive,
-      };
-    }),
+  if (!matchesTokenHash(commandKey, capability.issuanceKeyHash)) {
+    throw new ConflictException("Automatic quote handoff is unavailable");
+  }
+  const record = capability.issuanceIdempotencyRecord;
+  if (
+    record.generation !== 1 ||
+    record.requestFingerprint !== fingerprint ||
+    record.status !== IdempotencyStatus.COMPLETED
+  ) {
+    throw new ConflictException("Automatic quote handoff is unavailable");
+  }
+  const response = canonicalHandoffResponse(
+    record.responseBody,
+    capability.id,
+    capability.expiresAt,
+  );
+  return handoffCapabilityResponse(secret, response);
+}
+
+function canonicalHandoffResponse(
+  value: Prisma.JsonValue | null,
+  handoffId: string,
+  expiresAt: Date,
+): { handoffId: string; expiresAt: string } {
+  const response = asRecord(value);
+  if (
+    response?.handoffId !== handoffId ||
+    typeof response.expiresAt !== "string" ||
+    Date.parse(response.expiresAt) !== expiresAt.getTime()
+  ) {
+    throw new ConflictException("Automatic quote handoff is unavailable");
+  }
+  return { handoffId, expiresAt: response.expiresAt };
+}
+
+function retryableHandoffTransactionError(error: unknown): boolean {
+  const candidate = error as {
+    code?: unknown;
+    cause?: { code?: unknown; cause?: { code?: unknown } };
   };
+  const codes = [
+    candidate?.code,
+    candidate?.cause?.code,
+    candidate?.cause?.cause?.code,
+  ];
+  return codes.some(
+    (code) => code === "P2034" || code === "40001" || code === "40P01",
+  );
 }
 
 function automaticQuoteClientSubject(

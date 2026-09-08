@@ -121,15 +121,19 @@ export class AutomaticQuotesController {
   @ApiParam(SESSION_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOperation({
-    summary: "Mint one single-use assisted quote-request handoff capability",
+    summary:
+      "Mint one single-use assisted quote-request handoff capability with a canonical issuance key",
   })
   @ApiCreatedResponse({ type: AutomaticQuoteHandoffCapabilityDto })
   @ApiConflictResponse({
     description:
-      "Idempotency input changed or the source session's handoff capability is no longer available",
+      "Only the original issuance key may replay the stored response for seven days. Alternate keys, changed input, expired replay windows, and exhausted legacy issuance conflict.",
   })
   @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
-  @ApiGoneResponse({ description: "Session or handoff is no longer available" })
+  @ApiGoneResponse({
+    description:
+      "The source capability/session is no longer authorized; this takes precedence over an otherwise replayable issuance response",
+  })
   createHandoffCapability(
     @Param("sessionId") sessionId: string,
     @Headers("authorization") authorization: string | undefined,

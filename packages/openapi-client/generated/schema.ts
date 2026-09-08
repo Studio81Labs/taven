@@ -899,7 +899,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Mint one single-use assisted quote-request handoff capability */
+        /** Mint one single-use assisted quote-request handoff capability with a canonical issuance key */
         post: operations["AutomaticQuotesController_createHandoffCapability"];
         delete?: never;
         options?: never;
@@ -1320,9 +1320,12 @@ export interface components {
             severity: "INFO" | "WARNING" | "BLOCKING";
         };
         AutomaticQuoteHandoffCapabilityDto: {
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Capability consumption deadline; distinct from the seven-day issuance replay deadline
+             */
             expiresAt: string;
-            /** @description Single-use capability for one assisted quote request */
+            /** @description Single-use capability for one assisted quote request. It is replayable only by the original issuance key while the source session remains authorized; replay never restores token usability. */
             handoffToken: string;
         };
         AutomaticQuoteHandoffDto: {
@@ -3918,14 +3921,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Idempotency input changed or the source session's handoff capability is no longer available */
+            /** @description Only the original issuance key may replay the stored response for seven days. Alternate keys, changed input, expired replay windows, and exhausted legacy issuance conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Session or handoff is no longer available */
+            /** @description The source capability/session is no longer authorized; this takes precedence over an otherwise replayable issuance response */
             410: {
                 headers: {
                     [name: string]: unknown;
