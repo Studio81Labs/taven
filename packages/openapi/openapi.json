@@ -2203,6 +2203,108 @@
         ],
         "type": "object"
       },
+      "MetricsOrderPageDto": {
+        "properties": {
+          "completeness": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "interval": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "metricDefinition": {
+            "enum": [
+              "v0-1"
+            ],
+            "type": "string"
+          },
+          "nextCursor": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "OPERATIONAL_NODE"
+            ],
+            "type": "string"
+          },
+          "sourceCoverage": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "metricDefinition",
+          "generatedAt",
+          "interval",
+          "sourceCoverage",
+          "completeness",
+          "scope",
+          "nodeId",
+          "items"
+        ],
+        "type": "object"
+      },
+      "MetricsReportDto": {
+        "properties": {
+          "commercial": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "completeness": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "interval": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "metricDefinition": {
+            "enum": [
+              "v0-1"
+            ],
+            "type": "string"
+          },
+          "operational": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "sourceCoverage": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "metricDefinition",
+          "generatedAt",
+          "interval",
+          "sourceCoverage",
+          "completeness",
+          "commercial",
+          "operational"
+        ],
+        "type": "object"
+      },
       "ModelOfferItemDto": {
         "properties": {
           "color": {
@@ -4359,6 +4461,211 @@
         "summary": "Start an operator handling timer",
         "tags": [
           "operator measurement"
+        ]
+      }
+    },
+    "/admin/metrics": {
+      "get": {
+        "description": "Uses one read-only repeatable-read database snapshot. Commercial sections are platform aggregates; operational sections are limited to one granted node.",
+        "operationId": "MetricsReportController_report",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "enum": [
+                "CZK"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "enum": [
+                "direct",
+                "organic",
+                "paid",
+                "referral",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsReportDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read v0-1 commercial and operational business metrics",
+        "tags": [
+          "operator metrics"
+        ]
+      }
+    },
+    "/admin/metrics/orders": {
+      "get": {
+        "description": "Every item is proven to have exactly the requested operational node scope. The opaque cursor is bound to the complete filter set.",
+        "operationId": "MetricsReportController_orders",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nodeId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "enum": [
+                "CZK"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "enum": [
+                "direct",
+                "organic",
+                "paid",
+                "referral",
+                "unknown"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsOrderPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read node-scoped order metric details",
+        "tags": [
+          "operator metrics"
         ]
       }
     },

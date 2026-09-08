@@ -192,6 +192,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read v0-1 commercial and operational business metrics
+         * @description Uses one read-only repeatable-read database snapshot. Commercial sections are platform aggregates; operational sections are limited to one granted node.
+         */
+        get: operations["MetricsReportController_report"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/metrics/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read node-scoped order metric details
+         * @description Every item is proven to have exactly the requested operational node scope. The opaque cursor is bound to the complete filter set.
+         */
+        get: operations["MetricsReportController_orders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/actual-costs": {
         parameters: {
             query?: never;
@@ -1816,6 +1856,50 @@ export interface components {
             id: string;
             status: string;
         };
+        MetricsOrderPageDto: {
+            completeness: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            generatedAt: string;
+            interval: {
+                [key: string]: unknown;
+            };
+            items: {
+                [key: string]: unknown;
+            }[];
+            /** @enum {string} */
+            metricDefinition: "v0-1";
+            nextCursor?: string;
+            /** Format: uuid */
+            nodeId: string;
+            /** @enum {string} */
+            scope: "OPERATIONAL_NODE";
+            sourceCoverage: {
+                [key: string]: unknown;
+            };
+        };
+        MetricsReportDto: {
+            commercial: {
+                [key: string]: unknown;
+            };
+            completeness: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            generatedAt: string;
+            interval: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            metricDefinition: "v0-1";
+            operational: {
+                [key: string]: unknown;
+            };
+            sourceCoverage: {
+                [key: string]: unknown;
+            };
+        };
         ModelOfferItemDto: {
             color?: string;
             /** @enum {string} */
@@ -2569,6 +2653,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeasurementCommandResultDto"];
+                };
+            };
+        };
+    };
+    MetricsReportController_report: {
+        parameters: {
+            query: {
+                nodeId?: string;
+                currency?: "CZK";
+                channel?: "direct" | "organic" | "paid" | "referral" | "unknown";
+                to: string;
+                from: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricsReportDto"];
+                };
+            };
+        };
+    };
+    MetricsReportController_orders: {
+        parameters: {
+            query: {
+                limit?: number;
+                cursor?: string;
+                nodeId?: string;
+                currency?: "CZK";
+                channel?: "direct" | "organic" | "paid" | "referral" | "unknown";
+                to: string;
+                from: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricsOrderPageDto"];
                 };
             };
         };
