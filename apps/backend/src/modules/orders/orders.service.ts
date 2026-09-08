@@ -25,6 +25,14 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
+  assertOperationalOrderScope,
+  operatorNode,
+  requireOperatorPermission,
+} from "../admin-access/operator-command";
+import type { OperatorContext } from "../admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { AuditService } from "../audit/audit.service";
+import {
   ApproveLegacyClaimWindowDto,
   CancelOrderDto,
   CreateClaimReprintDto,
@@ -41,6 +49,7 @@ import {
   JobQcSubmissionDto,
   PackJobDto,
   RejectClaimDto,
+  RefundDto,
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
@@ -53,10 +62,6 @@ type CommandOperation = (
 ) => Promise<FulfilmentCommandResultDto>;
 
 const IDEMPOTENCY_DAYS = 30;
-// The v0 guard authenticates one deployment-wide operator credential and does
-// not expose a person identity yet. Keep its audit identity explicit and
-// stable until issue #24 replaces the shared credential with operator sessions.
-const V0_OPERATOR_ACTOR_ID = "00000000-0000-4000-8000-000000000022";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ACTIVE_SHIPMENT_STATUSES = [
@@ -69,37 +74,48 @@ const ACTIVE_SHIPMENT_STATUSES = [
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
-  async getFulfilment(orderId: string): Promise<FulfilmentProjectionDto> {
+  async getFulfilment(
+    operator: OperatorContext,
+    orderId: string,
+  ): Promise<FulfilmentProjectionDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
     assertUuid(orderId, "orderId");
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      include: {
-        phases: true,
-        jobs: {
-          include: {
-            shipmentAssignment: true,
-            replacementRequestSource: true,
+    const nodeId = operatorNode(operator);
+    const order = await this.prisma.$transaction(async (tx) => {
+      await assertOperationalOrderScope(tx, orderId, nodeId);
+      return tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          phases: true,
+          jobs: {
+            include: {
+              shipmentAssignment: true,
+              replacementRequestSource: true,
+            },
+            orderBy: { createdAt: "asc" },
           },
-          orderBy: { createdAt: "asc" },
-        },
-        shipments: {
-          include: { jobAssignments: true },
-          orderBy: { createdAt: "asc" },
-        },
-        fulfilmentSlots: { orderBy: { createdAt: "asc" } },
-        replacementRequests: { orderBy: { createdAt: "asc" } },
-        claims: {
-          include: {
-            resolutions: true,
-            refunds: true,
-            reshipmentAuthorizations: true,
+          shipments: {
+            include: { jobAssignments: true },
+            orderBy: { createdAt: "asc" },
           },
-          orderBy: { createdAt: "asc" },
+          fulfilmentSlots: { orderBy: { createdAt: "asc" } },
+          replacementRequests: { orderBy: { createdAt: "asc" } },
+          claims: {
+            include: {
+              resolutions: true,
+              refunds: true,
+              reshipmentAuthorizations: true,
+            },
+            orderBy: { createdAt: "asc" },
+          },
+          priceAdjustments: { orderBy: { createdAt: "asc" } },
         },
-        priceAdjustments: { orderBy: { createdAt: "asc" } },
-      },
+      });
     });
     if (!order) throw new NotFoundException("Order was not found");
     const phase = order.phases[0];
@@ -118,10 +134,15 @@ export class OrdersService {
   }
 
   approveLegacyClaimWindow(
+    operator: OperatorContext,
     orderId: string,
     body: ApproveLegacyClaimWindowDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
     const claimPolicyRevision = requiredText(
       body.claimPolicyRevision,
       "claimPolicyRevision",
@@ -141,6 +162,7 @@ export class OrdersService {
       throw new BadRequestException("claimWindowDays is invalid");
     }
     return this.command(
+      operator,
       orderId,
       "claim-window-migration:approve",
       key,
@@ -246,16 +268,24 @@ export class OrdersService {
   }
 
   acceptJob(
+    operator: OperatorContext,
     orderId: string,
     jobId: string,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.command(orderId, `job:${jobId}:accept`, key, {}, async (tx) => {
-      const job = await this.lockJob(tx, orderId, jobId);
-      if (job.status !== JobStatus.CREATED) {
-        throw new ConflictException("Job is not awaiting acceptance");
-      }
-      const currencyRows = await tx.$queryRaw<Array<{ currency: string }>>`
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
+    return this.command(
+      operator,
+      orderId,
+      `job:${jobId}:accept`,
+      key,
+      {},
+      async (tx) => {
+        const job = await this.lockJob(tx, orderId, jobId);
+        if (job.status !== JobStatus.CREATED) {
+          throw new ConflictException("Job is not awaiting acceptance");
+        }
+        const currencyRows = await tx.$queryRaw<Array<{ currency: string }>>`
         SELECT snapshot.currency
         FROM orders target_order
         JOIN order_active_price_bindings active_binding
@@ -266,33 +296,37 @@ export class OrdersService {
         JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
         WHERE target_order.id = ${orderId}::uuid
       `;
-      const currency = currencyRows[0]?.currency;
-      if (!currency) {
-        throw new ConflictException("Order has no active price currency");
-      }
-      const acceptedAt = await databaseNow(tx);
-      const accepted = await tx.job.update({
-        where: { id: jobId },
-        data: {
-          status: JobStatus.ACCEPTED,
-          acceptedAt,
-          // v0 work is platform-owned. The tuple is still frozen so future
-          // maker routing cannot reinterpret historical economics.
-          payoutAmount: 0n,
-          payoutCurrency: currency,
-        },
-        select: { id: true, payoutAmount: true, payoutCurrency: true },
-      });
-      return result(orderId, "JOB_ACCEPTED", accepted);
-    });
+        const currency = currencyRows[0]?.currency;
+        if (!currency) {
+          throw new ConflictException("Order has no active price currency");
+        }
+        const acceptedAt = await databaseNow(tx);
+        const accepted = await tx.job.update({
+          where: { id: jobId },
+          data: {
+            status: JobStatus.ACCEPTED,
+            acceptedAt,
+            // v0 work is platform-owned. The tuple is still frozen so future
+            // maker routing cannot reinterpret historical economics.
+            payoutAmount: 0n,
+            payoutCurrency: currency,
+          },
+          select: { id: true, payoutAmount: true, payoutCurrency: true },
+        });
+        return result(orderId, "JOB_ACCEPTED", accepted);
+      },
+    );
   }
 
   startPrinting(
+    operator: OperatorContext,
     orderId: string,
     jobId: string,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     return this.command(
+      operator,
       orderId,
       `job:${jobId}:printing`,
       key,
@@ -351,17 +385,20 @@ export class OrdersService {
   }
 
   finishPrinting(
+    operator: OperatorContext,
     orderId: string,
     jobId: string,
     body: JobPrintedDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     const actualMaterialMilligrams = positiveBigInt(
       body.actualMaterialMilligrams,
       "actualMaterialMilligrams",
       true,
     );
     return this.command(
+      operator,
       orderId,
       `job:${jobId}:printed`,
       key,
@@ -394,11 +431,13 @@ export class OrdersService {
   }
 
   submitQc(
+    operator: OperatorContext,
     orderId: string,
     jobId: string,
     body: JobQcSubmissionDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     const photoAssetId = body.photoAssetId?.trim() || undefined;
     const omissionReason = optionalText(
       body.omissionReason,
@@ -412,6 +451,7 @@ export class OrdersService {
     }
     if (photoAssetId) assertUuid(photoAssetId, "photoAssetId");
     return this.command(
+      operator,
       orderId,
       `job:${jobId}:qc-submission`,
       key,
@@ -444,11 +484,14 @@ export class OrdersService {
   }
 
   approveQc(
+    operator: OperatorContext,
     orderId: string,
     jobId: string,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     return this.command(
+      operator,
       orderId,
       `job:${jobId}:qc-approval`,
       key,
@@ -507,13 +550,15 @@ export class OrdersService {
   }
 
   failJob(
+    operator: OperatorContext,
     orderId: string,
     jobId: string,
     body: JobFailureDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     const stage = enumValue(JobFailureStage, body.stage, "stage");
-    const reason = requiredText(body.reason, "reason", 2_000);
+    const reason = requiredText(body.reason, "reason", 1_000);
     if (body.recovery !== "REPLACE" && body.recovery !== "REFUND") {
       throw new BadRequestException("recovery is invalid");
     }
@@ -533,6 +578,7 @@ export class OrdersService {
       );
     }
     return this.command(
+      operator,
       orderId,
       `job:${jobId}:failure`,
       key,
@@ -801,20 +847,25 @@ export class OrdersService {
   }
 
   createReplacement(
+    operator: OperatorContext,
     orderId: string,
     sourceJobId: string,
     body: CreateReplacementDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     assertUuid(body.candidateResourceEstimateId, "candidateResourceEstimateId");
     const requestedPlanKey = optionalText(body.planKey, "planKey", 255);
+    const reason = requiredText(body.reason, "reason", 1_000);
     return this.command(
+      operator,
       orderId,
       `job:${sourceJobId}:replacement`,
       key,
       {
         candidateResourceEstimateId: body.candidateResourceEstimateId,
         planKey: requestedPlanKey ?? null,
+        reason,
       },
       async (tx) => {
         const source = await this.lockJob(tx, orderId, sourceJobId);
@@ -1012,15 +1063,19 @@ export class OrdersService {
   }
 
   expireReplacement(
+    operator: OperatorContext,
     orderId: string,
     sourceJobId: string,
     body: ExpireReplacementDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
+    const reason = requiredText(body.reason, "reason", 1_000);
     const printingConsumptions = cancellationPrintingConsumptions(
       body.printingConsumptions,
     );
     const commandInput = {
+      reason,
       printingConsumptions: [...printingConsumptions]
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([jobId, actualMaterialMilligrams]) => ({
@@ -1029,6 +1084,7 @@ export class OrdersService {
         })),
     };
     return this.command(
+      operator,
       orderId,
       `job:${sourceJobId}:replacement-expiry`,
       key,
@@ -1071,13 +1127,16 @@ export class OrdersService {
   }
 
   packJob(
+    operator: OperatorContext,
     orderId: string,
     jobId: string,
     body: PackJobDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     assertUuid(body.shipmentId, "shipmentId");
     return this.command(
+      operator,
       orderId,
       `job:${jobId}:packing`,
       key,
@@ -1146,15 +1205,18 @@ export class OrdersService {
   }
 
   createShipment(
+    operator: OperatorContext,
     orderId: string,
     body: CreateShipmentDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     assertUuid(body.shipmentPlanId, "shipmentPlanId");
     if (body.replacesShipmentId) {
       assertUuid(body.replacesShipmentId, "replacesShipmentId");
     }
     return this.command(
+      operator,
       orderId,
       `shipment-plan:${body.shipmentPlanId}:create`,
       key,
@@ -1212,11 +1274,13 @@ export class OrdersService {
   }
 
   labelShipment(
+    operator: OperatorContext,
     orderId: string,
     shipmentId: string,
     body: ShipmentLabelDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     const input = {
       carrier: requiredText(body.carrier, "carrier", 100),
       providerShipmentId: requiredText(
@@ -1226,8 +1290,10 @@ export class OrdersService {
       ),
       carrierLabelId: requiredText(body.carrierLabelId, "carrierLabelId", 190),
       trackingCode: optionalText(body.trackingCode, "trackingCode", 255),
+      reason: requiredText(body.reason, "reason", 1_000),
     };
     return this.command(
+      operator,
       orderId,
       `shipment:${shipmentId}:label`,
       key,
@@ -1281,13 +1347,16 @@ export class OrdersService {
   }
 
   confirmLabelVoid(
+    operator: OperatorContext,
     orderId: string,
     shipmentId: string,
     body: ShipmentProviderEvidenceDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     const evidence = providerEvidence(body);
     return this.command(
+      operator,
       orderId,
       `shipment:${shipmentId}:label-void`,
       key,
@@ -1595,13 +1664,16 @@ export class OrdersService {
   }
 
   handoffShipment(
+    operator: OperatorContext,
     orderId: string,
     shipmentId: string,
     body: ShipmentProviderEvidenceDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     const evidence = providerEvidence(body);
     return this.command(
+      operator,
       orderId,
       `shipment:${shipmentId}:handoff`,
       key,
@@ -1897,11 +1969,13 @@ export class OrdersService {
   }
 
   applyShipmentEvent(
+    operator: OperatorContext,
     orderId: string,
     shipmentId: string,
     body: ShipmentEventDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     const evidence = providerEvidence(body);
     const kind = enumValue(
       {
@@ -1915,6 +1989,7 @@ export class OrdersService {
       "kind",
     );
     return this.command(
+      operator,
       orderId,
       `shipment:${shipmentId}:event:${evidence.providerEventId}`,
       key,
@@ -2272,10 +2347,12 @@ export class OrdersService {
   }
 
   createClaim(
+    operator: OperatorContext,
     orderId: string,
     body: CreateClaimDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     const origin = enumValue(
       {
         SHIPMENT_INCIDENT: ClaimOrigin.SHIPMENT_INCIDENT,
@@ -2284,7 +2361,7 @@ export class OrdersService {
       body.origin,
       "origin",
     );
-    const reason = requiredText(body.reason, "reason", 2_000);
+    const reason = requiredText(body.reason, "reason", 1_000);
     if (
       !Array.isArray(body.fulfilmentSlotIds) ||
       body.fulfilmentSlotIds.length === 0
@@ -2313,6 +2390,7 @@ export class OrdersService {
       );
     }
     return this.command(
+      operator,
       orderId,
       "claim:create",
       key,
@@ -2477,14 +2555,20 @@ export class OrdersService {
   }
 
   rejectClaim(
+    operator: OperatorContext,
     orderId: string,
     claimId: string,
     body: RejectClaimDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
     assertUuid(claimId, "claimId");
-    const reason = requiredText(body.reason, "reason", 2_000);
+    const reason = requiredText(body.reason, "reason", 1_000);
     return this.command(
+      operator,
       orderId,
       `claim:${claimId}:rejection`,
       key,
@@ -2590,14 +2674,17 @@ export class OrdersService {
   }
 
   withdrawClaim(
+    operator: OperatorContext,
     orderId: string,
     claimId: string,
     body: WithdrawClaimDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
     assertUuid(claimId, "claimId");
-    const reason = requiredText(body.reason, "reason", 2_000);
+    const reason = requiredText(body.reason, "reason", 1_000);
     return this.command(
+      operator,
       orderId,
       `claim:${claimId}:withdrawal`,
       key,
@@ -2703,11 +2790,16 @@ export class OrdersService {
   }
 
   createClaimReprint(
+    operator: OperatorContext,
     orderId: string,
     claimId: string,
     body: CreateClaimReprintDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
     assertUuid(claimId, "claimId");
     if (!Array.isArray(body.replacements) || body.replacements.length === 0) {
       throw new BadRequestException("replacements is invalid");
@@ -2733,11 +2825,13 @@ export class OrdersService {
       );
     }
     const requestedPlanKey = optionalText(body.planKey, "planKey", 255);
+    const reason = requiredText(body.reason, "reason", 1_000);
     return this.command(
+      operator,
       orderId,
       `claim:${claimId}:reprint`,
       key,
-      { replacements, planKey: requestedPlanKey ?? null },
+      { replacements, planKey: requestedPlanKey ?? null, reason },
       async (tx) => {
         const order = await this.lockOrder(tx, orderId);
         if (order.status !== OrderStatus.SHIPPED) {
@@ -3133,11 +3227,16 @@ export class OrdersService {
   }
 
   handoffReshipment(
+    operator: OperatorContext,
     orderId: string,
     claimId: string,
     body: HandoffReshipmentDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
     assertUuid(claimId, "claimId");
     const carrier = requiredText(body.carrier, "carrier", 100);
     const providerShipmentId = requiredText(
@@ -3174,11 +3273,13 @@ export class OrdersService {
       providerEventId: evidence.providerEventId,
       providerTransactionId: evidence.providerTransactionId,
       occurredAt: evidence.occurredAt,
+      reason: evidence.reason,
       custodyConfirmedAt,
       reQcPassedAt,
       reQcEvidence,
     };
     return this.command(
+      operator,
       orderId,
       `claim:${claimId}:reshipment-handoff`,
       key,
@@ -3443,10 +3544,15 @@ export class OrdersService {
   }
 
   createPriceAdjustment(
+    operator: OperatorContext,
     orderId: string,
     body: CreatePriceAdjustmentDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
     const amountMinor = positiveBigInt(body.amountMinor, "amountMinor");
     const reason = enumValue(
       {
@@ -3458,6 +3564,7 @@ export class OrdersService {
       requiredText(body.reason, "reason", 100),
       "reason",
     );
+    const rationale = requiredText(body.rationale, "rationale", 1_000);
     if (body.paymentId) assertUuid(body.paymentId, "paymentId");
     if (body.claimId) assertUuid(body.claimId, "claimId");
     if (!body.allocation || typeof body.allocation !== "object") {
@@ -3488,11 +3595,13 @@ export class OrdersService {
         : {}),
     };
     return this.command(
+      operator,
       orderId,
       "price-adjustment:create",
       key,
       {
         reason,
+        rationale,
         amountMinor: amountMinor.toString(),
         paymentId: body.paymentId ?? null,
         claimId: body.claimId ?? null,
@@ -3684,16 +3793,24 @@ export class OrdersService {
   }
 
   refundAdjustment(
+    operator: OperatorContext,
     orderId: string,
     adjustmentId: string,
+    body: RefundDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
     assertUuid(adjustmentId, "adjustmentId");
+    const reason = requiredText(body.reason, "reason", 1_000);
     return this.command(
+      operator,
       orderId,
       `price-adjustment:${adjustmentId}:refund`,
       key,
-      {},
+      { reason },
       async (tx) => {
         await this.lockOrder(tx, orderId);
         await tx.$queryRaw`
@@ -3804,16 +3921,24 @@ export class OrdersService {
   }
 
   refundClaim(
+    operator: OperatorContext,
     orderId: string,
     claimId: string,
+    body: RefundDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
     assertUuid(claimId, "claimId");
+    const reason = requiredText(body.reason, "reason", 1_000);
     return this.command(
+      operator,
       orderId,
       `claim:${claimId}:refund`,
       key,
-      {},
+      { reason },
       async (tx) => {
         await this.lockOrder(tx, orderId);
         await tx.$queryRaw`
@@ -4137,10 +4262,12 @@ export class OrdersService {
   }
 
   completeOrder(
+    operator: OperatorContext,
     orderId: string,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.command(orderId, "complete", key, {}, async (tx) => {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
+    return this.command(operator, orderId, "complete", key, {}, async (tx) => {
       const order = await this.lockOrder(tx, orderId);
       if (order.status !== OrderStatus.DELIVERED) {
         throw new ConflictException("Order is not fully delivered");
@@ -4167,11 +4294,16 @@ export class OrdersService {
   }
 
   cancelOrder(
+    operator: OperatorContext,
     orderId: string,
     body: CancelOrderDto,
     key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    const reason = requiredText(body.reason, "reason", 2_000);
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
+    const reason = requiredText(body.reason, "reason", 1_000);
     const printingConsumptions = cancellationPrintingConsumptions(
       body.printingConsumptions,
     );
@@ -4184,89 +4316,100 @@ export class OrdersService {
           actualMaterialMilligrams: actualMaterialMilligrams.toString(),
         })),
     };
-    return this.command(orderId, "cancel", key, commandInput, async (tx) => {
-      const order = await this.lockOrder(tx, orderId);
-      if (
-        [
-          OrderStatus.SHIPPED,
-          OrderStatus.DELIVERED,
-          OrderStatus.COMPLETED,
-          OrderStatus.PARTIALLY_FULFILLED,
-          OrderStatus.REFUNDED,
-        ].includes(
-          order.status as
-            | typeof OrderStatus.SHIPPED
-            | typeof OrderStatus.DELIVERED
-            | typeof OrderStatus.COMPLETED
-            | typeof OrderStatus.PARTIALLY_FULFILLED
-            | typeof OrderStatus.REFUNDED,
-        )
-      ) {
-        throw new ConflictException("Order cannot be cancelled after handoff");
-      }
-      const liveLabels = await tx.shipment.findMany({
-        where: {
-          orderId,
-          status: {
-            in: [
-              ShipmentStatus.LABEL_CREATED,
-              ShipmentStatus.CANCELLATION_PENDING,
-            ],
-          },
-        },
-        select: { id: true, status: true },
-      });
-      const at = await databaseNow(tx);
-      if (liveLabels.length > 0) {
-        const activePrinting = await this.activePrintingReservations(
-          tx,
-          orderId,
-        );
-        assertPrintingConsumptionCoverage(
-          activePrinting,
-          printingConsumptions,
-          false,
-        );
-        await tx.shipment.updateMany({
+    return this.command(
+      operator,
+      orderId,
+      "cancel",
+      key,
+      commandInput,
+      async (tx) => {
+        const order = await this.lockOrder(tx, orderId);
+        if (
+          [
+            OrderStatus.SHIPPED,
+            OrderStatus.DELIVERED,
+            OrderStatus.COMPLETED,
+            OrderStatus.PARTIALLY_FULFILLED,
+            OrderStatus.REFUNDED,
+          ].includes(
+            order.status as
+              | typeof OrderStatus.SHIPPED
+              | typeof OrderStatus.DELIVERED
+              | typeof OrderStatus.COMPLETED
+              | typeof OrderStatus.PARTIALLY_FULFILLED
+              | typeof OrderStatus.REFUNDED,
+          )
+        ) {
+          throw new ConflictException(
+            "Order cannot be cancelled after handoff",
+          );
+        }
+        const liveLabels = await tx.shipment.findMany({
           where: {
-            id: {
-              in: liveLabels
-                .filter(({ status }) => status === ShipmentStatus.LABEL_CREATED)
-                .map(({ id }) => id),
+            orderId,
+            status: {
+              in: [
+                ShipmentStatus.LABEL_CREATED,
+                ShipmentStatus.CANCELLATION_PENDING,
+              ],
             },
-            status: ShipmentStatus.LABEL_CREATED,
           },
-          data: {
-            status: ShipmentStatus.CANCELLATION_PENDING,
-            cancellationRequestedAt: at,
-          },
+          select: { id: true, status: true },
         });
-        if (order.status === OrderStatus.QC_PASSED) {
-          await tx.orderPhase.updateMany({
+        const at = await databaseNow(tx);
+        if (liveLabels.length > 0) {
+          const activePrinting = await this.activePrintingReservations(
+            tx,
+            orderId,
+          );
+          assertPrintingConsumptionCoverage(
+            activePrinting,
+            printingConsumptions,
+            false,
+          );
+          await tx.shipment.updateMany({
             where: {
-              orderId,
-              status: OrderPhaseStatus.QC_PASSED,
+              id: {
+                in: liveLabels
+                  .filter(
+                    ({ status }) => status === ShipmentStatus.LABEL_CREATED,
+                  )
+                  .map(({ id }) => id),
+              },
+              status: ShipmentStatus.LABEL_CREATED,
             },
-            data: { status: OrderPhaseStatus.RECOVERY_PENDING },
+            data: {
+              status: ShipmentStatus.CANCELLATION_PENDING,
+              cancellationRequestedAt: at,
+            },
           });
-          await tx.order.update({
-            where: { id: orderId },
-            data: { status: OrderStatus.RECOVERY_PENDING, updatedAt: at },
+          if (order.status === OrderStatus.QC_PASSED) {
+            await tx.orderPhase.updateMany({
+              where: {
+                orderId,
+                status: OrderPhaseStatus.QC_PASSED,
+              },
+              data: { status: OrderPhaseStatus.RECOVERY_PENDING },
+            });
+            await tx.order.update({
+              where: { id: orderId },
+              data: { status: OrderStatus.RECOVERY_PENDING, updatedAt: at },
+            });
+          }
+          return result(orderId, "LABEL_CANCELLATION_PENDING", {
+            shipmentIds: liveLabels.map(({ id }) => id),
           });
         }
-        return result(orderId, "LABEL_CANCELLATION_PENDING", {
-          shipmentIds: liveLabels.map(({ id }) => id),
-        });
-      }
-      const refundIds = await this.finalizeCancellation(
-        tx,
-        orderId,
-        at,
-        key!,
-        printingConsumptions,
-      );
-      return result(orderId, "ORDER_CANCELLED", { refundIds, reason });
-    });
+        const refundIds = await this.finalizeCancellation(
+          tx,
+          orderId,
+          at,
+          key!,
+          printingConsumptions,
+        );
+        return result(orderId, "ORDER_CANCELLED", { refundIds, reason });
+      },
+    );
   }
 
   private async markReadyToShipWhenFinanciallyReady(
@@ -5860,6 +6003,7 @@ export class OrdersService {
   }
 
   private async command(
+    operator: OperatorContext,
     orderId: string,
     operation: string,
     key: string | undefined,
@@ -5868,6 +6012,7 @@ export class OrdersService {
   ): Promise<FulfilmentCommandResultDto> {
     assertUuid(orderId, "orderId");
     const idempotencyKey = requiredIdempotencyKey(key);
+    const nodeId = operatorNode(operator);
     const operationDigest = createHash("sha256")
       .update(operation)
       .digest("hex")
@@ -5883,6 +6028,7 @@ export class OrdersService {
             hashtextextended(${`${namespace}:${idempotencyKey}`}, 0)
           )::text
         `;
+        await assertOperationalOrderScope(tx, orderId, nodeId);
         const now = await databaseNow(tx);
         const existing = await tx.idempotencyRecord.findFirst({
           where: { namespace, idempotencyKey },
@@ -5914,19 +6060,16 @@ export class OrdersService {
         const response = jsonSafe(
           await execute(tx),
         ) as FulfilmentCommandResultDto;
-        await tx.auditEvent.create({
-          data: {
-            orderId,
-            correlationId: record.id,
-            eventType: "fulfilment.command_completed",
-            actorKind: "OPERATOR",
-            actorId: V0_OPERATOR_ACTOR_ID,
-            idempotencyKey,
-            payload: jsonSafe({
-              operation,
-              input,
-              response,
-            }) as Prisma.InputJsonObject,
+        await this.audit.recordOperator(tx, operator, {
+          eventType: "fulfilment.command_completed",
+          orderId,
+          nodeId,
+          correlationId: record.id,
+          idempotencyKey,
+          ...auditReason(operation, input),
+          payload: {
+            operation,
+            status: response.status,
           },
         });
         await tx.idempotencyRecord.update({
@@ -6022,6 +6165,48 @@ function assertUuid(value: string, name: string): void {
   if (!UUID_PATTERN.test(value)) {
     throw new BadRequestException(`${name} is invalid`);
   }
+}
+
+function auditReason(
+  operation: string,
+  input: unknown,
+): { reasonCode: string; reason: string } | Record<string, never> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  const record = input as Record<string, unknown>;
+  const reason = [
+    record.rationale,
+    record.reason,
+    record.omissionReason,
+    record.approvalReference,
+    record.reQcEvidence,
+  ].find((value): value is string =>
+    typeof value === "string" ? value.trim().length > 0 : false,
+  );
+  if (!reason) return {};
+  const reasonCode =
+    typeof record.rationale === "string" && typeof record.reason === "string"
+      ? record.reason.trim()
+      : operationReasonCode(operation, record);
+  return { reasonCode, reason: reason.trim() };
+}
+
+function operationReasonCode(
+  operation: string,
+  input: Record<string, unknown>,
+): string {
+  if (
+    operation.startsWith("shipment:") &&
+    operation.includes(":event:") &&
+    typeof input.kind === "string"
+  ) {
+    return `SHIPMENT_EVENT_${input.kind}`;
+  }
+  return operation
+    .split(":")
+    .filter((part) => !UUID_PATTERN.test(part))
+    .join("_")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "_");
 }
 
 function requiredIdempotencyKey(value?: string): string {
@@ -6248,6 +6433,7 @@ function providerEvidence(body: ShipmentProviderEvidenceDto): {
   providerEventId: string;
   providerTransactionId: string;
   occurredAt: Date;
+  reason: string;
 } {
   const occurredAt = new Date(body.occurredAt);
   if (!Number.isFinite(occurredAt.getTime())) {
@@ -6261,6 +6447,7 @@ function providerEvidence(body: ShipmentProviderEvidenceDto): {
       255,
     ),
     occurredAt,
+    reason: requiredText(body.reason, "reason", 1_000),
   };
 }
 

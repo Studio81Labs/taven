@@ -34,6 +34,13 @@ import {
 } from "node:crypto";
 import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
+import {
+  operatorNode,
+  requireOperatorPermission,
+} from "../admin-access/operator-command";
+import type { OperatorContext } from "../admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { AuditService } from "../audit/audit.service";
 import { normalizeAttribution } from "../metrics/attribution";
 import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
@@ -109,6 +116,7 @@ type IdempotencyResponseCodec<T> = Readonly<{
 type IdempotencyOptions<T> = Readonly<{
   responseCodec?: IdempotencyResponseCodec<T>;
   responseStatusCode?: number | ((response: T) => number);
+  beforeReplay?: (transaction: Transaction) => Promise<void>;
 }>;
 type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
 type StoredQuoteRequestCreatedResponse = Omit<
@@ -124,7 +132,10 @@ type StoredOfferIssuedResponse = Omit<OfferIssuedDto, "offerToken"> &
 
 @Injectable()
 export class QuotesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   async createRequest(
     input: CreateQuoteRequestDto,
@@ -306,8 +317,10 @@ export class QuotesService {
   }
 
   async listRequests(
+    operator: OperatorContext,
     status?: string,
   ): Promise<OperatorQuoteRequestDetailDto[]> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
     const normalizedStatus = status ? parseStatus(status) : undefined;
     const observedAt = await databaseNow(this.prisma);
     const requests = await this.prisma.quoteRequest.findMany({
@@ -338,8 +351,10 @@ export class QuotesService {
   }
 
   async getOperatorRequest(
+    operator: OperatorContext,
     requestId: string,
   ): Promise<OperatorQuoteRequestDetailDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
     requestId = normalizedUuid(requestId, "requestId");
     const observedAt = await databaseNow(this.prisma);
     const request = await this.prisma.quoteRequest.findUnique({
@@ -355,9 +370,12 @@ export class QuotesService {
   }
 
   async beginReview(
+    operator: OperatorContext,
     requestId: string,
     idempotencyKey: string | undefined,
   ): Promise<QuoteRequestStatusDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    const nodeId = operatorNode(operator);
     requestId = normalizedUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
     return this.idempotent<QuoteRequestStatusDto>(
@@ -388,28 +406,37 @@ export class QuotesService {
             updatedAt: observedAt,
           },
         });
-        await transaction.auditEvent.create({
-          data: {
-            quoteRequestId: requestId,
-            eventType: "quote_request.review_started",
-            actorKind: AuditActorKind.SYSTEM,
-            idempotencyKey: commandKey,
-            correlationId: resultId,
-            payload: jsonInput({ requestId, operatorAuthenticated: true })!,
-            createdAt: observedAt,
-          },
+        await this.audit.recordOperator(transaction, operator, {
+          quoteRequestId: requestId,
+          nodeId,
+          eventType: "quote_request.review_started",
+          idempotencyKey: commandKey,
+          correlationId: resultId,
+          payload: { operation: "review", status: "IN_REVIEW" },
         });
         return { requestId, status: "IN_REVIEW" };
+      },
+      {
+        beforeReplay: async () => {
+          requireOperatorPermission(
+            operator,
+            OPERATOR_PERMISSIONS.QUOTES_WRITE,
+          );
+          operatorNode(operator);
+        },
       },
     );
   }
 
   async issueOffer(
+    operator: OperatorContext,
     requestId: string,
     input: IssueOfferDto,
     idempotencyKey: string | undefined,
   ): Promise<OfferIssuedDto> {
     assertBindingQuoteFlowsEnabled();
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    const nodeId = operatorNode(operator);
     requestId = normalizedUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const offer = validateOffer(input);
@@ -711,24 +738,13 @@ export class QuotesService {
             },
           ],
         });
-        await transaction.auditEvent.create({
-          data: {
-            quoteRequestId: requestId,
-            quoteId,
-            eventType: "quote_offer.issued",
-            actorKind: AuditActorKind.SYSTEM,
-            idempotencyKey: commandKey,
-            correlationId: resultId,
-            payload: jsonInput({
-              requestId,
-              quoteId,
-              version: 1,
-              termsRevision,
-              priceSnapshotId: snapshotId,
-              operatorAuthenticated: true,
-            })!,
-            createdAt: issuedAt,
-          },
+        await this.audit.recordOperator(transaction, operator, {
+          quoteRequestId: requestId,
+          nodeId,
+          eventType: "quote_offer.issued",
+          idempotencyKey: commandKey,
+          correlationId: resultId,
+          payload: { operation: "issue_offer", status: "QUOTED", version: 1 },
         });
         await transaction.outboxMessage.create({
           data: {
@@ -785,6 +801,13 @@ export class QuotesService {
               ),
             };
           },
+        },
+        beforeReplay: async () => {
+          requireOperatorPermission(
+            operator,
+            OPERATOR_PERMISSIONS.QUOTES_WRITE,
+          );
+          operatorNode(operator);
         },
       },
     );
@@ -1323,9 +1346,12 @@ export class QuotesService {
   }
 
   async expireOffer(
+    operator: OperatorContext,
     requestId: string,
     idempotencyKey: string | undefined,
   ): Promise<QuoteRequestStatusDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    const nodeId = operatorNode(operator);
     requestId = normalizedUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
     return this.idempotent(
@@ -1347,8 +1373,21 @@ export class QuotesService {
         if (quote.expiresAt.getTime() > observedAt.getTime()) {
           throw new ConflictException("Offer has not expired");
         }
-        await expireLockedOffer(transaction, quote, observedAt, commandKey);
+        await expireLockedOffer(transaction, quote, observedAt, commandKey, {
+          audit: this.audit,
+          operator,
+          nodeId,
+        });
         return { requestId, status: "EXPIRED" };
+      },
+      {
+        beforeReplay: async () => {
+          requireOperatorPermission(
+            operator,
+            OPERATOR_PERMISSIONS.QUOTES_WRITE,
+          );
+          operatorNode(operator);
+        },
       },
     );
   }
@@ -1503,6 +1542,7 @@ export class QuotesService {
       await transaction.$queryRaw`
         SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text
       `;
+      await options?.beforeReplay?.(transaction);
       const observedAt = await databaseNow(transaction);
       const existing = await transaction.idempotencyRecord.findFirst({
         where: { namespace, idempotencyKey },
@@ -1698,6 +1738,11 @@ async function expireLockedOffer(
       },
   observedAt: Date,
   commandKey = `system:quote-expiry:${quote.id}`,
+  operatorAudit?: Readonly<{
+    audit: AuditService;
+    operator: OperatorContext;
+    nodeId: string;
+  }>,
 ): Promise<void> {
   if (!quote.quoteRequest) return;
   await applyExpirationTransition(quote, commandKey, observedAt);
@@ -1712,17 +1757,33 @@ async function expireLockedOffer(
       updatedAt: observedAt,
     },
   });
-  await transaction.auditEvent.create({
-    data: {
-      quoteId: quote.id,
-      eventType: "quote_offer.expired",
-      actorKind: AuditActorKind.SYSTEM,
-      idempotencyKey: commandKey,
-      correlationId: resultId,
-      payload: jsonInput({ quoteId: quote.id })!,
-      createdAt: observedAt,
-    },
-  });
+  if (operatorAudit) {
+    await operatorAudit.audit.recordOperator(
+      transaction,
+      operatorAudit.operator,
+      {
+        quoteRequestId: quote.quoteRequestId,
+        nodeId: operatorAudit.nodeId,
+        createdAt: observedAt,
+        eventType: "quote_offer.expired",
+        idempotencyKey: commandKey,
+        correlationId: resultId,
+        payload: { operation: "expire_offer", status: "EXPIRED" },
+      },
+    );
+  } else {
+    await transaction.auditEvent.create({
+      data: {
+        quoteId: quote.id,
+        eventType: "quote_offer.expired",
+        actorKind: AuditActorKind.SYSTEM,
+        idempotencyKey: commandKey,
+        correlationId: resultId,
+        payload: jsonInput({ quoteId: quote.id })!,
+        createdAt: observedAt,
+      },
+    });
+  }
   await transaction.outboxMessage.upsert({
     where: { deduplicationKey: `quote-offer-expired:${quote.id}` },
     create: {

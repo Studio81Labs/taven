@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { PrismaModule } from "../../prisma/prisma.module";
 import { AutomaticQuotesModule } from "../automatic-quotes/automatic-quotes.module";
 import { AdminAccessModule } from "../admin-access/admin-access.module";
+import { AuditModule } from "../audit/audit.module";
 import { ResourcesModule } from "../resources/resources.module";
 import { BalancePaymentDeadlineService } from "./balance-payment-deadline.service";
 import { CheckoutPaymentDeadlineService } from "./checkout-payment-deadline.service";
@@ -25,6 +26,7 @@ import { SandboxPaymentProviderAdapter } from "./sandbox-payment-provider.adapte
     AutomaticQuotesModule,
     ResourcesModule,
     AdminAccessModule,
+    AuditModule,
   ],
   controllers: [PaymentsController, SandboxCheckoutController],
   providers: [

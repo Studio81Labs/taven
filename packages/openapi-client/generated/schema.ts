@@ -1272,18 +1272,29 @@ export interface components {
             nextCursor?: string;
         };
         AuditEventSummaryDto: {
+            /** Format: uuid */
+            correlationId?: string;
             /** Format: date-time */
             createdAt: string;
             eventType: string;
             /** Format: uuid */
             id: string;
+            legacy?: boolean;
             /** Format: uuid */
             nodeId?: string;
             /** Format: uuid */
             operatorIdentityId?: string;
+            /** Format: uuid */
+            orderId?: string;
             payload: {
                 [key: string]: unknown;
             };
+            /** Format: uuid */
+            paymentId?: string;
+            /** Format: uuid */
+            quoteId?: string;
+            /** Format: uuid */
+            quoteRequestId?: string;
             reason?: string;
             reasonCode?: string;
         };
@@ -1601,6 +1612,7 @@ export interface components {
         CreateClaimReprintDto: {
             /** @description Stable reprint identity; omitted values derive from the command key */
             planKey?: string;
+            reason: string;
             replacements: components["schemas"]["ClaimReprintJobDto"][];
         };
         CreatePriceAdjustmentDto: {
@@ -1610,6 +1622,7 @@ export interface components {
             claimId?: string;
             /** Format: uuid */
             paymentId?: string;
+            rationale: string;
             /** @enum {string} */
             reason: "EXPRESS_BREACH" | "PRODUCTION_FAILURE" | "SHIPMENT_INCIDENT" | "POST_DELIVERY_ISSUE";
         };
@@ -1635,6 +1648,7 @@ export interface components {
             candidateResourceEstimateId: string;
             /** @description Stable resource-plan identity; omitted values derive from the command key */
             planKey?: string;
+            reason: string;
         };
         CreateShipmentDto: {
             /** Format: uuid */
@@ -1651,6 +1665,7 @@ export interface components {
         ExpireReplacementDto: {
             /** @description Exact material consumption for every actively printing Job abandoned by the expired replacement request */
             printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
+            reason: string;
         };
         FulfilmentCommandResultDto: {
             /** Format: uuid */
@@ -1700,6 +1715,7 @@ export interface components {
             providerEventId: string;
             providerShipmentId: string;
             providerTransactionId: string;
+            reason: string;
             reQcEvidence: string;
             /** Format: date-time */
             reQcPassedAt: string;
@@ -2104,6 +2120,9 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
         };
+        RefundDto: {
+            reason: string;
+        };
         RejectClaimDto: {
             reason: string;
         };
@@ -2136,11 +2155,13 @@ export interface components {
             occurredAt: string;
             providerEventId: string;
             providerTransactionId: string;
+            reason: string;
         };
         ShipmentLabelDto: {
             carrier: string;
             carrierLabelId: string;
             providerShipmentId: string;
+            reason: string;
             trackingCode?: string;
         };
         ShipmentProviderEvidenceDto: {
@@ -2148,6 +2169,7 @@ export interface components {
             occurredAt: string;
             providerEventId: string;
             providerTransactionId: string;
+            reason: string;
         };
         SignedDownloadResponseDto: {
             /** Format: uri */
@@ -2698,7 +2720,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -2815,7 +2841,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {

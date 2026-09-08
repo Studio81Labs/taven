@@ -58,6 +58,7 @@ describe("payment capabilities", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
 
     await expect(service.capabilities({})).resolves.toEqual({
@@ -122,6 +123,7 @@ describe("payment capabilities", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
 
     await expect(
@@ -148,6 +150,7 @@ describe("payment capabilities", () => {
           methods: ["CARD", "BANK_TRANSFER"],
         }),
       } as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -211,6 +214,7 @@ describe("provider event verification time", () => {
           evidence: { source: "authenticated-status-api" },
         }),
       } as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,

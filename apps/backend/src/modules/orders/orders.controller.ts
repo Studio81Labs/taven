@@ -20,7 +20,9 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { OperatorAccessGuard } from "../admin-access/operator-access.guard";
+import { CurrentOperator } from "../admin-access/current-operator.decorator";
 import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
+import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import {
@@ -40,6 +42,7 @@ import {
   JobQcSubmissionDto,
   PackJobDto,
   RejectClaimDto,
+  RefundDto,
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
@@ -87,8 +90,11 @@ export class OrdersController {
   @ApiParam(ORDER_ID_PARAM)
   @ApiOkResponse({ type: FulfilmentProjectionDto })
   @ApiNotFoundResponse({ description: "Order was not found" })
-  get(@Param("orderId") orderId: string): Promise<FulfilmentProjectionDto> {
-    return this.orders.getFulfilment(orderId);
+  get(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+  ): Promise<FulfilmentProjectionDto> {
+    return this.orders.getFulfilment(operator, orderId);
   }
 
   @Post("claim-window-migration")
@@ -102,11 +108,12 @@ export class OrdersController {
   @ApiBody({ type: ApproveLegacyClaimWindowDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   approveLegacyClaimWindow(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Body() body: ApproveLegacyClaimWindowDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.approveLegacyClaimWindow(orderId, body, key);
+    return this.orders.approveLegacyClaimWindow(operator, orderId, body, key);
   }
 
   @Post("jobs/:jobId/accept")
@@ -117,11 +124,12 @@ export class OrdersController {
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   acceptJob(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.acceptJob(orderId, jobId, key);
+    return this.orders.acceptJob(operator, orderId, jobId, key);
   }
 
   @Post("jobs/:jobId/printing")
@@ -132,11 +140,12 @@ export class OrdersController {
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   startPrinting(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.startPrinting(orderId, jobId, key);
+    return this.orders.startPrinting(operator, orderId, jobId, key);
   }
 
   @Post("jobs/:jobId/printed")
@@ -148,12 +157,13 @@ export class OrdersController {
   @ApiBody({ type: JobPrintedDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   printed(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Body() body: JobPrintedDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.finishPrinting(orderId, jobId, body, key);
+    return this.orders.finishPrinting(operator, orderId, jobId, body, key);
   }
 
   @Post("jobs/:jobId/qc-submission")
@@ -165,12 +175,13 @@ export class OrdersController {
   @ApiBody({ type: JobQcSubmissionDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   submitQc(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Body() body: JobQcSubmissionDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.submitQc(orderId, jobId, body, key);
+    return this.orders.submitQc(operator, orderId, jobId, body, key);
   }
 
   @Post("jobs/:jobId/qc-approval")
@@ -181,11 +192,12 @@ export class OrdersController {
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   approveQc(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.approveQc(orderId, jobId, key);
+    return this.orders.approveQc(operator, orderId, jobId, key);
   }
 
   @Post("jobs/:jobId/failure")
@@ -202,12 +214,13 @@ export class OrdersController {
   })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   failJob(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Body() body: JobFailureDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.failJob(orderId, jobId, body, key);
+    return this.orders.failJob(operator, orderId, jobId, body, key);
   }
 
   @Post("jobs/:jobId/replacement")
@@ -222,12 +235,13 @@ export class OrdersController {
   @ApiConflictResponse({ description: "Fresh resources cannot be reserved" })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   createReplacement(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Body() body: CreateReplacementDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.createReplacement(orderId, jobId, body, key);
+    return this.orders.createReplacement(operator, orderId, jobId, body, key);
   }
 
   @Post("jobs/:jobId/replacement-expiry")
@@ -242,12 +256,13 @@ export class OrdersController {
   @ApiConflictResponse({ description: "Replacement request has not expired" })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   expireReplacement(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Body() body: ExpireReplacementDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.expireReplacement(orderId, jobId, body, key);
+    return this.orders.expireReplacement(operator, orderId, jobId, body, key);
   }
 
   @Post("jobs/:jobId/packing")
@@ -259,12 +274,13 @@ export class OrdersController {
   @ApiBody({ type: PackJobDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   packJob(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("jobId") jobId: string,
     @Body() body: PackJobDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.packJob(orderId, jobId, body, key);
+    return this.orders.packJob(operator, orderId, jobId, body, key);
   }
 
   @Post("shipments")
@@ -275,11 +291,12 @@ export class OrdersController {
   @ApiBody({ type: CreateShipmentDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   createShipment(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Body() body: CreateShipmentDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.createShipment(orderId, body, key);
+    return this.orders.createShipment(operator, orderId, body, key);
   }
 
   @Post("shipments/:shipmentId/label")
@@ -291,12 +308,13 @@ export class OrdersController {
   @ApiBody({ type: ShipmentLabelDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   labelShipment(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("shipmentId") shipmentId: string,
     @Body() body: ShipmentLabelDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.labelShipment(orderId, shipmentId, body, key);
+    return this.orders.labelShipment(operator, orderId, shipmentId, body, key);
   }
 
   @Post("shipments/:shipmentId/label-void")
@@ -308,12 +326,19 @@ export class OrdersController {
   @ApiBody({ type: ShipmentProviderEvidenceDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   confirmLabelVoid(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("shipmentId") shipmentId: string,
     @Body() body: ShipmentProviderEvidenceDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.confirmLabelVoid(orderId, shipmentId, body, key);
+    return this.orders.confirmLabelVoid(
+      operator,
+      orderId,
+      shipmentId,
+      body,
+      key,
+    );
   }
 
   @Post("shipments/:shipmentId/handoff")
@@ -325,12 +350,19 @@ export class OrdersController {
   @ApiBody({ type: ShipmentProviderEvidenceDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   handoffShipment(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("shipmentId") shipmentId: string,
     @Body() body: ShipmentProviderEvidenceDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.handoffShipment(orderId, shipmentId, body, key);
+    return this.orders.handoffShipment(
+      operator,
+      orderId,
+      shipmentId,
+      body,
+      key,
+    );
   }
 
   @Post("shipments/:shipmentId/events")
@@ -342,12 +374,19 @@ export class OrdersController {
   @ApiBody({ type: ShipmentEventDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   shipmentEvent(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("shipmentId") shipmentId: string,
     @Body() body: ShipmentEventDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.applyShipmentEvent(orderId, shipmentId, body, key);
+    return this.orders.applyShipmentEvent(
+      operator,
+      orderId,
+      shipmentId,
+      body,
+      key,
+    );
   }
 
   @Post("adjustments")
@@ -359,11 +398,12 @@ export class OrdersController {
   @ApiBody({ type: CreatePriceAdjustmentDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   adjustment(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Body() body: CreatePriceAdjustmentDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.createPriceAdjustment(orderId, body, key);
+    return this.orders.createPriceAdjustment(operator, orderId, body, key);
   }
 
   @Post("adjustments/:adjustmentId/refund")
@@ -373,13 +413,22 @@ export class OrdersController {
   @ApiParam(ORDER_ID_PARAM)
   @ApiParam(ADJUSTMENT_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: RefundDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   refundAdjustment(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("adjustmentId") adjustmentId: string,
+    @Body() body: RefundDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.refundAdjustment(orderId, adjustmentId, key);
+    return this.orders.refundAdjustment(
+      operator,
+      orderId,
+      adjustmentId,
+      body,
+      key,
+    );
   }
 
   @Post("claims")
@@ -390,11 +439,12 @@ export class OrdersController {
   @ApiBody({ type: CreateClaimDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   createClaim(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Body() body: CreateClaimDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.createClaim(orderId, body, key);
+    return this.orders.createClaim(operator, orderId, body, key);
   }
 
   @Post("claims/:claimId/rejection")
@@ -410,12 +460,13 @@ export class OrdersController {
   })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   rejectClaim(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("claimId") claimId: string,
     @Body() body: RejectClaimDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.rejectClaim(orderId, claimId, body, key);
+    return this.orders.rejectClaim(operator, orderId, claimId, body, key);
   }
 
   @Post("claims/:claimId/withdrawal")
@@ -430,12 +481,13 @@ export class OrdersController {
   })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   withdrawClaim(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("claimId") claimId: string,
     @Body() body: WithdrawClaimDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.withdrawClaim(orderId, claimId, body, key);
+    return this.orders.withdrawClaim(operator, orderId, claimId, body, key);
   }
 
   @Post("claims/:claimId/reshipment-handoff")
@@ -453,12 +505,13 @@ export class OrdersController {
   })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   handoffReshipment(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("claimId") claimId: string,
     @Body() body: HandoffReshipmentDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.handoffReshipment(orderId, claimId, body, key);
+    return this.orders.handoffReshipment(operator, orderId, claimId, body, key);
   }
 
   @Post("claims/:claimId/reprint")
@@ -476,12 +529,19 @@ export class OrdersController {
   })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   createClaimReprint(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("claimId") claimId: string,
     @Body() body: CreateClaimReprintDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.createClaimReprint(orderId, claimId, body, key);
+    return this.orders.createClaimReprint(
+      operator,
+      orderId,
+      claimId,
+      body,
+      key,
+    );
   }
 
   @Post("claims/:claimId/refund")
@@ -493,13 +553,16 @@ export class OrdersController {
   @ApiParam(ORDER_ID_PARAM)
   @ApiParam(CLAIM_ID_PARAM)
   @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: RefundDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   refundClaim(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Param("claimId") claimId: string,
+    @Body() body: RefundDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.refundClaim(orderId, claimId, key);
+    return this.orders.refundClaim(operator, orderId, claimId, body, key);
   }
 
   @Post("complete")
@@ -509,10 +572,11 @@ export class OrdersController {
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   complete(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.completeOrder(orderId, key);
+    return this.orders.completeOrder(operator, orderId, key);
   }
 
   @Post("cancel")
@@ -526,10 +590,11 @@ export class OrdersController {
   @ApiBody({ type: CancelOrderDto })
   @ApiOkResponse({ type: FulfilmentCommandResultDto })
   cancel(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Body() body: CancelOrderDto,
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
-    return this.orders.cancelOrder(orderId, body, key);
+    return this.orders.cancelOrder(operator, orderId, body, key);
   }
 }

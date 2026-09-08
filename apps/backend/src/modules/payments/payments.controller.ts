@@ -28,6 +28,8 @@ import {
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
+import { CurrentOperator } from "../admin-access/current-operator.decorator";
+import type { OperatorContext } from "../admin-access/operator-context";
 import {
   CreateBalancePaymentDto,
   CheckoutPaymentDto,
@@ -70,7 +72,7 @@ export class PaymentsController {
   @HttpCode(200)
   @ApiSecurity("operatorSession")
   @UseGuards(OperatorAccessGuard)
-  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.PAYMENTS_WRITE)
   @ApiParam({ name: "orderId", type: String, format: "uuid" })
   @ApiHeader({ ...OPERATOR_CSRF_HEADER, required: true })
   @ApiHeader(IDEMPOTENCY_HEADER)
@@ -82,11 +84,17 @@ export class PaymentsController {
     description: "The configured payment provider is unavailable",
   })
   createBalance(
+    @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
     @Body() body: CreateBalancePaymentDto,
     @Headers("idempotency-key") idempotencyKey?: string,
   ): Promise<CheckoutPaymentDto> {
-    return this.payments.createBalancePayment(orderId, body, idempotencyKey);
+    return this.payments.createBalancePayment(
+      operator,
+      orderId,
+      body,
+      idempotencyKey,
+    );
   }
 
   @Post("automatic-quote-sessions/:sessionId/checkout/payments")

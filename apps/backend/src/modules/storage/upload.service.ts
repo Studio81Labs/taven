@@ -30,6 +30,13 @@ import { pipeline } from "node:stream/promises";
 import { createInflateRaw, crc32 } from "node:zlib";
 import { assertQuotePhotoUploadsEnabled } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
+import {
+  operatorNode,
+  requireOperatorPermission,
+} from "../admin-access/operator-command";
+import type { OperatorContext } from "../admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { AuditService } from "../audit/audit.service";
 import type {
   ConfirmedUploadResponseDto,
   InitiateModelUploadDto,
@@ -105,6 +112,7 @@ export class UploadService {
     @Inject(OBJECT_STORAGE) private readonly objects: ObjectStorage,
     @Inject(OBJECT_STORAGE_CONFIG)
     private readonly storageConfig: ObjectStorageConfig,
+    private readonly audit: AuditService,
   ) {}
 
   async initiateModelUpload(
@@ -516,9 +524,12 @@ export class UploadService {
   }
 
   async createOperatorQuotePhotoDownload(
+    operator: OperatorContext,
     quoteRequestId: string,
     photoAssetId: string,
   ): Promise<SignedDownloadResponseDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    const nodeId = operatorNode(operator);
     quoteRequestId = normalizedUuid(quoteRequestId, "requestId");
     photoAssetId = normalizedUuid(photoAssetId, "photoAssetId");
     const photo = await this.prisma.photoAsset.findFirst({
@@ -538,7 +549,17 @@ export class UploadService {
       photo.photoDeleteAfter,
       this.storageConfig.signedUrlTtlSeconds,
     );
-    return this.signDownload(photo.storageObjectKey, expiresAt);
+    const download = await this.signDownload(photo.storageObjectKey, expiresAt);
+    await this.prisma.$transaction((transaction) =>
+      this.audit.recordOperator(transaction, operator, {
+        quoteRequestId,
+        nodeId,
+        eventType: "quote_request.attachment_download_issued",
+        correlationId: randomUUID(),
+        payload: { operation: "attachment_download", status: "ISSUED" },
+      }),
+    );
+    return download;
   }
 
   async getReorderEligibility(
