@@ -514,6 +514,14 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(issued.response.status).toBe(201);
     expect(issued.body.version).toBe(1);
+    await expect(
+      prisma.auditEvent.findFirstOrThrow({
+        where: {
+          eventType: "quote_offer.issued",
+          idempotencyKey: issueKey,
+        },
+      }),
+    ).resolves.toMatchObject({ quoteId: issued.body.quoteId });
 
     const lateReferencePhotoId = randomUUID();
     const latePhotoUploadedAt = new Date();
@@ -1361,6 +1369,63 @@ describe("QuoteRequest and tokenized individual offers", () => {
         where: { id: created.body.requestId },
       }),
     ).toMatchObject({ status: "EXPIRED" });
+  });
+
+  it("records the exact offer when an operator expires it", async () => {
+    const created = await quotes.createRequest(
+      requestInput("manual-expiry"),
+      "198.51.100.49",
+      key("manual-expiry-create"),
+    );
+    await quotes.beginReview(
+      operator,
+      created.requestId,
+      key("manual-expiry-review"),
+    );
+    const issued = await quotes.issueOffer(
+      operator,
+      created.requestId,
+      {
+        summary: "Manual expiry audit offer",
+        expiresAt: new Date(Date.now() + 600).toISOString(),
+        promisedDate: "2026-10-01",
+        priceListId,
+        contractTotalMinor: 110_000,
+        taxRegime: "NON_VAT_PAYER",
+        vatRateBasisPoints: 0,
+        netAmountMinor: 110_000,
+        vatAmountMinor: 0,
+        depositMinor: 33_000,
+        termsSnapshot: { revisionAcceptedByOffer: true },
+        inputSnapshot: { operatorEstimate: "manual-v0" },
+        deliveryDestination: defaultDeliveryDestination(),
+        shipmentPlans: defaultShipmentPlans(),
+        paymentPolicy: defaultPaymentPolicy(),
+        items: defaultItems(),
+        components: defaultComponents(),
+      } as unknown as IssueOfferDto,
+      key("manual-expiry-issue"),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 700));
+
+    const manualExpiryKey = key("manual-expiry-command");
+    const expired = await quotes.expireOffer(
+      operator,
+      created.requestId,
+      manualExpiryKey,
+    );
+    expect(expired).toEqual({
+      requestId: created.requestId,
+      status: "EXPIRED",
+    });
+    await expect(
+      prisma.auditEvent.findFirstOrThrow({
+        where: {
+          eventType: "quote_offer.expired",
+          idempotencyKey: manualExpiryKey,
+        },
+      }),
+    ).resolves.toMatchObject({ quoteId: issued.quoteId });
   });
 
   it("accepts against one captured database instant near the deadline", async () => {

@@ -9,7 +9,11 @@ import { PrismaService } from "../../prisma/prisma.service";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { requireOperatorPermission } from "../admin-access/operator-command";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
-import type { AuditEventPageDto, AuditEventSummaryDto } from "./audit.dto";
+import type {
+  AuditEventPageDto,
+  AuditEventSummaryDto,
+  AuditPayloadValue,
+} from "./audit.dto";
 
 type Transaction = Prisma.TransactionClient;
 type AuditFilters = Readonly<{
@@ -37,6 +41,7 @@ export class AuditService {
       orderId?: string;
       paymentId?: string;
       quoteRequestId?: string;
+      quoteId?: string;
       nodeId: string;
       createdAt?: Date;
       correlationId?: string;
@@ -79,6 +84,7 @@ export class AuditService {
         orderId: input.orderId ?? null,
         paymentId: input.paymentId ?? null,
         quoteRequestId: input.quoteRequestId ?? null,
+        quoteId: input.quoteId ?? null,
         correlationId: input.correlationId ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
         payload: input.payload,
@@ -242,9 +248,9 @@ function operationalOrderScope(
 
 function redactPayload(
   value: Prisma.JsonValue,
-): Record<string, boolean | number | string> {
+): Record<string, AuditPayloadValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const result: Record<string, boolean | number | string> = {};
+  const result: Record<string, AuditPayloadValue> = {};
   for (const key of [
     "operation",
     "status",
@@ -260,7 +266,87 @@ function redactPayload(
     )
       result[key] = field;
   }
+  const response = jsonObject(value.response);
+  const status = response?.status;
+  if (
+    typeof status === "boolean" ||
+    typeof status === "number" ||
+    typeof status === "string"
+  ) {
+    result.status = status;
+  }
+  const targets = response ? jsonObject(response.targets) : undefined;
+  if (targets) redactTargetIdentifiers(result, targets);
   return result;
+}
+
+function jsonObject(
+  value: Prisma.JsonValue | undefined,
+): Prisma.JsonObject | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : undefined;
+}
+
+const AUDIT_TARGET_IDENTIFIER_FIELDS = new Set([
+  "authorizationId",
+  "claimId",
+  "fulfilmentSlotId",
+  "fulfilmentSlotIds",
+  "jobId",
+  "originalShipmentId",
+  "phaseReservationSetId",
+  "priceAdjustmentId",
+  "predecessorShipmentId",
+  "replacementJobId",
+  "replacementRequestId",
+  "replacementShipmentId",
+  "refundIds",
+  "reshipmentShipmentId",
+  "shipmentId",
+  "shipmentIds",
+  "shipmentPlanId",
+  "sourceJobId",
+]);
+const MAX_AUDIT_TARGET_IDENTIFIERS = 100;
+
+function redactTargetIdentifiers(
+  result: Record<string, AuditPayloadValue>,
+  targets: Prisma.JsonObject,
+): void {
+  let remaining = MAX_AUDIT_TARGET_IDENTIFIERS;
+  for (const [key, value] of Object.entries(targets)) {
+    if (
+      !AUDIT_TARGET_IDENTIFIER_FIELDS.has(key) ||
+      remaining === 0 ||
+      value === undefined
+    ) {
+      continue;
+    }
+    const identifiers = identifiersFromJson(value, remaining);
+    if (identifiers.length === 0) continue;
+    result[key] =
+      key.endsWith("Ids") || identifiers.length > 1
+        ? identifiers
+        : identifiers[0]!;
+    remaining -= identifiers.length;
+  }
+}
+
+function identifiersFromJson(value: Prisma.JsonValue, limit: number): string[] {
+  const values = Array.isArray(value) ? value : [value];
+  const identifiers: string[] = [];
+  for (const candidate of values) {
+    if (
+      typeof candidate === "string" &&
+      UUID_PATTERN.test(candidate) &&
+      !identifiers.includes(candidate)
+    ) {
+      identifiers.push(candidate);
+      if (identifiers.length === limit) break;
+    }
+  }
+  return identifiers;
 }
 
 function digest(filters: AuditFilters): string {
