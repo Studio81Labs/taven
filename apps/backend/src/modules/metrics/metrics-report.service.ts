@@ -519,8 +519,10 @@ async function pageOrderKeys(
     ? Prisma.sql`
         AND CASE
           WHEN automatic_session.attribution IS NOT NULL
+            AND automatic_session.attribution <> 'null'::jsonb
             THEN COALESCE(automatic_session.attribution->>'channel', 'unknown')
           WHEN individual_request.attribution IS NOT NULL
+            AND individual_request.attribution <> 'null'::jsonb
             THEN COALESCE(individual_request.attribution->>'channel', 'unknown')
           ELSE COALESCE(customer.first_attribution->>'channel', 'unknown')
         END = ${query.channel}
