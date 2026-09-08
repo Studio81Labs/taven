@@ -1166,6 +1166,7 @@ model BusinessEvent {
   @@unique([eventType, dedupeKey])
   @@index([recordedAt])
   @@index([orderId, recordedAt])
+  @@index([eventType, observedAt], map: "business_events_event_type_observed_at_idx")
   @@map("business_events")
 }
 
@@ -2063,6 +2064,8 @@ model Order {
   businessEvents               BusinessEvent[]
 
   @@index([customerId, createdAt])
+  @@index([customerId, confirmedAt, id], map: "orders_customer_confirmed_at_id_idx")
+  @@index([confirmedAt, id], map: "orders_confirmed_at_id_idx")
   @@index([status, createdAt])
   @@map("orders")
 }
