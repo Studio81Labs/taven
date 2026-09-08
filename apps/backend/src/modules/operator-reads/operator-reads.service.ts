@@ -4,9 +4,11 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  AutomaticQuoteRiskDecision,
   CapacityReservationStatus,
   JobStatus,
   OrderStatus,
+  SliceKind,
 } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -61,6 +63,39 @@ type TimeCursor = Readonly<{
   createdAt: string;
   id: string;
   filterHash: string;
+}>;
+
+type SelectedReferenceSlice = Readonly<{
+  kind: SliceKind;
+  modelGeometryId: string;
+  printConfigRevisionId: string;
+  referenceProfileId: string | null;
+}>;
+
+type AutomaticQuoteItemSnapshot = Readonly<{
+  ordinal: number;
+  sourceModelFileId: string;
+  targetModelGeometryId: string;
+  printConfigRevisionId: string;
+  referenceProfileId: string;
+  referencePartsPerPlate: number | null;
+  configurationFingerprint: string;
+  riskDecisions: ReadonlyArray<
+    Readonly<{
+      configurationFingerprint: string;
+      preflightFinding: Readonly<{ code: string }>;
+    }>
+  >;
+}>;
+
+type OrderedItemPreflightScope = Readonly<{
+  ordinal: number;
+  sourceModelFileId: string;
+  modelGeometryId: string;
+  printConfigRevisionId: string;
+  referencePartsPerPlate: number | null;
+  primaryReferenceSliceResult: SelectedReferenceSlice | null;
+  tailReferenceSliceResult: SelectedReferenceSlice | null;
 }>;
 
 @Injectable()
@@ -192,8 +227,43 @@ export class OperatorReadsService {
         items: {
           orderBy: { ordinal: "asc" },
           include: {
-            modelGeometry: {
-              select: { preflightFindings: { select: { code: true } } },
+            primaryReferenceSliceResult: {
+              select: {
+                kind: true,
+                modelGeometryId: true,
+                printConfigRevisionId: true,
+                referenceProfileId: true,
+              },
+            },
+            tailReferenceSliceResult: {
+              select: {
+                kind: true,
+                modelGeometryId: true,
+                printConfigRevisionId: true,
+                referenceProfileId: true,
+              },
+            },
+          },
+        },
+        automaticQuoteDraft: {
+          select: {
+            items: {
+              select: {
+                ordinal: true,
+                sourceModelFileId: true,
+                targetModelGeometryId: true,
+                printConfigRevisionId: true,
+                referenceProfileId: true,
+                referencePartsPerPlate: true,
+                configurationFingerprint: true,
+                riskDecisions: {
+                  where: { decision: AutomaticQuoteRiskDecision.ACKNOWLEDGED },
+                  select: {
+                    configurationFingerprint: true,
+                    preflightFinding: { select: { code: true } },
+                  },
+                },
+              },
             },
           },
         },
@@ -207,6 +277,12 @@ export class OperatorReadsService {
     if (!order) throw new NotFoundException("Order was not found");
     const accepted = order.acceptedPriceBinding?.priceSnapshot;
     const active = order.activeContractPrice?.contractPriceRevision;
+    const acceptedQuoteItems = new Map(
+      (order.automaticQuoteDraft?.items ?? []).map((item) => [
+        item.ordinal,
+        item,
+      ]),
+    );
     return {
       id: order.id,
       publicReference: order.publicReference,
@@ -234,8 +310,9 @@ export class OperatorReadsService {
         material: item.material,
         color: item.color,
         quantity: item.quantity,
-        preflightFindings: item.modelGeometry.preflightFindings.map(
-          (finding) => finding.code,
+        preflightFindings: acceptedPreflightFindingCodes(
+          item,
+          acceptedQuoteItems.get(item.ordinal),
         ),
       })),
       financial: {
@@ -689,6 +766,49 @@ function pageResult<T extends { id: string }, R>(
       ? { nextCursor: encodeCursor({ id: last.id, filterHash }) }
       : {}),
   };
+}
+
+function acceptedPreflightFindingCodes(
+  item: OrderedItemPreflightScope,
+  snapshot: AutomaticQuoteItemSnapshot | undefined,
+): string[] {
+  if (
+    !snapshot ||
+    snapshot.ordinal !== item.ordinal ||
+    snapshot.sourceModelFileId !== item.sourceModelFileId ||
+    snapshot.targetModelGeometryId !== item.modelGeometryId ||
+    snapshot.printConfigRevisionId !== item.printConfigRevisionId ||
+    snapshot.referencePartsPerPlate !== item.referencePartsPerPlate
+  ) {
+    return [];
+  }
+  const selectedReferences = [
+    item.primaryReferenceSliceResult,
+    item.tailReferenceSliceResult,
+  ].filter((slice): slice is SelectedReferenceSlice => slice !== null);
+  if (
+    selectedReferences.length === 0 ||
+    selectedReferences.some(
+      (slice) =>
+        slice.kind !== SliceKind.REFERENCE ||
+        slice.modelGeometryId !== item.modelGeometryId ||
+        slice.printConfigRevisionId !== item.printConfigRevisionId ||
+        slice.referenceProfileId !== snapshot.referenceProfileId,
+    )
+  ) {
+    return [];
+  }
+  return [
+    ...new Set(
+      snapshot.riskDecisions
+        .filter(
+          (decision) =>
+            decision.configurationFingerprint ===
+            snapshot.configurationFingerprint,
+        )
+        .map((decision) => decision.preflightFinding.code),
+    ),
+  ].sort();
 }
 
 function pageLimit(value: number | undefined): number {

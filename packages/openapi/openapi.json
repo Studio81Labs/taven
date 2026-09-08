@@ -2116,6 +2116,142 @@
         ],
         "type": "object"
       },
+      "FulfilmentClaimDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "incidentShipmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "openedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "refunds": {
+            "items": {
+              "$ref": "#/components/schemas/FulfilmentRefundDto"
+            },
+            "type": "array"
+          },
+          "reshipmentAuthorizations": {
+            "items": {
+              "$ref": "#/components/schemas/FulfilmentReshipmentAuthorizationDto"
+            },
+            "type": "array"
+          },
+          "resolutions": {
+            "items": {
+              "$ref": "#/components/schemas/FulfilmentClaimSlotResolutionDto"
+            },
+            "type": "array"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "orderPhaseId",
+          "incidentShipmentId",
+          "origin",
+          "status",
+          "reason",
+          "openedAt",
+          "resolvedAt",
+          "createdAt",
+          "updatedAt",
+          "resolutions",
+          "refunds",
+          "reshipmentAuthorizations"
+        ],
+        "type": "object"
+      },
+      "FulfilmentClaimSlotResolutionDto": {
+        "properties": {
+          "claimId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "fulfilmentSlotId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "replacementRequestId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "replacementShipmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "claimId",
+          "fulfilmentSlotId",
+          "replacementRequestId",
+          "replacementShipmentId",
+          "status",
+          "resolvedAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "FulfilmentCommandResultDto": {
         "properties": {
           "orderId": {
@@ -2136,17 +2272,388 @@
         ],
         "type": "object"
       },
+      "FulfilmentJobDto": {
+        "properties": {
+          "acceptedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "cancellationReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "cancelledAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "failedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "failureReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "failureStage": {
+            "nullable": true,
+            "type": "string"
+          },
+          "gcodeReadyAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "handedOverAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "packedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "payoutAmount": {
+            "nullable": true,
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "payoutCurrency": {
+            "nullable": true,
+            "type": "string"
+          },
+          "phaseResourcePlanJobId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "photoSubmittedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "printedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "printingAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "productionArtifactHash": {
+            "nullable": true,
+            "type": "string"
+          },
+          "productionSliceResultId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "qcApprovedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "qcEvidenceOmissionReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "qcPhotoAssetId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "qcRejectedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "replacementRequestSource": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FulfilmentReplacementRequestDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "replacesJobId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "settledAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "shipmentAssignment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FulfilmentJobShipmentAssignmentDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "shipmentPlanId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "nodeId",
+          "orderId",
+          "orderPhaseId",
+          "shipmentPlanId",
+          "phaseResourcePlanJobId",
+          "replacesJobId",
+          "status",
+          "acceptedAt",
+          "payoutAmount",
+          "payoutCurrency",
+          "gcodeReadyAt",
+          "productionSliceResultId",
+          "productionArtifactHash",
+          "printingAt",
+          "printedAt",
+          "photoSubmittedAt",
+          "qcPhotoAssetId",
+          "qcEvidenceOmissionReason",
+          "qcApprovedAt",
+          "qcRejectedAt",
+          "packedAt",
+          "handedOverAt",
+          "settledAt",
+          "failedAt",
+          "failureStage",
+          "failureReason",
+          "cancelledAt",
+          "cancellationReason",
+          "createdAt",
+          "updatedAt",
+          "shipmentAssignment",
+          "replacementRequestSource"
+        ],
+        "type": "object"
+      },
+      "FulfilmentJobShipmentAssignmentDto": {
+        "properties": {
+          "assignedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "jobId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "shipmentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "shipmentPlanId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "shipmentId",
+          "shipmentPlanId",
+          "orderId",
+          "orderPhaseId",
+          "assignedAt"
+        ],
+        "type": "object"
+      },
+      "FulfilmentPhaseDto": {
+        "properties": {
+          "activatedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "cancelledAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "completedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deliveredAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "qcPassedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "shippedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "kind",
+          "status",
+          "activatedAt",
+          "qcPassedAt",
+          "shippedAt",
+          "deliveredAt",
+          "completedAt",
+          "cancelledAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "FulfilmentPriceAdjustmentDto": {
+        "properties": {
+          "allocation": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "amountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "claimId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "paymentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "refundRequiredMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "sourceContractPriceId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "paymentId",
+          "claimId",
+          "sourceContractPriceId",
+          "idempotencyKey",
+          "reason",
+          "amountMinor",
+          "refundRequiredMinor",
+          "currency",
+          "allocation",
+          "createdAt"
+        ],
+        "type": "object"
+      },
       "FulfilmentProjectionDto": {
         "properties": {
           "claims": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/FulfilmentClaimDto"
             },
             "type": "array"
           },
           "jobs": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/FulfilmentJobDto"
             },
             "type": "array"
           },
@@ -2158,29 +2665,29 @@
             "type": "string"
           },
           "phase": {
-            "type": "object"
+            "$ref": "#/components/schemas/FulfilmentPhaseDto"
           },
           "priceAdjustments": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/FulfilmentPriceAdjustmentDto"
             },
             "type": "array"
           },
           "replacementRequests": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/FulfilmentReplacementRequestDto"
             },
             "type": "array"
           },
           "shipments": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/FulfilmentShipmentDto"
             },
             "type": "array"
           },
           "slots": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/FulfilmentSlotDto"
             },
             "type": "array"
           }
@@ -2195,6 +2702,440 @@
           "replacementRequests",
           "claims",
           "priceAdjustments"
+        ],
+        "type": "object"
+      },
+      "FulfilmentRefundDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "claimId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "completedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "paymentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "priceAdjustmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "providerRefundId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requestedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "paymentId",
+          "claimId",
+          "priceAdjustmentId",
+          "provider",
+          "providerRefundId",
+          "amountMinor",
+          "reason",
+          "status",
+          "requestedAt",
+          "completedAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "FulfilmentReplacementRequestDto": {
+        "properties": {
+          "claimId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deadlineAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "phaseReservationSetId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "replacementJobId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "resolvedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "shipmentPlanId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sourceJobId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "orderPhaseId",
+          "shipmentPlanId",
+          "sourceJobId",
+          "replacementJobId",
+          "phaseReservationSetId",
+          "claimId",
+          "reason",
+          "status",
+          "deadlineAt",
+          "resolvedAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "FulfilmentReshipmentAuthorizationDto": {
+        "properties": {
+          "acceptanceEventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "claimId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "consumedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "custodyConfirmedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deliveryDestinationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "issuedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "originalShipmentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reQcEvidence": {
+            "type": "string"
+          },
+          "reQcPassedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reshipmentShipmentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "shipmentPlanId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "orderPhaseId",
+          "shipmentPlanId",
+          "deliveryDestinationId",
+          "claimId",
+          "originalShipmentId",
+          "reshipmentShipmentId",
+          "acceptanceEventId",
+          "custodyConfirmedAt",
+          "reQcPassedAt",
+          "reQcEvidence",
+          "issuedAt",
+          "consumedAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "FulfilmentShipmentDto": {
+        "properties": {
+          "cancellationRequestedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "cancelledAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "carrier": {
+            "nullable": true,
+            "type": "string"
+          },
+          "carrierLabelId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deliveredAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "deliveryDestinationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "handedOverAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "jobAssignments": {
+            "items": {
+              "$ref": "#/components/schemas/FulfilmentJobShipmentAssignmentDto"
+            },
+            "type": "array"
+          },
+          "labelCreatedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "providerAcceptanceScanId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "providerShipmentId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "providerVoidedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "providerVoidId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "replacesShipmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "reprintClaimId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "shipmentPlanId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "trackingCode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "orderPhaseId",
+          "shipmentPlanId",
+          "deliveryDestinationId",
+          "replacesShipmentId",
+          "reprintClaimId",
+          "status",
+          "carrier",
+          "providerShipmentId",
+          "carrierLabelId",
+          "trackingCode",
+          "labelCreatedAt",
+          "cancellationRequestedAt",
+          "providerVoidId",
+          "providerVoidedAt",
+          "providerAcceptanceScanId",
+          "handedOverAt",
+          "deliveredAt",
+          "cancelledAt",
+          "createdAt",
+          "updatedAt",
+          "jobAssignments"
+        ],
+        "type": "object"
+      },
+      "FulfilmentSlotDto": {
+        "properties": {
+          "claimUntil": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deliveredAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderItemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "packingUnitKey": {
+            "type": "string"
+          },
+          "quantityOrdinal": {
+            "type": "number"
+          },
+          "settlementAmountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "orderPhaseId",
+          "orderItemId",
+          "quantityOrdinal",
+          "packingUnitKey",
+          "settlementAmountMinor",
+          "outcome",
+          "deliveredAt",
+          "claimUntil",
+          "createdAt",
+          "updatedAt"
         ],
         "type": "object"
       },

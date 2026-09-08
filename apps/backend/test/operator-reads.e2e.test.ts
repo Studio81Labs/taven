@@ -166,14 +166,33 @@ describe("operator read contracts", () => {
       });
     }
 
+    const unrelatedFindingCode = `HISTORICAL_${randomBytes(6).toString("hex")}`;
+    await prisma.preflightFinding.create({
+      data: {
+        modelFileId: fixture.modelFileId,
+        modelGeometryId: fixture.modelGeometryId,
+        inspectionRevision: `historical-${randomBytes(8).toString("hex")}`,
+        code: unrelatedFindingCode,
+        severity: "WARNING",
+        message: "Not accepted for the ordered configuration",
+      },
+    });
+
     const order = await read(`/admin/orders/${fixture.orderId}`);
     expect(order.status).toBe(200);
-    await expect(order.json()).resolves.toMatchObject({
+    const orderDetail = (await order.json()) as {
+      items: Array<{ id: string; preflightFindings: string[] }>;
+    };
+    expect(orderDetail).toMatchObject({
       id: fixture.orderId,
       items: expect.any(Array),
       financial: { settlements: expect.any(Array) },
       fulfilment: { jobs: expect.any(Array), shipments: expect.any(Array) },
     });
+    expect(
+      orderDetail.items.find((item) => item.id === fixture.orderItemId)
+        ?.preflightFindings,
+    ).toEqual([]);
 
     const jobs = await read(
       `/admin/jobs?machineId=${fixture.machineId}&limit=1`,
