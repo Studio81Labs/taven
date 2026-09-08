@@ -51,6 +51,9 @@ overrides:
   # GHSA-5p4m-2wfm-xmqj, GHSA-2883-xcg3-v3hh. Remove when all parents resolve
   # js-yaml >= 4.3.2.
   "js-yaml@4": ">=4.3.2 <5"
+  # GHSA-535w-7cp7-47q4, GHSA-qfvm-cv95-jqjf, GHSA-qvfw-j98x-7q72, and
+  # GHSA-wc9g-mqfw-jrwm. Remove when Nest stops pinning multer 2.2.0.
+  "multer@2.2.0": ">=2.3.0 <3"
   # GHSA-pm4m-ph32-ghv5. Remove when @nestjs/swagger stops pinning 5.2.1.
   js-yaml@5.2.1: 5.2.3
   # CVE-2026-40345. Prisma 7 pins 7.1.5; remove when it adopts >= 8.
