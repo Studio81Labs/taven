@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 const UUID = { type: String, format: "uuid" } as const;
+const DATE_TIME = { type: String, format: "date-time" } as const;
+const INTEGER_STRING = { type: String, pattern: "^[0-9]+$" } as const;
 
 export class JobPrintedDto {
   @ApiProperty({ type: String, pattern: "^[0-9]+$" })
@@ -304,6 +306,520 @@ export class FulfilmentCommandResultDto {
   result!: Record<string, unknown>;
 }
 
+export class FulfilmentPhaseDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty({ type: String })
+  kind!: string;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  activatedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  qcPassedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  shippedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  deliveredAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  completedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  cancelledAt!: string | null;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+}
+
+export class FulfilmentJobShipmentAssignmentDto {
+  @ApiProperty(UUID)
+  jobId!: string;
+
+  @ApiProperty(UUID)
+  shipmentId!: string;
+
+  @ApiProperty(UUID)
+  shipmentPlanId!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty(DATE_TIME)
+  assignedAt!: string;
+}
+
+export class FulfilmentReplacementRequestDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty(UUID)
+  shipmentPlanId!: string;
+
+  @ApiProperty(UUID)
+  sourceJobId!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  replacementJobId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  phaseReservationSetId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  claimId!: string | null;
+
+  @ApiProperty({ type: String })
+  reason!: string;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty(DATE_TIME)
+  deadlineAt!: string;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  resolvedAt!: string | null;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+}
+
+export class FulfilmentJobDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  nodeId!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty(UUID)
+  shipmentPlanId!: string;
+
+  @ApiProperty(UUID)
+  phaseResourcePlanJobId!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  replacesJobId!: string | null;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  acceptedAt!: string | null;
+
+  @ApiProperty({ ...INTEGER_STRING, nullable: true })
+  payoutAmount!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  payoutCurrency!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  gcodeReadyAt!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  productionSliceResultId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  productionArtifactHash!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  printingAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  printedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  photoSubmittedAt!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  qcPhotoAssetId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  qcEvidenceOmissionReason!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  qcApprovedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  qcRejectedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  packedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  handedOverAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  settledAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  failedAt!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  failureStage!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  failureReason!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  cancelledAt!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  cancellationReason!: string | null;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+
+  @ApiProperty({ type: FulfilmentJobShipmentAssignmentDto, nullable: true })
+  shipmentAssignment!: FulfilmentJobShipmentAssignmentDto | null;
+
+  @ApiProperty({ type: FulfilmentReplacementRequestDto, nullable: true })
+  replacementRequestSource!: FulfilmentReplacementRequestDto | null;
+}
+
+export class FulfilmentShipmentDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty(UUID)
+  shipmentPlanId!: string;
+
+  @ApiProperty(UUID)
+  deliveryDestinationId!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  replacesShipmentId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  reprintClaimId!: string | null;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  carrier!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  providerShipmentId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  carrierLabelId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  trackingCode!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  labelCreatedAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  cancellationRequestedAt!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  providerVoidId!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  providerVoidedAt!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  providerAcceptanceScanId!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  handedOverAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  deliveredAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  cancelledAt!: string | null;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+
+  @ApiProperty({ type: [FulfilmentJobShipmentAssignmentDto] })
+  jobAssignments!: FulfilmentJobShipmentAssignmentDto[];
+}
+
+export class FulfilmentSlotDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty(UUID)
+  orderItemId!: string;
+
+  @ApiProperty({ type: Number })
+  quantityOrdinal!: number;
+
+  @ApiProperty({ type: String })
+  packingUnitKey!: string;
+
+  @ApiProperty(INTEGER_STRING)
+  settlementAmountMinor!: string;
+
+  @ApiProperty({ type: String })
+  outcome!: string;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  deliveredAt!: string | null;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  claimUntil!: string | null;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+}
+
+export class FulfilmentClaimSlotResolutionDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  claimId!: string;
+
+  @ApiProperty(UUID)
+  fulfilmentSlotId!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  replacementRequestId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  replacementShipmentId!: string | null;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  resolvedAt!: string | null;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+}
+
+export class FulfilmentRefundDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  paymentId!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  claimId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  priceAdjustmentId!: string | null;
+
+  @ApiProperty({ type: String })
+  provider!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  providerRefundId!: string | null;
+
+  @ApiProperty(INTEGER_STRING)
+  amountMinor!: string;
+
+  @ApiProperty({ type: String })
+  reason!: string;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty(DATE_TIME)
+  requestedAt!: string;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  completedAt!: string | null;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+}
+
+export class FulfilmentReshipmentAuthorizationDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty(UUID)
+  shipmentPlanId!: string;
+
+  @ApiProperty(UUID)
+  deliveryDestinationId!: string;
+
+  @ApiProperty(UUID)
+  claimId!: string;
+
+  @ApiProperty(UUID)
+  originalShipmentId!: string;
+
+  @ApiProperty(UUID)
+  reshipmentShipmentId!: string;
+
+  @ApiProperty(UUID)
+  acceptanceEventId!: string;
+
+  @ApiProperty(DATE_TIME)
+  custodyConfirmedAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  reQcPassedAt!: string;
+
+  @ApiProperty({ type: String })
+  reQcEvidence!: string;
+
+  @ApiProperty(DATE_TIME)
+  issuedAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  consumedAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+}
+
+export class FulfilmentClaimDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  incidentShipmentId!: string | null;
+
+  @ApiProperty({ type: String })
+  origin!: string;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty({ type: String })
+  reason!: string;
+
+  @ApiProperty(DATE_TIME)
+  openedAt!: string;
+
+  @ApiProperty({ ...DATE_TIME, nullable: true })
+  resolvedAt!: string | null;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+
+  @ApiProperty(DATE_TIME)
+  updatedAt!: string;
+
+  @ApiProperty({ type: [FulfilmentClaimSlotResolutionDto] })
+  resolutions!: FulfilmentClaimSlotResolutionDto[];
+
+  @ApiProperty({ type: [FulfilmentRefundDto] })
+  refunds!: FulfilmentRefundDto[];
+
+  @ApiProperty({ type: [FulfilmentReshipmentAuthorizationDto] })
+  reshipmentAuthorizations!: FulfilmentReshipmentAuthorizationDto[];
+}
+
+export class FulfilmentPriceAdjustmentDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  paymentId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  claimId!: string | null;
+
+  @ApiProperty(UUID)
+  sourceContractPriceId!: string;
+
+  @ApiProperty({ type: String })
+  idempotencyKey!: string;
+
+  @ApiProperty({ type: String })
+  reason!: string;
+
+  @ApiProperty(INTEGER_STRING)
+  amountMinor!: string;
+
+  @ApiProperty(INTEGER_STRING)
+  refundRequiredMinor!: string;
+
+  @ApiProperty({ type: String })
+  currency!: string;
+
+  @ApiProperty({ type: Object, additionalProperties: true })
+  allocation!: Record<string, unknown>;
+
+  @ApiProperty(DATE_TIME)
+  createdAt!: string;
+}
+
 export class FulfilmentProjectionDto {
   @ApiProperty(UUID)
   orderId!: string;
@@ -311,24 +827,24 @@ export class FulfilmentProjectionDto {
   @ApiProperty({ type: String })
   orderStatus!: string;
 
-  @ApiProperty({ type: Object })
-  phase!: Record<string, unknown>;
+  @ApiProperty({ type: FulfilmentPhaseDto })
+  phase!: FulfilmentPhaseDto;
 
-  @ApiProperty({ type: [Object] })
-  jobs!: Array<Record<string, unknown>>;
+  @ApiProperty({ type: [FulfilmentJobDto] })
+  jobs!: FulfilmentJobDto[];
 
-  @ApiProperty({ type: [Object] })
-  shipments!: Array<Record<string, unknown>>;
+  @ApiProperty({ type: [FulfilmentShipmentDto] })
+  shipments!: FulfilmentShipmentDto[];
 
-  @ApiProperty({ type: [Object] })
-  slots!: Array<Record<string, unknown>>;
+  @ApiProperty({ type: [FulfilmentSlotDto] })
+  slots!: FulfilmentSlotDto[];
 
-  @ApiProperty({ type: [Object] })
-  replacementRequests!: Array<Record<string, unknown>>;
+  @ApiProperty({ type: [FulfilmentReplacementRequestDto] })
+  replacementRequests!: FulfilmentReplacementRequestDto[];
 
-  @ApiProperty({ type: [Object] })
-  claims!: Array<Record<string, unknown>>;
+  @ApiProperty({ type: [FulfilmentClaimDto] })
+  claims!: FulfilmentClaimDto[];
 
-  @ApiProperty({ type: [Object] })
-  priceAdjustments!: Array<Record<string, unknown>>;
+  @ApiProperty({ type: [FulfilmentPriceAdjustmentDto] })
+  priceAdjustments!: FulfilmentPriceAdjustmentDto[];
 }

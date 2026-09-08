@@ -2036,23 +2036,330 @@ export interface components {
             pending: number;
             value: components["schemas"]["MetricRatioDto"];
         };
+        FulfilmentClaimDto: {
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            incidentShipmentId: string | null;
+            /** Format: date-time */
+            openedAt: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            origin: string;
+            reason: string;
+            refunds: components["schemas"]["FulfilmentRefundDto"][];
+            reshipmentAuthorizations: components["schemas"]["FulfilmentReshipmentAuthorizationDto"][];
+            resolutions: components["schemas"]["FulfilmentClaimSlotResolutionDto"][];
+            /** Format: date-time */
+            resolvedAt: string | null;
+            status: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        FulfilmentClaimSlotResolutionDto: {
+            /** Format: uuid */
+            claimId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            fulfilmentSlotId: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            replacementRequestId: string | null;
+            /** Format: uuid */
+            replacementShipmentId: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            status: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
         FulfilmentCommandResultDto: {
             /** Format: uuid */
             orderId: string;
             result: Record<string, never>;
             status: string;
         };
+        FulfilmentJobDto: {
+            /** Format: date-time */
+            acceptedAt: string | null;
+            cancellationReason: string | null;
+            /** Format: date-time */
+            cancelledAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            failedAt: string | null;
+            failureReason: string | null;
+            failureStage: string | null;
+            /** Format: date-time */
+            gcodeReadyAt: string | null;
+            /** Format: date-time */
+            handedOverAt: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            nodeId: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            /** Format: date-time */
+            packedAt: string | null;
+            payoutAmount: string | null;
+            payoutCurrency: string | null;
+            /** Format: uuid */
+            phaseResourcePlanJobId: string;
+            /** Format: date-time */
+            photoSubmittedAt: string | null;
+            /** Format: date-time */
+            printedAt: string | null;
+            /** Format: date-time */
+            printingAt: string | null;
+            productionArtifactHash: string | null;
+            /** Format: uuid */
+            productionSliceResultId: string | null;
+            /** Format: date-time */
+            qcApprovedAt: string | null;
+            qcEvidenceOmissionReason: string | null;
+            /** Format: uuid */
+            qcPhotoAssetId: string | null;
+            /** Format: date-time */
+            qcRejectedAt: string | null;
+            replacementRequestSource: components["schemas"]["FulfilmentReplacementRequestDto"] | null;
+            /** Format: uuid */
+            replacesJobId: string | null;
+            /** Format: date-time */
+            settledAt: string | null;
+            shipmentAssignment: components["schemas"]["FulfilmentJobShipmentAssignmentDto"] | null;
+            /** Format: uuid */
+            shipmentPlanId: string;
+            status: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        FulfilmentJobShipmentAssignmentDto: {
+            /** Format: date-time */
+            assignedAt: string;
+            /** Format: uuid */
+            jobId: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            /** Format: uuid */
+            shipmentId: string;
+            /** Format: uuid */
+            shipmentPlanId: string;
+        };
+        FulfilmentPhaseDto: {
+            /** Format: date-time */
+            activatedAt: string | null;
+            /** Format: date-time */
+            cancelledAt: string | null;
+            /** Format: date-time */
+            completedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deliveredAt: string | null;
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: date-time */
+            qcPassedAt: string | null;
+            /** Format: date-time */
+            shippedAt: string | null;
+            status: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        FulfilmentPriceAdjustmentDto: {
+            allocation: {
+                [key: string]: unknown;
+            };
+            amountMinor: string;
+            /** Format: uuid */
+            claimId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            idempotencyKey: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            paymentId: string | null;
+            reason: string;
+            refundRequiredMinor: string;
+            /** Format: uuid */
+            sourceContractPriceId: string;
+        };
         FulfilmentProjectionDto: {
-            claims: Record<string, never>[];
-            jobs: Record<string, never>[];
+            claims: components["schemas"]["FulfilmentClaimDto"][];
+            jobs: components["schemas"]["FulfilmentJobDto"][];
             /** Format: uuid */
             orderId: string;
             orderStatus: string;
-            phase: Record<string, never>;
-            priceAdjustments: Record<string, never>[];
-            replacementRequests: Record<string, never>[];
-            shipments: Record<string, never>[];
-            slots: Record<string, never>[];
+            phase: components["schemas"]["FulfilmentPhaseDto"];
+            priceAdjustments: components["schemas"]["FulfilmentPriceAdjustmentDto"][];
+            replacementRequests: components["schemas"]["FulfilmentReplacementRequestDto"][];
+            shipments: components["schemas"]["FulfilmentShipmentDto"][];
+            slots: components["schemas"]["FulfilmentSlotDto"][];
+        };
+        FulfilmentRefundDto: {
+            amountMinor: string;
+            /** Format: uuid */
+            claimId: string | null;
+            /** Format: date-time */
+            completedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            paymentId: string;
+            /** Format: uuid */
+            priceAdjustmentId: string | null;
+            provider: string;
+            providerRefundId: string | null;
+            reason: string;
+            /** Format: date-time */
+            requestedAt: string;
+            status: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        FulfilmentReplacementRequestDto: {
+            /** Format: uuid */
+            claimId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deadlineAt: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            /** Format: uuid */
+            phaseReservationSetId: string | null;
+            reason: string;
+            /** Format: uuid */
+            replacementJobId: string | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            /** Format: uuid */
+            shipmentPlanId: string;
+            /** Format: uuid */
+            sourceJobId: string;
+            status: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        FulfilmentReshipmentAuthorizationDto: {
+            /** Format: uuid */
+            acceptanceEventId: string;
+            /** Format: uuid */
+            claimId: string;
+            /** Format: date-time */
+            consumedAt: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            custodyConfirmedAt: string;
+            /** Format: uuid */
+            deliveryDestinationId: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            issuedAt: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            /** Format: uuid */
+            originalShipmentId: string;
+            reQcEvidence: string;
+            /** Format: date-time */
+            reQcPassedAt: string;
+            /** Format: uuid */
+            reshipmentShipmentId: string;
+            /** Format: uuid */
+            shipmentPlanId: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        FulfilmentShipmentDto: {
+            /** Format: date-time */
+            cancellationRequestedAt: string | null;
+            /** Format: date-time */
+            cancelledAt: string | null;
+            carrier: string | null;
+            carrierLabelId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deliveredAt: string | null;
+            /** Format: uuid */
+            deliveryDestinationId: string;
+            /** Format: date-time */
+            handedOverAt: string | null;
+            /** Format: uuid */
+            id: string;
+            jobAssignments: components["schemas"]["FulfilmentJobShipmentAssignmentDto"][];
+            /** Format: date-time */
+            labelCreatedAt: string | null;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            providerAcceptanceScanId: string | null;
+            providerShipmentId: string | null;
+            /** Format: date-time */
+            providerVoidedAt: string | null;
+            providerVoidId: string | null;
+            /** Format: uuid */
+            replacesShipmentId: string | null;
+            /** Format: uuid */
+            reprintClaimId: string | null;
+            /** Format: uuid */
+            shipmentPlanId: string;
+            status: string;
+            trackingCode: string | null;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        FulfilmentSlotDto: {
+            /** Format: date-time */
+            claimUntil: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deliveredAt: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderItemId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            outcome: string;
+            packingUnitKey: string;
+            quantityOrdinal: number;
+            settlementAmountMinor: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
         FunnelMetricsDto: {
             automaticBindingPriceQuoteViews: number;
