@@ -143,39 +143,63 @@ describe("quote capability expiry clock", () => {
 });
 
 describe("operator quote-request page", () => {
-  it("hydrates attachments through the page transaction", async () => {
+  it("batches attachment hydration through the page transaction", async () => {
     const observedAt = new Date("2026-09-08T21:00:00.000Z");
     const requestId = "11111111-1111-4111-8111-111111111111";
-    const transactionAttachments = { findMany: vi.fn().mockResolvedValue([]) };
+    const secondRequestId = "55555555-5555-4555-8555-555555555555";
+    const pageRequest = (id: string) => ({
+      id,
+      publicReference: `QR-${id.slice(0, 8)}`,
+      status: QuoteRequestStatus.NEW,
+      description: "A valid request description",
+      purpose: null,
+      measurements: null,
+      requestedDate: null,
+      contactSnapshot: { name: "Customer", email: "test@example.test" },
+      attribution: null,
+      slaDueAt: new Date("2026-09-09T21:00:00.000Z"),
+      slaRespondedAt: null,
+      createdAt: observedAt,
+      quoteSession: null,
+      customer: null,
+      quote: null,
+      automaticQuoteHandoff: null,
+      photoPublicationConsentGrantedAt: null,
+    });
+    const transactionAttachments = {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: "66666666-6666-4666-8666-666666666666",
+          scopeId: requestId,
+          mediaType: "image/png",
+          sizeBytes: 1n,
+          uploadedAt: observedAt,
+          photoDeleteAfter: new Date("2026-10-08T21:00:00.000Z"),
+        },
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          scopeId: secondRequestId,
+          mediaType: "image/jpeg",
+          sizeBytes: 2n,
+          uploadedAt: observedAt,
+          photoDeleteAfter: new Date("2026-10-08T21:00:00.000Z"),
+        },
+      ]),
+    };
     const rootAttachments = { findMany: vi.fn() };
     const transaction = {
       $executeRaw: vi.fn().mockResolvedValue(undefined),
       $queryRaw: vi
         .fn()
         .mockResolvedValueOnce([{ now: observedAt }])
-        .mockResolvedValueOnce([{ id: requestId }]),
+        .mockResolvedValueOnce([{ id: requestId }, { id: secondRequestId }]),
       quoteRequest: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: requestId,
-            publicReference: "QR-111111111111",
-            status: QuoteRequestStatus.NEW,
-            description: "A valid request description",
-            purpose: null,
-            measurements: null,
-            requestedDate: null,
-            contactSnapshot: { name: "Customer", email: "test@example.test" },
-            attribution: null,
-            slaDueAt: new Date("2026-09-09T21:00:00.000Z"),
-            slaRespondedAt: null,
-            createdAt: observedAt,
-            quoteSession: null,
-            customer: null,
-            quote: null,
-            automaticQuoteHandoff: null,
-            photoPublicationConsentGrantedAt: null,
-          },
-        ]),
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            pageRequest(requestId),
+            pageRequest(secondRequestId),
+          ]),
       },
       photoAsset: transactionAttachments,
     };
@@ -188,7 +212,7 @@ describe("operator quote-request page", () => {
     };
     const service = new QuotesService(prisma as never, {} as never);
 
-    await service.listRequestsPage(
+    const page = await service.listRequestsPage(
       {
         operatorId: "22222222-2222-4222-8222-222222222222",
         role: "VIEWER",
@@ -197,15 +221,28 @@ describe("operator quote-request page", () => {
         authenticationMethod: "DEVELOPMENT_PASSWORD",
         sessionId: "44444444-4444-4444-8444-444444444444",
       },
-      { limit: 1 },
+      { limit: 2 },
     );
 
+    expect(transactionAttachments.findMany).toHaveBeenCalledTimes(1);
     expect(transactionAttachments.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ scopeId: requestId }),
+        where: expect.objectContaining({
+          scopeId: { in: [requestId, secondRequestId] },
+        }),
       }),
     );
     expect(rootAttachments.findMany).not.toHaveBeenCalled();
+    expect(page.items).toMatchObject([
+      {
+        requestId,
+        attachments: [{ id: "66666666-6666-4666-8666-666666666666" }],
+      },
+      {
+        requestId: secondRequestId,
+        attachments: [{ id: "77777777-7777-4777-8777-777777777777" }],
+      },
+    ]);
   });
 });
 

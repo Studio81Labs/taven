@@ -103,6 +103,9 @@ const OFFER_COMPONENT_ORDER = [
 ] as const;
 
 type Transaction = Prisma.TransactionClient;
+type RequestAttachments = Awaited<
+  ReturnType<PrismaService["photoAsset"]["findMany"]>
+>;
 type QuoteAcceptanceRow = {
   evaluated_at: Date;
   accepted_at: Date | null;
@@ -439,10 +442,23 @@ export class QuotesService {
               request !== undefined,
           );
         const last = page.at(-1);
+        const attachments = await transaction.photoAsset.findMany({
+          where: {
+            scopeKind: PhotoScopeKind.QUOTE_REQUEST,
+            scopeId: { in: page.map((request) => request.id) },
+            deletedAt: null,
+          },
+          orderBy: { uploadedAt: "asc" },
+        });
+        const attachmentsByRequest = groupAttachmentsByRequest(attachments);
         return {
           items: await Promise.all(
             page.map((request) =>
-              this.operatorRequestDetail(request, observedAt, transaction),
+              this.operatorRequestDetail(
+                request,
+                observedAt,
+                attachmentsByRequest.get(request.id) ?? [],
+              ),
             ),
           ),
           ...(keys.length > limit && last
@@ -1562,17 +1578,18 @@ export class QuotesService {
       quote?: { issuedAt: Date } | null;
     },
     observedAt: Date,
-    attachmentClient: Pick<PrismaService, "photoAsset"> | Transaction = this
-      .prisma,
+    attachments?: RequestAttachments,
   ): Promise<QuoteRequestDetailDto> {
-    const attachments = await attachmentClient.photoAsset.findMany({
-      where: {
-        scopeKind: PhotoScopeKind.QUOTE_REQUEST,
-        scopeId: request.id,
-        deletedAt: null,
-      },
-      orderBy: { uploadedAt: "asc" },
-    });
+    const requestAttachments =
+      attachments ??
+      (await this.prisma.photoAsset.findMany({
+        where: {
+          scopeKind: PhotoScopeKind.QUOTE_REQUEST,
+          scopeId: request.id,
+          deletedAt: null,
+        },
+        orderBy: { uploadedAt: "asc" },
+      }));
     const respondedAt =
       slaResponseEvidenceAt(
         request.slaRespondedAt,
@@ -1592,7 +1609,7 @@ export class QuotesService {
       attribution: nullableJsonObject(request.attribution),
       slaDueAt: request.slaDueAt.toISOString(),
       slaBreached: respondedAt > request.slaDueAt.getTime(),
-      attachments: attachments.map((attachment) => ({
+      attachments: requestAttachments.map((attachment) => ({
         id: attachment.id,
         mediaType: attachment.mediaType,
         sizeBytes: safeNumber(attachment.sizeBytes),
@@ -1620,13 +1637,9 @@ export class QuotesService {
       quote?: { issuedAt: Date } | null;
     },
     observedAt: Date,
-    attachmentClient?: Pick<PrismaService, "photoAsset"> | Transaction,
+    attachments?: RequestAttachments,
   ): Promise<OperatorQuoteRequestDetailDto> {
-    const detail = await this.requestDetail(
-      request,
-      observedAt,
-      attachmentClient,
-    );
+    const detail = await this.requestDetail(request, observedAt, attachments);
     const handoff = request.automaticQuoteHandoff;
     return {
       ...detail,
@@ -3420,6 +3433,18 @@ export function addBusinessHours(value: Date, hours: number): Date {
     remainingMilliseconds -= consumed;
   }
   return result;
+}
+
+function groupAttachmentsByRequest(
+  attachments: RequestAttachments,
+): Map<string, RequestAttachments> {
+  const byRequest = new Map<string, RequestAttachments>();
+  for (const attachment of attachments) {
+    const requestAttachments = byRequest.get(attachment.scopeId) ?? [];
+    requestAttachments.push(attachment);
+    byRequest.set(attachment.scopeId, requestAttachments);
+  }
+  return byRequest;
 }
 
 function dateOnly(value: Date | null | undefined): string | null {
