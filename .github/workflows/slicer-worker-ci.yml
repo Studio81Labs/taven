@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths: &worker-paths
       - "apps/slicer-worker/**"
+      - "apps/backend/scripts/seed.ts"
       - "packages/slicer-contracts/**"
       - "tools/slicing-fixtures/**"
       - ".dockerignore"
@@ -42,6 +43,7 @@ jobs:
       - run: pnpm slicer-worker:typecheck
       - run: pnpm slicer-worker:test
       - run: pnpm slicer-worker:build
+      - run: pnpm slicer-worker:identity:check
 
   runtime:
     name: "worker: pinned Orca runtime & corpus"

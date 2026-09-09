@@ -36,6 +36,9 @@ ENV NODE_ENV=production
 WORKDIR /opt/taven/slicer-worker
 
 COPY --from=build --chown=10001:10001 /opt/taven/slicer-worker ./
+# The compiled worker imports the canonical lock from this location. Keep the
+# deployed runtime self-contained without introducing a second identity file.
+COPY --from=build --chown=10001:10001 /workspace/tools/slicing-fixtures/runtime.lock.json /opt/tools/slicing-fixtures/runtime.lock.json
 
 USER 10001:10001
 CMD ["node", "dist/main.js"]
