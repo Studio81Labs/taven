@@ -151,7 +151,42 @@ export interface paths {
         /** List immutable machine-profile revisions */
         get: operations["OperatorReadsController_machineProfiles"];
         put?: never;
-        post?: never;
+        /** Create an immutable machine-profile revision */
+        post: operations["OperatorCatalogController_createMachineProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/machine-profiles/{id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate a machine-profile revision */
+        post: operations["OperatorCatalogController_activateMachineProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/machine-profiles/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retire a machine-profile revision */
+        post: operations["OperatorCatalogController_retireMachineProfile"];
         delete?: never;
         options?: never;
         head?: never;
@@ -192,6 +227,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/catalog/reference-profile-activation-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List durable notices for committed reference-profile activations */
+        get: operations["OperatorReadsController_referenceProfileActivationNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/catalog/reference-profiles": {
         parameters: {
             query?: never;
@@ -202,7 +254,42 @@ export interface paths {
         /** List immutable reference-profile revisions */
         get: operations["OperatorReadsController_referenceProfiles"];
         put?: never;
-        post?: never;
+        /** Create an immutable reference-profile revision */
+        post: operations["OperatorCatalogController_createReferenceProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/reference-profiles/{id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate a reference-profile revision */
+        post: operations["OperatorCatalogController_activateReferenceProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/reference-profiles/{id}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retire a reference-profile revision */
+        post: operations["OperatorCatalogController_retireReferenceProfile"];
         delete?: never;
         options?: never;
         head?: never;
@@ -344,7 +431,42 @@ export interface paths {
         /** List calibration revisions in the granted node */
         get: operations["OperatorReadsController_calibrations"];
         put?: never;
-        post?: never;
+        /** Create an immutable node machine calibration */
+        post: operations["OperatorCatalogController_createMachineCalibration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/calibrations/{calibrationId}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate a node machine calibration */
+        post: operations["OperatorCatalogController_activateMachineCalibration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/calibrations/{calibrationId}/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retire a node machine calibration */
+        post: operations["OperatorCatalogController_retireMachineCalibration"];
         delete?: never;
         options?: never;
         head?: never;
@@ -378,7 +500,42 @@ export interface paths {
         /** List inventory in the granted node */
         get: operations["OperatorReadsController_inventories"];
         put?: never;
-        post?: never;
+        /** Register material inventory for a node machine */
+        post: operations["OperatorCatalogController_createInventory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/adjustments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an audited inventory adjustment */
+        post: operations["OperatorCatalogController_adjustInventory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an inventory status correction */
+        post: operations["OperatorCatalogController_updateInventoryStatus"];
         delete?: never;
         options?: never;
         head?: never;
@@ -396,6 +553,23 @@ export interface paths {
         get: operations["OperatorReadsController_machines"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/machines/{machineId}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a machine status correction */
+        post: operations["OperatorCatalogController_updateMachineStatus"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1825,6 +1999,15 @@ export interface components {
             startsAt: string;
             status: string;
         };
+        CatalogCommandResultDto: {
+            /** Format: uuid */
+            id: string;
+            state?: string;
+            status?: string;
+        };
+        CatalogReasonDto: {
+            reason: string;
+        };
         CheckoutBillingDto: {
             addressLine1: string;
             addressLine2?: string;
@@ -1971,6 +2154,53 @@ export interface components {
             reason: string;
             replacements: components["schemas"]["ClaimReprintJobDto"][];
         };
+        CreateInventoryDto: {
+            color?: string | null;
+            currency: string;
+            lotCode?: string | null;
+            /** Format: uuid */
+            machineId: string;
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** Format: int64 */
+            priceMinorUnitsDenominator: string;
+            /** Format: int64 */
+            priceMinorUnitsNumerator: string;
+            /** Format: int64 */
+            remainingMilligrams: string;
+            sku: string;
+            vendor: string;
+        };
+        CreateMachineCalibrationDto: {
+            elephantFootCompensationMicrometers: number;
+            flowRatioPartsPerMillion: number;
+            /** Format: uuid */
+            machineId: string;
+            /** @description Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates. */
+            settings: {
+                [key: string]: unknown;
+            };
+            xyCompensationMicrometers: number;
+        };
+        CreateMachineProfileDto: {
+            /** Format: uuid */
+            machineCapabilityId: string;
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            nozzleDiameterMicrometers: number;
+            /** @enum {string} */
+            productionArtifactFormat: "GCODE_3MF" | "BGCODE" | "GCODE";
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
+            /** Format: uuid */
+            referenceProfileId: string;
+            /** @description Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates. */
+            settings: {
+                [key: string]: unknown;
+            };
+            slicerEngine: string;
+            slicerVersion: string;
+        };
         CreatePriceAdjustmentDto: {
             allocation: components["schemas"]["PriceAdjustmentAllocationDto"];
             amountMinor: string;
@@ -1995,6 +2225,18 @@ export interface components {
             purpose?: string;
             /** Format: date */
             requestedDate?: string;
+        };
+        CreateReferenceProfileDto: {
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
+            /** @description Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates. */
+            settings: {
+                [key: string]: unknown;
+            };
+            slicerEngine: string;
+            slicerVersion: string;
         };
         CreateReplacementDto: {
             /**
@@ -2457,6 +2699,11 @@ export interface components {
             /** @example 256000 */
             sizeBytes: number;
         };
+        InventoryAdjustmentDto: {
+            /** Format: int64 */
+            deltaMilligrams: string;
+            reason: string;
+        };
         InventoryPageDto: {
             items: components["schemas"]["InventoryReadDto"][];
             nextCursor?: string;
@@ -2473,6 +2720,11 @@ export interface components {
             reservedMilligrams: string;
             sku: string;
             status: string;
+        };
+        InventoryStatusDto: {
+            reason: string;
+            /** @enum {string} */
+            status: "AVAILABLE" | "DEPLETED" | "RETIRED";
         };
         IssueOfferDto: {
             components: components["schemas"]["OfferPriceComponentDto"][];
@@ -2587,6 +2839,11 @@ export interface components {
             /** Format: uuid */
             nodeId: string;
             status: string;
+        };
+        MachineStatusDto: {
+            reason: string;
+            /** @enum {string} */
+            status: "ACTIVE" | "MAINTENANCE" | "DISABLED";
         };
         MarginCoverageDto: {
             completeOrders: number;
@@ -3272,6 +3529,34 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
         };
+        ReferenceProfileActivationNoticeDto: {
+            /** @enum {string} */
+            action: "REVIEW_PRICE_LIST";
+            /** Format: date-time */
+            activatedAt: string;
+            id: string;
+            /** @enum {string} */
+            kind: "REFERENCE_PROFILE_ACTIVATED";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
+            /** Format: uuid */
+            referenceProfileId: string;
+            /** @enum {number} */
+            schemaVersion: 1;
+        };
+        ReferenceProfileActivationNoticePageDto: {
+            items: components["schemas"]["ReferenceProfileActivationNoticeDto"][];
+            nextCursor?: string;
+        };
+        ReferenceProfileActivationResultDto: {
+            /** Format: uuid */
+            id: string;
+            notice: components["schemas"]["ReferenceProfileActivationNoticeDto"];
+            state?: string;
+            status?: string;
+        };
         ReferenceProfilePageDto: {
             items: components["schemas"]["ReferenceProfileReadDto"][];
             nextCursor?: string;
@@ -3693,6 +3978,105 @@ export interface operations {
             };
         };
     };
+    OperatorCatalogController_createMachineProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMachineProfileDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_activateMachineProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogReasonDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+            /** @description Revision lifecycle, idempotency, or snapshot integrity conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot verification storage is temporarily unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorCatalogController_retireMachineProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogReasonDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
     OperatorReadsController_priceLists: {
         parameters: {
             query?: {
@@ -3743,6 +4127,31 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_referenceProfileActivationNotices: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceProfileActivationNoticePageDto"];
+                };
+            };
+        };
+    };
     OperatorReadsController_referenceProfiles: {
         parameters: {
             query?: {
@@ -3764,6 +4173,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReferenceProfilePageDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_createReferenceProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReferenceProfileDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_activateReferenceProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogReasonDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceProfileActivationResultDto"];
+                };
+            };
+            /** @description Revision lifecycle, idempotency, or snapshot integrity conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot verification storage is temporarily unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorCatalogController_retireReferenceProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogReasonDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
                 };
             };
         };
@@ -3993,6 +4501,109 @@ export interface operations {
             };
         };
     };
+    OperatorCatalogController_createMachineCalibration: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMachineCalibrationDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_activateMachineCalibration: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                calibrationId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogReasonDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+            /** @description Revision lifecycle, idempotency, or snapshot integrity conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot verification storage is temporarily unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OperatorCatalogController_retireMachineCalibration: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                calibrationId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogReasonDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
     OperatorReadsController_capacityReservations: {
         parameters: {
             query: {
@@ -4052,6 +4663,95 @@ export interface operations {
             };
         };
     };
+    OperatorCatalogController_createInventory: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInventoryDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_adjustInventory: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                inventoryId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InventoryAdjustmentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_updateInventoryStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                inventoryId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InventoryStatusDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
     OperatorReadsController_machines: {
         parameters: {
             query?: {
@@ -4075,6 +4775,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachinePageDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_updateMachineStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                machineId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MachineStatusDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
                 };
             };
         };

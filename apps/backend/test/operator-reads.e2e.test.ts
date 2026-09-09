@@ -136,6 +136,7 @@ describe("operator read contracts", () => {
   it("exposes global catalog and node-scoped pages to operations readers", async () => {
     for (const path of [
       "/admin/catalog/reference-profiles?limit=1",
+      "/admin/catalog/reference-profile-activation-notices?limit=1",
       "/admin/catalog/machine-profiles?limit=1",
       "/admin/catalog/print-config-revisions?limit=1",
       "/admin/catalog/price-lists?limit=1",
@@ -161,6 +162,15 @@ describe("operator read contracts", () => {
       `/admin/nodes/${nodeId}/capacity-reservations`,
     );
     expect(missingRange.status).toBe(400);
+
+    for (const path of [
+      "/admin/catalog/reference-profile-activation-notices?unknown=true",
+      "/admin/catalog/reference-profile-activation-notices?limit=1&limit=2",
+      "/admin/catalog/reference-profile-activation-notices?cursor=invalid",
+    ]) {
+      const response = await read(path);
+      expect(response.status, path).toBe(400);
+    }
   });
 
   it("uses bounded, opaque pagination for operational and assisted-work reads", async () => {

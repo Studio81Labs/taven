@@ -11,6 +11,15 @@ export class ObjectStorageDeadlineError extends Error {
   }
 }
 
+export class ImmutableObjectConflictError extends Error {
+  constructor(
+    message = "immutable object key already contains different data",
+  ) {
+    super(message);
+    this.name = "ImmutableObjectConflictError";
+  }
+}
+
 export interface ObjectStorageUploadRequest {
   objectKey: string;
   contentType: string;

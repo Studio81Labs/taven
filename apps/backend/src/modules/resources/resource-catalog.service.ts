@@ -14,15 +14,24 @@ import { PrismaService } from "../../prisma/prisma.service";
 import {
   ResourceConflictError,
   ResourceNotFoundError,
+  ResourceSnapshotIntegrityError,
+  ResourceSnapshotUnavailableError,
   ResourceValidationError,
 } from "./resource-errors";
 import {
   resourceRevisionDigest,
   type CanonicalJson,
 } from "./resource-identity";
-import { SlicerProfileSnapshotService } from "../slicing/slicer-profile-snapshot.service";
+import {
+  SlicerProfileSnapshotIntegrityError,
+  SlicerProfileSnapshotNotFoundError,
+  SlicerProfileSnapshotService,
+  SlicerProfileSnapshotUnavailableError,
+  type SlicerSettingsSnapshot,
+} from "../slicing/slicer-profile-snapshot.service";
 
 type JsonSettings = Prisma.InputJsonObject;
+type Transaction = Prisma.TransactionClient;
 
 export type CreateReferenceProfileInput = {
   material: Material;
@@ -69,6 +78,17 @@ export type CreateInventoryInput = {
 
 type RevisionTable =
   "referenceProfile" | "machineProfile" | "machineCalibration";
+type CatalogSnapshotKind =
+  "reference-profile" | "machine-profile" | "machine-calibration";
+const MAX_INT64 = 9_223_372_036_854_775_807n;
+const verifiedCatalogSnapshot = Symbol("verifiedCatalogSnapshot");
+
+export type VerifiedCatalogSnapshot = Readonly<{
+  kind: CatalogSnapshotKind;
+  revisionId: string;
+  contentSha256: string;
+  [verifiedCatalogSnapshot]: true;
+}>;
 
 function nonBlank(value: string, name: string): string {
   const normalized = value.trim();
@@ -113,7 +133,7 @@ function catalogWriteError(error: unknown): never {
     typeof error === "object" &&
     "code" in error &&
     typeof error.code === "string" &&
-    ["P2002", "P2003", "P2010"].includes(error.code)
+    ["P2002", "P2003", "P2010", "P2039"].includes(error.code)
   ) {
     throw new ResourceConflictError(
       "resource catalog change conflicts with the current catalog",
@@ -142,7 +162,10 @@ export class ResourceCatalogService {
     private readonly snapshots: SlicerProfileSnapshotService,
   ) {}
 
-  async createReferenceProfile(input: CreateReferenceProfileInput) {
+  async createReferenceProfile(
+    input: CreateReferenceProfileInput,
+    transaction?: Transaction,
+  ) {
     const slicerEngine = nonBlank(input.slicerEngine, "slicerEngine");
     const slicerVersion = nonBlank(input.slicerVersion, "slicerVersion");
     const payload = {
@@ -153,26 +176,31 @@ export class ResourceCatalogService {
       slicerVersion,
     } satisfies CanonicalJson;
     const id = randomUUID();
-    await this.snapshots.provisionSettings(input.settings as Prisma.JsonValue);
     try {
-      return await this.prisma.$transaction(async (transaction) => {
-        await transaction.revisionIdentity.create({
+      const create = async (tx: Transaction) => {
+        await tx.revisionIdentity.create({
           data: {
             id,
             kind: RevisionKind.REFERENCE_PROFILE,
             digest: resourceRevisionDigest("REFERENCE_PROFILE", payload),
           },
         });
-        return transaction.referenceProfile.create({
+        return tx.referenceProfile.create({
           data: { id, ...input, slicerEngine, slicerVersion },
         });
-      });
+      };
+      return transaction
+        ? await create(transaction)
+        : await this.prisma.$transaction(create);
     } catch (error) {
       return catalogWriteError(error);
     }
   }
 
-  async createMachineProfile(input: CreateMachineProfileInput) {
+  async createMachineProfile(
+    input: CreateMachineProfileInput,
+    transaction?: Transaction,
+  ) {
     const slicerEngine = nonBlank(input.slicerEngine, "slicerEngine");
     const slicerVersion = nonBlank(input.slicerVersion, "slicerVersion");
     const nozzleDiameterMicrometers = positiveInteger(
@@ -191,17 +219,16 @@ export class ResourceCatalogService {
       productionArtifactFormat: input.productionArtifactFormat,
     } satisfies CanonicalJson;
     const id = randomUUID();
-    await this.snapshots.provisionSettings(input.settings as Prisma.JsonValue);
     try {
-      return await this.prisma.$transaction(async (transaction) => {
-        await transaction.revisionIdentity.create({
+      const create = async (tx: Transaction) => {
+        await tx.revisionIdentity.create({
           data: {
             id,
             kind: RevisionKind.MACHINE_PROFILE,
             digest: resourceRevisionDigest("MACHINE_PROFILE", payload),
           },
         });
-        return transaction.machineProfile.create({
+        return tx.machineProfile.create({
           data: {
             id,
             ...input,
@@ -210,13 +237,19 @@ export class ResourceCatalogService {
             slicerVersion,
           },
         });
-      });
+      };
+      return transaction
+        ? await create(transaction)
+        : await this.prisma.$transaction(create);
     } catch (error) {
       return catalogWriteError(error);
     }
   }
 
-  async createMachineCalibration(input: CreateMachineCalibrationInput) {
+  async createMachineCalibration(
+    input: CreateMachineCalibrationInput,
+    transaction?: Transaction,
+  ) {
     const flowRatioPartsPerMillion = positiveInteger(
       input.flowRatioPartsPerMillion,
       "flowRatioPartsPerMillion",
@@ -242,20 +275,22 @@ export class ResourceCatalogService {
       xyCompensationMicrometers: input.xyCompensationMicrometers,
     } satisfies CanonicalJson;
     const id = randomUUID();
-    await this.snapshots.provisionSettings(input.settings as Prisma.JsonValue);
     try {
-      return await this.prisma.$transaction(async (transaction) => {
-        await transaction.revisionIdentity.create({
+      const create = async (tx: Transaction) => {
+        await tx.revisionIdentity.create({
           data: {
             id,
             kind: RevisionKind.MACHINE_CALIBRATION,
             digest: resourceRevisionDigest("MACHINE_CALIBRATION", payload),
           },
         });
-        return transaction.machineCalibration.create({
+        return tx.machineCalibration.create({
           data: { id, ...input, flowRatioPartsPerMillion },
         });
-      });
+      };
+      return transaction
+        ? await create(transaction)
+        : await this.prisma.$transaction(create);
     } catch (error) {
       return catalogWriteError(error);
     }
@@ -294,28 +329,102 @@ export class ResourceCatalogService {
     });
   }
 
-  activateReferenceProfile(id: string) {
-    return this.transitionRevision("referenceProfile", id, "activate");
+  async verifyReferenceProfileSnapshot(
+    id: string,
+  ): Promise<VerifiedCatalogSnapshot> {
+    return this.verifySnapshot("reference-profile", id, () =>
+      this.snapshots.provisionReferenceProfile(id),
+    );
   }
 
-  retireReferenceProfile(id: string) {
-    return this.transitionRevision("referenceProfile", id, "retire");
+  async verifyMachineProfileSnapshot(
+    id: string,
+  ): Promise<VerifiedCatalogSnapshot> {
+    return this.verifySnapshot("machine-profile", id, () =>
+      this.snapshots.provisionMachineProfile(id),
+    );
   }
 
-  activateMachineProfile(id: string) {
-    return this.transitionRevision("machineProfile", id, "activate");
+  async verifyMachineCalibrationSnapshot(
+    id: string,
+    nodeId?: string,
+  ): Promise<VerifiedCatalogSnapshot> {
+    return this.verifySnapshot("machine-calibration", id, () =>
+      this.snapshots.provisionMachineCalibration(nodeId, id),
+    );
   }
 
-  retireMachineProfile(id: string) {
-    return this.transitionRevision("machineProfile", id, "retire");
+  async activateReferenceProfile(
+    id: string,
+    transaction?: Transaction,
+    verification?: VerifiedCatalogSnapshot,
+  ) {
+    verification ??= await this.requireStandaloneVerification(transaction, () =>
+      this.verifyReferenceProfileSnapshot(id),
+    );
+    this.requireVerifiedSnapshot(verification, "reference-profile", id);
+    return this.transitionRevision(
+      "referenceProfile",
+      id,
+      "activate",
+      transaction,
+    );
   }
 
-  activateMachineCalibration(id: string) {
-    return this.transitionRevision("machineCalibration", id, "activate");
+  retireReferenceProfile(id: string, transaction?: Transaction) {
+    return this.transitionRevision(
+      "referenceProfile",
+      id,
+      "retire",
+      transaction,
+    );
   }
 
-  retireMachineCalibration(id: string) {
-    return this.transitionRevision("machineCalibration", id, "retire");
+  async activateMachineProfile(
+    id: string,
+    transaction?: Transaction,
+    verification?: VerifiedCatalogSnapshot,
+  ) {
+    verification ??= await this.requireStandaloneVerification(transaction, () =>
+      this.verifyMachineProfileSnapshot(id),
+    );
+    this.requireVerifiedSnapshot(verification, "machine-profile", id);
+    return this.transitionRevision(
+      "machineProfile",
+      id,
+      "activate",
+      transaction,
+    );
+  }
+
+  retireMachineProfile(id: string, transaction?: Transaction) {
+    return this.transitionRevision("machineProfile", id, "retire", transaction);
+  }
+
+  async activateMachineCalibration(
+    id: string,
+    transaction?: Transaction,
+    verification?: VerifiedCatalogSnapshot,
+  ) {
+    verification ??= await this.requireStandaloneVerification(transaction, () =>
+      this.verifyMachineCalibrationSnapshot(id),
+    );
+    this.requireVerifiedSnapshot(verification, "machine-calibration", id);
+    return this.transitionRevision(
+      "machineCalibration",
+      id,
+      "activate",
+      transaction,
+    );
+  }
+
+  retireMachineCalibration(id: string, transaction?: Transaction) {
+    return this.transitionRevision(
+      "machineCalibration",
+      id,
+      "retire",
+      transaction,
+    );
   }
 
   listMachines(nodeId: string) {
@@ -329,18 +438,23 @@ export class ResourceCatalogService {
     nodeId: string,
     machineId: string,
     status: MachineStatus,
+    transaction?: Transaction,
   ) {
-    const result = await this.prisma.machine.updateMany({
+    const client = transaction ?? this.prisma;
+    const result = await client.machine.updateMany({
       where: { id: machineId, nodeId },
       data: { status },
     });
     if (result.count !== 1) {
       throw new ResourceNotFoundError("machine was not found in the node");
     }
-    return this.prisma.machine.findUniqueOrThrow({ where: { id: machineId } });
+    return client.machine.findUniqueOrThrow({ where: { id: machineId } });
   }
 
-  async createInventory(input: CreateInventoryInput) {
+  async createInventory(
+    input: CreateInventoryInput,
+    transaction?: Transaction,
+  ) {
     if (input.remainingMilligrams < 0n) {
       throw new ResourceValidationError(
         "remainingMilligrams must not be negative",
@@ -361,7 +475,7 @@ export class ResourceCatalogService {
       throw new ResourceValidationError("currency must be a three-letter code");
     }
     try {
-      return await this.prisma.inventory.create({
+      return await (transaction ?? this.prisma).inventory.create({
         data: {
           ...input,
           id: randomUUID(),
@@ -391,10 +505,11 @@ export class ResourceCatalogService {
     nodeId: string,
     inventoryId: string,
     deltaMilligrams: bigint,
+    transaction?: Transaction,
   ) {
     try {
-      return await this.prisma.$transaction(async (transaction) => {
-        const rows = await transaction.$queryRaw<
+      const adjust = async (tx: Transaction) => {
+        const rows = await tx.$queryRaw<
           Array<{
             remaining_milligrams: bigint;
             reserved_milligrams: bigint;
@@ -413,6 +528,11 @@ export class ResourceCatalogService {
         }
         const remainingMilligrams =
           inventory.remaining_milligrams + deltaMilligrams;
+        if (remainingMilligrams > MAX_INT64) {
+          throw new ResourceValidationError(
+            "inventory adjustment exceeds the supported range",
+          );
+        }
         if (
           remainingMilligrams < 0n ||
           remainingMilligrams < inventory.reserved_milligrams
@@ -422,11 +542,14 @@ export class ResourceCatalogService {
             "inventories_balance_check",
           );
         }
-        return transaction.inventory.update({
+        return tx.inventory.update({
           where: { id: inventoryId },
           data: { remainingMilligrams },
         });
-      });
+      };
+      return transaction
+        ? await adjust(transaction)
+        : await this.prisma.$transaction(adjust);
     } catch (error) {
       if (
         error instanceof ResourceConflictError ||
@@ -442,28 +565,86 @@ export class ResourceCatalogService {
     nodeId: string,
     inventoryId: string,
     status: InventoryStatus,
+    transaction?: Transaction,
   ) {
-    const result = await this.prisma.inventory.updateMany({
+    const client = transaction ?? this.prisma;
+    const result = await client.inventory.updateMany({
       where: { id: inventoryId, nodeId },
       data: { status },
     });
     if (result.count !== 1) {
       throw new ResourceNotFoundError("inventory was not found in the node");
     }
-    return this.prisma.inventory.findUniqueOrThrow({
+    return client.inventory.findUniqueOrThrow({
       where: { id: inventoryId },
     });
+  }
+
+  private async verifySnapshot(
+    kind: CatalogSnapshotKind,
+    revisionId: string,
+    provision: () => Promise<SlicerSettingsSnapshot>,
+  ): Promise<VerifiedCatalogSnapshot> {
+    try {
+      const snapshot = await provision();
+      return {
+        kind,
+        revisionId,
+        contentSha256: snapshot.contentSha256,
+        [verifiedCatalogSnapshot]: true,
+      };
+    } catch (error) {
+      if (error instanceof SlicerProfileSnapshotNotFoundError) {
+        throw new ResourceNotFoundError(error.message);
+      }
+      if (error instanceof SlicerProfileSnapshotIntegrityError) {
+        throw new ResourceSnapshotIntegrityError(error.message);
+      }
+      if (error instanceof SlicerProfileSnapshotUnavailableError) {
+        throw new ResourceSnapshotUnavailableError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async requireStandaloneVerification(
+    transaction: Transaction | undefined,
+    verify: () => Promise<VerifiedCatalogSnapshot>,
+  ): Promise<VerifiedCatalogSnapshot> {
+    if (transaction) {
+      throw new ResourceSnapshotIntegrityError(
+        "activation transaction requires a verified catalog snapshot",
+      );
+    }
+    return verify();
+  }
+
+  private requireVerifiedSnapshot(
+    verification: VerifiedCatalogSnapshot,
+    kind: CatalogSnapshotKind,
+    revisionId: string,
+  ): void {
+    if (
+      verification[verifiedCatalogSnapshot] !== true ||
+      verification.kind !== kind ||
+      verification.revisionId !== revisionId
+    ) {
+      throw new ResourceSnapshotIntegrityError(
+        "activation snapshot verification does not match the catalog revision",
+      );
+    }
   }
 
   private async transitionRevision(
     table: RevisionTable,
     id: string,
     action: "activate" | "retire",
+    transaction?: Transaction,
   ) {
     try {
-      return await this.prisma.$transaction(async (transaction) => {
-        const observedAt = await databaseNow(transaction);
-        const delegate = transaction[table] as unknown as {
+      const transition = async (tx: Transaction) => {
+        const observedAt = await databaseNow(tx);
+        const delegate = tx[table] as unknown as {
           updateMany(args: {
             where: { id: string; state: RevisionState };
             data: {
@@ -490,7 +671,10 @@ export class ResourceCatalogService {
           );
         }
         return delegate.findUniqueOrThrow({ where: { id } });
-      });
+      };
+      return transaction
+        ? await transition(transaction)
+        : await this.prisma.$transaction(transition);
     } catch (error) {
       if (error instanceof ResourceConflictError) throw error;
       return catalogWriteError(error);

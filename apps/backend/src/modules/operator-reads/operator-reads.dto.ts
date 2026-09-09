@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { FulfilmentProjectionDto } from "../orders/orders.dto";
+import { ReferenceProfileActivationNoticeDto } from "../resources/reference-profile-activation-notice.dto";
 
 const UUID = { type: String, format: "uuid" } as const;
 const DECIMAL = { type: String, pattern: "^-?[0-9]+$" } as const;
@@ -563,6 +564,14 @@ export class ReferenceProfilePageDto {
   items!: ReferenceProfileReadDto[];
 
   @ApiPropertyOptional({ type: String })
+  nextCursor?: string;
+}
+
+export class ReferenceProfileActivationNoticePageDto {
+  @ApiProperty({ type: [ReferenceProfileActivationNoticeDto] })
+  items!: ReferenceProfileActivationNoticeDto[];
+
+  @ApiPropertyOptional({ type: String, minLength: 1 })
   nextCursor?: string;
 }
 

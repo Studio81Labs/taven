@@ -1316,6 +1316,38 @@
         ],
         "type": "object"
       },
+      "CatalogCommandResultDto": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "CatalogReasonDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "CheckoutBillingDto": {
         "properties": {
           "addressLine1": {
@@ -1894,6 +1926,182 @@
         ],
         "type": "object"
       },
+      "CreateInventoryDto": {
+        "properties": {
+          "color": {
+            "maxLength": 100,
+            "nullable": true,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "lotCode": {
+            "maxLength": 100,
+            "nullable": true,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "priceMinorUnitsDenominator": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "priceMinorUnitsNumerator": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "remainingMilligrams": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "sku": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "vendor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "machineId",
+          "sku",
+          "material",
+          "vendor",
+          "priceMinorUnitsNumerator",
+          "priceMinorUnitsDenominator",
+          "currency",
+          "remainingMilligrams"
+        ],
+        "type": "object"
+      },
+      "CreateMachineCalibrationDto": {
+        "properties": {
+          "elephantFootCompensationMicrometers": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "type": "integer"
+          },
+          "flowRatioPartsPerMillion": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "description": "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+            "type": "object"
+          },
+          "xyCompensationMicrometers": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "machineId",
+          "flowRatioPartsPerMillion",
+          "xyCompensationMicrometers",
+          "elephantFootCompensationMicrometers",
+          "settings"
+        ],
+        "type": "object"
+      },
+      "CreateMachineProfileDto": {
+        "properties": {
+          "machineCapabilityId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "nozzleDiameterMicrometers": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "productionArtifactFormat": {
+            "enum": [
+              "GCODE_3MF",
+              "BGCODE",
+              "GCODE"
+            ],
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "description": "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+            "type": "object"
+          },
+          "slicerEngine": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "slicerVersion": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "material",
+          "quality",
+          "slicerEngine",
+          "slicerVersion",
+          "settings",
+          "machineCapabilityId",
+          "referenceProfileId",
+          "nozzleDiameterMicrometers",
+          "productionArtifactFormat"
+        ],
+        "type": "object"
+      },
       "CreatePriceAdjustmentDto": {
         "properties": {
           "allocation": {
@@ -1975,6 +2183,50 @@
         "required": [
           "description",
           "contact"
+        ],
+        "type": "object"
+      },
+      "CreateReferenceProfileDto": {
+        "properties": {
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "description": "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+            "type": "object"
+          },
+          "slicerEngine": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "slicerVersion": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "material",
+          "quality",
+          "slicerEngine",
+          "slicerVersion",
+          "settings"
         ],
         "type": "object"
       },
@@ -3442,6 +3694,26 @@
         ],
         "type": "object"
       },
+      "InventoryAdjustmentDto": {
+        "properties": {
+          "deltaMilligrams": {
+            "format": "int64",
+            "pattern": "^(?:(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)|-(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7][0-9]{0}|9223372036854775808))$",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "deltaMilligrams"
+        ],
+        "type": "object"
+      },
       "InventoryPageDto": {
         "properties": {
           "items": {
@@ -3503,6 +3775,29 @@
           "remainingMilligrams",
           "reservedMilligrams",
           "availableMilligrams",
+          "status"
+        ],
+        "type": "object"
+      },
+      "InventoryStatusDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "AVAILABLE",
+              "DEPLETED",
+              "RETIRED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
           "status"
         ],
         "type": "object"
@@ -3940,6 +4235,29 @@
           "displayName",
           "status",
           "installedNozzleMicrometers"
+        ],
+        "type": "object"
+      },
+      "MachineStatusDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "MAINTENANCE",
+              "DISABLED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "status"
         ],
         "type": "object"
       },
@@ -6515,6 +6833,105 @@
         ],
         "type": "object"
       },
+      "ReferenceProfileActivationNoticeDto": {
+        "properties": {
+          "action": {
+            "enum": [
+              "REVIEW_PRICE_LIST"
+            ],
+            "type": "string"
+          },
+          "activatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "REFERENCE_PROFILE_ACTIVATED"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "enum": [
+              1
+            ],
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "schemaVersion",
+          "kind",
+          "referenceProfileId",
+          "material",
+          "quality",
+          "activatedAt",
+          "action"
+        ],
+        "type": "object"
+      },
+      "ReferenceProfileActivationNoticePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceProfileActivationNoticeDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ReferenceProfileActivationResultDto": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "notice": {
+            "$ref": "#/components/schemas/ReferenceProfileActivationNoticeDto"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "notice"
+        ],
+        "type": "object"
+      },
       "ReferenceProfilePageDto": {
         "properties": {
           "items": {
@@ -7485,6 +7902,205 @@
         "tags": [
           "operator reads"
         ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_createMachineProfile",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMachineProfileDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Create an immutable machine-profile revision",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/machine-profiles/{id}/activate": {
+      "post": {
+        "operationId": "OperatorCatalogController_activateMachineProfile",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogReasonDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Revision lifecycle, idempotency, or snapshot integrity conflicts"
+          },
+          "503": {
+            "description": "Snapshot verification storage is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Activate a machine-profile revision",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/machine-profiles/{id}/retire": {
+      "post": {
+        "operationId": "OperatorCatalogController_retireMachineProfile",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogReasonDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Retire a machine-profile revision",
+        "tags": [
+          "operator catalog"
+        ]
       }
     },
     "/admin/catalog/price-lists": {
@@ -7603,6 +8219,64 @@
         ]
       }
     },
+    "/admin/catalog/reference-profile-activation-notices": {
+      "get": {
+        "operationId": "OperatorReadsController_referenceProfileActivationNotices",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferenceProfileActivationNoticePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List durable notices for committed reference-profile activations",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/catalog/reference-profiles": {
       "get": {
         "operationId": "OperatorReadsController_referenceProfiles",
@@ -7658,6 +8332,205 @@
         "summary": "List immutable reference-profile revisions",
         "tags": [
           "operator reads"
+        ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_createReferenceProfile",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReferenceProfileDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Create an immutable reference-profile revision",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/reference-profiles/{id}/activate": {
+      "post": {
+        "operationId": "OperatorCatalogController_activateReferenceProfile",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogReasonDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferenceProfileActivationResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Revision lifecycle, idempotency, or snapshot integrity conflicts"
+          },
+          "503": {
+            "description": "Snapshot verification storage is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Activate a reference-profile revision",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/reference-profiles/{id}/retire": {
+      "post": {
+        "operationId": "OperatorCatalogController_retireReferenceProfile",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogReasonDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Retire a reference-profile revision",
+        "tags": [
+          "operator catalog"
         ]
       }
     },
@@ -8269,6 +9142,232 @@
         "tags": [
           "operator reads"
         ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_createMachineCalibration",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMachineCalibrationDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Create an immutable node machine calibration",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/calibrations/{calibrationId}/activate": {
+      "post": {
+        "operationId": "OperatorCatalogController_activateMachineCalibration",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "calibrationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogReasonDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Revision lifecycle, idempotency, or snapshot integrity conflicts"
+          },
+          "503": {
+            "description": "Snapshot verification storage is temporarily unavailable"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Activate a node machine calibration",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/calibrations/{calibrationId}/retire": {
+      "post": {
+        "operationId": "OperatorCatalogController_retireMachineCalibration",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "calibrationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogReasonDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Retire a node machine calibration",
+        "tags": [
+          "operator catalog"
+        ]
       }
     },
     "/admin/nodes/{nodeId}/capacity-reservations": {
@@ -8447,6 +9546,226 @@
         "tags": [
           "operator reads"
         ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_createInventory",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInventoryDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Register material inventory for a node machine",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/adjustments": {
+      "post": {
+        "operationId": "OperatorCatalogController_adjustInventory",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "inventoryId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryAdjustmentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record an audited inventory adjustment",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/status": {
+      "post": {
+        "operationId": "OperatorCatalogController_updateInventoryStatus",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "inventoryId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryStatusDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record an inventory status correction",
+        "tags": [
+          "operator catalog"
+        ]
       }
     },
     "/admin/nodes/{nodeId}/machines": {
@@ -8513,6 +9832,83 @@
         "summary": "List machines in the granted node",
         "tags": [
           "operator reads"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/machines/{machineId}/status": {
+      "post": {
+        "operationId": "OperatorCatalogController_updateMachineStatus",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "machineId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MachineStatusDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record a machine status correction",
+        "tags": [
+          "operator catalog"
         ]
       }
     },

@@ -32,6 +32,7 @@ import {
   OperatorOrderDetailDto,
   OperatorOrderPageDto,
   PriceListPageDto,
+  ReferenceProfileActivationNoticePageDto,
   PrintConfigRevisionPageDto,
   ReferenceProfilePageDto,
 } from "./operator-reads.dto";
@@ -135,6 +136,29 @@ export class OperatorReadsController {
     @Query() query: Record<string, string | string[] | undefined>,
   ): Promise<ReferenceProfilePageDto> {
     return this.reads.referenceProfiles(
+      operator,
+      pageQuery(query, PAGE_FIELDS),
+    );
+  }
+
+  @Get("admin/catalog/reference-profile-activation-notices")
+  @ApiOperation({
+    summary: "List durable notices for committed reference-profile activations",
+  })
+  @ApiOkResponse({ type: ReferenceProfileActivationNoticePageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, minLength: 1 })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  referenceProfileActivationNotices(
+    @CurrentOperator() operator: OperatorContext,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<ReferenceProfileActivationNoticePageDto> {
+    return this.reads.referenceProfileActivationNotices(
       operator,
       pageQuery(query, PAGE_FIELDS),
     );

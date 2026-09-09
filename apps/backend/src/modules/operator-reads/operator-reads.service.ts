@@ -20,6 +20,7 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { OrdersService } from "../orders/orders.service";
+import { referenceProfileActivationNotice } from "../resources/reference-profile-activation-notice.dto";
 import {
   CapacityReservationPageDto,
   MachineCalibrationPageDto,
@@ -32,6 +33,7 @@ import {
   PriceListPageDto,
   PrintConfigRevisionPageDto,
   ReferenceProfilePageDto,
+  ReferenceProfileActivationNoticePageDto,
   type MachineProfileReadDto,
   type OperatorJobListItemDto,
   type OperatorOrderListItemDto,
@@ -67,6 +69,11 @@ type TimeCursor = Readonly<{
 }>;
 type StartsAtCursor = Readonly<{
   startsAt: string;
+  id: string;
+  filterHash: string;
+}>;
+type ActivationNoticeCursor = Readonly<{
+  activatedAt: string;
   id: string;
   filterHash: string;
 }>;
@@ -540,6 +547,63 @@ export class OperatorReadsService {
       filterHash,
       referenceProfile,
     );
+  }
+
+  async referenceProfileActivationNotices(
+    operator: OperatorContext,
+    input: PageInput,
+  ): Promise<ReferenceProfileActivationNoticePageDto> {
+    this.requireRead(operator);
+    const filterHash = digest({
+      kind: "reference-profile-activation-notices",
+      version: 1,
+    });
+    const cursor = input.cursor
+      ? parseActivationNoticeCursor(
+          input.cursor,
+          filterHash,
+          "reference profile activation notices cursor",
+        )
+      : undefined;
+    const limit = pageLimit(input.limit);
+    const rows = await this.prisma.referenceProfile.findMany({
+      where: {
+        activatedAt: { not: null },
+        ...(cursor
+          ? {
+              OR: [
+                { activatedAt: { lt: new Date(cursor.activatedAt) } },
+                {
+                  activatedAt: new Date(cursor.activatedAt),
+                  id: { lt: cursor.id },
+                },
+              ],
+            }
+          : {}),
+      },
+      select: {
+        id: true,
+        material: true,
+        quality: true,
+        activatedAt: true,
+      },
+      orderBy: [{ activatedAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+    });
+    const page = rows.slice(0, limit).map(referenceProfileActivationNotice);
+    const last = page.at(-1);
+    return {
+      items: page,
+      ...(rows.length > limit && last
+        ? {
+            nextCursor: encodeCursor({
+              activatedAt: last.activatedAt,
+              id: last.referenceProfileId,
+              filterHash,
+            }),
+          }
+        : {}),
+    };
   }
 
   async machineProfiles(
@@ -1063,6 +1127,23 @@ function parseStartsAtCursor(
   return cursor as StartsAtCursor;
 }
 
+function parseActivationNoticeCursor(
+  value: string,
+  filterHash: string,
+  name: string,
+): ActivationNoticeCursor {
+  const cursor = parseCursor(
+    value,
+    filterHash,
+    name,
+  ) as Partial<ActivationNoticeCursor>;
+  if (typeof cursor.activatedAt !== "string") {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  strictInstant(`${name} activatedAt`, cursor.activatedAt);
+  return cursor as ActivationNoticeCursor;
+}
+
 function parseCursor(value: string, filterHash: string, name: string): Cursor {
   try {
     const parsed: unknown = JSON.parse(
@@ -1084,7 +1165,9 @@ function parseCursor(value: string, filterHash: string, name: string): Cursor {
   }
 }
 
-function encodeCursor(value: Cursor | TimeCursor | StartsAtCursor): string {
+function encodeCursor(
+  value: Cursor | TimeCursor | StartsAtCursor | ActivationNoticeCursor,
+): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
 

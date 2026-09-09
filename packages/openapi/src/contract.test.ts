@@ -158,7 +158,7 @@ describe("OpenAPI artifact", () => {
       ),
     );
 
-    expect(idempotencyHeaders).toHaveLength(49);
+    expect(idempotencyHeaders).toHaveLength(62);
     expect(idempotencyHeaders).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -177,6 +177,99 @@ describe("OpenAPI artifact", () => {
         pattern: "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
       });
     }
+  });
+
+  it("describes catalog command boundary constraints", async () => {
+    const contract = JSON.parse(
+      await readFile(new URL("../openapi.json", import.meta.url), "utf8"),
+    ) as {
+      components: {
+        schemas: Record<
+          string,
+          { properties?: Record<string, Record<string, unknown>> }
+        >;
+      };
+    };
+    const schemas = contract.components.schemas;
+    const nonBlankTextPattern =
+      "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$";
+
+    expect(
+      schemas.CreateReferenceProfileDto?.properties?.material,
+    ).toMatchObject({ enum: ["PLA", "PETG"] });
+    expect(
+      schemas.CreateMachineProfileDto?.properties?.nozzleDiameterMicrometers,
+    ).toMatchObject({ type: "integer", minimum: 1, maximum: 2_147_483_647 });
+    expect(
+      schemas.CreateMachineCalibrationDto?.properties?.flowRatioPartsPerMillion,
+    ).toMatchObject({ type: "integer", minimum: 1, maximum: 2_147_483_647 });
+    const inventoryProperties = schemas.CreateInventoryDto?.properties;
+    const textProperties = [
+      schemas.CatalogReasonDto?.properties?.reason,
+      schemas.CreateReferenceProfileDto?.properties?.slicerEngine,
+      schemas.CreateReferenceProfileDto?.properties?.slicerVersion,
+      inventoryProperties?.sku,
+      inventoryProperties?.vendor,
+      inventoryProperties?.color,
+      inventoryProperties?.lotCode,
+    ];
+    for (const property of textProperties) {
+      expect(property?.pattern).toBe(nonBlankTextPattern);
+      const unicodePattern = new RegExp(property?.pattern as string, "u");
+      expect("valid catalog text").toMatch(unicodePattern);
+      expect("valid 🧵 catalog text").toMatch(unicodePattern);
+      expect("invalid\u0000catalog text").not.toMatch(unicodePattern);
+      expect("invalid\ud800catalog text").not.toMatch(unicodePattern);
+    }
+    for (const property of [
+      schemas.CreateReferenceProfileDto?.properties?.settings,
+      schemas.CreateMachineProfileDto?.properties?.settings,
+      schemas.CreateMachineCalibrationDto?.properties?.settings,
+    ]) {
+      expect(property).toMatchObject({
+        description:
+          "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+      });
+    }
+    const numerator = inventoryProperties?.priceMinorUnitsNumerator;
+    const denominator = inventoryProperties?.priceMinorUnitsDenominator;
+    const remaining = inventoryProperties?.remainingMilligrams;
+    const adjustment =
+      schemas.InventoryAdjustmentDto?.properties?.deltaMilligrams;
+
+    expect(numerator).toMatchObject({ format: "int64" });
+    expect(denominator).toMatchObject({ format: "int64" });
+    expect(remaining).toMatchObject({ format: "int64" });
+    expect(adjustment).toMatchObject({ format: "int64" });
+
+    for (const schema of [numerator, denominator, remaining, adjustment]) {
+      expect(schema?.pattern).toEqual(expect.any(String));
+      expect("9223372036854775808").not.toMatch(
+        new RegExp(schema?.pattern as string),
+      );
+    }
+    expect("9223372036854775807").toMatch(
+      new RegExp(numerator?.pattern as string),
+    );
+    expect("9223372036854775807").toMatch(
+      new RegExp(denominator?.pattern as string),
+    );
+    expect("0").not.toMatch(new RegExp(denominator?.pattern as string));
+    expect("0").toMatch(new RegExp(remaining?.pattern as string));
+    expect("-9223372036854775808").toMatch(
+      new RegExp(adjustment?.pattern as string),
+    );
+    expect("-9223372036854775809").not.toMatch(
+      new RegExp(adjustment?.pattern as string),
+    );
+    expect("0").not.toMatch(new RegExp(adjustment?.pattern as string));
+    expect("-0").not.toMatch(new RegExp(adjustment?.pattern as string));
+    expect(schemas.MachineStatusDto?.properties?.status).toMatchObject({
+      enum: ["ACTIVE", "MAINTENANCE", "DISABLED"],
+    });
+    expect(schemas.InventoryStatusDto?.properties?.status).toMatchObject({
+      enum: ["AVAILABLE", "DEPLETED", "RETIRED"],
+    });
   });
 
   it("describes every fulfilment route input", async () => {
