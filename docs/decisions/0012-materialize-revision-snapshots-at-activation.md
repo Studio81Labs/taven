@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-09-09
-- **Related:** Epic #7 §4.4.1, escalation #101, PR #99
+- **Related:** Epic #7 §§4.4.1 and 4.4.3, escalations #101 and #103, issues #99 and #104
 
 ## Context
 
@@ -11,10 +11,11 @@ insert-only. The storage adapter materializes the same settings as an immutable,
 content-addressed object at
 `slicer-revisions/<lowercase-sha256>/settings.json`.
 
-The canonical serialization used for persisted revision digests and snapshot
-bytes is the legacy `localeCompare` ordering. Those bytes, digests, and object
-keys are compatibility identifiers for already committed data; they are not a
-general-purpose serialization contract for new command idempotency fingerprints.
+The canonical serialization used for persisted revision digests, snapshot bytes,
+and catalog command fingerprints is the initial deterministic UTF-16 code-unit
+order. The owner has confirmed this project is fresh and undeployed, with no
+historical resource hashes or objects that require compatibility handling. ADR
+0015 records the shared serializer contract.
 
 Creating a DRAFT revision previously wrote that object before the catalog and
 idempotency transaction committed. A concurrent request, later database
@@ -50,10 +51,12 @@ already holds the complete canonical source and permanent revision history.
    result. Storage unavailability before activation commits is a sanitized 503;
    immutable object hash, length, or content-type disagreement is a sanitized 409. Neither commits an activation, audit event, or completed activation
    record. Retirement performs no storage I/O.
-6. Persisted revision digests and slicer snapshot hashes keep the legacy
-   serialization exactly. Catalog command idempotency uses the separately
-   defined total-order serialization in ADR 0013 and never changes a persisted
-   hash or object key.
+6. `canonicalJson` uses deterministic UTF-16 code-unit key ordering for
+   persisted revision digests, snapshot bytes/SHA-256 object keys, and catalog
+   command idempotency fingerprints. It preserves JSON scalar encoding and
+   array order. No legacy helper, dual hash, fallback lookup, or migration is
+   introduced for the confirmed fresh state; ADR 0015 supersedes ADR 0013's
+   former split.
 
 No durable staging lease, new storage prefix, promotion state, migration,
 background completion worker, or online snapshot garbage collector is added.
@@ -77,16 +80,9 @@ creation transaction commits and before the separate activation transaction. It
 relies on ADR 0004's insert-only revision payload and identity invariants for
 permanent artifact ownership.
 
-## Historical-object maintenance runbook
+## Historical-object maintenance
 
-Older binaries may have produced unreferenced objects. The default maintenance
-operation is a dry-run inventory of exact-format
-`slicer-revisions/<sha256>/settings.json` keys against canonical hashes from
-all four persisted revision families in every lifecycle state.
-
-Deletion is permitted only during a confirmed stop/drain of every old and new
-snapshot writer, bootstrap process, and dispatcher. Immediately recheck the
-canonical hash reference before deleting an exact-format unreferenced key; keep
-shared, referenced, malformed, or unfamiliar keys. The operation must be
-idempotent and resumable. If writer quiescence cannot be proven, report only;
-elapsed time is not a deletion fence.
+Historical-object inventory, cleanup, writer drain, and compatibility work are
+inapplicable: the owner confirmed that this project is fresh, undeployed, and
+has no historical resource objects. The committed ownership and integrity rules
+above remain required for all newly created revisions.

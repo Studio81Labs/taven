@@ -217,6 +217,32 @@ describe("operator catalog commands", () => {
       ),
     );
     expect(calibration.state).toBe("DRAFT");
+    await expect(
+      prisma.revisionIdentity.findMany({
+        where: {
+          id: { in: [reference.id, machineProfile.id, calibration.id] },
+        },
+        select: { id: true, kind: true, digest: true },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: reference.id,
+          kind: "REFERENCE_PROFILE",
+          digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+        expect.objectContaining({
+          id: machineProfile.id,
+          kind: "MACHINE_PROFILE",
+          digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+        expect.objectContaining({
+          id: calibration.id,
+          kind: "MACHINE_CALIBRATION",
+          digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      ]),
+    );
     expect(createdMachineProvision).not.toHaveBeenCalled();
     expect(createdCalibrationProvision).not.toHaveBeenCalled();
     createdMachineProvision.mockRestore();
@@ -672,11 +698,11 @@ describe("operator catalog commands", () => {
     ).resolves.toBe(0);
   });
 
-  it("accepts historical reference-profile snapshot bytes and object keys", async () => {
-    const settings = { é: "composed", "e\u0301": "decomposed" };
-    const bytes = new TextEncoder().encode('{"é":"composed","é":"decomposed"}');
+  it("accepts initial UTF-16 reference-profile snapshot bytes and object keys", async () => {
+    const settings = { a: 1, B: 2 };
+    const bytes = new TextEncoder().encode('{"B":2,"a":1}');
     const contentSha256 =
-      "9b8a3754182aaa9d6e9302ea33bd78d8915b9228d2e96eed6be0f5c5837269b1";
+      "1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9";
     const objectKey = `slicer-revisions/${contentSha256}/settings.json`;
     const objects = app.get<ObjectStorage>(OBJECT_STORAGE);
     await objects.putImmutableObject({
@@ -695,7 +721,7 @@ describe("operator catalog commands", () => {
           slicerVersion: "2.1.0",
           settings,
         },
-        `catalog-legacy-snapshot-${randomUUID()}`,
+        `catalog-initial-snapshot-${randomUUID()}`,
       ),
     );
     await expect(
@@ -705,8 +731,8 @@ describe("operator catalog commands", () => {
     const activated = await responseBody(
       command(
         `/admin/catalog/reference-profiles/${created.id}/activate`,
-        { reason: "Verify historical immutable snapshot" },
-        `catalog-legacy-snapshot-activate-${randomUUID()}`,
+        { reason: "Verify initial immutable snapshot" },
+        `catalog-initial-snapshot-activate-${randomUUID()}`,
       ),
     );
     expect(activated).toMatchObject({ id: created.id, state: "ACTIVE" });

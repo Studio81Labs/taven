@@ -11,7 +11,10 @@ import {
   MachineStatus,
   InventoryStatus,
 } from "@prisma/client";
-import { createHash } from "node:crypto";
+import {
+  resourceRevisionDigest,
+  type CanonicalJson,
+} from "../src/modules/resources/resource-identity";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for seeding");
@@ -37,8 +40,6 @@ const ids = {
   print40: "93333333-3333-4333-8333-333333333333",
 } as const;
 
-const digest = (value: unknown) =>
-  createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const canonical = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object" && !(value instanceof Date))
@@ -62,10 +63,10 @@ async function revision<T extends RevisionKind>(
   tx: Prisma.TransactionClient,
   id: string,
   kind: T,
-  payload: unknown,
+  payload: CanonicalJson,
   create: () => Promise<unknown>,
 ) {
-  const expectedDigest = digest(payload);
+  const expectedDigest = resourceRevisionDigest(kind, payload);
   const byId = await tx.revisionIdentity.findUnique({ where: { id } });
   const byDigest = await tx.revisionIdentity.findUnique({
     where: { digest: expectedDigest },
@@ -227,41 +228,50 @@ async function main() {
         activatedAt: at,
         createdAt: at,
       };
-      await revision(tx, id, RevisionKind.REFERENCE_PROFILE, data, async () => {
-        const existing = await tx.referenceProfile.findUnique({
-          where: { id },
-        });
-        if (existing) {
-          if (
-            ![
-              "material",
-              "quality",
-              "slicerEngine",
-              "slicerVersion",
-              "settings",
-              "state",
-              "activatedAt",
-            ].every((k) =>
-              same(
-                existing[k as keyof typeof existing],
-                data[k as keyof typeof data],
-              ),
+      const revisionPayload = {
+        material: data.material,
+        quality: data.quality,
+        settings: data.settings,
+        slicerEngine: data.slicerEngine,
+        slicerVersion: data.slicerVersion,
+      } satisfies CanonicalJson;
+      await revision(
+        tx,
+        id,
+        RevisionKind.REFERENCE_PROFILE,
+        revisionPayload,
+        async () => {
+          const existing = await tx.referenceProfile.findUnique({
+            where: { id },
+          });
+          if (existing) {
+            if (
+              ![
+                "material",
+                "quality",
+                "slicerEngine",
+                "slicerVersion",
+                "settings",
+                "state",
+                "activatedAt",
+              ].every((k) =>
+                same(
+                  existing[k as keyof typeof existing],
+                  data[k as keyof typeof data],
+                ),
+              )
             )
-          )
-            throw new Error(`Seed reference profile ${id} does not match`);
-        } else await tx.referenceProfile.create({ data });
-      });
+              throw new Error(`Seed reference profile ${id} does not match`);
+          } else await tx.referenceProfile.create({ data });
+        },
+      );
     }
 
     for (const [id, material, referenceProfileId] of [
       [ids.machinePla, Material.PLA, ids.refPla],
       [ids.machinePetg, Material.PETG, ids.refPetg],
     ] as const) {
-      // Keep the deterministic seed identity compatible with profiles created
-      // before productionArtifactFormat became explicit. The migration backfills
-      // those immutable revisions to the same gcode_3mf behavior.
-      const revisionData = {
-        id,
+      const revisionPayload = {
         machineCapabilityId: ids.capability,
         referenceProfileId,
         material,
@@ -270,19 +280,20 @@ async function main() {
         slicerEngine: "orca-slicer",
         slicerVersion: "2.3.1",
         settings: { profile: "standard", material, nozzle: 400 },
+        productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
+      } satisfies CanonicalJson;
+      const data = {
+        id,
+        ...revisionPayload,
         state: RevisionState.ACTIVE,
         activatedAt: at,
         createdAt: at,
-      };
-      const data = {
-        ...revisionData,
-        productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
       };
       await revision(
         tx,
         id,
         RevisionKind.MACHINE_PROFILE,
-        revisionData,
+        revisionPayload,
         async () => {
           const existing = await tx.machineProfile.findUnique({
             where: { id },
@@ -314,14 +325,17 @@ async function main() {
       );
     }
 
-    const calData = {
-      id: ids.calibration,
+    const calibrationPayload = {
       nodeId: ids.node,
       machineId: ids.machine,
       flowRatioPartsPerMillion: 1000000,
       xyCompensationMicrometers: 0,
       elephantFootCompensationMicrometers: 0,
       settings: { source: "seed" },
+    } satisfies CanonicalJson;
+    const calData = {
+      id: ids.calibration,
+      ...calibrationPayload,
       state: RevisionState.ACTIVE,
       activatedAt: at,
       createdAt: at,
@@ -330,7 +344,7 @@ async function main() {
       tx,
       ids.calibration,
       RevisionKind.MACHINE_CALIBRATION,
-      calData,
+      calibrationPayload,
       async () => {
         const existing = await tx.machineCalibration.findUnique({
           where: { id: ids.calibration },
@@ -373,31 +387,45 @@ async function main() {
         settings: { preset: `standard-${infillPercent}` },
         createdAt: at,
       };
-      await revision(tx, id, RevisionKind.PRINT_CONFIG, data, async () => {
-        const existing = await tx.printConfigRevision.findUnique({
-          where: { id },
-        });
-        if (existing) {
-          if (
-            ![
-              "quality",
-              "infillPercent",
-              "layerHeightMicrometers",
-              "supportsEnabled",
-              "brimEnabled",
-              "settings",
-            ].every((k) =>
-              same(
-                existing[k as keyof typeof existing],
-                data[k as keyof typeof data],
-              ),
+      const revisionPayload = {
+        quality: data.quality,
+        infillPercent: data.infillPercent,
+        layerHeightMicrometers: data.layerHeightMicrometers,
+        supportsEnabled: data.supportsEnabled,
+        brimEnabled: data.brimEnabled,
+        settings: data.settings,
+      } satisfies CanonicalJson;
+      await revision(
+        tx,
+        id,
+        RevisionKind.PRINT_CONFIG,
+        revisionPayload,
+        async () => {
+          const existing = await tx.printConfigRevision.findUnique({
+            where: { id },
+          });
+          if (existing) {
+            if (
+              ![
+                "quality",
+                "infillPercent",
+                "layerHeightMicrometers",
+                "supportsEnabled",
+                "brimEnabled",
+                "settings",
+              ].every((k) =>
+                same(
+                  existing[k as keyof typeof existing],
+                  data[k as keyof typeof data],
+                ),
+              )
             )
-          )
-            throw new Error(
-              `Seed print config ${infillPercent} does not match`,
-            );
-        } else await tx.printConfigRevision.create({ data });
-      });
+              throw new Error(
+                `Seed print config ${infillPercent} does not match`,
+              );
+          } else await tx.printConfigRevision.create({ data });
+        },
+      );
     }
   });
 }

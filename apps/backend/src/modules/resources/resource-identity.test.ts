@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ResourceValidationError } from "./resource-errors";
-import {
-  canonicalCatalogCommandJson,
-  canonicalJson,
-  resourceRevisionDigest,
-} from "./resource-identity";
+import { canonicalJson, resourceRevisionDigest } from "./resource-identity";
 
 describe("resourceRevisionDigest", () => {
   it("is stable across object key order and changes with immutable content", () => {
@@ -37,7 +33,16 @@ describe("resourceRevisionDigest", () => {
     ).toThrow(ResourceValidationError);
   });
 
-  it("preserves historical revision serialization bytes and digests", () => {
+  it("uses the normative initial UTF-16 bytes and revision digest", () => {
+    const payload = { a: 1, B: 2 };
+
+    expect(canonicalJson(payload)).toBe('{"B":2,"a":1}');
+    expect(resourceRevisionDigest("REFERENCE_PROFILE", payload)).toBe(
+      "89b2023077b58e9a4d84549da43a8e1948ce3fc837b8889a0ae3fd5b0ae1c043",
+    );
+  });
+
+  it("recursively uses UTF-16 order for representative resource settings", () => {
     const payload = {
       B: "uppercase",
       a: "lowercase",
@@ -52,16 +57,30 @@ describe("resourceRevisionDigest", () => {
       negative: -0,
       decimal: 1.25,
     };
+    const reordered = {
+      "\uE000": "bmp-private",
+      "😀": "astral",
+      é: "composed",
+      "e\u0301": "decomposed",
+      nested: { z: [3, { a: "first", B: "second" }], a: true },
+      negative: -0,
+      escaped: 'line\nbreak\tquote\\slash"',
+      decimal: 1.25,
+      a: "lowercase",
+      B: "uppercase",
+      2: "two",
+      10: "ten",
+    };
+    const expected = String.raw`{"10":"ten","2":"two","B":"uppercase","a":"lowercase","decimal":1.25,"escaped":"line\nbreak\tquote\\slash\"","é":"decomposed","negative":0,"nested":{"a":true,"z":[3,{"B":"second","a":"first"}]},"é":"composed","😀":"astral","":"bmp-private"}`;
 
-    expect(canonicalJson(payload)).toBe(
-      String.raw`{"😀":"astral","10":"ten","2":"two","a":"lowercase","B":"uppercase","decimal":1.25,"é":"decomposed","é":"composed","escaped":"line\nbreak\tquote\\slash\"","negative":0,"nested":{"a":true,"z":[3,{"a":"first","B":"second"}]},"":"bmp-private"}`,
-    );
+    expect(canonicalJson(payload)).toBe(expected);
+    expect(canonicalJson(reordered)).toBe(expected);
     expect(resourceRevisionDigest("REFERENCE_PROFILE", payload)).toBe(
-      "f36fc1b10cdfeadeb74cf006140ff1d73983a740755d205f0d4d0e2cb4f0d304",
+      "9197c5a99ecb71dbd75f4148bf00895efbc88a4f76b66f222e576f1152430765",
     );
   });
 
-  it("uses a code-unit total order for catalog command fingerprints", () => {
+  it("keeps command inputs stable across recursively reordered members", () => {
     const first = {
       é: "composed",
       "e\u0301": "decomposed",
@@ -73,9 +92,9 @@ describe("resourceRevisionDigest", () => {
       é: "composed",
     };
 
-    expect(canonicalCatalogCommandJson(first)).toBe(
-      canonicalCatalogCommandJson(reordered),
+    expect(canonicalJson(first)).toBe(canonicalJson(reordered));
+    expect(canonicalJson(first)).toBe(
+      '{"é":"decomposed","nested":{"B":"uppercase","a":"lowercase"},"é":"composed"}',
     );
-    expect(canonicalCatalogCommandJson(first)).not.toBe(canonicalJson(first));
   });
 });

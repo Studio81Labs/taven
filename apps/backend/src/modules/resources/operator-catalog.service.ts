@@ -23,11 +23,7 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
-import {
-  canonicalCatalogCommandJson,
-  canonicalJson,
-  type CanonicalJson,
-} from "./resource-identity";
+import { canonicalJson, type CanonicalJson } from "./resource-identity";
 import {
   ResourceConflictError,
   ResourceNotFoundError,
@@ -849,7 +845,7 @@ function inventoryCommandInput(input: CreateInventoryInput): CanonicalJson {
 
 function fingerprintFor(input: unknown): string {
   return createHash("sha256")
-    .update(canonicalCatalogCommandJson(canonicalInput(input)))
+    .update(canonicalJson(canonicalInput(input)))
     .digest("hex");
 }
 
