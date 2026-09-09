@@ -224,6 +224,7 @@ export class OperatorCatalogService {
         );
         return result;
       },
+      () => this.requireMachineInNode(nodeId, input.machineId),
     );
   }
 
@@ -538,6 +539,18 @@ export class OperatorCatalogService {
     await this.catalog.provisionSettings(calibration.settings);
   }
 
+  private async requireMachineInNode(
+    nodeId: string,
+    machineId: string,
+  ): Promise<void> {
+    const machine = await this.prisma.machine.findFirst({
+      where: { id: machineId, nodeId },
+      select: { id: true },
+    });
+    if (!machine)
+      throw new NotFoundException("Machine was not found in the node");
+  }
+
   private async stagedCommand<T extends CatalogResult>(
     operator: OperatorContext,
     namespace: string,
@@ -545,6 +558,7 @@ export class OperatorCatalogService {
     input: unknown,
     stage: (() => Promise<unknown>) | undefined,
     execute: (tx: Transaction, idempotencyKey: string) => Promise<T>,
+    preflight?: () => Promise<void>,
   ): Promise<T> {
     const preparation = await this.prepareIdempotency<T>(
       operator,
@@ -553,7 +567,10 @@ export class OperatorCatalogService {
       input,
     );
     if ("response" in preparation) return preparation.response;
-    if (preparation.stageSnapshot && stage) await stage();
+    if (preparation.stageSnapshot && stage) {
+      await preflight?.();
+      await stage();
+    }
     return this.command(operator, namespace, key, input, execute);
   }
 

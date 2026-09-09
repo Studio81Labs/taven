@@ -503,6 +503,27 @@ describe("operator catalog commands", () => {
       expect(zeroAdjustment.status).toBe(400);
     }
 
+    const snapshots = app.get(ResourceCatalogService);
+    const invalidCalibrationProvision = vi
+      .spyOn(snapshots, "provisionSettings")
+      .mockRejectedValue(
+        new Error("storage must not be called for invalid machine"),
+      );
+    const invalidCalibration = await command(
+      `/admin/nodes/${fixture.nodeId}/calibrations`,
+      {
+        machineId: randomUUID(),
+        flowRatioPartsPerMillion: 1_000_000,
+        xyCompensationMicrometers: 0,
+        elephantFootCompensationMicrometers: 0,
+        settings: { testScope, invalidMachine: true },
+      },
+      `catalog-invalid-machine-${randomUUID()}`,
+    );
+    expect(invalidCalibration.status).toBe(404);
+    expect(invalidCalibrationProvision).not.toHaveBeenCalled();
+    invalidCalibrationProvision.mockRestore();
+
     const wrongNode = await command(
       `/admin/nodes/${randomUUID()}/inventories`,
       {
