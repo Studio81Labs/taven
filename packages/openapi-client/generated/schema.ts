@@ -3553,7 +3553,7 @@ export interface components {
         ReferenceProfileActivationResultDto: {
             /** Format: uuid */
             id: string;
-            notice?: components["schemas"]["ReferenceProfileActivationNoticeDto"];
+            notice: components["schemas"]["ReferenceProfileActivationNoticeDto"];
             state?: string;
             status?: string;
         };

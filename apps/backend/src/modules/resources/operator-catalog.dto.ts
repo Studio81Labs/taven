@@ -61,8 +61,8 @@ export class CatalogCommandResultDto {
 }
 
 export class ReferenceProfileActivationResultDto extends CatalogCommandResultDto {
-  @ApiPropertyOptional({ type: () => ReferenceProfileActivationNoticeDto })
-  notice?: ReferenceProfileActivationNoticeDto;
+  @ApiProperty({ type: () => ReferenceProfileActivationNoticeDto })
+  notice!: ReferenceProfileActivationNoticeDto;
 }
 
 export class CatalogReasonDto {

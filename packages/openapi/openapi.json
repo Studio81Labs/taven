@@ -6927,7 +6927,8 @@
           }
         },
         "required": [
-          "id"
+          "id",
+          "notice"
         ],
         "type": "object"
       },

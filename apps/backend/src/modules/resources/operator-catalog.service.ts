@@ -63,7 +63,7 @@ import type {
 type Transaction = Prisma.TransactionClient;
 type CatalogResult = CatalogCommandResultDto;
 type ReferenceProfileActivationResult = CatalogResult &
-  Readonly<{ notice?: ReferenceProfileActivationNoticeDto }>;
+  Readonly<{ notice: ReferenceProfileActivationNoticeDto }>;
 type IdempotencyPreparation<T> = { response: T } | { needsVerification: true };
 
 const IDEMPOTENCY_DAYS = 30;
