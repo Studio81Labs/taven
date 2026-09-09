@@ -1,10 +1,14 @@
 # ADR 0013: Separate catalog command fingerprints from persisted hashes
 
-- **Status:** accepted
+- **Status:** superseded by [ADR 0015](0015-use-deterministic-initial-resource-serialization.md)
 - **Date:** 2026-09-09
 - **Related:** Epic #7 §4.4.2, escalation #102, issue #91, PR #99
 
 ## Context
+
+This is historical decision evidence only. It was superseded before deployment
+by ADR 0015 after the owner confirmed the project has no historical resource
+data; current implementation must not follow this split.
 
 Catalog revision digests and immutable slicer snapshot object keys were already
 derived from the historical `canonicalJson` serializer. That serializer uses
@@ -18,7 +22,7 @@ bodies must receive the same request fingerprint even when Unicode keys compare
 as equal under locale collation. This command-local requirement does not justify
 changing durable identifiers.
 
-## Decision
+## Superseded decision (historical)
 
 1. `canonicalJson` retains the exact historical `localeCompare` ordering. It
    remains the sole serializer for persisted resource revision digests and

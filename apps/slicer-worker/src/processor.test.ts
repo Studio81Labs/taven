@@ -519,7 +519,7 @@ describe("SlicingProcessor", () => {
     });
   });
 
-  it("loads a historical reference-profile snapshot and reuses its dispatch artifact", async () => {
+  it("loads an initial UTF-16 reference-profile snapshot and reuses its dispatch artifact", async () => {
     const store = new MemoryStore();
     const engine = new FakeEngine();
     const geometry = await readFile(
@@ -528,14 +528,14 @@ describe("SlicingProcessor", () => {
     const geometryHash = sha256(geometry);
     store.objects.set(`geometries/${ids.geometry}/canonical`, geometry);
     const referenceProfile = new TextEncoder().encode(
-      '{"é":"composed","é":"decomposed"}',
+      '{"é":"decomposed","é":"composed"}',
     );
     const printConfig = new TextEncoder().encode(
       JSON.stringify({ name: "print-config" }),
     );
     const referenceHash = sha256(referenceProfile);
     expect(referenceHash).toBe(
-      "9b8a3754182aaa9d6e9302ea33bd78d8915b9228d2e96eed6be0f5c5837269b1",
+      "8117f7eb721338d1c046fc7a3905d1f77b7a920abc82436194992a55af52f571",
     );
     const configHash = sha256(printConfig);
     store.objects.set(

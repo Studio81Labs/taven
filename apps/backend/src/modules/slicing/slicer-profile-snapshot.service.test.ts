@@ -67,20 +67,18 @@ describe("SlicerProfileSnapshotService", () => {
     );
   });
 
-  it("preserves historical snapshot bytes, hash, and object key", () => {
+  it("uses the initial UTF-16 snapshot bytes, hash, and object key", () => {
     const snapshot = slicerSettingsSnapshot({
-      é: "composed",
-      "e\u0301": "decomposed",
+      a: 1,
+      B: 2,
     });
 
-    expect(new TextDecoder().decode(snapshot.bytes)).toBe(
-      '{"é":"composed","é":"decomposed"}',
-    );
+    expect(new TextDecoder().decode(snapshot.bytes)).toBe('{"B":2,"a":1}');
     expect(snapshot.contentSha256).toBe(
-      "9b8a3754182aaa9d6e9302ea33bd78d8915b9228d2e96eed6be0f5c5837269b1",
+      "1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9",
     );
     expect(snapshot.objectKey).toBe(
-      "slicer-revisions/9b8a3754182aaa9d6e9302ea33bd78d8915b9228d2e96eed6be0f5c5837269b1/settings.json",
+      "slicer-revisions/1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9/settings.json",
     );
   });
 
@@ -223,39 +221,43 @@ describe("SlicerProfileSnapshotService", () => {
   });
 
   it("repairs snapshots from all committed revision families at bootstrap", async () => {
-    const reference = { reference: true };
-    const machine = { machine: true };
-    const calibration = { calibration: true };
-    const configuration = { configuration: true };
+    const initialSettings = { a: 1, B: 2 };
     const putImmutableObject = vi.fn().mockResolvedValue(undefined);
+    const referenceProfile = {
+      findMany: vi.fn().mockResolvedValue([{ settings: initialSettings }]),
+    };
+    const machineProfile = {
+      findMany: vi.fn().mockResolvedValue([{ settings: initialSettings }]),
+    };
+    const machineCalibration = {
+      findMany: vi.fn().mockResolvedValue([{ settings: initialSettings }]),
+    };
+    const printConfigRevision = {
+      findMany: vi.fn().mockResolvedValue([{ settings: initialSettings }]),
+    };
     const service = new SlicerProfileSnapshotService(
       {
-        referenceProfile: {
-          findMany: vi.fn().mockResolvedValue([{ settings: reference }]),
-        },
-        machineProfile: {
-          findMany: vi.fn().mockResolvedValue([{ settings: machine }]),
-        },
-        machineCalibration: {
-          findMany: vi.fn().mockResolvedValue([{ settings: calibration }]),
-        },
-        printConfigRevision: {
-          findMany: vi.fn().mockResolvedValue([{ settings: configuration }]),
-        },
+        referenceProfile,
+        machineProfile,
+        machineCalibration,
+        printConfigRevision,
       } as unknown as PrismaService,
       { putImmutableObject } as unknown as ObjectStorage,
     );
 
     await expect(service.onApplicationBootstrap()).resolves.toBeUndefined();
-    expect(putImmutableObject).toHaveBeenCalledTimes(4);
-    for (const settings of [reference, machine, calibration, configuration]) {
-      const snapshot = slicerSettingsSnapshot(settings);
-      expect(putImmutableObject).toHaveBeenCalledWith({
-        objectKey: snapshot.objectKey,
-        bytes: snapshot.bytes,
-        contentHash: snapshot.contentSha256,
-        contentType: "application/json",
-      });
-    }
+    expect(referenceProfile.findMany).toHaveBeenCalledOnce();
+    expect(machineProfile.findMany).toHaveBeenCalledOnce();
+    expect(machineCalibration.findMany).toHaveBeenCalledOnce();
+    expect(printConfigRevision.findMany).toHaveBeenCalledOnce();
+    expect(putImmutableObject).toHaveBeenCalledOnce();
+    expect(putImmutableObject).toHaveBeenCalledWith({
+      objectKey:
+        "slicer-revisions/1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9/settings.json",
+      bytes: Buffer.from('{"B":2,"a":1}', "utf8"),
+      contentHash:
+        "1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9",
+      contentType: "application/json",
+    });
   });
 });
