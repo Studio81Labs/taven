@@ -519,7 +519,7 @@ describe("SlicingProcessor", () => {
     });
   });
 
-  it("reuses a persisted reference artifact across dispatch jobs without regenerating timestamped G-code", async () => {
+  it("loads a historical reference-profile snapshot and reuses its dispatch artifact", async () => {
     const store = new MemoryStore();
     const engine = new FakeEngine();
     const geometry = await readFile(
@@ -528,12 +528,15 @@ describe("SlicingProcessor", () => {
     const geometryHash = sha256(geometry);
     store.objects.set(`geometries/${ids.geometry}/canonical`, geometry);
     const referenceProfile = new TextEncoder().encode(
-      JSON.stringify({ name: "reference-profile" }),
+      '{"é":"composed","é":"decomposed"}',
     );
     const printConfig = new TextEncoder().encode(
       JSON.stringify({ name: "print-config" }),
     );
     const referenceHash = sha256(referenceProfile);
+    expect(referenceHash).toBe(
+      "9b8a3754182aaa9d6e9302ea33bd78d8915b9228d2e96eed6be0f5c5837269b1",
+    );
     const configHash = sha256(printConfig);
     store.objects.set(
       `slicer-revisions/${referenceHash}/settings.json`,

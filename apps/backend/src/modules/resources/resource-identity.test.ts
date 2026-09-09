@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ResourceValidationError } from "./resource-errors";
-import { canonicalJson, resourceRevisionDigest } from "./resource-identity";
+import {
+  canonicalCatalogCommandJson,
+  canonicalJson,
+  resourceRevisionDigest,
+} from "./resource-identity";
 
 describe("resourceRevisionDigest", () => {
   it("is stable across object key order and changes with immutable content", () => {
@@ -33,19 +37,45 @@ describe("resourceRevisionDigest", () => {
     ).toThrow(ResourceValidationError);
   });
 
-  it("uses a locale-independent total order for Unicode object keys", () => {
+  it("preserves historical revision serialization bytes and digests", () => {
+    const payload = {
+      B: "uppercase",
+      a: "lowercase",
+      10: "ten",
+      2: "two",
+      nested: { z: [3, { B: "second", a: "first" }], a: true },
+      "e\u0301": "decomposed",
+      é: "composed",
+      "😀": "astral",
+      "\uE000": "bmp-private",
+      escaped: 'line\nbreak\tquote\\slash"',
+      negative: -0,
+      decimal: 1.25,
+    };
+
+    expect(canonicalJson(payload)).toBe(
+      String.raw`{"😀":"astral","10":"ten","2":"two","a":"lowercase","B":"uppercase","decimal":1.25,"é":"decomposed","é":"composed","escaped":"line\nbreak\tquote\\slash\"","negative":0,"nested":{"a":true,"z":[3,{"a":"first","B":"second"}]},"":"bmp-private"}`,
+    );
+    expect(resourceRevisionDigest("REFERENCE_PROFILE", payload)).toBe(
+      "f36fc1b10cdfeadeb74cf006140ff1d73983a740755d205f0d4d0e2cb4f0d304",
+    );
+  });
+
+  it("uses a code-unit total order for catalog command fingerprints", () => {
     const first = {
       é: "composed",
       "e\u0301": "decomposed",
+      nested: { B: "uppercase", a: "lowercase" },
     };
     const reordered = {
+      nested: { a: "lowercase", B: "uppercase" },
       "e\u0301": "decomposed",
       é: "composed",
     };
 
-    expect(canonicalJson(first)).toBe(canonicalJson(reordered));
-    expect(resourceRevisionDigest("REFERENCE_PROFILE", first)).toBe(
-      resourceRevisionDigest("REFERENCE_PROFILE", reordered),
+    expect(canonicalCatalogCommandJson(first)).toBe(
+      canonicalCatalogCommandJson(reordered),
     );
+    expect(canonicalCatalogCommandJson(first)).not.toBe(canonicalJson(first));
   });
 });

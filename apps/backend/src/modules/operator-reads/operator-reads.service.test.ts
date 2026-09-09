@@ -1,4 +1,8 @@
-import { CapacityReservationStatus } from "@prisma/client";
+import {
+  CapacityReservationStatus,
+  Material,
+  PrintQuality,
+} from "@prisma/client";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
@@ -86,5 +90,77 @@ describe("OperatorReadsService capacity reservations", () => {
     });
     expect(findMany.mock.calls[0]?.[0]).not.toHaveProperty("cursor");
     expect(findMany.mock.calls[0]?.[0]).not.toHaveProperty("skip");
+  });
+});
+
+describe("OperatorReadsService reference-profile activation notices", () => {
+  it("uses the committed activation tuple for a version-bound keyset page", async () => {
+    const activatedAt = "2026-01-02T03:04:05.678Z";
+    const filterHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          kind: "reference-profile-activation-notices",
+          version: 1,
+        }),
+      )
+      .digest("hex");
+    const cursor = Buffer.from(
+      JSON.stringify({ id: cursorId, activatedAt, filterHash }),
+      "utf8",
+    ).toString("base64url");
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: secondReservationId,
+        material: Material.PLA,
+        quality: PrintQuality.FINE,
+        activatedAt: new Date("2026-01-01T03:04:05.678Z"),
+      },
+    ]);
+    const service = new OperatorReadsService(
+      { referenceProfile: { findMany } } as never,
+      {} as never,
+    );
+    const operator = {
+      operatorId: "55555555-5555-4555-8555-555555555555",
+      role: "VIEWER" as const,
+      permissions: [OPERATOR_PERMISSIONS.OPERATIONS_READ],
+      nodeIds: [nodeId],
+      authenticationMethod: "DEVELOPMENT_PASSWORD" as const,
+      sessionId: "66666666-6666-4666-8666-666666666666",
+    };
+
+    await expect(
+      service.referenceProfileActivationNotices(operator, { cursor, limit: 1 }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: `reference-profile-activated:${secondReservationId}`,
+          schemaVersion: 1,
+          kind: "REFERENCE_PROFILE_ACTIVATED",
+          referenceProfileId: secondReservationId,
+          material: "PLA",
+          quality: "FINE",
+          activatedAt: "2026-01-01T03:04:05.678Z",
+          action: "REVIEW_PRICE_LIST",
+        },
+      ],
+    });
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        activatedAt: { not: null },
+        OR: [
+          { activatedAt: { lt: new Date(activatedAt) } },
+          { activatedAt: new Date(activatedAt), id: { lt: cursorId } },
+        ],
+      },
+      select: {
+        id: true,
+        material: true,
+        quality: true,
+        activatedAt: true,
+      },
+      orderBy: [{ activatedAt: "desc" }, { id: "desc" }],
+      take: 2,
+    });
   });
 });

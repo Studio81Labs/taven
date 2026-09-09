@@ -13,6 +13,10 @@ import {
   SlicerProfileSnapshotUnavailableError,
 } from "../src/modules/slicing/slicer-profile-snapshot.service";
 import {
+  OBJECT_STORAGE,
+  type ObjectStorage,
+} from "../src/modules/storage/object-storage.port";
+import {
   PersistenceFactory,
   type PersistenceFoundation,
 } from "./support/persistence-factory";
@@ -358,6 +362,17 @@ describe("operator catalog commands", () => {
     );
     expect(draft.state).toBe("DRAFT");
     expect(provision).not.toHaveBeenCalled();
+    const draftNoticePage = await fetch(
+      new URL("/admin/catalog/reference-profile-activation-notices", baseUrl),
+      { headers: { cookie: viewerCookie } },
+    );
+    expect(draftNoticePage.status).toBe(200);
+    const draftNotices = (await draftNoticePage.json()) as {
+      items: Array<{ referenceProfileId: string }>;
+    };
+    expect(draftNotices.items).not.toContainEqual(
+      expect.objectContaining({ referenceProfileId: draft.id }),
+    );
 
     const crossOperatorReplay = await responseBody(
       commandAs(
@@ -511,6 +526,10 @@ describe("operator catalog commands", () => {
     ).resolves.toBe(0);
     unavailable.mockRestore();
 
+    const [priceListCount, outboxCount] = await Promise.all([
+      prisma.priceList.count(),
+      prisma.outboxMessage.count(),
+    ]);
     const activated = await responseBody(
       command(
         `${createPath}/${draft.id}/activate`,
@@ -518,7 +537,37 @@ describe("operator catalog commands", () => {
         unavailableKey,
       ),
     );
-    expect(activated).toMatchObject({ id: draft.id, state: "ACTIVE" });
+    expect(activated).toMatchObject({
+      id: draft.id,
+      state: "ACTIVE",
+      notice: {
+        id: `reference-profile-activated:${draft.id.toLowerCase()}`,
+        schemaVersion: 1,
+        kind: "REFERENCE_PROFILE_ACTIVATED",
+        referenceProfileId: draft.id,
+        material: "PLA",
+        quality: "FINE",
+        activatedAt: expect.any(String),
+        action: "REVIEW_PRICE_LIST",
+      },
+    });
+    await expect(prisma.priceList.count()).resolves.toBe(priceListCount);
+    await expect(prisma.outboxMessage.count()).resolves.toBe(outboxCount);
+    const activationNotices = await fetch(
+      new URL("/admin/catalog/reference-profile-activation-notices", baseUrl),
+      { headers: { cookie: viewerCookie } },
+    );
+    expect(activationNotices.status).toBe(200);
+    const activationNoticePage = (await activationNotices.json()) as {
+      items: Array<{ id: string; referenceProfileId: string; action: string }>;
+    };
+    expect(activationNoticePage.items).toContainEqual(
+      expect.objectContaining({
+        id: `reference-profile-activated:${draft.id.toLowerCase()}`,
+        referenceProfileId: draft.id,
+        action: "REVIEW_PRICE_LIST",
+      }),
+    );
     const replayProvision = vi
       .spyOn(snapshots, "provisionReferenceProfile")
       .mockRejectedValue(
@@ -554,6 +603,20 @@ describe("operator catalog commands", () => {
       ),
     );
     expect(retired).toMatchObject({ id: draft.id, state: "RETIRED" });
+    const retiredNoticePage = await fetch(
+      new URL("/admin/catalog/reference-profile-activation-notices", baseUrl),
+      { headers: { cookie: viewerCookie } },
+    );
+    expect(retiredNoticePage.status).toBe(200);
+    const retiredNotices = (await retiredNoticePage.json()) as {
+      items: Array<{ id: string; referenceProfileId: string }>;
+    };
+    expect(retiredNotices.items).toContainEqual(
+      expect.objectContaining({
+        id: `reference-profile-activated:${draft.id.toLowerCase()}`,
+        referenceProfileId: draft.id,
+      }),
+    );
     const afterAdvanceProvision = vi
       .spyOn(snapshots, "provisionReferenceProfile")
       .mockRejectedValue(
@@ -607,6 +670,49 @@ describe("operator catalog commands", () => {
         },
       }),
     ).resolves.toBe(0);
+  });
+
+  it("accepts historical reference-profile snapshot bytes and object keys", async () => {
+    const settings = { é: "composed", "e\u0301": "decomposed" };
+    const bytes = new TextEncoder().encode('{"é":"composed","é":"decomposed"}');
+    const contentSha256 =
+      "9b8a3754182aaa9d6e9302ea33bd78d8915b9228d2e96eed6be0f5c5837269b1";
+    const objectKey = `slicer-revisions/${contentSha256}/settings.json`;
+    const objects = app.get<ObjectStorage>(OBJECT_STORAGE);
+    await objects.putImmutableObject({
+      objectKey,
+      contentType: "application/json",
+      contentHash: contentSha256,
+      bytes,
+    });
+    const created = await responseBody(
+      command(
+        "/admin/catalog/reference-profiles",
+        {
+          material: "PLA",
+          quality: "FINE",
+          slicerEngine: "orca",
+          slicerVersion: "2.1.0",
+          settings,
+        },
+        `catalog-legacy-snapshot-${randomUUID()}`,
+      ),
+    );
+    await expect(
+      prisma.referenceProfile.findUniqueOrThrow({ where: { id: created.id } }),
+    ).resolves.toMatchObject({ settings, state: "DRAFT" });
+
+    const activated = await responseBody(
+      command(
+        `/admin/catalog/reference-profiles/${created.id}/activate`,
+        { reason: "Verify historical immutable snapshot" },
+        `catalog-legacy-snapshot-activate-${randomUUID()}`,
+      ),
+    );
+    expect(activated).toMatchObject({ id: created.id, state: "ACTIVE" });
+    await expect(
+      objects.readObjectRange(objectKey, 0, bytes.byteLength),
+    ).resolves.toEqual(bytes);
   });
 
   it("rejects malformed command bodies, untrusted nodes, and catalog-write access", async () => {
@@ -1010,15 +1116,19 @@ describe("operator catalog commands", () => {
   }
 });
 
-async function responseBody(
-  response: Promise<Response>,
-): Promise<{ id: string; status?: string; state?: string }> {
+async function responseBody(response: Promise<Response>): Promise<{
+  id: string;
+  status?: string;
+  state?: string;
+  notice?: Record<string, unknown>;
+}> {
   const resolved = await response;
   expect(resolved.status).toBe(200);
   return resolved.json() as Promise<{
     id: string;
     status?: string;
     state?: string;
+    notice?: Record<string, unknown>;
   }>;
 }
 

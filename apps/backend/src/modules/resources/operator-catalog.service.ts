@@ -23,7 +23,11 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
-import { canonicalJson, type CanonicalJson } from "./resource-identity";
+import {
+  canonicalCatalogCommandJson,
+  canonicalJson,
+  type CanonicalJson,
+} from "./resource-identity";
 import {
   ResourceConflictError,
   ResourceNotFoundError,
@@ -39,6 +43,11 @@ import {
   type CreateReferenceProfileInput,
   type VerifiedCatalogSnapshot,
 } from "./resource-catalog.service";
+import {
+  referenceProfileActivationNotice,
+  type ReferenceProfileActivationNoticeDto,
+  type ReferenceProfileActivationNoticeSource,
+} from "./reference-profile-activation-notice.dto";
 import type {
   CatalogCommandResultDto,
   CatalogReasonDto,
@@ -53,6 +62,8 @@ import type {
 
 type Transaction = Prisma.TransactionClient;
 type CatalogResult = CatalogCommandResultDto;
+type ReferenceProfileActivationResult = CatalogResult &
+  Readonly<{ notice?: ReferenceProfileActivationNoticeDto }>;
 type IdempotencyPreparation<T> = { response: T } | { needsVerification: true };
 
 const IDEMPOTENCY_DAYS = 30;
@@ -127,7 +138,7 @@ export class OperatorCatalogService {
     id: string,
     body: CatalogReasonDto,
     key?: string,
-  ): Promise<CatalogResult> {
+  ): Promise<ReferenceProfileActivationResult> {
     return this.transitionGlobalRevision(
       operator,
       id,
@@ -135,7 +146,7 @@ export class OperatorCatalogService {
       key,
       "reference-profile",
       "activate",
-    );
+    ) as Promise<ReferenceProfileActivationResult>;
   }
 
   retireReferenceProfile(
@@ -425,7 +436,17 @@ export class OperatorCatalogService {
             ? await this.catalog.activateMachineProfile(id, tx, verification)
             : await this.catalog.retireMachineProfile(id, tx);
       const state = (revision as { state: string }).state;
-      const result = { id, state };
+      const result = {
+        id,
+        state,
+        ...(kind === "reference-profile" && action === "activate"
+          ? {
+              notice: referenceProfileActivationNotice(
+                revision as ReferenceProfileActivationNoticeSource,
+              ),
+            }
+          : {}),
+      };
       await this.record(tx, operator, nodeId, idempotencyKey, id, {
         eventType: `catalog.${kind}.${action}d`,
         reason,
@@ -828,7 +849,7 @@ function inventoryCommandInput(input: CreateInventoryInput): CanonicalJson {
 
 function fingerprintFor(input: unknown): string {
   return createHash("sha256")
-    .update(canonicalJson(canonicalInput(input)))
+    .update(canonicalCatalogCommandJson(canonicalInput(input)))
     .digest("hex");
 }
 

@@ -11,6 +11,11 @@ insert-only. The storage adapter materializes the same settings as an immutable,
 content-addressed object at
 `slicer-revisions/<lowercase-sha256>/settings.json`.
 
+The canonical serialization used for persisted revision digests and snapshot
+bytes is the legacy `localeCompare` ordering. Those bytes, digests, and object
+keys are compatibility identifiers for already committed data; they are not a
+general-purpose serialization contract for new command idempotency fingerprints.
+
 Creating a DRAFT revision previously wrote that object before the catalog and
 idempotency transaction committed. A concurrent request, later database
 rejection, or process crash could therefore leave an object without a committed
@@ -45,6 +50,10 @@ already holds the complete canonical source and permanent revision history.
    result. Storage unavailability before activation commits is a sanitized 503;
    immutable object hash, length, or content-type disagreement is a sanitized 409. Neither commits an activation, audit event, or completed activation
    record. Retirement performs no storage I/O.
+6. Persisted revision digests and slicer snapshot hashes keep the legacy
+   serialization exactly. Catalog command idempotency uses the separately
+   defined total-order serialization in ADR 0013 and never changes a persisted
+   hash or object key.
 
 No durable staging lease, new storage prefix, promotion state, migration,
 background completion worker, or online snapshot garbage collector is added.

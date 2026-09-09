@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ReferenceProfileActivationNoticeDto } from "./reference-profile-activation-notice.dto";
 
 const UUID = { type: String, format: "uuid" } as const;
 const MAX_INT64 = "9223372036854775807";
@@ -57,6 +58,11 @@ export class CatalogCommandResultDto {
 
   @ApiPropertyOptional({ type: String })
   state?: string;
+}
+
+export class ReferenceProfileActivationResultDto extends CatalogCommandResultDto {
+  @ApiPropertyOptional({ type: () => ReferenceProfileActivationNoticeDto })
+  notice?: ReferenceProfileActivationNoticeDto;
 }
 
 export class CatalogReasonDto {

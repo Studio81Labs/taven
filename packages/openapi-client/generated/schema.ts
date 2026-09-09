@@ -227,6 +227,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/catalog/reference-profile-activation-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List durable notices for committed reference-profile activations */
+        get: operations["OperatorReadsController_referenceProfileActivationNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/catalog/reference-profiles": {
         parameters: {
             query?: never;
@@ -3512,6 +3529,34 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
         };
+        ReferenceProfileActivationNoticeDto: {
+            /** @enum {string} */
+            action: "REVIEW_PRICE_LIST";
+            /** Format: date-time */
+            activatedAt: string;
+            id: string;
+            /** @enum {string} */
+            kind: "REFERENCE_PROFILE_ACTIVATED";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
+            /** Format: uuid */
+            referenceProfileId: string;
+            /** @enum {number} */
+            schemaVersion: 1;
+        };
+        ReferenceProfileActivationNoticePageDto: {
+            items: components["schemas"]["ReferenceProfileActivationNoticeDto"][];
+            nextCursor?: string;
+        };
+        ReferenceProfileActivationResultDto: {
+            /** Format: uuid */
+            id: string;
+            notice?: components["schemas"]["ReferenceProfileActivationNoticeDto"];
+            state?: string;
+            status?: string;
+        };
         ReferenceProfilePageDto: {
             items: components["schemas"]["ReferenceProfileReadDto"][];
             nextCursor?: string;
@@ -4082,6 +4127,31 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_referenceProfileActivationNotices: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceProfileActivationNoticePageDto"];
+                };
+            };
+        };
+    };
     OperatorReadsController_referenceProfiles: {
         parameters: {
             query?: {
@@ -4158,7 +4228,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                    "application/json": components["schemas"]["ReferenceProfileActivationResultDto"];
                 };
             };
             /** @description Revision lifecycle, idempotency, or snapshot integrity conflicts */

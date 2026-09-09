@@ -67,6 +67,23 @@ describe("SlicerProfileSnapshotService", () => {
     );
   });
 
+  it("preserves historical snapshot bytes, hash, and object key", () => {
+    const snapshot = slicerSettingsSnapshot({
+      é: "composed",
+      "e\u0301": "decomposed",
+    });
+
+    expect(new TextDecoder().decode(snapshot.bytes)).toBe(
+      '{"é":"composed","é":"decomposed"}',
+    );
+    expect(snapshot.contentSha256).toBe(
+      "9b8a3754182aaa9d6e9302ea33bd78d8915b9228d2e96eed6be0f5c5837269b1",
+    );
+    expect(snapshot.objectKey).toBe(
+      "slicer-revisions/9b8a3754182aaa9d6e9302ea33bd78d8915b9228d2e96eed6be0f5c5837269b1/settings.json",
+    );
+  });
+
   it("validates exact job hashes before provisioning immutable snapshots", async () => {
     const machine = { machine: "h2s" };
     const calibration = { flow_ratio: "1" };

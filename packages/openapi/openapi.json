@@ -6833,6 +6833,104 @@
         ],
         "type": "object"
       },
+      "ReferenceProfileActivationNoticeDto": {
+        "properties": {
+          "action": {
+            "enum": [
+              "REVIEW_PRICE_LIST"
+            ],
+            "type": "string"
+          },
+          "activatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "REFERENCE_PROFILE_ACTIVATED"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "enum": [
+              1
+            ],
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "schemaVersion",
+          "kind",
+          "referenceProfileId",
+          "material",
+          "quality",
+          "activatedAt",
+          "action"
+        ],
+        "type": "object"
+      },
+      "ReferenceProfileActivationNoticePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceProfileActivationNoticeDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ReferenceProfileActivationResultDto": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "notice": {
+            "$ref": "#/components/schemas/ReferenceProfileActivationNoticeDto"
+          },
+          "state": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "ReferenceProfilePageDto": {
         "properties": {
           "items": {
@@ -8120,6 +8218,64 @@
         ]
       }
     },
+    "/admin/catalog/reference-profile-activation-notices": {
+      "get": {
+        "operationId": "OperatorReadsController_referenceProfileActivationNotices",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferenceProfileActivationNoticePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List durable notices for committed reference-profile activations",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/catalog/reference-profiles": {
       "get": {
         "operationId": "OperatorReadsController_referenceProfiles",
@@ -8285,7 +8441,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                  "$ref": "#/components/schemas/ReferenceProfileActivationResultDto"
                 }
               }
             },

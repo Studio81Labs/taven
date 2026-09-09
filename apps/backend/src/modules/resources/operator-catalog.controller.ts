@@ -34,6 +34,7 @@ import {
   InventoryStatusDto,
   InventoryAdjustmentDto,
   MachineStatusDto,
+  ReferenceProfileActivationResultDto,
 } from "./operator-catalog.dto";
 import { OperatorCatalogService } from "./operator-catalog.service";
 
@@ -95,7 +96,7 @@ export class OperatorCatalogController {
   @ApiParam(RESOURCE_ID)
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiBody({ type: CatalogReasonDto })
-  @ApiOkResponse({ type: CatalogCommandResultDto })
+  @ApiOkResponse({ type: ReferenceProfileActivationResultDto })
   @ApiConflictResponse({
     description:
       "Revision lifecycle, idempotency, or snapshot integrity conflicts",
