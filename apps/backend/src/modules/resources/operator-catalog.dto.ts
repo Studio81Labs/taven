@@ -45,7 +45,7 @@ const SETTINGS = {
   type: Object,
   additionalProperties: true,
   description:
-    "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+    "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
 } as const;
 
 export class CatalogCommandResultDto {

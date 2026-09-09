@@ -228,18 +228,16 @@ describe("OpenAPI artifact", () => {
         new RegExp(property?.pattern as string),
       );
     }
-    expect(
+    for (const property of [
       schemas.CreateReferenceProfileDto?.properties?.settings,
-    ).toMatchObject({
-      description:
-        "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
-    });
-    expect(
+      schemas.CreateMachineProfileDto?.properties?.settings,
       schemas.CreateMachineCalibrationDto?.properties?.settings,
-    ).toMatchObject({
-      description:
-        "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
-    });
+    ]) {
+      expect(property).toMatchObject({
+        description:
+          "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+      });
+    }
     const numerator = inventoryProperties?.priceMinorUnitsNumerator;
     const denominator = inventoryProperties?.priceMinorUnitsDenominator;
     const remaining = inventoryProperties?.remainingMilligrams;

@@ -2015,7 +2015,7 @@
           },
           "settings": {
             "additionalProperties": true,
-            "description": "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+            "description": "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
             "type": "object"
           },
           "xyCompensationMicrometers": {
@@ -2073,7 +2073,7 @@
           },
           "settings": {
             "additionalProperties": true,
-            "description": "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+            "description": "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
             "type": "object"
           },
           "slicerEngine": {
@@ -2205,7 +2205,7 @@
           },
           "settings": {
             "additionalProperties": true,
-            "description": "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+            "description": "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
             "type": "object"
           },
           "slicerEngine": {
