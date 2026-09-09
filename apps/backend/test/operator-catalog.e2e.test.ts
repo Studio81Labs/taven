@@ -1,0 +1,415 @@
+import "reflect-metadata";
+import type { NestExpressApplication } from "@nestjs/platform-express";
+import { Test } from "@nestjs/testing";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { AppModule } from "../src/app.module";
+import { configureHttpBodyParsers } from "../src/http-body.config";
+import { PrismaService } from "../src/prisma/prisma.service";
+import {
+  PersistenceFactory,
+  type PersistenceFoundation,
+} from "./support/persistence-factory";
+
+const uploadClientHashKey = "operator-catalog-test-upload-client-hash-key-32";
+const quoteCapabilityKey =
+  "operator-catalog-test-quote-capability-key-with-at-least-32-characters";
+const testScope = randomUUID();
+process.env.TAVEN_ENVIRONMENT ??= "development";
+process.env.TAVEN_QUOTE_CAPABILITY_KEY ??= quoteCapabilityKey;
+process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS ??= "[]";
+process.env.TAVEN_S3_ENDPOINT ??= "http://127.0.0.1:9010";
+process.env.TAVEN_S3_REGION ??= "us-east-1";
+process.env.TAVEN_S3_BUCKET ??= "taven";
+process.env.TAVEN_S3_ACCESS_KEY_ID ??= "taven";
+process.env.TAVEN_S3_SECRET_ACCESS_KEY ??= "taven-local-only";
+process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
+process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??= uploadClientHashKey;
+process.env.TAVEN_REDIS_URL ??= "redis://127.0.0.1:6381";
+
+describe("operator catalog commands", () => {
+  let app: NestExpressApplication;
+  let baseUrl: URL;
+  let prisma: PrismaService;
+  let pool: Pool;
+  let fixture: PersistenceFoundation;
+  let adminCookie: string;
+  let adminCsrfToken: string;
+  let viewerCookie: string;
+  let viewerCsrfToken: string;
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    app = moduleRef.createNestApplication<NestExpressApplication>({
+      bodyParser: false,
+    });
+    configureHttpBodyParsers(app);
+    await app.listen(0, "127.0.0.1");
+    baseUrl = new URL(await app.getUrl());
+    prisma = app.get(PrismaService);
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) throw new Error("DATABASE_URL is required for e2e tests");
+    pool = new Pool({ connectionString: databaseUrl });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const fixtures = new PersistenceFactory(
+        client,
+        `operator-catalog-${randomUUID()}`,
+      );
+      fixture = await fixtures.createFoundation("operator-catalog");
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    const admin = await sessionCookie("ADMIN", fixture.nodeId);
+    adminCookie = admin.cookie;
+    adminCsrfToken = admin.csrfToken;
+    const viewer = await sessionCookie("VIEWER", fixture.nodeId);
+    viewerCookie = viewer.cookie;
+    viewerCsrfToken = viewer.csrfToken;
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await pool?.end();
+  });
+
+  it("writes revision and node catalog resources with idempotency and audit evidence", async () => {
+    const referenceKey = `catalog-reference-${randomUUID()}`;
+    const referenceBody = {
+      material: "PLA",
+      quality: "FINE",
+      slicerEngine: "orca",
+      slicerVersion: "2.1.0",
+      settings: {
+        layerHeight: 120,
+        profile: "operator-catalog",
+        testScope,
+      },
+    };
+    const referenceResponse = await command(
+      "/admin/catalog/reference-profiles",
+      referenceBody,
+      referenceKey,
+    );
+    expect(referenceResponse.status).toBe(200);
+    const reference = (await referenceResponse.json()) as {
+      id: string;
+      state: string;
+    };
+    expect(reference).toMatchObject({ state: "DRAFT" });
+    await expect(
+      prisma.referenceProfile.findUnique({ where: { id: reference.id } }),
+    ).resolves.toMatchObject({
+      settings: referenceBody.settings,
+      state: "DRAFT",
+    });
+
+    const replay = await command(
+      "/admin/catalog/reference-profiles",
+      referenceBody,
+      referenceKey,
+    );
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toEqual(reference);
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          correlationId: reference.id,
+          eventType: "catalog.reference-profile.created",
+        },
+      }),
+    ).resolves.toBe(1);
+
+    const mismatchedReplay = await command(
+      "/admin/catalog/reference-profiles",
+      { ...referenceBody, slicerVersion: "2.1.1" },
+      referenceKey,
+    );
+    expect(mismatchedReplay.status).toBe(409);
+
+    const machine = await prisma.machine.findUniqueOrThrow({
+      where: { id: fixture.machineId },
+      select: { machineCapabilityId: true },
+    });
+    const machineProfile = await responseBody(
+      command(
+        "/admin/catalog/machine-profiles",
+        {
+          ...referenceBody,
+          machineCapabilityId: machine.machineCapabilityId,
+          referenceProfileId: reference.id,
+          nozzleDiameterMicrometers: 400,
+          productionArtifactFormat: "GCODE_3MF",
+        },
+        `catalog-machine-profile-${randomUUID()}`,
+      ),
+    );
+    expect(machineProfile.state).toBe("DRAFT");
+
+    const calibration = await responseBody(
+      command(
+        `/admin/nodes/${fixture.nodeId}/calibrations`,
+        {
+          machineId: fixture.machineId,
+          flowRatioPartsPerMillion: 1_000_000,
+          xyCompensationMicrometers: 10,
+          elephantFootCompensationMicrometers: -5,
+          settings: { testScope, zOffset: -5 },
+        },
+        `catalog-calibration-${randomUUID()}`,
+      ),
+    );
+    expect(calibration.state).toBe("DRAFT");
+
+    const inventory = await responseBody(
+      command(
+        `/admin/nodes/${fixture.nodeId}/inventories`,
+        {
+          machineId: fixture.machineId,
+          sku: `catalog-${randomUUID()}`,
+          material: "PLA",
+          vendor: "Taven test",
+          color: "blue",
+          lotCode: "lot-42",
+          priceMinorUnitsNumerator: "9007199254740993",
+          priceMinorUnitsDenominator: "1000",
+          currency: "EUR",
+          remainingMilligrams: "500",
+        },
+        `catalog-inventory-${randomUUID()}`,
+      ),
+    );
+    await expect(
+      prisma.inventory.findUnique({ where: { id: inventory.id } }),
+    ).resolves.toMatchObject({
+      priceMinorUnitsNumerator: 9_007_199_254_740_993n,
+      priceMinorUnitsDenominator: 1000n,
+      remainingMilligrams: 500n,
+    });
+
+    for (const [path, body] of [
+      [
+        `/admin/catalog/reference-profiles/${reference.id}/activate`,
+        { reason: "Verified reference profile" },
+      ],
+      [
+        `/admin/catalog/machine-profiles/${machineProfile.id}/activate`,
+        { reason: "Verified machine profile" },
+      ],
+      [
+        `/admin/nodes/${fixture.nodeId}/calibrations/${fixture.machineCalibrationId}/retire`,
+        { reason: "Superseded fixture calibration" },
+      ],
+      [
+        `/admin/nodes/${fixture.nodeId}/calibrations/${calibration.id}/activate`,
+        { reason: "Verified machine calibration" },
+      ],
+      [
+        `/admin/nodes/${fixture.nodeId}/machines/${fixture.machineId}/status`,
+        { status: "MAINTENANCE", reason: "Scheduled maintenance" },
+      ],
+      [
+        `/admin/nodes/${fixture.nodeId}/inventories/${inventory.id}/status`,
+        { status: "DEPLETED", reason: "Container is empty" },
+      ],
+      [
+        `/admin/nodes/${fixture.nodeId}/calibrations/${calibration.id}/retire`,
+        { reason: "Superseded calibration" },
+      ],
+      [
+        `/admin/catalog/machine-profiles/${machineProfile.id}/retire`,
+        { reason: "Superseded machine profile" },
+      ],
+      [
+        `/admin/catalog/reference-profiles/${reference.id}/retire`,
+        { reason: "Superseded reference profile" },
+      ],
+    ] as const) {
+      const response = await command(
+        path,
+        body,
+        `catalog-transition-${randomUUID()}`,
+      );
+      expect(response.status, path).toBe(200);
+    }
+
+    const adjustmentKey = `catalog-adjustment-${randomUUID()}`;
+    const adjustmentPath = `/admin/nodes/${fixture.nodeId}/inventories/${fixture.inventoryId}/adjustments`;
+    const adjustmentBody = {
+      deltaMilligrams: "11",
+      reason: "Receiving correction",
+    };
+    const adjustment = await responseBody(
+      command(adjustmentPath, adjustmentBody, adjustmentKey),
+    );
+    const adjustmentReplay = await responseBody(
+      command(adjustmentPath, adjustmentBody, adjustmentKey),
+    );
+    expect(adjustmentReplay).toEqual(adjustment);
+    await expect(
+      prisma.inventory.findUnique({ where: { id: fixture.inventoryId } }),
+    ).resolves.toMatchObject({ remainingMilligrams: 111n });
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          correlationId: fixture.inventoryId,
+          eventType: "catalog.inventory.adjusted",
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
+  it("rejects missing correction reasons, untrusted nodes, and catalog-write access", async () => {
+    const noReason = await command(
+      `/admin/nodes/${fixture.nodeId}/machines/${fixture.machineId}/status`,
+      { status: "ACTIVE" },
+      `catalog-no-reason-${randomUUID()}`,
+    );
+    expect(noReason.status).toBe(400);
+
+    const overflow = await command(
+      `/admin/nodes/${fixture.nodeId}/inventories/${fixture.inventoryId}/adjustments`,
+      {
+        deltaMilligrams: "9223372036854775808",
+        reason: "Invalid oversized correction",
+      },
+      `catalog-overflow-${randomUUID()}`,
+    );
+    expect(overflow.status).toBe(400);
+
+    const wrongNode = await command(
+      `/admin/nodes/${randomUUID()}/inventories`,
+      {
+        machineId: fixture.machineId,
+        sku: `catalog-wrong-node-${randomUUID()}`,
+        material: "PLA",
+        vendor: "Taven test",
+        priceMinorUnitsNumerator: "1",
+        priceMinorUnitsDenominator: "1",
+        currency: "EUR",
+        remainingMilligrams: "1",
+      },
+      `catalog-wrong-node-${randomUUID()}`,
+    );
+    expect(wrongNode.status).toBe(404);
+
+    const incompatibleReference = await responseBody(
+      command(
+        "/admin/catalog/reference-profiles",
+        {
+          material: "PETG",
+          quality: "FINE",
+          slicerEngine: "orca",
+          slicerVersion: "2.1.0",
+          settings: { profile: "incompatible", testScope },
+        },
+        `catalog-incompatible-reference-${randomUUID()}`,
+      ),
+    );
+    const machine = await prisma.machine.findUniqueOrThrow({
+      where: { id: fixture.machineId },
+      select: { machineCapabilityId: true },
+    });
+    const incompatibleProfile = await command(
+      "/admin/catalog/machine-profiles",
+      {
+        machineCapabilityId: machine.machineCapabilityId,
+        referenceProfileId: incompatibleReference.id,
+        material: "PETG",
+        quality: "FINE",
+        slicerEngine: "orca",
+        slicerVersion: "2.1.0",
+        nozzleDiameterMicrometers: 400,
+        productionArtifactFormat: "GCODE_3MF",
+        settings: { profile: "incompatible" },
+      },
+      `catalog-incompatible-${randomUUID()}`,
+    );
+    expect(incompatibleProfile.status).toBe(409);
+
+    const forbidden = await fetch(
+      new URL(`/admin/nodes/${fixture.nodeId}/inventories`, baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: viewerCookie,
+          "content-type": "application/json",
+          "idempotency-key": `catalog-viewer-${randomUUID()}`,
+          origin: "http://localhost:3002",
+          "x-csrf-token": viewerCsrfToken,
+        },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(forbidden.status).toBe(403);
+  });
+
+  async function command(
+    path: string,
+    body: object,
+    idempotencyKey: string,
+  ): Promise<Response> {
+    return fetch(new URL(path, baseUrl), {
+      method: "POST",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json",
+        "idempotency-key": idempotencyKey,
+        origin: "http://localhost:3002",
+        "x-csrf-token": adminCsrfToken,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function sessionCookie(
+    role: "VIEWER" | "ADMIN",
+    nodeId: string,
+  ): Promise<{ cookie: string; csrfToken: string }> {
+    const identity = await prisma.operatorIdentity.create({
+      data: {
+        email: `operator-catalog-${randomUUID()}@example.test`,
+        role,
+        nodeGrants: { create: { nodeId } },
+      },
+    });
+    const token = randomBytes(32).toString("base64url");
+    const csrfKey = createHash("sha256")
+      .update("openapi:TAVEN_ADMIN_CSRF_KEY")
+      .digest();
+    const csrfToken = createHmac("sha256", csrfKey)
+      .update(token)
+      .digest("base64url");
+    await prisma.operatorSession.create({
+      data: {
+        tokenHash: createHash("sha256").update(token).digest("hex"),
+        csrfHash: createHash("sha256").update(csrfToken).digest("hex"),
+        operatorId: identity.id,
+        authenticationMethod: "DEVELOPMENT_PASSWORD",
+        credentialVersion: 1,
+        absoluteExpiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+      },
+    });
+    return { cookie: `taven_admin=${token}`, csrfToken };
+  }
+});
+
+async function responseBody(
+  response: Promise<Response>,
+): Promise<{ id: string; status?: string; state?: string }> {
+  const resolved = await response;
+  expect(resolved.status).toBe(200);
+  return resolved.json() as Promise<{
+    id: string;
+    status?: string;
+    state?: string;
+  }>;
+}
