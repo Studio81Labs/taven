@@ -838,6 +838,22 @@ describe("operator catalog commands", () => {
     );
     expect(wrongNode.status).toBe(404);
 
+    const incompatibleInventory = await command(
+      `/admin/nodes/${fixture.nodeId}/inventories`,
+      {
+        machineId: fixture.machineId,
+        sku: `catalog-incompatible-inventory-${randomUUID()}`,
+        material: "PETG",
+        vendor: "Taven test",
+        priceMinorUnitsNumerator: "1",
+        priceMinorUnitsDenominator: "1",
+        currency: "EUR",
+        remainingMilligrams: "1",
+      },
+      `catalog-incompatible-inventory-${randomUUID()}`,
+    );
+    expect(incompatibleInventory.status).toBe(409);
+
     const incompatibleReference = await responseBody(
       command(
         "/admin/catalog/reference-profiles",
