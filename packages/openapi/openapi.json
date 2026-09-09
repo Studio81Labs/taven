@@ -7917,6 +7917,12 @@
               }
             },
             "description": ""
+          },
+          "409": {
+            "description": "Revision lifecycle, idempotency, or snapshot integrity conflicts"
+          },
+          "503": {
+            "description": "Snapshot verification storage is temporarily unavailable"
           }
         },
         "security": [
@@ -8284,6 +8290,12 @@
               }
             },
             "description": ""
+          },
+          "409": {
+            "description": "Revision lifecycle, idempotency, or snapshot integrity conflicts"
+          },
+          "503": {
+            "description": "Snapshot verification storage is temporarily unavailable"
           }
         },
         "security": [
@@ -9105,6 +9117,12 @@
               }
             },
             "description": ""
+          },
+          "409": {
+            "description": "Revision lifecycle, idempotency, or snapshot integrity conflicts"
+          },
+          "503": {
+            "description": "Snapshot verification storage is temporarily unavailable"
           }
         },
         "security": [

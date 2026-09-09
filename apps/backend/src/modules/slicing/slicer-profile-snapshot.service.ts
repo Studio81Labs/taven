@@ -14,6 +14,7 @@ import {
   type CanonicalJson,
 } from "../resources/resource-identity";
 import {
+  ImmutableObjectConflictError,
   OBJECT_STORAGE,
   type ObjectStorage,
 } from "../storage/object-storage.port";
@@ -41,6 +42,27 @@ export class SlicerProfileSnapshotMismatchError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SlicerProfileSnapshotMismatchError";
+  }
+}
+
+export class SlicerProfileSnapshotNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SlicerProfileSnapshotNotFoundError";
+  }
+}
+
+export class SlicerProfileSnapshotIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SlicerProfileSnapshotIntegrityError";
+  }
+}
+
+export class SlicerProfileSnapshotUnavailableError extends Error {
+  constructor(message = "slicer snapshot storage is unavailable") {
+    super(message);
+    this.name = "SlicerProfileSnapshotUnavailableError";
   }
 }
 
@@ -81,17 +103,50 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
     );
   }
 
-  async provisionSettings(
-    settings: Prisma.JsonValue,
+  async provisionReferenceProfile(
+    revisionId: string,
   ): Promise<SlicerSettingsSnapshot> {
-    const snapshot = slicerSettingsSnapshot(settings);
-    await this.objects.putImmutableObject({
-      objectKey: snapshot.objectKey,
-      bytes: snapshot.bytes,
-      contentHash: snapshot.contentSha256,
-      contentType: "application/json",
+    const revision = await this.prisma.referenceProfile.findUnique({
+      where: { id: revisionId },
+      select: { settings: true },
     });
-    return snapshot;
+    if (!revision) {
+      throw new SlicerProfileSnapshotNotFoundError(
+        "reference profile revision was not found",
+      );
+    }
+    return this.provisionCommittedSettings(revision.settings);
+  }
+
+  async provisionMachineProfile(
+    revisionId: string,
+  ): Promise<SlicerSettingsSnapshot> {
+    const revision = await this.prisma.machineProfile.findUnique({
+      where: { id: revisionId },
+      select: { settings: true },
+    });
+    if (!revision) {
+      throw new SlicerProfileSnapshotNotFoundError(
+        "machine profile revision was not found",
+      );
+    }
+    return this.provisionCommittedSettings(revision.settings);
+  }
+
+  async provisionMachineCalibration(
+    nodeId: string | undefined,
+    revisionId: string,
+  ): Promise<SlicerSettingsSnapshot> {
+    const revision = await this.prisma.machineCalibration.findFirst({
+      where: { id: revisionId, ...(nodeId ? { nodeId } : {}) },
+      select: { settings: true },
+    });
+    if (!revision) {
+      throw new SlicerProfileSnapshotNotFoundError(
+        "machine calibration revision was not found",
+      );
+    }
+    return this.provisionCommittedSettings(revision.settings);
   }
 
   async ensureJobSnapshots(job: SlicingJob): Promise<void> {
@@ -126,6 +181,34 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
         contentType: "application/json",
       });
     }
+  }
+
+  private async provisionCommittedSettings(
+    settings: Prisma.JsonValue,
+  ): Promise<SlicerSettingsSnapshot> {
+    let snapshot: SlicerSettingsSnapshot;
+    try {
+      snapshot = slicerSettingsSnapshot(settings);
+    } catch (error) {
+      if (error instanceof SlicerProfileSnapshotMismatchError) {
+        throw new SlicerProfileSnapshotIntegrityError(error.message);
+      }
+      throw error;
+    }
+    try {
+      await this.objects.putImmutableObject({
+        objectKey: snapshot.objectKey,
+        bytes: snapshot.bytes,
+        contentHash: snapshot.contentSha256,
+        contentType: "application/json",
+      });
+    } catch (error) {
+      if (error instanceof ImmutableObjectConflictError) {
+        throw new SlicerProfileSnapshotIntegrityError(error.message);
+      }
+      throw new SlicerProfileSnapshotUnavailableError();
+    }
+    return snapshot;
   }
 
   private async expectationsFor(

@@ -14,13 +14,21 @@ import { PrismaService } from "../../prisma/prisma.service";
 import {
   ResourceConflictError,
   ResourceNotFoundError,
+  ResourceSnapshotIntegrityError,
+  ResourceSnapshotUnavailableError,
   ResourceValidationError,
 } from "./resource-errors";
 import {
   resourceRevisionDigest,
   type CanonicalJson,
 } from "./resource-identity";
-import { SlicerProfileSnapshotService } from "../slicing/slicer-profile-snapshot.service";
+import {
+  SlicerProfileSnapshotIntegrityError,
+  SlicerProfileSnapshotNotFoundError,
+  SlicerProfileSnapshotService,
+  SlicerProfileSnapshotUnavailableError,
+  type SlicerSettingsSnapshot,
+} from "../slicing/slicer-profile-snapshot.service";
 
 type JsonSettings = Prisma.InputJsonObject;
 type Transaction = Prisma.TransactionClient;
@@ -70,7 +78,17 @@ export type CreateInventoryInput = {
 
 type RevisionTable =
   "referenceProfile" | "machineProfile" | "machineCalibration";
+type CatalogSnapshotKind =
+  "reference-profile" | "machine-profile" | "machine-calibration";
 const MAX_INT64 = 9_223_372_036_854_775_807n;
+const verifiedCatalogSnapshot = Symbol("verifiedCatalogSnapshot");
+
+export type VerifiedCatalogSnapshot = Readonly<{
+  kind: CatalogSnapshotKind;
+  revisionId: string;
+  contentSha256: string;
+  [verifiedCatalogSnapshot]: true;
+}>;
 
 function nonBlank(value: string, name: string): string {
   const normalized = value.trim();
@@ -144,16 +162,9 @@ export class ResourceCatalogService {
     private readonly snapshots: SlicerProfileSnapshotService,
   ) {}
 
-  provisionSettings(settings: Prisma.JsonValue | JsonSettings) {
-    return this.snapshots.provisionSettings(
-      settings as unknown as Prisma.JsonValue,
-    );
-  }
-
   async createReferenceProfile(
     input: CreateReferenceProfileInput,
     transaction?: Transaction,
-    settingsProvisioned = false,
   ) {
     const slicerEngine = nonBlank(input.slicerEngine, "slicerEngine");
     const slicerVersion = nonBlank(input.slicerVersion, "slicerVersion");
@@ -165,9 +176,6 @@ export class ResourceCatalogService {
       slicerVersion,
     } satisfies CanonicalJson;
     const id = randomUUID();
-    if (!settingsProvisioned) {
-      await this.provisionSettings(input.settings);
-    }
     try {
       const create = async (tx: Transaction) => {
         await tx.revisionIdentity.create({
@@ -192,7 +200,6 @@ export class ResourceCatalogService {
   async createMachineProfile(
     input: CreateMachineProfileInput,
     transaction?: Transaction,
-    settingsProvisioned = false,
   ) {
     const slicerEngine = nonBlank(input.slicerEngine, "slicerEngine");
     const slicerVersion = nonBlank(input.slicerVersion, "slicerVersion");
@@ -212,9 +219,6 @@ export class ResourceCatalogService {
       productionArtifactFormat: input.productionArtifactFormat,
     } satisfies CanonicalJson;
     const id = randomUUID();
-    if (!settingsProvisioned) {
-      await this.provisionSettings(input.settings);
-    }
     try {
       const create = async (tx: Transaction) => {
         await tx.revisionIdentity.create({
@@ -245,7 +249,6 @@ export class ResourceCatalogService {
   async createMachineCalibration(
     input: CreateMachineCalibrationInput,
     transaction?: Transaction,
-    settingsProvisioned = false,
   ) {
     const flowRatioPartsPerMillion = positiveInteger(
       input.flowRatioPartsPerMillion,
@@ -272,9 +275,6 @@ export class ResourceCatalogService {
       xyCompensationMicrometers: input.xyCompensationMicrometers,
     } satisfies CanonicalJson;
     const id = randomUUID();
-    if (!settingsProvisioned) {
-      await this.provisionSettings(input.settings);
-    }
     try {
       const create = async (tx: Transaction) => {
         await tx.revisionIdentity.create({
@@ -329,7 +329,40 @@ export class ResourceCatalogService {
     });
   }
 
-  activateReferenceProfile(id: string, transaction?: Transaction) {
+  async verifyReferenceProfileSnapshot(
+    id: string,
+  ): Promise<VerifiedCatalogSnapshot> {
+    return this.verifySnapshot("reference-profile", id, () =>
+      this.snapshots.provisionReferenceProfile(id),
+    );
+  }
+
+  async verifyMachineProfileSnapshot(
+    id: string,
+  ): Promise<VerifiedCatalogSnapshot> {
+    return this.verifySnapshot("machine-profile", id, () =>
+      this.snapshots.provisionMachineProfile(id),
+    );
+  }
+
+  async verifyMachineCalibrationSnapshot(
+    id: string,
+    nodeId?: string,
+  ): Promise<VerifiedCatalogSnapshot> {
+    return this.verifySnapshot("machine-calibration", id, () =>
+      this.snapshots.provisionMachineCalibration(nodeId, id),
+    );
+  }
+
+  async activateReferenceProfile(
+    id: string,
+    transaction?: Transaction,
+    verification?: VerifiedCatalogSnapshot,
+  ) {
+    verification ??= await this.requireStandaloneVerification(transaction, () =>
+      this.verifyReferenceProfileSnapshot(id),
+    );
+    this.requireVerifiedSnapshot(verification, "reference-profile", id);
     return this.transitionRevision(
       "referenceProfile",
       id,
@@ -347,7 +380,15 @@ export class ResourceCatalogService {
     );
   }
 
-  activateMachineProfile(id: string, transaction?: Transaction) {
+  async activateMachineProfile(
+    id: string,
+    transaction?: Transaction,
+    verification?: VerifiedCatalogSnapshot,
+  ) {
+    verification ??= await this.requireStandaloneVerification(transaction, () =>
+      this.verifyMachineProfileSnapshot(id),
+    );
+    this.requireVerifiedSnapshot(verification, "machine-profile", id);
     return this.transitionRevision(
       "machineProfile",
       id,
@@ -360,7 +401,15 @@ export class ResourceCatalogService {
     return this.transitionRevision("machineProfile", id, "retire", transaction);
   }
 
-  activateMachineCalibration(id: string, transaction?: Transaction) {
+  async activateMachineCalibration(
+    id: string,
+    transaction?: Transaction,
+    verification?: VerifiedCatalogSnapshot,
+  ) {
+    verification ??= await this.requireStandaloneVerification(transaction, () =>
+      this.verifyMachineCalibrationSnapshot(id),
+    );
+    this.requireVerifiedSnapshot(verification, "machine-calibration", id);
     return this.transitionRevision(
       "machineCalibration",
       id,
@@ -529,6 +578,61 @@ export class ResourceCatalogService {
     return client.inventory.findUniqueOrThrow({
       where: { id: inventoryId },
     });
+  }
+
+  private async verifySnapshot(
+    kind: CatalogSnapshotKind,
+    revisionId: string,
+    provision: () => Promise<SlicerSettingsSnapshot>,
+  ): Promise<VerifiedCatalogSnapshot> {
+    try {
+      const snapshot = await provision();
+      return {
+        kind,
+        revisionId,
+        contentSha256: snapshot.contentSha256,
+        [verifiedCatalogSnapshot]: true,
+      };
+    } catch (error) {
+      if (error instanceof SlicerProfileSnapshotNotFoundError) {
+        throw new ResourceNotFoundError(error.message);
+      }
+      if (error instanceof SlicerProfileSnapshotIntegrityError) {
+        throw new ResourceSnapshotIntegrityError(error.message);
+      }
+      if (error instanceof SlicerProfileSnapshotUnavailableError) {
+        throw new ResourceSnapshotUnavailableError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async requireStandaloneVerification(
+    transaction: Transaction | undefined,
+    verify: () => Promise<VerifiedCatalogSnapshot>,
+  ): Promise<VerifiedCatalogSnapshot> {
+    if (transaction) {
+      throw new ResourceSnapshotIntegrityError(
+        "activation transaction requires a verified catalog snapshot",
+      );
+    }
+    return verify();
+  }
+
+  private requireVerifiedSnapshot(
+    verification: VerifiedCatalogSnapshot,
+    kind: CatalogSnapshotKind,
+    revisionId: string,
+  ): void {
+    if (
+      verification[verifiedCatalogSnapshot] !== true ||
+      verification.kind !== kind ||
+      verification.revisionId !== revisionId
+    ) {
+      throw new ResourceSnapshotIntegrityError(
+        "activation snapshot verification does not match the catalog revision",
+      );
+    }
   }
 
   private async transitionRevision(

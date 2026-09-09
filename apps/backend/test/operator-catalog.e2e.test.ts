@@ -7,7 +7,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../src/app.module";
 import { configureHttpBodyParsers } from "../src/http-body.config";
 import { PrismaService } from "../src/prisma/prisma.service";
-import { ResourceCatalogService } from "../src/modules/resources/resource-catalog.service";
+import {
+  SlicerProfileSnapshotIntegrityError,
+  SlicerProfileSnapshotService,
+  SlicerProfileSnapshotUnavailableError,
+} from "../src/modules/slicing/slicer-profile-snapshot.service";
 import {
   PersistenceFactory,
   type PersistenceFoundation,
@@ -37,6 +41,9 @@ describe("operator catalog commands", () => {
   let fixture: PersistenceFoundation;
   let adminCookie: string;
   let adminCsrfToken: string;
+  let adminOperatorId: string;
+  let secondAdminCookie: string;
+  let secondAdminCsrfToken: string;
   let viewerCookie: string;
   let viewerCsrfToken: string;
 
@@ -72,6 +79,10 @@ describe("operator catalog commands", () => {
     const admin = await sessionCookie("ADMIN", fixture.nodeId);
     adminCookie = admin.cookie;
     adminCsrfToken = admin.csrfToken;
+    adminOperatorId = admin.operatorId;
+    const secondAdmin = await sessionCookie("ADMIN", fixture.nodeId);
+    secondAdminCookie = secondAdmin.cookie;
+    secondAdminCsrfToken = secondAdmin.csrfToken;
     const viewer = await sessionCookie("VIEWER", fixture.nodeId);
     viewerCookie = viewer.cookie;
     viewerCsrfToken = viewer.csrfToken;
@@ -95,6 +106,19 @@ describe("operator catalog commands", () => {
         testScope,
       },
     };
+    const snapshots = app.get(SlicerProfileSnapshotService);
+    const createdReferenceProvision = vi.spyOn(
+      snapshots,
+      "provisionReferenceProfile",
+    );
+    const createdMachineProvision = vi.spyOn(
+      snapshots,
+      "provisionMachineProfile",
+    );
+    const createdCalibrationProvision = vi.spyOn(
+      snapshots,
+      "provisionMachineCalibration",
+    );
     const referenceResponse = await command(
       "/admin/catalog/reference-profiles",
       referenceBody,
@@ -113,9 +137,10 @@ describe("operator catalog commands", () => {
       state: "DRAFT",
     });
 
-    const snapshots = app.get(ResourceCatalogService);
+    expect(createdReferenceProvision).not.toHaveBeenCalled();
+    createdReferenceProvision.mockRestore();
     const provisionSettings = vi
-      .spyOn(snapshots, "provisionSettings")
+      .spyOn(snapshots, "provisionReferenceProfile")
       .mockRejectedValue(new Error("storage must not be called for replay"));
     const replayAt = new Date(Date.now() + 31 * 86_400_000);
     vi.useFakeTimers();
@@ -144,7 +169,7 @@ describe("operator catalog commands", () => {
     ).resolves.toBe(1);
 
     const mismatchedProvision = vi
-      .spyOn(snapshots, "provisionSettings")
+      .spyOn(snapshots, "provisionReferenceProfile")
       .mockRejectedValue(new Error("storage must not be called for mismatch"));
     const mismatchedReplay = await command(
       "/admin/catalog/reference-profiles",
@@ -188,6 +213,10 @@ describe("operator catalog commands", () => {
       ),
     );
     expect(calibration.state).toBe("DRAFT");
+    expect(createdMachineProvision).not.toHaveBeenCalled();
+    expect(createdCalibrationProvision).not.toHaveBeenCalled();
+    createdMachineProvision.mockRestore();
+    createdCalibrationProvision.mockRestore();
 
     const inventory = await responseBody(
       command(
@@ -309,6 +338,242 @@ describe("operator catalog commands", () => {
         payload: expect.objectContaining({ deltaMilligrams: "11" }),
       }),
     );
+  });
+
+  it("creates snapshots only at activation and preserves cross-operator command effects", async () => {
+    const snapshots = app.get(SlicerProfileSnapshotService);
+    const createPath = "/admin/catalog/reference-profiles";
+    const createBody = {
+      material: "PLA",
+      quality: "FINE",
+      slicerEngine: "orca",
+      slicerVersion: "2.1.0",
+      settings: { profile: "activation-gate", testScope },
+    };
+
+    const createKey = `catalog-draft-only-${randomUUID()}`;
+    const provision = vi.spyOn(snapshots, "provisionReferenceProfile");
+    const draft = await responseBody(
+      command(createPath, createBody, createKey),
+    );
+    expect(draft.state).toBe("DRAFT");
+    expect(provision).not.toHaveBeenCalled();
+
+    const crossOperatorReplay = await responseBody(
+      commandAs(
+        secondAdminCookie,
+        secondAdminCsrfToken,
+        createPath,
+        createBody,
+        createKey,
+      ),
+    );
+    expect(crossOperatorReplay).toEqual(draft);
+    expect(provision).not.toHaveBeenCalled();
+    provision.mockRestore();
+    await expect(
+      prisma.auditEvent.findMany({
+        where: {
+          correlationId: draft.id,
+          eventType: "catalog.reference-profile.created",
+        },
+        select: { operatorIdentityId: true },
+      }),
+    ).resolves.toEqual([{ operatorIdentityId: adminOperatorId }]);
+
+    const concurrentKey = `catalog-concurrent-same-${randomUUID()}`;
+    const concurrentBody = {
+      ...createBody,
+      settings: { profile: "concurrent-same", testScope },
+    };
+    const concurrentResponses = await Promise.all([
+      command(createPath, concurrentBody, concurrentKey),
+      commandAs(
+        secondAdminCookie,
+        secondAdminCsrfToken,
+        createPath,
+        concurrentBody,
+        concurrentKey,
+      ),
+    ]);
+    expect(concurrentResponses.map(({ status }) => status)).toEqual([200, 200]);
+    const concurrentResults = (await Promise.all(
+      concurrentResponses.map((response) => response.json()),
+    )) as Array<{ id: string; state: string }>;
+    expect(concurrentResults[0]).toEqual(concurrentResults[1]);
+    const concurrentResult = concurrentResults[0];
+    if (!concurrentResult) {
+      throw new Error("expected a concurrent command result");
+    }
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          correlationId: concurrentResult.id,
+          eventType: "catalog.reference-profile.created",
+        },
+      }),
+    ).resolves.toBe(1);
+
+    const mismatchKey = `catalog-concurrent-mismatch-${randomUUID()}`;
+    const mismatchResponses = await Promise.all([
+      command(createPath, concurrentBody, mismatchKey),
+      commandAs(
+        secondAdminCookie,
+        secondAdminCsrfToken,
+        createPath,
+        { ...concurrentBody, slicerVersion: "2.1.1" },
+        mismatchKey,
+      ),
+    ]);
+    expect(mismatchResponses.map(({ status }) => status).sort()).toEqual([
+      200, 409,
+    ]);
+    const mismatchSuccess = mismatchResponses.find(
+      ({ status }) => status === 200,
+    );
+    if (!mismatchSuccess) {
+      throw new Error("expected one successful concurrent command");
+    }
+    const mismatchResult = (await mismatchSuccess.json()) as {
+      id: string;
+      state: string;
+    };
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          correlationId: mismatchResult.id,
+          eventType: "catalog.reference-profile.created",
+        },
+      }),
+    ).resolves.toBe(1);
+
+    const unavailableKey = `catalog-activation-unavailable-${randomUUID()}`;
+    const unavailable = vi
+      .spyOn(snapshots, "provisionReferenceProfile")
+      .mockRejectedValue(new SlicerProfileSnapshotUnavailableError());
+    const unavailableActivation = await command(
+      `${createPath}/${draft.id}/activate`,
+      { reason: "Verify immutable reference settings" },
+      unavailableKey,
+    );
+    expect(unavailableActivation.status).toBe(503);
+    await expect(
+      prisma.referenceProfile.findUniqueOrThrow({ where: { id: draft.id } }),
+    ).resolves.toMatchObject({ state: "DRAFT" });
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          correlationId: draft.id,
+          eventType: "catalog.reference-profile.activated",
+        },
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.idempotencyRecord.count({
+        where: {
+          namespace: `cat:reference-profile:${draft.id}:activate`,
+          idempotencyKey: unavailableKey,
+        },
+      }),
+    ).resolves.toBe(0);
+    unavailable.mockRestore();
+
+    const activated = await responseBody(
+      command(
+        `${createPath}/${draft.id}/activate`,
+        { reason: "Verify immutable reference settings" },
+        unavailableKey,
+      ),
+    );
+    expect(activated).toMatchObject({ id: draft.id, state: "ACTIVE" });
+    const replayProvision = vi
+      .spyOn(snapshots, "provisionReferenceProfile")
+      .mockRejectedValue(
+        new Error("storage must not be called for activation replay"),
+      );
+    const activatedReplay = await responseBody(
+      commandAs(
+        secondAdminCookie,
+        secondAdminCsrfToken,
+        `${createPath}/${draft.id}/activate`,
+        { reason: "Verify immutable reference settings" },
+        unavailableKey,
+      ),
+    );
+    expect(activatedReplay).toEqual(activated);
+    expect(replayProvision).not.toHaveBeenCalled();
+    replayProvision.mockRestore();
+    await expect(
+      prisma.auditEvent.findMany({
+        where: {
+          correlationId: draft.id,
+          eventType: "catalog.reference-profile.activated",
+        },
+        select: { operatorIdentityId: true },
+      }),
+    ).resolves.toEqual([{ operatorIdentityId: adminOperatorId }]);
+
+    const retired = await responseBody(
+      command(
+        `${createPath}/${draft.id}/retire`,
+        { reason: "Preserve activation replay evidence" },
+        `catalog-activation-replay-retire-${randomUUID()}`,
+      ),
+    );
+    expect(retired).toMatchObject({ id: draft.id, state: "RETIRED" });
+    const afterAdvanceProvision = vi
+      .spyOn(snapshots, "provisionReferenceProfile")
+      .mockRejectedValue(
+        new Error("storage must not be called for lifecycle-advanced replay"),
+      );
+    const replayAfterAdvance = await responseBody(
+      commandAs(
+        secondAdminCookie,
+        secondAdminCsrfToken,
+        `${createPath}/${draft.id}/activate`,
+        { reason: "Verify immutable reference settings" },
+        unavailableKey,
+      ),
+    );
+    expect(replayAfterAdvance).toEqual(activated);
+    expect(afterAdvanceProvision).not.toHaveBeenCalled();
+    afterAdvanceProvision.mockRestore();
+
+    const integrityDraft = await responseBody(
+      command(
+        createPath,
+        {
+          ...createBody,
+          settings: { profile: "activation-integrity", testScope },
+        },
+        `catalog-activation-integrity-create-${randomUUID()}`,
+      ),
+    );
+    const integrity = vi
+      .spyOn(snapshots, "provisionReferenceProfile")
+      .mockRejectedValue(
+        new SlicerProfileSnapshotIntegrityError("snapshot metadata mismatches"),
+      );
+    const integrityActivation = await command(
+      `${createPath}/${integrityDraft.id}/activate`,
+      { reason: "Verify immutable reference settings" },
+      `catalog-activation-integrity-${randomUUID()}`,
+    );
+    expect(integrityActivation.status).toBe(409);
+    integrity.mockRestore();
+    await expect(
+      prisma.referenceProfile.findUniqueOrThrow({
+        where: { id: integrityDraft.id },
+      }),
+    ).resolves.toMatchObject({ state: "DRAFT" });
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          correlationId: integrityDraft.id,
+          eventType: "catalog.reference-profile.activated",
+        },
+      }),
+    ).resolves.toBe(0);
   });
 
   it("rejects malformed command bodies, untrusted nodes, and catalog-write access", async () => {
@@ -503,9 +768,9 @@ describe("operator catalog commands", () => {
       expect(zeroAdjustment.status).toBe(400);
     }
 
-    const snapshots = app.get(ResourceCatalogService);
+    const snapshots = app.get(SlicerProfileSnapshotService);
     const invalidCalibrationProvision = vi
-      .spyOn(snapshots, "provisionSettings")
+      .spyOn(snapshots, "provisionMachineCalibration")
       .mockRejectedValue(
         new Error("storage must not be called for invalid machine"),
       );
@@ -558,7 +823,7 @@ describe("operator catalog commands", () => {
       select: { machineCapabilityId: true },
     });
     const incompatibleProvision = vi
-      .spyOn(snapshots, "provisionSettings")
+      .spyOn(snapshots, "provisionMachineProfile")
       .mockRejectedValue(
         new Error(
           "storage must not be called for incompatible machine profile",
@@ -621,14 +886,24 @@ describe("operator catalog commands", () => {
     body: object,
     idempotencyKey: string,
   ): Promise<Response> {
+    return commandAs(adminCookie, adminCsrfToken, path, body, idempotencyKey);
+  }
+
+  async function commandAs(
+    cookie: string,
+    csrfToken: string,
+    path: string,
+    body: object,
+    idempotencyKey: string,
+  ): Promise<Response> {
     return fetch(new URL(path, baseUrl), {
       method: "POST",
       headers: {
-        cookie: adminCookie,
+        cookie,
         "content-type": "application/json",
         "idempotency-key": idempotencyKey,
         origin: "http://localhost:3002",
-        "x-csrf-token": adminCsrfToken,
+        "x-csrf-token": csrfToken,
       },
       body: JSON.stringify(body),
     });
@@ -653,7 +928,7 @@ describe("operator catalog commands", () => {
   async function sessionCookie(
     role: "VIEWER" | "ADMIN",
     nodeId: string,
-  ): Promise<{ cookie: string; csrfToken: string }> {
+  ): Promise<{ cookie: string; csrfToken: string; operatorId: string }> {
     const identity = await prisma.operatorIdentity.create({
       data: {
         email: `operator-catalog-${randomUUID()}@example.test`,
@@ -678,7 +953,11 @@ describe("operator catalog commands", () => {
         absoluteExpiresAt: new Date(Date.now() + 60 * 60 * 1_000),
       },
     });
-    return { cookie: `taven_admin=${token}`, csrfToken };
+    return {
+      cookie: `taven_admin=${token}`,
+      csrfToken,
+      operatorId: identity.id,
+    };
   }
 });
 

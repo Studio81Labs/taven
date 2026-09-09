@@ -9,11 +9,13 @@ import {
 } from "@nestjs/common";
 import {
   ApiBody,
+  ApiConflictResponse,
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiSecurity,
+  ApiServiceUnavailableResponse,
   ApiTags,
 } from "@nestjs/swagger";
 import { CurrentOperator } from "../admin-access/current-operator.decorator";
@@ -94,6 +96,13 @@ export class OperatorCatalogController {
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiBody({ type: CatalogReasonDto })
   @ApiOkResponse({ type: CatalogCommandResultDto })
+  @ApiConflictResponse({
+    description:
+      "Revision lifecycle, idempotency, or snapshot integrity conflicts",
+  })
+  @ApiServiceUnavailableResponse({
+    description: "Snapshot verification storage is temporarily unavailable",
+  })
   activateReferenceProfile(
     @CurrentOperator() operator: OperatorContext,
     @Param("id") id: string,
@@ -126,6 +135,13 @@ export class OperatorCatalogController {
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiBody({ type: CatalogReasonDto })
   @ApiOkResponse({ type: CatalogCommandResultDto })
+  @ApiConflictResponse({
+    description:
+      "Revision lifecycle, idempotency, or snapshot integrity conflicts",
+  })
+  @ApiServiceUnavailableResponse({
+    description: "Snapshot verification storage is temporarily unavailable",
+  })
   activateMachineProfile(
     @CurrentOperator() operator: OperatorContext,
     @Param("id") id: string,
@@ -175,6 +191,13 @@ export class OperatorCatalogController {
   @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiBody({ type: CatalogReasonDto })
   @ApiOkResponse({ type: CatalogCommandResultDto })
+  @ApiConflictResponse({
+    description:
+      "Revision lifecycle, idempotency, or snapshot integrity conflicts",
+  })
+  @ApiServiceUnavailableResponse({
+    description: "Snapshot verification storage is temporarily unavailable",
+  })
   activateMachineCalibration(
     @CurrentOperator() operator: OperatorContext,
     @Param("nodeId") nodeId: string,

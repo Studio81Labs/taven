@@ -3987,6 +3987,20 @@ export interface operations {
                     "application/json": components["schemas"]["CatalogCommandResultDto"];
                 };
             };
+            /** @description Revision lifecycle, idempotency, or snapshot integrity conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot verification storage is temporarily unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     OperatorCatalogController_retireMachineProfile: {
@@ -4146,6 +4160,20 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CatalogCommandResultDto"];
                 };
+            };
+            /** @description Revision lifecycle, idempotency, or snapshot integrity conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot verification storage is temporarily unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -4459,6 +4487,20 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CatalogCommandResultDto"];
                 };
+            };
+            /** @description Revision lifecycle, idempotency, or snapshot integrity conflicts */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot verification storage is temporarily unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

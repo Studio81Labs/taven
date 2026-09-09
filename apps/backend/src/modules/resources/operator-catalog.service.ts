@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import {
   IdempotencyStatus,
@@ -26,6 +27,8 @@ import { canonicalJson, type CanonicalJson } from "./resource-identity";
 import {
   ResourceConflictError,
   ResourceNotFoundError,
+  ResourceSnapshotIntegrityError,
+  ResourceSnapshotUnavailableError,
   ResourceValidationError,
 } from "./resource-errors";
 import {
@@ -34,6 +37,7 @@ import {
   type CreateMachineCalibrationInput,
   type CreateMachineProfileInput,
   type CreateReferenceProfileInput,
+  type VerifiedCatalogSnapshot,
 } from "./resource-catalog.service";
 import type {
   CatalogCommandResultDto,
@@ -49,7 +53,7 @@ import type {
 
 type Transaction = Prisma.TransactionClient;
 type CatalogResult = CatalogCommandResultDto;
-type IdempotencyPreparation<T> = { response: T } | { stageSnapshot: boolean };
+type IdempotencyPreparation<T> = { response: T } | { needsVerification: true };
 
 const IDEMPOTENCY_DAYS = 30;
 const UUID_PATTERN =
@@ -76,18 +80,13 @@ export class OperatorCatalogService {
   ): Promise<CatalogResult> {
     const nodeId = this.globalNode(operator);
     const input = referenceProfileInput(body);
-    return this.stagedCommand(
+    return this.command(
       operator,
       "catalog:reference-profile:create",
       key,
       { nodeId, input },
-      () => this.catalog.provisionSettings(input.settings),
       async (tx, idempotencyKey) => {
-        const profile = await this.catalog.createReferenceProfile(
-          input,
-          tx,
-          true,
-        );
+        const profile = await this.catalog.createReferenceProfile(input, tx);
         const result = { id: profile.id, state: profile.state };
         await this.record(tx, operator, nodeId, idempotencyKey, profile.id, {
           eventType: "catalog.reference-profile.created",
@@ -105,18 +104,14 @@ export class OperatorCatalogService {
   ): Promise<CatalogResult> {
     const nodeId = this.globalNode(operator);
     const input = machineProfileInput(body);
-    return this.stagedCommand(
+    return this.command(
       operator,
       "catalog:machine-profile:create",
       key,
       { nodeId, input },
-      () => this.catalog.provisionSettings(input.settings),
       async (tx, idempotencyKey) => {
-        const profile = await this.catalog.createMachineProfile(
-          input,
-          tx,
-          true,
-        );
+        await this.requireMachineProfileCompatibility(input, tx);
+        const profile = await this.catalog.createMachineProfile(input, tx);
         const result = { id: profile.id, state: profile.state };
         await this.record(tx, operator, nodeId, idempotencyKey, profile.id, {
           eventType: "catalog.machine-profile.created",
@@ -124,7 +119,6 @@ export class OperatorCatalogService {
         });
         return result;
       },
-      () => this.requireMachineProfileCompatibility(input),
     );
   }
 
@@ -200,17 +194,16 @@ export class OperatorCatalogService {
   ): Promise<CatalogResult> {
     nodeId = this.node(operator, nodeId);
     const input = calibrationInput(nodeId, body);
-    return this.stagedCommand(
+    return this.command(
       operator,
       `cat:n:${nodeId}:c:create`,
       key,
       { nodeId, input },
-      () => this.catalog.provisionSettings(input.settings),
       async (tx, idempotencyKey) => {
+        await this.requireMachineInNode(nodeId, input.machineId, tx);
         const calibration = await this.catalog.createMachineCalibration(
           input,
           tx,
-          true,
         );
         const result = { id: calibration.id, state: calibration.state };
         await this.record(
@@ -226,7 +219,6 @@ export class OperatorCatalogService {
         );
         return result;
       },
-      () => this.requireMachineInNode(nodeId, input.machineId),
     );
   }
 
@@ -418,33 +410,44 @@ export class OperatorCatalogService {
     const nodeId = this.globalNode(operator);
     id = uuid(id, "id");
     const reason = reasonText(body);
-    return this.stagedCommand(
+    const input = { nodeId, id, action, reason };
+    const execute = async (
+      tx: Transaction,
+      idempotencyKey: string,
+      verification?: VerifiedCatalogSnapshot,
+    ) => {
+      const revision =
+        kind === "reference-profile"
+          ? action === "activate"
+            ? await this.catalog.activateReferenceProfile(id, tx, verification)
+            : await this.catalog.retireReferenceProfile(id, tx)
+          : action === "activate"
+            ? await this.catalog.activateMachineProfile(id, tx, verification)
+            : await this.catalog.retireMachineProfile(id, tx);
+      const state = (revision as { state: string }).state;
+      const result = { id, state };
+      await this.record(tx, operator, nodeId, idempotencyKey, id, {
+        eventType: `catalog.${kind}.${action}d`,
+        reason,
+        reasonCode: "CATALOG_REVISION_LIFECYCLE",
+        payload: { operation: action, revisionKind: kind },
+      });
+      return result;
+    };
+    const namespace = `catalog:${kind}:${id}:${action}`;
+    if (action === "retire") {
+      return this.command(operator, namespace, key, input, execute);
+    }
+    return this.activationCommand(
       operator,
-      `catalog:${kind}:${id}:${action}`,
+      namespace,
       key,
-      { nodeId, id, action, reason },
-      action === "activate"
-        ? () => this.provisionGlobalRevision(kind, id)
-        : undefined,
-      async (tx, idempotencyKey) => {
-        const revision =
-          kind === "reference-profile"
-            ? action === "activate"
-              ? await this.catalog.activateReferenceProfile(id, tx)
-              : await this.catalog.retireReferenceProfile(id, tx)
-            : action === "activate"
-              ? await this.catalog.activateMachineProfile(id, tx)
-              : await this.catalog.retireMachineProfile(id, tx);
-        const state = (revision as { state: string }).state;
-        const result = { id, state };
-        await this.record(tx, operator, nodeId, idempotencyKey, id, {
-          eventType: `catalog.${kind}.${action}d`,
-          reason,
-          reasonCode: "CATALOG_REVISION_LIFECYCLE",
-          payload: { operation: action, revisionKind: kind },
-        });
-        return result;
-      },
+      input,
+      () =>
+        kind === "reference-profile"
+          ? this.catalog.verifyReferenceProfileSnapshot(id)
+          : this.catalog.verifyMachineProfileSnapshot(id),
+      execute,
     );
   }
 
@@ -459,38 +462,46 @@ export class OperatorCatalogService {
     nodeId = this.node(operator, nodeId);
     id = uuid(id, "id");
     const reason = reasonText(body);
-    return this.stagedCommand(
+    const input = { nodeId, id, action, reason };
+    const execute = async (
+      tx: Transaction,
+      idempotencyKey: string,
+      verification?: VerifiedCatalogSnapshot,
+    ) => {
+      const scopedCalibration = await tx.machineCalibration.findFirst({
+        where: { id, nodeId },
+        select: { id: true },
+      });
+      if (!scopedCalibration) {
+        throw new ResourceNotFoundError(
+          "calibration was not found in the node",
+        );
+      }
+      const calibration =
+        action === "activate"
+          ? await this.catalog.activateMachineCalibration(id, tx, verification)
+          : await this.catalog.retireMachineCalibration(id, tx);
+      const state = (calibration as { state: string }).state;
+      const result = { id, state };
+      await this.record(tx, operator, nodeId, idempotencyKey, id, {
+        eventType: `catalog.machine-calibration.${action}d`,
+        reason,
+        reasonCode: "CATALOG_REVISION_LIFECYCLE",
+        payload: { operation: action, revisionKind: "machine-calibration" },
+      });
+      return result;
+    };
+    const namespace = `cat:n:${nodeId}:c:${id}:${action === "activate" ? "a" : "r"}`;
+    if (action === "retire") {
+      return this.command(operator, namespace, key, input, execute);
+    }
+    return this.activationCommand(
       operator,
-      `cat:n:${nodeId}:c:${id}:${action === "activate" ? "a" : "r"}`,
+      namespace,
       key,
-      { nodeId, id, action, reason },
-      action === "activate"
-        ? () => this.provisionCalibration(nodeId, id)
-        : undefined,
-      async (tx, idempotencyKey) => {
-        const scopedCalibration = await tx.machineCalibration.findFirst({
-          where: { id, nodeId },
-          select: { id: true },
-        });
-        if (!scopedCalibration) {
-          throw new ResourceNotFoundError(
-            "calibration was not found in the node",
-          );
-        }
-        const calibration =
-          action === "activate"
-            ? await this.catalog.activateMachineCalibration(id, tx)
-            : await this.catalog.retireMachineCalibration(id, tx);
-        const state = (calibration as { state: string }).state;
-        const result = { id, state };
-        await this.record(tx, operator, nodeId, idempotencyKey, id, {
-          eventType: `catalog.machine-calibration.${action}d`,
-          reason,
-          reasonCode: "CATALOG_REVISION_LIFECYCLE",
-          payload: { operation: action, revisionKind: "machine-calibration" },
-        });
-        return result;
-      },
+      input,
+      () => this.catalog.verifyMachineCalibrationSnapshot(id, nodeId),
+      execute,
     );
   }
 
@@ -507,45 +518,12 @@ export class OperatorCatalogService {
     return normalizedNodeId;
   }
 
-  private async provisionGlobalRevision(
-    kind: "reference-profile" | "machine-profile",
-    id: string,
-  ): Promise<void> {
-    const revision =
-      kind === "reference-profile"
-        ? await this.prisma.referenceProfile.findUnique({
-            where: { id },
-            select: { settings: true },
-          })
-        : await this.prisma.machineProfile.findUnique({
-            where: { id },
-            select: { settings: true },
-          });
-    if (!revision) {
-      throw new NotFoundException("Catalog revision was not found");
-    }
-    await this.catalog.provisionSettings(revision.settings);
-  }
-
-  private async provisionCalibration(
-    nodeId: string,
-    id: string,
-  ): Promise<void> {
-    const calibration = await this.prisma.machineCalibration.findFirst({
-      where: { id, nodeId },
-      select: { settings: true },
-    });
-    if (!calibration) {
-      throw new NotFoundException("Calibration was not found");
-    }
-    await this.catalog.provisionSettings(calibration.settings);
-  }
-
   private async requireMachineInNode(
     nodeId: string,
     machineId: string,
+    client: Pick<Transaction, "machine"> = this.prisma,
   ): Promise<void> {
-    const machine = await this.prisma.machine.findFirst({
+    const machine = await client.machine.findFirst({
       where: { id: machineId, nodeId },
       select: { id: true },
     });
@@ -555,9 +533,11 @@ export class OperatorCatalogService {
 
   private async requireMachineProfileCompatibility(
     input: CreateMachineProfileInput,
+    client: Pick<Transaction, "referenceProfile" | "machineCapability"> = this
+      .prisma,
   ): Promise<void> {
     const [referenceProfile, machineCapability] = await Promise.all([
-      this.prisma.referenceProfile.findFirst({
+      client.referenceProfile.findFirst({
         where: {
           id: input.referenceProfileId,
           material: input.material,
@@ -565,7 +545,7 @@ export class OperatorCatalogService {
         },
         select: { id: true },
       }),
-      this.prisma.machineCapability.findFirst({
+      client.machineCapability.findFirst({
         where: {
           id: input.machineCapabilityId,
           supportedMaterials: { has: input.material },
@@ -583,14 +563,17 @@ export class OperatorCatalogService {
     }
   }
 
-  private async stagedCommand<T extends CatalogResult>(
+  private async activationCommand<T extends CatalogResult>(
     operator: OperatorContext,
     namespace: string,
     key: string | undefined,
     input: unknown,
-    stage: (() => Promise<unknown>) | undefined,
-    execute: (tx: Transaction, idempotencyKey: string) => Promise<T>,
-    preflight?: () => Promise<void>,
+    verify: () => Promise<VerifiedCatalogSnapshot>,
+    execute: (
+      tx: Transaction,
+      idempotencyKey: string,
+      verification: VerifiedCatalogSnapshot,
+    ) => Promise<T>,
   ): Promise<T> {
     const preparation = await this.prepareIdempotency<T>(
       operator,
@@ -599,11 +582,31 @@ export class OperatorCatalogService {
       input,
     );
     if ("response" in preparation) return preparation.response;
-    if (preparation.stageSnapshot && stage) {
-      await preflight?.();
-      await stage();
+    try {
+      const verification = await verify();
+      return this.command(
+        operator,
+        namespace,
+        key,
+        input,
+        (tx, idempotencyKey) => execute(tx, idempotencyKey, verification),
+      );
+    } catch (error) {
+      if (error instanceof ResourceNotFoundError) {
+        throw new NotFoundException("Catalog resource was not found");
+      }
+      if (error instanceof ResourceSnapshotIntegrityError) {
+        throw new ConflictException(
+          "Catalog revision snapshot verification failed",
+        );
+      }
+      if (error instanceof ResourceSnapshotUnavailableError) {
+        throw new ServiceUnavailableException(
+          "Catalog revision snapshot verification is unavailable",
+        );
+      }
+      throw error;
     }
-    return this.command(operator, namespace, key, input, execute);
   }
 
   private async prepareIdempotency<T extends CatalogResult>(
@@ -612,7 +615,7 @@ export class OperatorCatalogService {
     key: string | undefined,
     input: unknown,
   ): Promise<IdempotencyPreparation<T>> {
-    namespace = operatorCommandNamespace(namespace, operator);
+    namespace = operatorCommandNamespace(namespace);
     const idempotencyKey = requiredKey(key);
     const fingerprint = fingerprintFor(input);
     const { existing, now } = await this.prisma.$transaction(async (tx) => {
@@ -623,9 +626,8 @@ export class OperatorCatalogService {
       });
       return { existing, now };
     });
-    if (!existing || existing.expiresAt <= now) {
-      return { stageSnapshot: true };
-    }
+    if (!existing || existing.expiresAt <= now)
+      return { needsVerification: true };
     if (existing.requestFingerprint !== fingerprint) {
       throw new ConflictException(
         "Idempotency key was already used with different input",
@@ -637,7 +639,7 @@ export class OperatorCatalogService {
     ) {
       return { response: existing.responseBody as unknown as T };
     }
-    return { stageSnapshot: false };
+    return { needsVerification: true };
   }
 
   private async command<T extends CatalogResult>(
@@ -647,7 +649,7 @@ export class OperatorCatalogService {
     input: unknown,
     execute: (tx: Transaction, idempotencyKey: string) => Promise<T>,
   ): Promise<T> {
-    namespace = operatorCommandNamespace(namespace, operator);
+    namespace = operatorCommandNamespace(namespace);
     const idempotencyKey = requiredKey(key);
     const fingerprint = fingerprintFor(input);
     try {
@@ -719,15 +721,8 @@ export class OperatorCatalogService {
   }
 }
 
-function operatorCommandNamespace(
-  namespace: string,
-  operator: OperatorContext,
-): string {
-  const operatorFingerprint = createHash("sha256")
-    .update(operator.operatorId)
-    .digest("hex")
-    .slice(0, 12);
-  return `${namespace.replace("catalog:", "cat:")}:o:${operatorFingerprint}`;
+function operatorCommandNamespace(namespace: string): string {
+  return namespace.replace("catalog:", "cat:");
 }
 
 function referenceProfileInput(

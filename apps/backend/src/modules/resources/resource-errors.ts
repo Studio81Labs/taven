@@ -21,3 +21,19 @@ export class ResourceConflictError extends Error {
     this.constraint = constraint;
   }
 }
+
+export class ResourceSnapshotIntegrityError extends Error {
+  constructor(message = "catalog revision snapshot verification failed") {
+    super(message);
+    this.name = "ResourceSnapshotIntegrityError";
+  }
+}
+
+export class ResourceSnapshotUnavailableError extends Error {
+  constructor(
+    message = "catalog revision snapshot verification is unavailable",
+  ) {
+    super(message);
+    this.name = "ResourceSnapshotUnavailableError";
+  }
+}
