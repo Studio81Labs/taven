@@ -845,11 +845,14 @@ function uuid(value: unknown, name: string): string {
 }
 
 function text(value: unknown, name: string, maxLength?: number): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
+  if (typeof value !== "string") {
     throw new BadRequestException(`${name} must not be blank`);
   }
   const normalized = value.trim();
-  if (maxLength !== undefined && normalized.length > maxLength) {
+  if (Array.from(normalized).length === 0) {
+    throw new BadRequestException(`${name} must not be blank`);
+  }
+  if (maxLength !== undefined && Array.from(normalized).length > maxLength) {
     throw new BadRequestException(`${name} is too long`);
   }
   return normalized;

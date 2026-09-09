@@ -355,6 +355,25 @@ describe("operator catalog commands", () => {
     );
     expect(tooLong.status).toBe(400);
 
+    const unicodeSku = `${"🧵".repeat(50)}-${randomUUID()}`;
+    expect(Array.from(unicodeSku)).toHaveLength(87);
+    expect(unicodeSku).toHaveLength(137);
+    const unicodeSkuResponse = await command(
+      `/admin/nodes/${fixture.nodeId}/inventories`,
+      {
+        machineId: fixture.machineId,
+        sku: unicodeSku,
+        material: "PLA",
+        vendor: "Taven test",
+        priceMinorUnitsNumerator: "1",
+        priceMinorUnitsDenominator: "1",
+        currency: "EUR",
+        remainingMilligrams: "1",
+      },
+      `catalog-unicode-sku-${randomUUID()}`,
+    );
+    expect(unicodeSkuResponse.status).toBe(200);
+
     const intOverflow = await command(
       `/admin/nodes/${fixture.nodeId}/calibrations`,
       {
