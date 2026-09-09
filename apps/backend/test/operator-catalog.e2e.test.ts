@@ -381,6 +381,39 @@ describe("operator catalog commands", () => {
       }),
     ).resolves.toEqual([{ operatorIdentityId: adminOperatorId }]);
 
+    const unicodeOrderKey = `catalog-unicode-order-${randomUUID()}`;
+    const unicodeOrderFirst = await responseBody(
+      command(
+        createPath,
+        {
+          ...createBody,
+          settings: {
+            é: "composed",
+            "e\u0301": "decomposed",
+            testScope,
+          },
+        },
+        unicodeOrderKey,
+      ),
+    );
+    const unicodeOrderReplay = await responseBody(
+      commandAs(
+        secondAdminCookie,
+        secondAdminCsrfToken,
+        createPath,
+        {
+          ...createBody,
+          settings: {
+            testScope,
+            "e\u0301": "decomposed",
+            é: "composed",
+          },
+        },
+        unicodeOrderKey,
+      ),
+    );
+    expect(unicodeOrderReplay).toEqual(unicodeOrderFirst);
+
     const concurrentKey = `catalog-concurrent-same-${randomUUID()}`;
     const concurrentBody = {
       ...createBody,

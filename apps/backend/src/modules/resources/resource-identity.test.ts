@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ResourceValidationError } from "./resource-errors";
-import { resourceRevisionDigest } from "./resource-identity";
+import { canonicalJson, resourceRevisionDigest } from "./resource-identity";
 
 describe("resourceRevisionDigest", () => {
   it("is stable across object key order and changes with immutable content", () => {
@@ -31,5 +31,21 @@ describe("resourceRevisionDigest", () => {
         invalid: Number.POSITIVE_INFINITY,
       }),
     ).toThrow(ResourceValidationError);
+  });
+
+  it("uses a locale-independent total order for Unicode object keys", () => {
+    const first = {
+      é: "composed",
+      "e\u0301": "decomposed",
+    };
+    const reordered = {
+      "e\u0301": "decomposed",
+      é: "composed",
+    };
+
+    expect(canonicalJson(first)).toBe(canonicalJson(reordered));
+    expect(resourceRevisionDigest("REFERENCE_PROFILE", first)).toBe(
+      resourceRevisionDigest("REFERENCE_PROFILE", reordered),
+    );
   });
 });

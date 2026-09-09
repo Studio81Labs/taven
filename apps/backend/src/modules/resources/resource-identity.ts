@@ -7,6 +7,11 @@ export type CanonicalJson =
   | readonly CanonicalJson[]
   | { readonly [key: string]: CanonicalJson };
 
+function compareCodeUnits(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 export function canonicalJson(value: CanonicalJson): string {
   if (value === null || typeof value === "boolean") {
     return JSON.stringify(value);
@@ -24,7 +29,7 @@ export function canonicalJson(value: CanonicalJson): string {
     return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
   }
   const entries = Object.entries(value).sort(([left], [right]) =>
-    left.localeCompare(right),
+    compareCodeUnits(left, right),
   );
   return `{${entries
     .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
