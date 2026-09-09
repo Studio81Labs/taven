@@ -123,6 +123,7 @@ export class OperatorCatalogService {
         });
         return result;
       },
+      () => this.requireMachineProfileCompatibility(input),
     );
   }
 
@@ -549,6 +550,36 @@ export class OperatorCatalogService {
     });
     if (!machine)
       throw new NotFoundException("Machine was not found in the node");
+  }
+
+  private async requireMachineProfileCompatibility(
+    input: CreateMachineProfileInput,
+  ): Promise<void> {
+    const [referenceProfile, machineCapability] = await Promise.all([
+      this.prisma.referenceProfile.findFirst({
+        where: {
+          id: input.referenceProfileId,
+          material: input.material,
+          quality: input.quality,
+        },
+        select: { id: true },
+      }),
+      this.prisma.machineCapability.findFirst({
+        where: {
+          id: input.machineCapabilityId,
+          supportedMaterials: { has: input.material },
+          supportedNozzleMicrometers: {
+            has: input.nozzleDiameterMicrometers,
+          },
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (!referenceProfile || !machineCapability) {
+      throw new ConflictException(
+        "machine profile material, quality, or nozzle is incompatible",
+      );
+    }
   }
 
   private async stagedCommand<T extends CatalogResult>(

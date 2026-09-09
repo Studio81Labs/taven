@@ -557,6 +557,13 @@ describe("operator catalog commands", () => {
       where: { id: fixture.machineId },
       select: { machineCapabilityId: true },
     });
+    const incompatibleProvision = vi
+      .spyOn(snapshots, "provisionSettings")
+      .mockRejectedValue(
+        new Error(
+          "storage must not be called for incompatible machine profile",
+        ),
+      );
     const incompatibleProfile = await command(
       "/admin/catalog/machine-profiles",
       {
@@ -573,6 +580,8 @@ describe("operator catalog commands", () => {
       `catalog-incompatible-${randomUUID()}`,
     );
     expect(incompatibleProfile.status).toBe(409);
+    expect(incompatibleProvision).not.toHaveBeenCalled();
+    incompatibleProvision.mockRestore();
 
     const forbidden = await fetch(
       new URL(`/admin/nodes/${fixture.nodeId}/inventories`, baseUrl),
