@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Taven opt-in BullMQ slicer worker",
+  "exports": {
+    "./fixture-runtime": {
+      "types": "./src/fixture-runtime.ts",
+      "default": "./src/fixture-runtime.ts"
+    }
+  },
   "scripts": {
     "contracts:build": "pnpm --filter @taven/slicer-contracts... build",
     "prebuild": "pnpm contracts:build",

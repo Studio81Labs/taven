@@ -1,5 +1,5 @@
 import createClient, { type Client, type ClientOptions } from "openapi-fetch";
-import type { paths } from "../generated/schema";
+import type { paths } from "../generated/schema.js";
 
 export type TavenApiClient = Client<paths>;
 export type TavenApiClientOptions = ClientOptions;
