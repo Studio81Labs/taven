@@ -26,10 +26,10 @@ export class CreateReferenceProfileDto {
   @ApiProperty({ type: String })
   quality!: string;
 
-  @ApiProperty({ type: String, minLength: 1 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
   slicerEngine!: string;
 
-  @ApiProperty({ type: String, minLength: 1 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
   slicerVersion!: string;
 
   @ApiProperty({ type: Object, additionalProperties: true })
@@ -43,7 +43,7 @@ export class CreateMachineProfileDto extends CreateReferenceProfileDto {
   @ApiProperty(UUID)
   referenceProfileId!: string;
 
-  @ApiProperty({ type: Number, minimum: 1 })
+  @ApiProperty({ type: Number, minimum: 1, maximum: 2_147_483_647 })
   nozzleDiameterMicrometers!: number;
 
   @ApiProperty({ type: String })
@@ -54,13 +54,21 @@ export class CreateMachineCalibrationDto {
   @ApiProperty(UUID)
   machineId!: string;
 
-  @ApiProperty({ type: Number, minimum: 1 })
+  @ApiProperty({ type: Number, minimum: 1, maximum: 2_147_483_647 })
   flowRatioPartsPerMillion!: number;
 
-  @ApiProperty({ type: Number })
+  @ApiProperty({
+    type: Number,
+    minimum: -2_147_483_648,
+    maximum: 2_147_483_647,
+  })
   xyCompensationMicrometers!: number;
 
-  @ApiProperty({ type: Number })
+  @ApiProperty({
+    type: Number,
+    minimum: -2_147_483_648,
+    maximum: 2_147_483_647,
+  })
   elephantFootCompensationMicrometers!: number;
 
   @ApiProperty({ type: Object, additionalProperties: true })
@@ -71,19 +79,19 @@ export class CreateInventoryDto {
   @ApiProperty(UUID)
   machineId!: string;
 
-  @ApiProperty({ type: String, minLength: 1 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
   sku!: string;
 
   @ApiProperty({ type: String })
   material!: string;
 
-  @ApiProperty({ type: String, minLength: 1 })
+  @ApiProperty({ type: String, minLength: 1, maxLength: 200 })
   vendor!: string;
 
-  @ApiPropertyOptional({ type: String, nullable: true })
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 100 })
   color?: string | null;
 
-  @ApiPropertyOptional({ type: String, nullable: true })
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: 100 })
   lotCode?: string | null;
 
   @ApiProperty(INTEGER)
@@ -92,7 +100,12 @@ export class CreateInventoryDto {
   @ApiProperty({ type: String, pattern: "^[1-9][0-9]*$" })
   priceMinorUnitsDenominator!: string;
 
-  @ApiProperty({ type: String, pattern: "^[A-Z]{3}$" })
+  @ApiProperty({
+    type: String,
+    minLength: 3,
+    maxLength: 3,
+    pattern: "^[A-Z]{3}$",
+  })
   currency!: string;
 
   @ApiProperty({ type: String, pattern: "^[0-9]+$" })

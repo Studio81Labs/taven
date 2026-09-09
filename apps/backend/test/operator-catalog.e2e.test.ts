@@ -3,10 +3,11 @@ import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../src/app.module";
 import { configureHttpBodyParsers } from "../src/http-body.config";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { ResourceCatalogService } from "../src/modules/resources/resource-catalog.service";
 import {
   PersistenceFactory,
   type PersistenceFoundation,
@@ -112,11 +113,17 @@ describe("operator catalog commands", () => {
       state: "DRAFT",
     });
 
+    const snapshots = app.get(ResourceCatalogService);
+    const provisionSettings = vi
+      .spyOn(snapshots, "provisionSettings")
+      .mockRejectedValue(new Error("storage must not be called for replay"));
     const replay = await command(
       "/admin/catalog/reference-profiles",
       referenceBody,
       referenceKey,
     );
+    expect(provisionSettings).not.toHaveBeenCalled();
+    provisionSettings.mockRestore();
     expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toEqual(reference);
     await expect(
@@ -128,12 +135,17 @@ describe("operator catalog commands", () => {
       }),
     ).resolves.toBe(1);
 
+    const mismatchedProvision = vi
+      .spyOn(snapshots, "provisionSettings")
+      .mockRejectedValue(new Error("storage must not be called for mismatch"));
     const mismatchedReplay = await command(
       "/admin/catalog/reference-profiles",
       { ...referenceBody, slicerVersion: "2.1.1" },
       referenceKey,
     );
     expect(mismatchedReplay.status).toBe(409);
+    expect(mismatchedProvision).not.toHaveBeenCalled();
+    mismatchedProvision.mockRestore();
 
     const machine = await prisma.machine.findUniqueOrThrow({
       where: { id: fixture.machineId },
@@ -251,7 +263,11 @@ describe("operator catalog commands", () => {
       command(adjustmentPath, adjustmentBody, adjustmentKey),
     );
     const adjustmentReplay = await responseBody(
-      command(adjustmentPath, adjustmentBody, adjustmentKey),
+      command(
+        `/admin/nodes/${fixture.nodeId.toUpperCase()}/inventories/${fixture.inventoryId.toUpperCase()}/adjustments`,
+        adjustmentBody,
+        adjustmentKey,
+      ),
     );
     expect(adjustmentReplay).toEqual(adjustment);
     await expect(
@@ -274,6 +290,32 @@ describe("operator catalog commands", () => {
       `catalog-no-reason-${randomUUID()}`,
     );
     expect(noReason.status).toBe(400);
+
+    const tooLong = await command(
+      "/admin/catalog/reference-profiles",
+      {
+        material: "PLA",
+        quality: "FINE",
+        slicerEngine: "x".repeat(101),
+        slicerVersion: "2.1.0",
+        settings: { testScope },
+      },
+      `catalog-long-text-${randomUUID()}`,
+    );
+    expect(tooLong.status).toBe(400);
+
+    const intOverflow = await command(
+      `/admin/nodes/${fixture.nodeId}/calibrations`,
+      {
+        machineId: fixture.machineId,
+        flowRatioPartsPerMillion: 2_147_483_648,
+        xyCompensationMicrometers: 0,
+        elephantFootCompensationMicrometers: 0,
+        settings: { testScope },
+      },
+      `catalog-int-overflow-${randomUUID()}`,
+    );
+    expect(intOverflow.status).toBe(400);
 
     const overflow = await command(
       `/admin/nodes/${fixture.nodeId}/inventories/${fixture.inventoryId}/adjustments`,

@@ -1928,14 +1928,18 @@
       "CreateInventoryDto": {
         "properties": {
           "color": {
+            "maxLength": 100,
             "nullable": true,
             "type": "string"
           },
           "currency": {
+            "maxLength": 3,
+            "minLength": 3,
             "pattern": "^[A-Z]{3}$",
             "type": "string"
           },
           "lotCode": {
+            "maxLength": 100,
             "nullable": true,
             "type": "string"
           },
@@ -1959,10 +1963,12 @@
             "type": "string"
           },
           "sku": {
+            "maxLength": 100,
             "minLength": 1,
             "type": "string"
           },
           "vendor": {
+            "maxLength": 200,
             "minLength": 1,
             "type": "string"
           }
@@ -1982,9 +1988,12 @@
       "CreateMachineCalibrationDto": {
         "properties": {
           "elephantFootCompensationMicrometers": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
             "type": "number"
           },
           "flowRatioPartsPerMillion": {
+            "maximum": 2147483647,
             "minimum": 1,
             "type": "number"
           },
@@ -1997,6 +2006,8 @@
             "type": "object"
           },
           "xyCompensationMicrometers": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
             "type": "number"
           }
         },
@@ -2019,6 +2030,7 @@
             "type": "string"
           },
           "nozzleDiameterMicrometers": {
+            "maximum": 2147483647,
             "minimum": 1,
             "type": "number"
           },
@@ -2037,10 +2049,12 @@
             "type": "object"
           },
           "slicerEngine": {
+            "maxLength": 100,
             "minLength": 1,
             "type": "string"
           },
           "slicerVersion": {
+            "maxLength": 100,
             "minLength": 1,
             "type": "string"
           }
@@ -2155,10 +2169,12 @@
             "type": "object"
           },
           "slicerEngine": {
+            "maxLength": 100,
             "minLength": 1,
             "type": "string"
           },
           "slicerVersion": {
+            "maxLength": 100,
             "minLength": 1,
             "type": "string"
           }

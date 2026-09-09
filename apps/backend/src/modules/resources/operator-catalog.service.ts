@@ -48,6 +48,7 @@ import type {
 
 type Transaction = Prisma.TransactionClient;
 type CatalogResult = CatalogCommandResultDto;
+type IdempotencyPreparation<T> = { response: T } | { stageSnapshot: boolean };
 
 const IDEMPOTENCY_DAYS = 30;
 const UUID_PATTERN =
@@ -55,6 +56,8 @@ const UUID_PATTERN =
 const INTEGER_PATTERN = /^-?(?:0|[1-9][0-9]*)$/;
 const MAX_INT64 = 9_223_372_036_854_775_807n;
 const MIN_INT64 = -9_223_372_036_854_775_808n;
+const MAX_INT32 = 2_147_483_647;
+const MIN_INT32 = -2_147_483_648;
 
 @Injectable()
 export class OperatorCatalogService {
@@ -71,12 +74,12 @@ export class OperatorCatalogService {
   ): Promise<CatalogResult> {
     const nodeId = this.globalNode(operator);
     const input = referenceProfileInput(body);
-    await this.catalog.provisionSettings(input.settings);
-    return this.command(
+    return this.stagedCommand(
       operator,
       "catalog:reference-profile:create",
       key,
       { nodeId, input },
+      () => this.catalog.provisionSettings(input.settings),
       async (tx, idempotencyKey) => {
         const profile = await this.catalog.createReferenceProfile(
           input,
@@ -100,12 +103,12 @@ export class OperatorCatalogService {
   ): Promise<CatalogResult> {
     const nodeId = this.globalNode(operator);
     const input = machineProfileInput(body);
-    await this.catalog.provisionSettings(input.settings);
-    return this.command(
+    return this.stagedCommand(
       operator,
       "catalog:machine-profile:create",
       key,
       { nodeId, input },
+      () => this.catalog.provisionSettings(input.settings),
       async (tx, idempotencyKey) => {
         const profile = await this.catalog.createMachineProfile(
           input,
@@ -192,14 +195,14 @@ export class OperatorCatalogService {
     body: CreateMachineCalibrationDto,
     key?: string,
   ): Promise<CatalogResult> {
-    this.node(operator, nodeId);
+    nodeId = this.node(operator, nodeId);
     const input = calibrationInput(nodeId, body);
-    await this.catalog.provisionSettings(input.settings);
-    return this.command(
+    return this.stagedCommand(
       operator,
       `cat:n:${nodeId}:c:create`,
       key,
       { nodeId, input },
+      () => this.catalog.provisionSettings(input.settings),
       async (tx, idempotencyKey) => {
         const calibration = await this.catalog.createMachineCalibration(
           input,
@@ -263,7 +266,7 @@ export class OperatorCatalogService {
     body: CreateInventoryDto,
     key?: string,
   ): Promise<CatalogResult> {
-    this.node(operator, nodeId);
+    nodeId = this.node(operator, nodeId);
     const input = inventoryInput(nodeId, body);
     return this.command(
       operator,
@@ -289,8 +292,8 @@ export class OperatorCatalogService {
     body: ResourceStatusDto,
     key?: string,
   ): Promise<CatalogResult> {
-    this.node(operator, nodeId);
-    uuid(machineId, "machineId");
+    nodeId = this.node(operator, nodeId);
+    machineId = uuid(machineId, "machineId");
     const status = enumValue(body.status, MachineStatus, "status");
     const reason = reasonText(body);
     return this.command(
@@ -324,8 +327,8 @@ export class OperatorCatalogService {
     body: ResourceStatusDto,
     key?: string,
   ): Promise<CatalogResult> {
-    this.node(operator, nodeId);
-    uuid(inventoryId, "inventoryId");
+    nodeId = this.node(operator, nodeId);
+    inventoryId = uuid(inventoryId, "inventoryId");
     const status = enumValue(body.status, InventoryStatus, "status");
     const reason = reasonText(body);
     return this.command(
@@ -359,8 +362,8 @@ export class OperatorCatalogService {
     body: InventoryAdjustmentDto,
     key?: string,
   ): Promise<CatalogResult> {
-    this.node(operator, nodeId);
-    uuid(inventoryId, "inventoryId");
+    nodeId = this.node(operator, nodeId);
+    inventoryId = uuid(inventoryId, "inventoryId");
     const deltaMilligrams = integer(body.deltaMilligrams, "deltaMilligrams");
     if (deltaMilligrams === 0n)
       throw new BadRequestException("deltaMilligrams must not be zero");
@@ -406,16 +409,16 @@ export class OperatorCatalogService {
     action: "activate" | "retire",
   ): Promise<CatalogResult> {
     const nodeId = this.globalNode(operator);
-    uuid(id, "id");
+    id = uuid(id, "id");
     const reason = reasonText(body);
-    if (action === "activate") {
-      await this.provisionGlobalRevision(kind, id);
-    }
-    return this.command(
+    return this.stagedCommand(
       operator,
       `catalog:${kind}:${id}:${action}`,
       key,
       { nodeId, id, action, reason },
+      action === "activate"
+        ? () => this.provisionGlobalRevision(kind, id)
+        : undefined,
       async (tx, idempotencyKey) => {
         const revision =
           kind === "reference-profile"
@@ -446,24 +449,17 @@ export class OperatorCatalogService {
     key: string | undefined,
     action: "activate" | "retire",
   ): Promise<CatalogResult> {
-    this.node(operator, nodeId);
-    uuid(id, "id");
+    nodeId = this.node(operator, nodeId);
+    id = uuid(id, "id");
     const reason = reasonText(body);
-    if (action === "activate") {
-      const calibration = await this.prisma.machineCalibration.findFirst({
-        where: { id, nodeId },
-        select: { settings: true },
-      });
-      if (!calibration) {
-        throw new NotFoundException("Calibration was not found");
-      }
-      await this.catalog.provisionSettings(calibration.settings);
-    }
-    return this.command(
+    return this.stagedCommand(
       operator,
       `cat:n:${nodeId}:c:${id}:${action === "activate" ? "a" : "r"}`,
       key,
       { nodeId, id, action, reason },
+      action === "activate"
+        ? () => this.provisionCalibration(nodeId, id)
+        : undefined,
       async (tx, idempotencyKey) => {
         const scopedCalibration = await tx.machineCalibration.findFirst({
           where: { id, nodeId },
@@ -493,13 +489,15 @@ export class OperatorCatalogService {
 
   private globalNode(operator: OperatorContext): string {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.CATALOG_WRITE);
-    return operatorNode(operator);
+    return uuid(operatorNode(operator), "operator node");
   }
 
-  private node(operator: OperatorContext, nodeId: string): void {
-    if (this.globalNode(operator) !== uuid(nodeId, "nodeId")) {
+  private node(operator: OperatorContext, nodeId: string): string {
+    const normalizedNodeId = uuid(nodeId, "nodeId");
+    if (this.globalNode(operator) !== normalizedNodeId) {
       throw new NotFoundException("Node was not found");
     }
+    return normalizedNodeId;
   }
 
   private async provisionGlobalRevision(
@@ -522,6 +520,69 @@ export class OperatorCatalogService {
     await this.catalog.provisionSettings(revision.settings);
   }
 
+  private async provisionCalibration(
+    nodeId: string,
+    id: string,
+  ): Promise<void> {
+    const calibration = await this.prisma.machineCalibration.findFirst({
+      where: { id, nodeId },
+      select: { settings: true },
+    });
+    if (!calibration) {
+      throw new NotFoundException("Calibration was not found");
+    }
+    await this.catalog.provisionSettings(calibration.settings);
+  }
+
+  private async stagedCommand<T extends CatalogResult>(
+    operator: OperatorContext,
+    namespace: string,
+    key: string | undefined,
+    input: unknown,
+    stage: (() => Promise<unknown>) | undefined,
+    execute: (tx: Transaction, idempotencyKey: string) => Promise<T>,
+  ): Promise<T> {
+    const preparation = await this.prepareIdempotency<T>(
+      operator,
+      namespace,
+      key,
+      input,
+    );
+    if ("response" in preparation) return preparation.response;
+    if (preparation.stageSnapshot && stage) await stage();
+    return this.command(operator, namespace, key, input, execute);
+  }
+
+  private async prepareIdempotency<T extends CatalogResult>(
+    operator: OperatorContext,
+    namespace: string,
+    key: string | undefined,
+    input: unknown,
+  ): Promise<IdempotencyPreparation<T>> {
+    namespace = operatorCommandNamespace(namespace, operator);
+    const idempotencyKey = requiredKey(key);
+    const fingerprint = fingerprintFor(input);
+    const existing = await this.prisma.idempotencyRecord.findFirst({
+      where: { namespace, idempotencyKey },
+      orderBy: { generation: "desc" },
+    });
+    if (!existing || existing.expiresAt <= new Date()) {
+      return { stageSnapshot: true };
+    }
+    if (existing.requestFingerprint !== fingerprint) {
+      throw new ConflictException(
+        "Idempotency key was already used with different input",
+      );
+    }
+    if (
+      existing.status === IdempotencyStatus.COMPLETED &&
+      existing.responseBody
+    ) {
+      return { response: existing.responseBody as unknown as T };
+    }
+    return { stageSnapshot: false };
+  }
+
   private async command<T extends CatalogResult>(
     operator: OperatorContext,
     namespace: string,
@@ -531,9 +592,7 @@ export class OperatorCatalogService {
   ): Promise<T> {
     namespace = operatorCommandNamespace(namespace, operator);
     const idempotencyKey = requiredKey(key);
-    const fingerprint = createHash("sha256")
-      .update(canonicalJson(canonicalInput(input)))
-      .digest("hex");
+    const fingerprint = fingerprintFor(input);
     try {
       return await this.prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${namespace}:${idempotencyKey}`}, 0))::text`;
@@ -620,8 +679,8 @@ function referenceProfileInput(
   return {
     material: enumValue(body.material, Material, "material"),
     quality: enumValue(body.quality, PrintQuality, "quality"),
-    slicerEngine: text(body.slicerEngine, "slicerEngine"),
-    slicerVersion: text(body.slicerVersion, "slicerVersion"),
+    slicerEngine: text(body.slicerEngine, "slicerEngine", 100),
+    slicerVersion: text(body.slicerVersion, "slicerVersion", 100),
     settings: settings(body.settings),
   };
 }
@@ -675,11 +734,11 @@ function inventoryInput(
   return {
     nodeId,
     machineId: uuid(body.machineId, "machineId"),
-    sku: text(body.sku, "sku"),
+    sku: text(body.sku, "sku", 100),
     material: enumValue(body.material, Material, "material"),
-    vendor: text(body.vendor, "vendor"),
-    color: optionalText(body.color, "color") ?? null,
-    lotCode: optionalText(body.lotCode, "lotCode") ?? null,
+    vendor: text(body.vendor, "vendor", 200),
+    color: optionalText(body.color, "color", 100) ?? null,
+    lotCode: optionalText(body.lotCode, "lotCode", 100) ?? null,
     priceMinorUnitsNumerator: integer(
       body.priceMinorUnitsNumerator,
       "priceMinorUnitsNumerator",
@@ -688,7 +747,7 @@ function inventoryInput(
       body.priceMinorUnitsDenominator,
       "priceMinorUnitsDenominator",
     ),
-    currency: text(body.currency, "currency").toUpperCase(),
+    currency: currency(body.currency),
     remainingMilligrams: integer(
       body.remainingMilligrams,
       "remainingMilligrams",
@@ -710,6 +769,12 @@ function inventoryCommandInput(input: CreateInventoryInput): CanonicalJson {
     currency: input.currency,
     remainingMilligrams: input.remainingMilligrams.toString(),
   };
+}
+
+function fingerprintFor(input: unknown): string {
+  return createHash("sha256")
+    .update(canonicalJson(canonicalInput(input)))
+    .digest("hex");
 }
 
 function canonicalInput(value: unknown): CanonicalJson {
@@ -768,17 +833,33 @@ function uuid(value: unknown, name: string): string {
   return value.toLowerCase();
 }
 
-function text(value: unknown, name: string): string {
+function text(value: unknown, name: string, maxLength?: number): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new BadRequestException(`${name} must not be blank`);
   }
-  return value.trim();
+  const normalized = value.trim();
+  if (maxLength !== undefined && normalized.length > maxLength) {
+    throw new BadRequestException(`${name} is too long`);
+  }
+  return normalized;
 }
 
-function optionalText(value: unknown, name: string): string | null | undefined {
+function currency(value: unknown): string {
+  const normalized = text(value, "currency", 3).toUpperCase();
+  if (!/^[A-Z]{3}$/.test(normalized)) {
+    throw new BadRequestException("currency is invalid");
+  }
+  return normalized;
+}
+
+function optionalText(
+  value: unknown,
+  name: string,
+  maxLength?: number,
+): string | null | undefined {
   if (value === undefined) return undefined;
   if (value === null) return null;
-  return text(value, name);
+  return text(value, name, maxLength);
 }
 
 function positiveInteger(value: unknown, name: string): number {
@@ -788,7 +869,12 @@ function positiveInteger(value: unknown, name: string): number {
 }
 
 function integerNumber(value: unknown, name: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < MIN_INT32 ||
+    value > MAX_INT32
+  ) {
     throw new BadRequestException(`${name} must be an integer`);
   }
   return value;
