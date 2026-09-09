@@ -10,6 +10,7 @@ const pathFilteredWorkflows = {
     "apps/backend/**",
     "packages/core/**",
     "packages/slicer-contracts/**",
+    "scripts/ci/check-boundaries.mjs",
   ],
   "web-ci.yml": [
     "apps/web/**",
@@ -26,7 +27,10 @@ const pathFilteredWorkflows = {
   "slicer-worker-ci.yml": [
     "apps/slicer-worker/**",
     "apps/backend/scripts/seed.ts",
+    "infra/**",
     "packages/slicer-contracts/**",
+    "scripts/ci/check-boundaries.mjs",
+    "scripts/ci/check-workflow-coverage.mjs",
     "tools/slicing-fixtures/**",
     ".dockerignore",
   ],
