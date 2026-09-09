@@ -327,6 +327,18 @@ describe("operator catalog commands", () => {
     );
     expect(overflow.status).toBe(400);
 
+    for (const deltaMilligrams of ["0", "-0"]) {
+      const zeroAdjustment = await command(
+        `/admin/nodes/${fixture.nodeId}/inventories/${fixture.inventoryId}/adjustments`,
+        {
+          deltaMilligrams,
+          reason: "Invalid zero correction",
+        },
+        `catalog-zero-adjustment-${deltaMilligrams}-${randomUUID()}`,
+      );
+      expect(zeroAdjustment.status).toBe(400);
+    }
+
     const wrongNode = await command(
       `/admin/nodes/${randomUUID()}/inventories`,
       {

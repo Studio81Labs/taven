@@ -54,7 +54,7 @@ type IdempotencyPreparation<T> = { response: T } | { stageSnapshot: boolean };
 const IDEMPOTENCY_DAYS = 30;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const INTEGER_PATTERN = /^-?(?:0|[1-9][0-9]*)$/;
+const INTEGER_PATTERN = /^(?:0|-?[1-9][0-9]*)$/;
 const MAX_INT64 = 9_223_372_036_854_775_807n;
 const MIN_INT64 = -9_223_372_036_854_775_808n;
 const MAX_INT32 = 2_147_483_647;

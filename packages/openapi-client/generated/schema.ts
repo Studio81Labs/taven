@@ -2145,8 +2145,11 @@ export interface components {
             machineId: string;
             /** @enum {string} */
             material: "PLA" | "PETG";
+            /** Format: int64 */
             priceMinorUnitsDenominator: string;
+            /** Format: int64 */
             priceMinorUnitsNumerator: string;
+            /** Format: int64 */
             remainingMilligrams: string;
             sku: string;
             vendor: string;
@@ -2677,6 +2680,7 @@ export interface components {
             sizeBytes: number;
         };
         InventoryAdjustmentDto: {
+            /** Format: int64 */
             deltaMilligrams: string;
             reason: string;
         };

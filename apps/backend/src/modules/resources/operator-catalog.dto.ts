@@ -1,10 +1,38 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 const UUID = { type: String, format: "uuid" } as const;
-const INTEGER = { type: String, pattern: "^-?(?:0|[1-9][0-9]*)$" } as const;
+const MAX_INT64 = "9223372036854775807";
+const MIN_INT64_MAGNITUDE = "9223372036854775808";
+
+function positiveIntegerPattern(maximum: string): string {
+  const shorter = `[1-9][0-9]{0,${maximum.length - 2}}`;
+  const sameLength = Array.from(maximum, (character, index) => {
+    const maximumDigit = Number(character);
+    const minimumDigit = index === 0 ? 1 : 0;
+    if (maximumDigit <= minimumDigit) return null;
+    return `${maximum.slice(0, index)}[${minimumDigit}-${maximumDigit - 1}][0-9]{${maximum.length - index - 1}}`;
+  }).filter((pattern): pattern is string => pattern !== null);
+
+  return `(?:${[shorter, ...sameLength, maximum].join("|")})`;
+}
+
+const POSITIVE_INT64 = positiveIntegerPattern(MAX_INT64);
+const POSITIVE_INT64_OR_MIN_MAGNITUDE =
+  positiveIntegerPattern(MIN_INT64_MAGNITUDE);
+const NON_ZERO_INTEGER = {
+  type: String,
+  format: "int64",
+  pattern: `^(?:${POSITIVE_INT64}|-${POSITIVE_INT64_OR_MIN_MAGNITUDE})$`,
+} as const;
 const NON_NEGATIVE_INTEGER = {
   type: String,
-  pattern: "^(?:0|[1-9][0-9]*)$",
+  format: "int64",
+  pattern: `^(?:0|${POSITIVE_INT64})$`,
+} as const;
+const POSITIVE_INTEGER = {
+  type: String,
+  format: "int64",
+  pattern: `^${POSITIVE_INT64}$`,
 } as const;
 const MATERIALS = ["PLA", "PETG"] as const;
 const PRINT_QUALITIES = ["DRAFT", "STANDARD", "FINE"] as const;
@@ -116,7 +144,7 @@ export class CreateInventoryDto {
   @ApiProperty(NON_NEGATIVE_INTEGER)
   priceMinorUnitsNumerator!: string;
 
-  @ApiProperty({ type: String, pattern: "^[1-9][0-9]*$" })
+  @ApiProperty(POSITIVE_INTEGER)
   priceMinorUnitsDenominator!: string;
 
   @ApiProperty({
@@ -142,6 +170,6 @@ export class InventoryStatusDto extends CatalogReasonDto {
 }
 
 export class InventoryAdjustmentDto extends CatalogReasonDto {
-  @ApiProperty(INTEGER)
+  @ApiProperty(NON_ZERO_INTEGER)
   deltaMilligrams!: string;
 }

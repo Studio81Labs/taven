@@ -201,9 +201,40 @@ describe("OpenAPI artifact", () => {
     expect(
       schemas.CreateMachineCalibrationDto?.properties?.flowRatioPartsPerMillion,
     ).toMatchObject({ type: "integer", minimum: 1, maximum: 2_147_483_647 });
-    expect(
-      schemas.CreateInventoryDto?.properties?.priceMinorUnitsNumerator,
-    ).toMatchObject({ pattern: "^(?:0|[1-9][0-9]*)$" });
+    const inventoryProperties = schemas.CreateInventoryDto?.properties;
+    const numerator = inventoryProperties?.priceMinorUnitsNumerator;
+    const denominator = inventoryProperties?.priceMinorUnitsDenominator;
+    const remaining = inventoryProperties?.remainingMilligrams;
+    const adjustment =
+      schemas.InventoryAdjustmentDto?.properties?.deltaMilligrams;
+
+    expect(numerator).toMatchObject({ format: "int64" });
+    expect(denominator).toMatchObject({ format: "int64" });
+    expect(remaining).toMatchObject({ format: "int64" });
+    expect(adjustment).toMatchObject({ format: "int64" });
+
+    for (const schema of [numerator, denominator, remaining, adjustment]) {
+      expect(schema?.pattern).toEqual(expect.any(String));
+      expect("9223372036854775808").not.toMatch(
+        new RegExp(schema?.pattern as string),
+      );
+    }
+    expect("9223372036854775807").toMatch(
+      new RegExp(numerator?.pattern as string),
+    );
+    expect("9223372036854775807").toMatch(
+      new RegExp(denominator?.pattern as string),
+    );
+    expect("0").not.toMatch(new RegExp(denominator?.pattern as string));
+    expect("0").toMatch(new RegExp(remaining?.pattern as string));
+    expect("-9223372036854775808").toMatch(
+      new RegExp(adjustment?.pattern as string),
+    );
+    expect("-9223372036854775809").not.toMatch(
+      new RegExp(adjustment?.pattern as string),
+    );
+    expect("0").not.toMatch(new RegExp(adjustment?.pattern as string));
+    expect("-0").not.toMatch(new RegExp(adjustment?.pattern as string));
     expect(schemas.MachineStatusDto?.properties?.status).toMatchObject({
       enum: ["ACTIVE", "MAINTENANCE", "DISABLED"],
     });
