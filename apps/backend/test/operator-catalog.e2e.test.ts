@@ -117,14 +117,22 @@ describe("operator catalog commands", () => {
     const provisionSettings = vi
       .spyOn(snapshots, "provisionSettings")
       .mockRejectedValue(new Error("storage must not be called for replay"));
-    const replay = await command(
-      "/admin/catalog/reference-profiles",
-      referenceBody,
-      referenceKey,
-    );
-    expect(provisionSettings).not.toHaveBeenCalled();
+    const replayAt = new Date(Date.now() + 31 * 86_400_000);
+    vi.useFakeTimers();
+    let replay: Response | undefined;
+    try {
+      vi.setSystemTime(replayAt);
+      replay = await command(
+        "/admin/catalog/reference-profiles",
+        referenceBody,
+        referenceKey,
+      );
+      expect(provisionSettings).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
     provisionSettings.mockRestore();
-    expect(replay.status).toBe(200);
+    expect(replay?.status).toBe(200);
     await expect(replay.json()).resolves.toEqual(reference);
     await expect(
       prisma.auditEvent.count({

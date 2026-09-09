@@ -563,11 +563,15 @@ export class OperatorCatalogService {
     namespace = operatorCommandNamespace(namespace, operator);
     const idempotencyKey = requiredKey(key);
     const fingerprint = fingerprintFor(input);
-    const existing = await this.prisma.idempotencyRecord.findFirst({
-      where: { namespace, idempotencyKey },
-      orderBy: { generation: "desc" },
+    const { existing, now } = await this.prisma.$transaction(async (tx) => {
+      const now = await databaseNow(tx);
+      const existing = await tx.idempotencyRecord.findFirst({
+        where: { namespace, idempotencyKey },
+        orderBy: { generation: "desc" },
+      });
+      return { existing, now };
     });
-    if (!existing || existing.expiresAt <= new Date()) {
+    if (!existing || existing.expiresAt <= now) {
       return { stageSnapshot: true };
     }
     if (existing.requestFingerprint !== fingerprint) {
