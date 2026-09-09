@@ -224,12 +224,14 @@ describe("OpenAPI artifact", () => {
     expect(
       schemas.CreateReferenceProfileDto?.properties?.settings,
     ).toMatchObject({
-      description: "String keys and values must not contain U+0000.",
+      description:
+        "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
     });
     expect(
       schemas.CreateMachineCalibrationDto?.properties?.settings,
     ).toMatchObject({
-      description: "String keys and values must not contain U+0000.",
+      description:
+        "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
     });
     const numerator = inventoryProperties?.priceMinorUnitsNumerator;
     const denominator = inventoryProperties?.priceMinorUnitsDenominator;

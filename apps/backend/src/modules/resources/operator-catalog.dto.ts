@@ -43,7 +43,8 @@ const NON_BLANK_TEXT = "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$";
 const SETTINGS = {
   type: Object,
   additionalProperties: true,
-  description: "String keys and values must not contain U+0000.",
+  description:
+    "String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
 } as const;
 
 export class CatalogCommandResultDto {

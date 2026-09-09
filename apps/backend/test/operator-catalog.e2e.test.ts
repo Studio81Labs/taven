@@ -412,6 +412,16 @@ describe("operator catalog commands", () => {
           settings: { note: "catalog\u0000setting" },
         },
       ],
+      [
+        "/admin/catalog/reference-profiles",
+        {
+          material: "PLA",
+          quality: "FINE",
+          slicerEngine: "orca",
+          slicerVersion: "2.1.0",
+          settings: { note: "catalog\ud800" },
+        },
+      ],
     ] as const) {
       const response = await command(path, body, `catalog-nul-${randomUUID()}`);
       expect(response.status, path).toBe(400);

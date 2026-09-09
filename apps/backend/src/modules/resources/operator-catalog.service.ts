@@ -816,7 +816,7 @@ function settings(value: unknown): Prisma.InputJsonObject {
     throw new BadRequestException("settings must be an object");
   }
   try {
-    rejectNulCharacters(value as CanonicalJson, "settings");
+    rejectInvalidSettingsText(value as CanonicalJson, "settings");
     canonicalJson(value as CanonicalJson);
   } catch (error) {
     if (error instanceof ResourceValidationError) {
@@ -867,27 +867,46 @@ function codePointLength(value: string): number {
   return Array.from(value).length;
 }
 
-function rejectNulCharacters(value: CanonicalJson, name: string): void {
+function rejectInvalidSettingsText(value: CanonicalJson, name: string): void {
   if (typeof value === "string") {
-    if (value.includes("\u0000")) {
-      throw new BadRequestException(`${name} must not contain NUL characters`);
-    }
+    rejectInvalidSettingsString(value, name);
     return;
   }
   if (Array.isArray(value)) {
-    for (const entry of value) rejectNulCharacters(entry, name);
+    for (const entry of value) rejectInvalidSettingsText(entry, name);
     return;
   }
   if (value && typeof value === "object") {
     for (const [key, entry] of Object.entries(value)) {
-      if (key.includes("\u0000")) {
-        throw new BadRequestException(
-          `${name} must not contain NUL characters`,
-        );
-      }
-      rejectNulCharacters(entry, name);
+      rejectInvalidSettingsString(key, name);
+      rejectInvalidSettingsText(entry, name);
     }
   }
+}
+
+function rejectInvalidSettingsString(value: string, name: string): void {
+  if (value.includes("\u0000")) {
+    throw new BadRequestException(`${name} must not contain NUL characters`);
+  }
+  if (hasUnpairedSurrogate(value)) {
+    throw new BadRequestException(
+      `${name} must not contain unpaired UTF-16 surrogates`,
+    );
+  }
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = value.charCodeAt(index + 1);
+      if (!(nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff)) return true;
+      index += 1;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) return true;
+  }
+  return false;
 }
 
 function currency(value: unknown): string {
