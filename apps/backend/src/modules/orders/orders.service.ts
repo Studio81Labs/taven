@@ -33,6 +33,8 @@ import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
+import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
+import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import {
   ApproveLegacyClaimWindowDto,
   CancelOrderDto,
@@ -322,9 +324,178 @@ export class OrdersService {
           },
           select: { id: true, payoutAmount: true, payoutCurrency: true },
         });
+        await this.enqueueAutomaticProductionSlice(tx, orderId, jobId);
         return result(orderId, "JOB_ACCEPTED", accepted);
       },
     );
+  }
+
+  private async enqueueAutomaticProductionSlice(
+    transaction: Transaction,
+    orderId: string,
+    jobId: string,
+  ): Promise<void> {
+    const origin = await transaction.automaticOrderOrigin.findUnique({
+      where: { orderId },
+      select: { orderId: true },
+    });
+    if (!origin) return;
+
+    const reservation = await transaction.productionReservation.findFirst({
+      where: {
+        jobId,
+        status: "HELD",
+        productionSliceResultId: null,
+      },
+      select: {
+        id: true,
+        machineId: true,
+        printConfigRevision: { select: { id: true, settings: true } },
+        machineProfile: {
+          select: {
+            id: true,
+            settings: true,
+            slicerEngine: true,
+            slicerVersion: true,
+            productionArtifactFormat: true,
+          },
+        },
+        machineCalibration: { select: { id: true, settings: true } },
+        phaseResourcePlanJob: {
+          select: {
+            candidateResourceEstimate: {
+              select: {
+                modelGeometry: {
+                  select: {
+                    id: true,
+                    sourceModelFileId: true,
+                    canonicalObjectKey: true,
+                    geometryHash: true,
+                    sourceModelFile: { select: { contentHash: true } },
+                  },
+                },
+                quantity: true,
+                partsPerPlate: true,
+                arrangementRevision: {
+                  select: { id: true, contentSha256: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!reservation) {
+      throw new ConflictException(
+        "Accepted automatic Job has no held production reservation",
+      );
+    }
+
+    const candidate =
+      reservation.phaseResourcePlanJob.candidateResourceEstimate;
+    const draftItems = await transaction.automaticQuoteItemDraft.findMany({
+      where: {
+        orderId,
+        sourceModelFileId: candidate.modelGeometry.sourceModelFileId,
+        targetModelGeometryId: candidate.modelGeometry.id,
+        printConfigRevisionId: reservation.printConfigRevision.id,
+      },
+      select: { bodyIds: true, selectionSha256: true },
+      take: 2,
+    });
+    const draftItem = draftItems[0];
+    if (!draftItem && draftItems.length === 0) {
+      const automaticDraftItemCount =
+        await transaction.automaticQuoteItemDraft.count({
+          where: { orderId },
+        });
+      if (automaticDraftItemCount === 0) return;
+    }
+    if (!draftItem || draftItems.length !== 1) {
+      throw new ConflictException(
+        "Accepted automatic Job has no unambiguous source selection",
+      );
+    }
+
+    const input = {
+      geometry: {
+        sourceModelFileId: candidate.modelGeometry.sourceModelFileId,
+        sourceContentSha256:
+          candidate.modelGeometry.sourceModelFile.contentHash,
+        modelGeometryId: candidate.modelGeometry.id,
+        canonicalObjectKey: candidate.modelGeometry.canonicalObjectKey,
+        geometrySha256: candidate.modelGeometry.geometryHash,
+        bodyIds: draftItem.bodyIds,
+        selectionSha256: draftItem.selectionSha256,
+      },
+      machineId: reservation.machineId,
+      machineProfile: {
+        revisionId: reservation.machineProfile.id,
+        contentSha256: slicerSettingsSnapshot(
+          reservation.machineProfile.settings,
+        ).contentSha256,
+        slicerEngine: reservation.machineProfile.slicerEngine,
+        slicerVersion: reservation.machineProfile.slicerVersion,
+        productionArtifactFormat: toSlicerProductionArtifactFormat(
+          reservation.machineProfile.productionArtifactFormat,
+        ),
+      },
+      machineCalibration: {
+        revisionId: reservation.machineCalibration.id,
+        contentSha256: slicerSettingsSnapshot(
+          reservation.machineCalibration.settings,
+        ).contentSha256,
+      },
+      printConfig: {
+        revisionId: reservation.printConfigRevision.id,
+        contentSha256: slicerSettingsSnapshot(
+          reservation.printConfigRevision.settings,
+        ).contentSha256,
+      },
+      partsPerPlate: candidate.partsPerPlate,
+      quantity: candidate.quantity,
+      acceptedJobId: jobId,
+      productionReservationId: reservation.id,
+      arrangementRevision: {
+        revisionId: candidate.arrangementRevision.id,
+        contentSha256: candidate.arrangementRevision.contentSha256,
+      },
+    };
+    const {
+      ProductionSliceJobSchema,
+      slicingDispatchAttemptKey,
+      slicingInputFingerprint,
+    } = await import("@taven/slicer-contracts");
+    const inputFingerprintSha256 = slicingInputFingerprint(
+      "production_slice",
+      input,
+    );
+    const job = ProductionSliceJobSchema.parse({
+      contractVersion: 2,
+      kind: "production_slice",
+      jobId,
+      correlationId: orderId,
+      inputFingerprintSha256,
+      idempotencyKey: `slicer:v2:production_slice:${jobId}:${inputFingerprintSha256}`,
+      attempt: 1,
+      input,
+    });
+    const deduplicationKey = slicingDispatchAttemptKey(
+      job.idempotencyKey,
+      job.attempt,
+    );
+    await transaction.outboxMessage.upsert({
+      where: { deduplicationKey },
+      create: {
+        deduplicationKey,
+        aggregateType: "ProductionSliceDispatch",
+        aggregateId: job.jobId,
+        messageType: "slicing.production-slice.requested",
+        schemaVersion: 2,
+        payload: { job } as unknown as Prisma.InputJsonObject,
+      },
+      update: {},
+    });
   }
 
   startPrinting(
