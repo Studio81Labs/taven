@@ -374,6 +374,16 @@ describe("operator catalog commands", () => {
     );
     expect(unicodeSkuResponse.status).toBe(200);
 
+    const unicodeReason = "🧵".repeat(600);
+    expect(Array.from(unicodeReason)).toHaveLength(600);
+    expect(unicodeReason).toHaveLength(1_200);
+    const unicodeReasonResponse = await command(
+      `/admin/nodes/${fixture.nodeId}/machines/${fixture.machineId}/status`,
+      { status: "ACTIVE", reason: unicodeReason },
+      `catalog-unicode-reason-${randomUUID()}`,
+    );
+    expect(unicodeReasonResponse.status).toBe(200);
+
     const intOverflow = await command(
       `/admin/nodes/${fixture.nodeId}/calibrations`,
       {

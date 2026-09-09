@@ -141,6 +141,26 @@ describe("AuditService legacy projection", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it("accepts an audit reason within the Unicode code-point limit", async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const service = new AuditService({} as never);
+    const transaction = { auditEvent: { create } } as never;
+    const reason = "🧵".repeat(600);
+
+    await service.recordOperator(transaction, operator, {
+      eventType: "fulfilment.command_completed",
+      nodeId,
+      createdAt: new Date("2026-01-01T00:00:01.000Z"),
+      reasonCode: "FULFILMENT_COMMAND",
+      reason,
+      payload: {},
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ reason }),
+    });
+  });
+
   it("preserves an explicit operator audit timestamp", async () => {
     const create = vi.fn().mockResolvedValue({});
     const service = new AuditService({} as never);

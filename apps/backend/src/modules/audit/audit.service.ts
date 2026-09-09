@@ -65,7 +65,7 @@ export class AuditService {
     if (reason === "") {
       throw new BadRequestException("Audit reason is invalid");
     }
-    if (reason && reason.length > 1_000) {
+    if (reason && codePointLength(reason) > 1_000) {
       throw new BadRequestException("Audit reason is too long");
     }
     if (reasonCode && !/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
@@ -151,6 +151,10 @@ export class AuditService {
       ...(nextCursor ? { nextCursor } : {}),
     };
   }
+}
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
 }
 
 async function databaseNow(

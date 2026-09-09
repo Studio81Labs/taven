@@ -849,13 +849,18 @@ function text(value: unknown, name: string, maxLength?: number): string {
     throw new BadRequestException(`${name} must not be blank`);
   }
   const normalized = value.trim();
-  if (Array.from(normalized).length === 0) {
+  const length = codePointLength(normalized);
+  if (length === 0) {
     throw new BadRequestException(`${name} must not be blank`);
   }
-  if (maxLength !== undefined && Array.from(normalized).length > maxLength) {
+  if (maxLength !== undefined && length > maxLength) {
     throw new BadRequestException(`${name} is too long`);
   }
   return normalized;
+}
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
 }
 
 function currency(value: unknown): string {
@@ -915,7 +920,7 @@ function commandBody<T extends object>(body: T | null | undefined): T {
 function reasonText(body: CatalogReasonDto): string {
   body = commandBody(body);
   const reason = text(body.reason, "reason");
-  if (reason.length > 1_000)
+  if (codePointLength(reason) > 1_000)
     throw new BadRequestException("reason is too long");
   return reason;
 }
