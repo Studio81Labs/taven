@@ -191,7 +191,8 @@ describe("OpenAPI artifact", () => {
       };
     };
     const schemas = contract.components.schemas;
-    const nonBlankTextPattern = "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$";
+    const nonBlankTextPattern =
+      "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$";
 
     expect(
       schemas.CreateReferenceProfileDto?.properties?.material,
@@ -217,7 +218,13 @@ describe("OpenAPI artifact", () => {
       expect("valid catalog text").toMatch(
         new RegExp(property?.pattern as string),
       );
+      expect("valid 🧵 catalog text").toMatch(
+        new RegExp(property?.pattern as string),
+      );
       expect("invalid\u0000catalog text").not.toMatch(
+        new RegExp(property?.pattern as string),
+      );
+      expect("invalid\ud800catalog text").not.toMatch(
         new RegExp(property?.pattern as string),
       );
     }

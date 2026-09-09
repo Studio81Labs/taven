@@ -1339,7 +1339,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           }
         },
@@ -1931,7 +1931,7 @@
           "color": {
             "maxLength": 100,
             "nullable": true,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           },
           "currency": {
@@ -1943,7 +1943,7 @@
           "lotCode": {
             "maxLength": 100,
             "nullable": true,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           },
           "machineId": {
@@ -1975,13 +1975,13 @@
           "sku": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           },
           "vendor": {
             "maxLength": 200,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           }
         },
@@ -2079,13 +2079,13 @@
           "slicerEngine": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           },
           "slicerVersion": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           }
         },
@@ -2211,13 +2211,13 @@
           "slicerEngine": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           },
           "slicerVersion": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           }
         },
@@ -3704,7 +3704,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           }
         },
@@ -3784,7 +3784,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           },
           "status": {
@@ -4243,7 +4243,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
-            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
+            "pattern": "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$",
             "type": "string"
           },
           "status": {

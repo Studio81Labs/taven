@@ -403,6 +403,23 @@ describe("operator catalog commands", () => {
         { status: "ACTIVE", reason: "repair\u0000note" },
       ],
       [
+        `/admin/nodes/${fixture.nodeId}/inventories`,
+        {
+          machineId: fixture.machineId,
+          sku: "catalog\ud800",
+          material: "PLA",
+          vendor: "Taven test",
+          priceMinorUnitsNumerator: "1",
+          priceMinorUnitsDenominator: "1",
+          currency: "EUR",
+          remainingMilligrams: "1",
+        },
+      ],
+      [
+        `/admin/nodes/${fixture.nodeId}/machines/${fixture.machineId}/status`,
+        { status: "ACTIVE", reason: "repair\ud800" },
+      ],
+      [
         "/admin/catalog/reference-profiles",
         {
           material: "PLA",
@@ -422,8 +439,22 @@ describe("operator catalog commands", () => {
           settings: { note: "catalog\ud800" },
         },
       ],
+      [
+        "/admin/catalog/reference-profiles",
+        {
+          material: "PLA",
+          quality: "FINE",
+          slicerEngine: "orca\ud800",
+          slicerVersion: "2.1.0",
+          settings: { testScope },
+        },
+      ],
     ] as const) {
-      const response = await command(path, body, `catalog-nul-${randomUUID()}`);
+      const response = await command(
+        path,
+        body,
+        `catalog-invalid-text-${randomUUID()}`,
+      );
       expect(response.status, path).toBe(400);
     }
 

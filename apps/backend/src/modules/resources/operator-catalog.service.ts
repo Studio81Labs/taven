@@ -850,9 +850,7 @@ function text(value: unknown, name: string, maxLength?: number): string {
     throw new BadRequestException(`${name} must not be blank`);
   }
   const normalized = value.trim();
-  if (normalized.includes("\u0000")) {
-    throw new BadRequestException(`${name} must not contain NUL characters`);
-  }
+  rejectInvalidText(normalized, name);
   const length = codePointLength(normalized);
   if (length === 0) {
     throw new BadRequestException(`${name} must not be blank`);
@@ -869,7 +867,7 @@ function codePointLength(value: string): number {
 
 function rejectInvalidSettingsText(value: CanonicalJson, name: string): void {
   if (typeof value === "string") {
-    rejectInvalidSettingsString(value, name);
+    rejectInvalidText(value, name);
     return;
   }
   if (Array.isArray(value)) {
@@ -878,13 +876,13 @@ function rejectInvalidSettingsText(value: CanonicalJson, name: string): void {
   }
   if (value && typeof value === "object") {
     for (const [key, entry] of Object.entries(value)) {
-      rejectInvalidSettingsString(key, name);
+      rejectInvalidText(key, name);
       rejectInvalidSettingsText(entry, name);
     }
   }
 }
 
-function rejectInvalidSettingsString(value: string, name: string): void {
+function rejectInvalidText(value: string, name: string): void {
   if (value.includes("\u0000")) {
     throw new BadRequestException(`${name} must not contain NUL characters`);
   }
