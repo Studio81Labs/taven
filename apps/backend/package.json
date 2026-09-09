@@ -26,7 +26,7 @@
     "pretest": "pnpm db:generate && pnpm --filter @taven/slicer-contracts... build",
     "test": "vitest run --exclude 'test/**'",
     "pretest:e2e": "pnpm --filter @taven/core --filter @taven/slicer-contracts... build",
-    "test:e2e": "vitest run test",
+    "test:e2e": "vitest run test --no-file-parallelism",
     "test:watch": "vitest --exclude 'test/**'",
     "db:generate": "prisma generate",
     "db:seed": "prisma db seed",
