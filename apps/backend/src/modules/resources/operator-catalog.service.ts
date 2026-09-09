@@ -59,6 +59,7 @@ const MAX_INT64 = 9_223_372_036_854_775_807n;
 const MIN_INT64 = -9_223_372_036_854_775_808n;
 const MAX_INT32 = 2_147_483_647;
 const MIN_INT32 = -2_147_483_648;
+const JSON_MAXIMUM_DEPTH = 64;
 
 @Injectable()
 export class OperatorCatalogService {
@@ -864,6 +865,7 @@ function settings(value: unknown): Prisma.InputJsonObject {
     throw new BadRequestException("settings must be an object");
   }
   try {
+    assertSettingsDepth(value, "settings");
     rejectInvalidSettingsText(value as CanonicalJson, "settings");
     canonicalJson(value as CanonicalJson);
   } catch (error) {
@@ -873,6 +875,29 @@ function settings(value: unknown): Prisma.InputJsonObject {
     throw error;
   }
   return value as Prisma.InputJsonObject;
+}
+
+function assertSettingsDepth(value: object, name: string): void {
+  const pending: Array<{ depth: number; value: unknown }> = [
+    { depth: 1, value },
+  ];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.depth > JSON_MAXIMUM_DEPTH) {
+      throw new BadRequestException(
+        `${name} must not exceed ${JSON_MAXIMUM_DEPTH} levels`,
+      );
+    }
+    if (current.value === null || typeof current.value !== "object") continue;
+    const children = Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value as Record<string, unknown>);
+    for (const child of children) {
+      if (child !== null && typeof child === "object") {
+        pending.push({ depth: current.depth + 1, value: child });
+      }
+    }
+  }
 }
 
 function enumValue<T extends Record<string, string>>(

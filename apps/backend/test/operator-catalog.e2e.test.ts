@@ -583,6 +583,22 @@ describe("operator catalog commands", () => {
     expect(incompatibleProvision).not.toHaveBeenCalled();
     incompatibleProvision.mockRestore();
 
+    const deepSettings = await command(
+      "/admin/catalog/reference-profiles",
+      {
+        material: "PLA",
+        quality: "FINE",
+        slicerEngine: "orca",
+        slicerVersion: "2.1.0",
+        settings: nestedSettings(65),
+      },
+      `catalog-deep-settings-${randomUUID()}`,
+    );
+    expect(deepSettings.status).toBe(400);
+    await expect(deepSettings.json()).resolves.toMatchObject({
+      message: "settings must not exceed 64 levels",
+    });
+
     const forbidden = await fetch(
       new URL(`/admin/nodes/${fixture.nodeId}/inventories`, baseUrl),
       {
@@ -676,4 +692,12 @@ async function responseBody(
     status?: string;
     state?: string;
   }>;
+}
+
+function nestedSettings(depth: number): Record<string, unknown> {
+  let result: Record<string, unknown> = {};
+  for (let index = 1; index < depth; index += 1) {
+    result = { nested: result };
+  }
+  return result;
 }
