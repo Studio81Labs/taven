@@ -36,11 +36,18 @@ All worker services remain opt-in.
 Profile and configuration revisions are provider-neutral immutable S3 objects
 at `slicer-revisions/<content-sha256>/settings.json`. Their bytes must hash to
 the settings-snapshot digest carried by the v2 job; this is intentionally
-separate from the database revision-identity digest. The backend provisions
-every persisted snapshot at startup and before dispatch. Orca preset JSON objects with
-`type: "filament"` (or a `filament_settings_id`) are loaded through Orca's
-filament-preset option; machine, process, and override objects use its settings
-option. This distinction is required for reliable sliced-3MF packaging.
+separate from the database revision-identity digest. Every snapshot is a
+`{ "bundleVersion": 1, "presets": [...] }` bundle. The backend validates it at
+startup and before dispatch, and the worker validates it again before use.
+
+Reference and machine bundles order a machine preset, a process preset, then
+one or more filament presets. Print-config and calibration bundles contain only
+override presets. The worker passes settings as machine, process, print-config,
+then calibration and preserves filament bundle order. It rejects ten or more
+settings presets because the broker's C-locale filename ordering is only
+unambiguous below that bound. `post_process`, `print_host`, `printhost_*`, and
+`bbl_use_printhost` are rejected; printer G-code fields remain valid preset
+content.
 Candidate jobs upload metrics-only
 JSON under `slice-metrics/`; only reference jobs write non-production reference
 G-code and only contract-authorized production jobs write under `gcode/`.

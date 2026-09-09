@@ -29,6 +29,29 @@ const runtimeLock = JSON.parse(
 
 const pinnedSlicerEngine = runtimeLock.engine.name;
 const pinnedSlicerVersion = runtimeLock.engine.version;
+type SeedSettings = Prisma.InputJsonObject & CanonicalJson;
+
+const catalogPreset = (file: string): SeedSettings =>
+  JSON.parse(
+    readFileSync(
+      path.resolve(
+        __dirname,
+        `../../../tools/catalog-profiles/resolved/${file}`,
+      ),
+      "utf8",
+    ),
+  ) as SeedSettings;
+const catalogPresets = {
+  machine: catalogPreset("machine.json"),
+  process: catalogPreset("process.json"),
+  pla: catalogPreset("filament-pla.json"),
+  petg: catalogPreset("filament-petg.json"),
+};
+const presetBundle = (...presets: SeedSettings[]): SeedSettings =>
+  ({
+    bundleVersion: 1,
+    presets,
+  }) as SeedSettings;
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for seeding");
@@ -237,7 +260,11 @@ async function main() {
         quality: PrintQuality.STANDARD,
         slicerEngine: pinnedSlicerEngine,
         slicerVersion: pinnedSlicerVersion,
-        settings: { profile: "standard", material },
+        settings: presetBundle(
+          catalogPresets.machine,
+          catalogPresets.process,
+          material === Material.PLA ? catalogPresets.pla : catalogPresets.petg,
+        ),
         state: RevisionState.ACTIVE,
         activatedAt: at,
         createdAt: at,
@@ -293,7 +320,11 @@ async function main() {
         nozzleDiameterMicrometers: 400,
         slicerEngine: pinnedSlicerEngine,
         slicerVersion: pinnedSlicerVersion,
-        settings: { profile: "standard", material, nozzle: 400 },
+        settings: presetBundle(
+          catalogPresets.machine,
+          catalogPresets.process,
+          material === Material.PLA ? catalogPresets.pla : catalogPresets.petg,
+        ),
         productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
       } satisfies CanonicalJson;
       const data = {
@@ -345,7 +376,11 @@ async function main() {
       flowRatioPartsPerMillion: 1000000,
       xyCompensationMicrometers: 0,
       elephantFootCompensationMicrometers: 0,
-      settings: { source: "seed" },
+      settings: presetBundle({
+        elefant_foot_compensation: "0",
+        xy_contour_compensation: "0",
+        xy_hole_compensation: "0",
+      }),
     } satisfies CanonicalJson;
     const calData = {
       id: ids.calibration,
@@ -398,7 +433,12 @@ async function main() {
         layerHeightMicrometers: 200,
         supportsEnabled: false,
         brimEnabled: false,
-        settings: { preset: `standard-${infillPercent}` },
+        settings: presetBundle({
+          brim_width: "0",
+          enable_support: "0",
+          layer_height: "0.2",
+          sparse_infill_density: `${infillPercent}%`,
+        }),
         createdAt: at,
       };
       const revisionPayload = {

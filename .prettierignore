@@ -14,3 +14,6 @@ packages/openapi-client/generated/
 tools/slicing-fixtures/expected/
 tools/slicing-fixtures/profiles/source/
 tools/slicing-fixtures/profiles/resolved/
+tools/catalog-profiles/manifest.json
+tools/catalog-profiles/resolved/
+tools/catalog-profiles/source/

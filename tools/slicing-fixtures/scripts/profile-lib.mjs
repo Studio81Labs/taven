@@ -91,26 +91,35 @@ function inheritedNames(profile) {
     : [profile.inherits];
 }
 
-export async function buildProfileBundle() {
-  const sourceDirectory = path.join(fixtureRoot, "profiles", "source");
-  const files = await listJsonFiles(sourceDirectory);
+export async function buildProfileBundle({
+  sources = [
+    {
+      directory: path.join(fixtureRoot, "profiles", "source"),
+      pathPrefix: "",
+    },
+  ],
+  roots = profileRoots,
+} = {}) {
   const profiles = new Map();
   const sourceFiles = [];
 
-  for (const file of files) {
-    const relativePath = path
-      .relative(sourceDirectory, file)
-      .replaceAll(path.sep, "/");
-    const source = await readFile(file, "utf8");
-    const profile = JSON.parse(source);
-    if (typeof profile.name !== "string" || profile.name.length === 0) {
-      throw new Error(`Profile ${relativePath} has no name`);
+  for (const { directory, pathPrefix = "" } of sources) {
+    const files = await listJsonFiles(directory);
+    for (const file of files) {
+      const relativePath = path
+        .join(pathPrefix, path.relative(directory, file))
+        .replaceAll(path.sep, "/");
+      const source = await readFile(file, "utf8");
+      const profile = JSON.parse(source);
+      if (typeof profile.name !== "string" || profile.name.length === 0) {
+        throw new Error(`Profile ${relativePath} has no name`);
+      }
+      if (profiles.has(profile.name)) {
+        throw new Error(`Duplicate profile name: ${profile.name}`);
+      }
+      profiles.set(profile.name, { profile, relativePath });
+      sourceFiles.push({ path: relativePath, sha256: sha256(source) });
     }
-    if (profiles.has(profile.name)) {
-      throw new Error(`Duplicate profile name: ${profile.name}`);
-    }
-    profiles.set(profile.name, { profile, relativePath });
-    sourceFiles.push({ path: relativePath, sha256: sha256(source) });
   }
 
   const resolvedByName = new Map();
@@ -144,16 +153,18 @@ export async function buildProfileBundle() {
     return resolved;
   }
 
-  const resolvedProfiles = profileRoots.map(({ kind, name }) => {
-    const contents = stableJson(resolve(name));
-    return {
-      kind,
-      name,
-      file: `${kind}.json`,
-      contents,
-      sha256: sha256(contents),
-    };
-  });
+  const resolvedProfiles = roots.map(
+    ({ kind, name, file = `${kind}.json` }) => {
+      const contents = stableJson(resolve(name));
+      return {
+        kind,
+        name,
+        file,
+        contents,
+        sha256: sha256(contents),
+      };
+    },
+  );
 
   const unused = [...profiles.keys()].filter((name) => !usedNames.has(name));
   if (unused.length > 0) {
@@ -170,7 +181,7 @@ export async function buildProfileBundle() {
       sourcePath: "resources/profiles/BBL",
       license: "AGPL-3.0",
     },
-    roots: profileRoots,
+    roots,
     sourceFiles,
     resolvedProfiles: resolvedProfiles.map(
       ({ contents: _contents, ...profile }) => profile,

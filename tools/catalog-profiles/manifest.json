@@ -1,0 +1,116 @@
+{
+  "bundleSha256": "d00e65cfc25a260fe6ceacb97dfdb16092cf3f67d75f46c1141f0f7a2c0c1a3e",
+  "resolvedProfiles": [
+    {
+      "file": "machine.json",
+      "kind": "machine",
+      "name": "Bambu Lab H2S 0.4 nozzle",
+      "sha256": "377cb092937347e65cba41d286da009f96d79882123146388f5e629e367da650"
+    },
+    {
+      "file": "process.json",
+      "kind": "process",
+      "name": "0.20mm Standard @BBL H2S",
+      "sha256": "a7fceee9360f71d75a45294847024f115aa7acd556f00822e74539febc7d3bb5"
+    },
+    {
+      "file": "filament-pla.json",
+      "kind": "filament",
+      "name": "Generic PLA @BBL H2S",
+      "sha256": "59be12163fa8eca887830f19c3c4f890796abfee68d9f8500d9a4f29f8eaafc8"
+    },
+    {
+      "file": "filament-petg.json",
+      "kind": "filament",
+      "name": "Generic PETG @BBL H2S",
+      "sha256": "369cfd1476b42920d9a771fabefd36303029d03870274519b0f3c63766809c81"
+    }
+  ],
+  "roots": [
+    {
+      "file": "machine.json",
+      "kind": "machine",
+      "name": "Bambu Lab H2S 0.4 nozzle"
+    },
+    {
+      "file": "process.json",
+      "kind": "process",
+      "name": "0.20mm Standard @BBL H2S"
+    },
+    {
+      "file": "filament-pla.json",
+      "kind": "filament",
+      "name": "Generic PLA @BBL H2S"
+    },
+    {
+      "file": "filament-petg.json",
+      "kind": "filament",
+      "name": "Generic PETG @BBL H2S"
+    }
+  ],
+  "schemaVersion": 1,
+  "sourceFiles": [
+    {
+      "path": "slicing-fixtures/filament/Generic PLA @BBL H2S.json",
+      "sha256": "df0eb98f574b53eba5cf6f7e0938552d4cbb878982f78b7810ab949845dfc0ed"
+    },
+    {
+      "path": "slicing-fixtures/filament/Generic PLA @base.json",
+      "sha256": "85ebc04bd25c236322547d6d95f5a074ce4cab53cf975392e1f6b2c1fb74d406"
+    },
+    {
+      "path": "slicing-fixtures/filament/fdm_filament_common.json",
+      "sha256": "05725cc129f96ea903dc77c40d248fa1bd0137cfc41216d09d952cfdd37d3683"
+    },
+    {
+      "path": "slicing-fixtures/filament/fdm_filament_pla.json",
+      "sha256": "79f257ca32c8a938f49df82623cc84ca86d1044a818d600714b024e6b6499642"
+    },
+    {
+      "path": "slicing-fixtures/machine/Bambu Lab H2S 0.4 nozzle.json",
+      "sha256": "fab2329da667f18cc2bc658338a14c9dbe23a44ceddd06bb775bb55621994af7"
+    },
+    {
+      "path": "slicing-fixtures/machine/fdm_bbl_3dp_001_common.json",
+      "sha256": "e90597a202d5461a2f8636a06c35409cffc79a2c1991bb726c6e465e9a0bd26c"
+    },
+    {
+      "path": "slicing-fixtures/machine/fdm_machine_common.json",
+      "sha256": "cdcaa5e5061934a9b960c94e203cc7d1e3b869a407182644f2dda9fdcbf5c2b3"
+    },
+    {
+      "path": "slicing-fixtures/process/0.20mm Standard @BBL H2S.json",
+      "sha256": "2cfcb2b775cf6f8861e0060b2447eb5bc9edee0f2eded02324064a26a2f70d3f"
+    },
+    {
+      "path": "slicing-fixtures/process/fdm_process_common.json",
+      "sha256": "398fcb322a7f459edab00cb2daf524345a19b8cef074415af52f377f91e4bd5b"
+    },
+    {
+      "path": "slicing-fixtures/process/fdm_process_single_0.20.json",
+      "sha256": "b26b4c110e0f44dc25985af0acb2deb00d7d1b3eba57b8d2241ad8106fc8e034"
+    },
+    {
+      "path": "slicing-fixtures/process/fdm_process_single_common.json",
+      "sha256": "59fc5ca43dcf9850076708b8ca14b7f9098fe90b9b32ceffc6741b4fcaf3e73e"
+    },
+    {
+      "path": "catalog-profiles/filament/Generic PETG @BBL H2S.json",
+      "sha256": "95850977f6491a0254f669c9823e40e665d33638420b7964eca08fe166f4a4e9"
+    },
+    {
+      "path": "catalog-profiles/filament/Generic PETG @base.json",
+      "sha256": "a9771d08f36fe4c71fa74394a36a341b1f15f7bfebb6fa71fba8211be50b58b2"
+    },
+    {
+      "path": "catalog-profiles/filament/fdm_filament_pet.json",
+      "sha256": "08207268a7f0401dbf04f9875b7f4ff2153c305748f0326d74d1a5843ccfde30"
+    }
+  ],
+  "upstream": {
+    "license": "AGPL-3.0",
+    "project": "OrcaSlicer/OrcaSlicer",
+    "revision": "8500fcdccaa10b5099ac20d252af3a7c560046f1",
+    "sourcePath": "resources/profiles/BBL"
+  }
+}

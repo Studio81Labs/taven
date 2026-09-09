@@ -66,6 +66,8 @@
     "slicer-worker:test": "pnpm -C apps/slicer-worker test",
     "slicer-worker:profiles:check": "node tools/slicing-fixtures/scripts/generate-profiles.mjs --check",
     "slicer-worker:profiles:update": "node tools/slicing-fixtures/scripts/generate-profiles.mjs --write",
+    "catalog-profiles:check": "node tools/catalog-profiles/scripts/generate-catalog.mjs --check",
+    "catalog-profiles:update": "node tools/catalog-profiles/scripts/generate-catalog.mjs --write",
     "slicer-worker:identity:check": "node tools/slicing-fixtures/scripts/check-engine-identity.mjs",
     "slicer-worker:orca:build": "node tools/slicing-fixtures/scripts/build-runtime.mjs",
     "slicer-worker:orca:digest": "node tools/slicing-fixtures/scripts/build-runtime.mjs --print-digest",
