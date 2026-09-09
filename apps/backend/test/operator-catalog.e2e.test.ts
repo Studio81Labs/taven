@@ -311,7 +311,30 @@ describe("operator catalog commands", () => {
     );
   });
 
-  it("rejects missing correction reasons, untrusted nodes, and catalog-write access", async () => {
+  it("rejects malformed command bodies, untrusted nodes, and catalog-write access", async () => {
+    const noBodyPaths = [
+      "/admin/catalog/reference-profiles",
+      "/admin/catalog/machine-profiles",
+      `/admin/catalog/reference-profiles/${randomUUID()}/activate`,
+      `/admin/catalog/reference-profiles/${randomUUID()}/retire`,
+      `/admin/catalog/machine-profiles/${fixture.machineProfileId}/activate`,
+      `/admin/catalog/machine-profiles/${fixture.machineProfileId}/retire`,
+      `/admin/nodes/${fixture.nodeId}/calibrations`,
+      `/admin/nodes/${fixture.nodeId}/calibrations/${fixture.machineCalibrationId}/activate`,
+      `/admin/nodes/${fixture.nodeId}/calibrations/${fixture.machineCalibrationId}/retire`,
+      `/admin/nodes/${fixture.nodeId}/inventories`,
+      `/admin/nodes/${fixture.nodeId}/machines/${fixture.machineId}/status`,
+      `/admin/nodes/${fixture.nodeId}/inventories/${fixture.inventoryId}/status`,
+      `/admin/nodes/${fixture.nodeId}/inventories/${fixture.inventoryId}/adjustments`,
+    ];
+    for (const path of noBodyPaths) {
+      const response = await commandWithoutBody(
+        path,
+        `catalog-no-body-${randomUUID()}`,
+      );
+      expect(response.status, path).toBe(400);
+    }
+
     const noReason = await command(
       `/admin/nodes/${fixture.nodeId}/machines/${fixture.machineId}/status`,
       { status: "ACTIVE" },
@@ -459,6 +482,22 @@ describe("operator catalog commands", () => {
         "x-csrf-token": adminCsrfToken,
       },
       body: JSON.stringify(body),
+    });
+  }
+
+  async function commandWithoutBody(
+    path: string,
+    idempotencyKey: string,
+  ): Promise<Response> {
+    return fetch(new URL(path, baseUrl), {
+      method: "POST",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json",
+        "idempotency-key": idempotencyKey,
+        origin: "http://localhost:3002",
+        "x-csrf-token": adminCsrfToken,
+      },
     });
   }
 

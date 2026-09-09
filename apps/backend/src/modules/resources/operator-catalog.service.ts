@@ -295,6 +295,7 @@ export class OperatorCatalogService {
   ): Promise<CatalogResult> {
     nodeId = this.node(operator, nodeId);
     machineId = uuid(machineId, "machineId");
+    body = commandBody(body);
     const status = enumValue(body.status, MachineStatus, "status");
     const reason = reasonText(body);
     return this.command(
@@ -330,6 +331,7 @@ export class OperatorCatalogService {
   ): Promise<CatalogResult> {
     nodeId = this.node(operator, nodeId);
     inventoryId = uuid(inventoryId, "inventoryId");
+    body = commandBody(body);
     const status = enumValue(body.status, InventoryStatus, "status");
     const reason = reasonText(body);
     return this.command(
@@ -365,6 +367,7 @@ export class OperatorCatalogService {
   ): Promise<CatalogResult> {
     nodeId = this.node(operator, nodeId);
     inventoryId = uuid(inventoryId, "inventoryId");
+    body = commandBody(body);
     const deltaMilligrams = integer(body.deltaMilligrams, "deltaMilligrams");
     if (deltaMilligrams === 0n)
       throw new BadRequestException("deltaMilligrams must not be zero");
@@ -681,6 +684,7 @@ function operatorCommandNamespace(
 function referenceProfileInput(
   body: CreateReferenceProfileDto,
 ): CreateReferenceProfileInput {
+  body = commandBody(body);
   return {
     material: enumValue(body.material, Material, "material"),
     quality: enumValue(body.quality, PrintQuality, "quality"),
@@ -713,6 +717,7 @@ function calibrationInput(
   nodeId: string,
   body: CreateMachineCalibrationDto,
 ): CreateMachineCalibrationInput {
+  body = commandBody(body);
   return {
     nodeId,
     machineId: uuid(body.machineId, "machineId"),
@@ -736,6 +741,7 @@ function inventoryInput(
   nodeId: string,
   body: CreateInventoryDto,
 ): CreateInventoryInput {
+  body = commandBody(body);
   return {
     nodeId,
     machineId: uuid(body.machineId, "machineId"),
@@ -896,7 +902,15 @@ function integer(value: unknown, name: string): bigint {
   return parsed;
 }
 
+function commandBody<T extends object>(body: T | null | undefined): T {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new BadRequestException("request body must be an object");
+  }
+  return body;
+}
+
 function reasonText(body: CatalogReasonDto): string {
+  body = commandBody(body);
   const reason = text(body.reason, "reason");
   if (reason.length > 1_000)
     throw new BadRequestException("reason is too long");
