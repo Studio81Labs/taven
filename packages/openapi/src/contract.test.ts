@@ -179,6 +179,39 @@ describe("OpenAPI artifact", () => {
     }
   });
 
+  it("describes catalog command boundary constraints", async () => {
+    const contract = JSON.parse(
+      await readFile(new URL("../openapi.json", import.meta.url), "utf8"),
+    ) as {
+      components: {
+        schemas: Record<
+          string,
+          { properties?: Record<string, Record<string, unknown>> }
+        >;
+      };
+    };
+    const schemas = contract.components.schemas;
+
+    expect(
+      schemas.CreateReferenceProfileDto?.properties?.material,
+    ).toMatchObject({ enum: ["PLA", "PETG"] });
+    expect(
+      schemas.CreateMachineProfileDto?.properties?.nozzleDiameterMicrometers,
+    ).toMatchObject({ type: "integer", minimum: 1, maximum: 2_147_483_647 });
+    expect(
+      schemas.CreateMachineCalibrationDto?.properties?.flowRatioPartsPerMillion,
+    ).toMatchObject({ type: "integer", minimum: 1, maximum: 2_147_483_647 });
+    expect(
+      schemas.CreateInventoryDto?.properties?.priceMinorUnitsNumerator,
+    ).toMatchObject({ pattern: "^(?:0|[1-9][0-9]*)$" });
+    expect(schemas.MachineStatusDto?.properties?.status).toMatchObject({
+      enum: ["ACTIVE", "MAINTENANCE", "DISABLED"],
+    });
+    expect(schemas.InventoryStatusDto?.properties?.status).toMatchObject({
+      enum: ["AVAILABLE", "DEPLETED", "RETIRED"],
+    });
+  });
+
   it("describes every fulfilment route input", async () => {
     type Parameter = {
       in?: string;

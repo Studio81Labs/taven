@@ -42,8 +42,9 @@ import type {
   CreateMachineCalibrationDto,
   CreateMachineProfileDto,
   CreateReferenceProfileDto,
+  InventoryStatusDto,
   InventoryAdjustmentDto,
-  ResourceStatusDto,
+  MachineStatusDto,
 } from "./operator-catalog.dto";
 
 type Transaction = Prisma.TransactionClient;
@@ -289,7 +290,7 @@ export class OperatorCatalogService {
     operator: OperatorContext,
     nodeId: string,
     machineId: string,
-    body: ResourceStatusDto,
+    body: MachineStatusDto,
     key?: string,
   ): Promise<CatalogResult> {
     nodeId = this.node(operator, nodeId);
@@ -324,7 +325,7 @@ export class OperatorCatalogService {
     operator: OperatorContext,
     nodeId: string,
     inventoryId: string,
-    body: ResourceStatusDto,
+    body: InventoryStatusDto,
     key?: string,
   ): Promise<CatalogResult> {
     nodeId = this.node(operator, nodeId);

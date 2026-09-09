@@ -1339,6 +1339,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           }
         },
@@ -1930,6 +1931,7 @@
           "color": {
             "maxLength": 100,
             "nullable": true,
+            "pattern": "\\S",
             "type": "string"
           },
           "currency": {
@@ -1941,6 +1943,7 @@
           "lotCode": {
             "maxLength": 100,
             "nullable": true,
+            "pattern": "\\S",
             "type": "string"
           },
           "machineId": {
@@ -1948,6 +1951,10 @@
             "type": "string"
           },
           "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
             "type": "string"
           },
           "priceMinorUnitsDenominator": {
@@ -1955,21 +1962,23 @@
             "type": "string"
           },
           "priceMinorUnitsNumerator": {
-            "pattern": "^-?[0-9]+$",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
             "type": "string"
           },
           "remainingMilligrams": {
-            "pattern": "^[0-9]+$",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
             "type": "string"
           },
           "sku": {
             "maxLength": 100,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "vendor": {
             "maxLength": 200,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           }
         },
@@ -1990,12 +1999,12 @@
           "elephantFootCompensationMicrometers": {
             "maximum": 2147483647,
             "minimum": -2147483648,
-            "type": "number"
+            "type": "integer"
           },
           "flowRatioPartsPerMillion": {
             "maximum": 2147483647,
             "minimum": 1,
-            "type": "number"
+            "type": "integer"
           },
           "machineId": {
             "format": "uuid",
@@ -2008,7 +2017,7 @@
           "xyCompensationMicrometers": {
             "maximum": 2147483647,
             "minimum": -2147483648,
-            "type": "number"
+            "type": "integer"
           }
         },
         "required": [
@@ -2027,17 +2036,31 @@
             "type": "string"
           },
           "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
             "type": "string"
           },
           "nozzleDiameterMicrometers": {
             "maximum": 2147483647,
             "minimum": 1,
-            "type": "number"
+            "type": "integer"
           },
           "productionArtifactFormat": {
+            "enum": [
+              "GCODE_3MF",
+              "BGCODE",
+              "GCODE"
+            ],
             "type": "string"
           },
           "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
             "type": "string"
           },
           "referenceProfileId": {
@@ -2051,11 +2074,13 @@
           "slicerEngine": {
             "maxLength": 100,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "slicerVersion": {
             "maxLength": 100,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           }
         },
@@ -2159,9 +2184,18 @@
       "CreateReferenceProfileDto": {
         "properties": {
           "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
             "type": "string"
           },
           "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
             "type": "string"
           },
           "settings": {
@@ -2171,11 +2205,13 @@
           "slicerEngine": {
             "maxLength": 100,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "slicerVersion": {
             "maxLength": 100,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           }
         },
@@ -3655,12 +3691,13 @@
       "InventoryAdjustmentDto": {
         "properties": {
           "deltaMilligrams": {
-            "pattern": "^-?[0-9]+$",
+            "pattern": "^-?(?:0|[1-9][0-9]*)$",
             "type": "string"
           },
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           }
         },
@@ -3731,6 +3768,29 @@
           "remainingMilligrams",
           "reservedMilligrams",
           "availableMilligrams",
+          "status"
+        ],
+        "type": "object"
+      },
+      "InventoryStatusDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "AVAILABLE",
+              "DEPLETED",
+              "RETIRED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
           "status"
         ],
         "type": "object"
@@ -4168,6 +4228,29 @@
           "displayName",
           "status",
           "installedNozzleMicrometers"
+        ],
+        "type": "object"
+      },
+      "MachineStatusDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "MAINTENANCE",
+              "DISABLED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "status"
         ],
         "type": "object"
       },
@@ -6921,23 +7004,6 @@
         ],
         "type": "object"
       },
-      "ResourceStatusDto": {
-        "properties": {
-          "reason": {
-            "maxLength": 1000,
-            "minLength": 1,
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "reason",
-          "status"
-        ],
-        "type": "object"
-      },
       "SelectAutomaticQuoteDestinationDto": {
         "properties": {
           "endpointType": {
@@ -9491,7 +9557,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ResourceStatusDto"
+                "$ref": "#/components/schemas/InventoryStatusDto"
               }
             }
           },
@@ -9635,7 +9701,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ResourceStatusDto"
+                "$ref": "#/components/schemas/MachineStatusDto"
               }
             }
           },

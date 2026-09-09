@@ -29,8 +29,9 @@ import {
   CreateMachineCalibrationDto,
   CreateMachineProfileDto,
   CreateReferenceProfileDto,
+  InventoryStatusDto,
   InventoryAdjustmentDto,
-  ResourceStatusDto,
+  MachineStatusDto,
 } from "./operator-catalog.dto";
 import { OperatorCatalogService } from "./operator-catalog.service";
 
@@ -236,13 +237,13 @@ export class OperatorCatalogController {
   @ApiParam(NODE_ID)
   @ApiParam(MACHINE_ID)
   @ApiHeader(IDEMPOTENCY_HEADER)
-  @ApiBody({ type: ResourceStatusDto })
+  @ApiBody({ type: MachineStatusDto })
   @ApiOkResponse({ type: CatalogCommandResultDto })
   updateMachineStatus(
     @CurrentOperator() operator: OperatorContext,
     @Param("nodeId") nodeId: string,
     @Param("machineId") machineId: string,
-    @Body() body: ResourceStatusDto,
+    @Body() body: MachineStatusDto,
     @Headers("idempotency-key") key?: string,
   ) {
     return this.catalog.updateMachineStatus(
@@ -260,13 +261,13 @@ export class OperatorCatalogController {
   @ApiParam(NODE_ID)
   @ApiParam(INVENTORY_ID)
   @ApiHeader(IDEMPOTENCY_HEADER)
-  @ApiBody({ type: ResourceStatusDto })
+  @ApiBody({ type: InventoryStatusDto })
   @ApiOkResponse({ type: CatalogCommandResultDto })
   updateInventoryStatus(
     @CurrentOperator() operator: OperatorContext,
     @Param("nodeId") nodeId: string,
     @Param("inventoryId") inventoryId: string,
-    @Body() body: ResourceStatusDto,
+    @Body() body: InventoryStatusDto,
     @Headers("idempotency-key") key?: string,
   ) {
     return this.catalog.updateInventoryStatus(

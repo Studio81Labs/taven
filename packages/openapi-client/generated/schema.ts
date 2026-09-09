@@ -2143,7 +2143,8 @@ export interface components {
             lotCode?: string | null;
             /** Format: uuid */
             machineId: string;
-            material: string;
+            /** @enum {string} */
+            material: "PLA" | "PETG";
             priceMinorUnitsDenominator: string;
             priceMinorUnitsNumerator: string;
             remainingMilligrams: string;
@@ -2163,10 +2164,13 @@ export interface components {
         CreateMachineProfileDto: {
             /** Format: uuid */
             machineCapabilityId: string;
-            material: string;
+            /** @enum {string} */
+            material: "PLA" | "PETG";
             nozzleDiameterMicrometers: number;
-            productionArtifactFormat: string;
-            quality: string;
+            /** @enum {string} */
+            productionArtifactFormat: "GCODE_3MF" | "BGCODE" | "GCODE";
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
             /** Format: uuid */
             referenceProfileId: string;
             settings: {
@@ -2201,8 +2205,10 @@ export interface components {
             requestedDate?: string;
         };
         CreateReferenceProfileDto: {
-            material: string;
-            quality: string;
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
             settings: {
                 [key: string]: unknown;
             };
@@ -2691,6 +2697,11 @@ export interface components {
             sku: string;
             status: string;
         };
+        InventoryStatusDto: {
+            reason: string;
+            /** @enum {string} */
+            status: "AVAILABLE" | "DEPLETED" | "RETIRED";
+        };
         IssueOfferDto: {
             components: components["schemas"]["OfferPriceComponentDto"][];
             contractTotalMinor: number;
@@ -2804,6 +2815,11 @@ export interface components {
             /** Format: uuid */
             nodeId: string;
             status: string;
+        };
+        MachineStatusDto: {
+            reason: string;
+            /** @enum {string} */
+            status: "ACTIVE" | "MAINTENANCE" | "DISABLED";
         };
         MarginCoverageDto: {
             completeOrders: number;
@@ -3532,10 +3548,6 @@ export interface components {
         };
         ReplaceAutomaticQuoteConfigurationDto: {
             items: components["schemas"]["ConfigureAutomaticQuoteDraftItemDto"][];
-        };
-        ResourceStatusDto: {
-            reason: string;
-            status: string;
         };
         SelectAutomaticQuoteDestinationDto: {
             endpointType: string;
@@ -4607,7 +4619,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ResourceStatusDto"];
+                "application/json": components["schemas"]["InventoryStatusDto"];
             };
         };
         responses: {
@@ -4664,7 +4676,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ResourceStatusDto"];
+                "application/json": components["schemas"]["MachineStatusDto"];
             };
         };
         responses: {
