@@ -70,6 +70,7 @@ export type CreateInventoryInput = {
 
 type RevisionTable =
   "referenceProfile" | "machineProfile" | "machineCalibration";
+const MAX_INT64 = 9_223_372_036_854_775_807n;
 
 function nonBlank(value: string, name: string): string {
   const normalized = value.trim();
@@ -478,6 +479,11 @@ export class ResourceCatalogService {
         }
         const remainingMilligrams =
           inventory.remaining_milligrams + deltaMilligrams;
+        if (remainingMilligrams > MAX_INT64) {
+          throw new ResourceValidationError(
+            "inventory adjustment exceeds the supported range",
+          );
+        }
         if (
           remainingMilligrams < 0n ||
           remainingMilligrams < inventory.reserved_milligrams

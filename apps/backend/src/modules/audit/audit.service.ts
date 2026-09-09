@@ -269,6 +269,7 @@ function redactPayload(
     "outcome",
     "version",
     "photoAssetId",
+    "deltaMilligrams",
   ] as const) {
     const field = value[key];
     if (

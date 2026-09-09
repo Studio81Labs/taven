@@ -281,6 +281,26 @@ describe("operator catalog commands", () => {
         },
       }),
     ).resolves.toBe(1);
+    const auditResponse = await fetch(
+      new URL(
+        `/admin/audit-events?eventType=catalog.inventory.adjusted`,
+        baseUrl,
+      ),
+      { headers: { cookie: adminCookie } },
+    );
+    expect(auditResponse.status).toBe(200);
+    const auditPage = (await auditResponse.json()) as {
+      items: Array<{
+        correlationId?: string;
+        payload: Record<string, unknown>;
+      }>;
+    };
+    expect(auditPage.items).toContainEqual(
+      expect.objectContaining({
+        correlationId: fixture.inventoryId,
+        payload: expect.objectContaining({ deltaMilligrams: "11" }),
+      }),
+    );
   });
 
   it("rejects missing correction reasons, untrusted nodes, and catalog-write access", async () => {
@@ -326,6 +346,16 @@ describe("operator catalog commands", () => {
       `catalog-overflow-${randomUUID()}`,
     );
     expect(overflow.status).toBe(400);
+
+    const balanceOverflow = await command(
+      `/admin/nodes/${fixture.nodeId}/inventories/${fixture.inventoryId}/adjustments`,
+      {
+        deltaMilligrams: "9223372036854775807",
+        reason: "Invalid balance overflow correction",
+      },
+      `catalog-balance-overflow-${randomUUID()}`,
+    );
+    expect(balanceOverflow.status).toBe(400);
 
     for (const deltaMilligrams of ["0", "-0"]) {
       const zeroAdjustment = await command(
