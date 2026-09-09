@@ -1,5 +1,5 @@
 {
-  "bundleSha256": "a02a40c3ca3dcc77c4b6d613faee5b1ac845911482a0b52bdb35428df53c54e0",
+  "bundleSha256": "1f9861ea7f9b4e0f4259932bd3dca7801d0416a1d0ff4842076b781ac0eb9a0c",
   "resolvedProfiles": [
     {
       "file": "machine.json",
@@ -37,20 +37,20 @@
   "schemaVersion": 1,
   "sourceFiles": [
     {
-      "path": "filament/fdm_filament_common.json",
-      "sha256": "05725cc129f96ea903dc77c40d248fa1bd0137cfc41216d09d952cfdd37d3683"
-    },
-    {
-      "path": "filament/fdm_filament_pla.json",
-      "sha256": "79f257ca32c8a938f49df82623cc84ca86d1044a818d600714b024e6b6499642"
+      "path": "filament/Generic PLA @BBL H2S.json",
+      "sha256": "df0eb98f574b53eba5cf6f7e0938552d4cbb878982f78b7810ab949845dfc0ed"
     },
     {
       "path": "filament/Generic PLA @base.json",
       "sha256": "85ebc04bd25c236322547d6d95f5a074ce4cab53cf975392e1f6b2c1fb74d406"
     },
     {
-      "path": "filament/Generic PLA @BBL H2S.json",
-      "sha256": "df0eb98f574b53eba5cf6f7e0938552d4cbb878982f78b7810ab949845dfc0ed"
+      "path": "filament/fdm_filament_common.json",
+      "sha256": "05725cc129f96ea903dc77c40d248fa1bd0137cfc41216d09d952cfdd37d3683"
+    },
+    {
+      "path": "filament/fdm_filament_pla.json",
+      "sha256": "79f257ca32c8a938f49df82623cc84ca86d1044a818d600714b024e6b6499642"
     },
     {
       "path": "machine/Bambu Lab H2S 0.4 nozzle.json",

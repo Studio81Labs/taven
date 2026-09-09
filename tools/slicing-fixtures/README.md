@@ -9,6 +9,11 @@ four identities separate:
    `profiles/manifest.json`; and
 4. the exact corpus CLI argument bundle digest in `runtime.lock.json`.
 
+Profile source paths and serialized object keys use the UTF-16 code-unit
+comparator `a === b ? 0 : a < b ? -1 : 1`, never host-locale collation. That
+makes an identical vendored closure produce the same provenance manifest and
+bundle digest on every supported host.
+
 The runtime is Linux x86-64, independently built from the Node BullMQ worker,
 non-root, and exposes no port. The AppImage is extracted without FUSE. Ubuntu
 packages come from a dated, signed snapshot, and the resulting image records
@@ -57,6 +62,17 @@ plate decisions, per-filament material usage, the exact CLI arguments,
 estimated time, and timestamp-normalized G-code hashes must match both runs and
 the reviewed JSON under `expected/`. The invalid fixture also requires Orca's
 specific parser failure code and message before a baseline can be recorded.
+
+## Determinism corrections
+
+The profile-bundle digest covers canonically serialized provenance as well as
+the resolved profile contents. If an ordering correction changes only that
+digest while `profiles/resolved/**` and `image.ociDigest` remain unchanged, it
+is a determinism correction rather than an engine or profile upgrade. Regenerate
+the manifest, update the reviewed profile digest in `runtime.lock.json` and the
+corpus baselines, then run the complete corpus verification. Any engine,
+profile-content, base-image, package, or invocation change remains a deliberate
+upgrade and follows the procedure below.
 
 ## Deliberate upgrades
 

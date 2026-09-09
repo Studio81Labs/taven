@@ -17,24 +17,46 @@ export const profileRoots = [
 export const upstreamProfileRevision =
   "8500fcdccaa10b5099ac20d252af3a7c560046f1";
 
-export function canonicalJson(value) {
+function compareUtf16(left, right) {
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+export function canonicalJson(value, depth = 0) {
+  const indentation = "  ".repeat(depth);
+  const nestedIndentation = "  ".repeat(depth + 1);
+
   if (Array.isArray(value)) {
-    return value.map(canonicalJson);
+    if (value.length === 0) {
+      return "[]";
+    }
+    return `[\n${value
+      .map((child) => `${nestedIndentation}${canonicalJson(child, depth + 1)}`)
+      .join(",\n")}\n${indentation}]`;
   }
 
   if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, canonicalJson(child)]),
+    const entries = Object.entries(value).sort(([left], [right]) =>
+      compareUtf16(left, right),
     );
+    if (entries.length === 0) {
+      return "{}";
+    }
+    return `{\n${entries
+      .map(
+        ([key, child]) =>
+          `${nestedIndentation}${JSON.stringify(key)}: ${canonicalJson(
+            child,
+            depth + 1,
+          )}`,
+      )
+      .join(",\n")}\n${indentation}}`;
   }
 
-  return value;
+  return JSON.stringify(value);
 }
 
 export function stableJson(value) {
-  return `${JSON.stringify(canonicalJson(value), null, 2)}\n`;
+  return `${canonicalJson(value)}\n`;
 }
 
 export function sha256(value) {
@@ -46,7 +68,7 @@ async function listJsonFiles(directory) {
   const files = [];
 
   for (const entry of entries.sort((left, right) =>
-    left.name.localeCompare(right.name),
+    compareUtf16(left.name, right.name),
   )) {
     const candidate = path.join(directory, entry.name);
     if (entry.isDirectory()) {
@@ -76,7 +98,9 @@ export async function buildProfileBundle() {
   const sourceFiles = [];
 
   for (const file of files) {
-    const relativePath = path.relative(sourceDirectory, file);
+    const relativePath = path
+      .relative(sourceDirectory, file)
+      .replaceAll(path.sep, "/");
     const source = await readFile(file, "utf8");
     const profile = JSON.parse(source);
     if (typeof profile.name !== "string" || profile.name.length === 0) {

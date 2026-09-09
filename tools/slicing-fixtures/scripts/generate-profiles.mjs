@@ -22,6 +22,54 @@ const expectedResolvedFiles = new Set(
   resolvedProfiles.map((profile) => profile.file),
 );
 
+function assertCodeUnitOrdering() {
+  const canonicalProbe = stableJson({
+    "fdm_filament_common.json": true,
+    "Generic PLA @BBL H2S.json": true,
+  });
+  const expectedProbe = [
+    "{",
+    '  "Generic PLA @BBL H2S.json": true,',
+    '  "fdm_filament_common.json": true',
+    "}",
+    "",
+  ].join("\n");
+  const numericKeyProbe = stableJson({
+    2: true,
+    10: true,
+  });
+  const expectedNumericKeyProbe = [
+    "{",
+    '  "10": true,',
+    '  "2": true',
+    "}",
+    "",
+  ].join("\n");
+  const sourcePaths = manifest.sourceFiles.map(
+    ({ path: sourcePath }) => sourcePath,
+  );
+  const genericProfileIndex = sourcePaths.indexOf(
+    "filament/Generic PLA @BBL H2S.json",
+  );
+  const commonProfileIndex = sourcePaths.indexOf(
+    "filament/fdm_filament_common.json",
+  );
+
+  if (
+    canonicalProbe !== expectedProbe ||
+    numericKeyProbe !== expectedNumericKeyProbe ||
+    genericProfileIndex === -1 ||
+    commonProfileIndex === -1 ||
+    genericProfileIndex >= commonProfileIndex
+  ) {
+    throw new Error(
+      "Profile serialization must order keys and source paths by UTF-16 code unit.",
+    );
+  }
+}
+
+assertCodeUnitOrdering();
+
 async function findUnexpectedResolvedFiles() {
   let entries;
   try {
