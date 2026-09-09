@@ -39,6 +39,12 @@ const PRINT_QUALITIES = ["DRAFT", "STANDARD", "FINE"] as const;
 const PRODUCTION_ARTIFACT_FORMATS = ["GCODE_3MF", "BGCODE", "GCODE"] as const;
 const MACHINE_STATUSES = ["ACTIVE", "MAINTENANCE", "DISABLED"] as const;
 const INVENTORY_STATUSES = ["AVAILABLE", "DEPLETED", "RETIRED"] as const;
+const NON_BLANK_TEXT = "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$";
+const SETTINGS = {
+  type: Object,
+  additionalProperties: true,
+  description: "String keys and values must not contain U+0000.",
+} as const;
 
 export class CatalogCommandResultDto {
   @ApiProperty(UUID)
@@ -52,7 +58,12 @@ export class CatalogCommandResultDto {
 }
 
 export class CatalogReasonDto {
-  @ApiProperty({ type: String, minLength: 1, maxLength: 1000, pattern: "\\S" })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 1000,
+    pattern: NON_BLANK_TEXT,
+  })
   reason!: string;
 }
 
@@ -63,13 +74,23 @@ export class CreateReferenceProfileDto {
   @ApiProperty({ type: String, enum: PRINT_QUALITIES })
   quality!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 100, pattern: "\\S" })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
   slicerEngine!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 100, pattern: "\\S" })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
   slicerVersion!: string;
 
-  @ApiProperty({ type: Object, additionalProperties: true })
+  @ApiProperty(SETTINGS)
   settings!: Record<string, unknown>;
 }
 
@@ -108,7 +129,7 @@ export class CreateMachineCalibrationDto {
   })
   elephantFootCompensationMicrometers!: number;
 
-  @ApiProperty({ type: Object, additionalProperties: true })
+  @ApiProperty(SETTINGS)
   settings!: Record<string, unknown>;
 }
 
@@ -116,20 +137,30 @@ export class CreateInventoryDto {
   @ApiProperty(UUID)
   machineId!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 100, pattern: "\\S" })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
   sku!: string;
 
   @ApiProperty({ type: String, enum: MATERIALS })
   material!: string;
 
-  @ApiProperty({ type: String, minLength: 1, maxLength: 200, pattern: "\\S" })
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    pattern: NON_BLANK_TEXT,
+  })
   vendor!: string;
 
   @ApiPropertyOptional({
     type: String,
     nullable: true,
     maxLength: 100,
-    pattern: "\\S",
+    pattern: NON_BLANK_TEXT,
   })
   color?: string | null;
 
@@ -137,7 +168,7 @@ export class CreateInventoryDto {
     type: String,
     nullable: true,
     maxLength: 100,
-    pattern: "\\S",
+    pattern: NON_BLANK_TEXT,
   })
   lotCode?: string | null;
 

@@ -384,6 +384,39 @@ describe("operator catalog commands", () => {
     );
     expect(unicodeReasonResponse.status).toBe(200);
 
+    for (const [path, body] of [
+      [
+        `/admin/nodes/${fixture.nodeId}/inventories`,
+        {
+          machineId: fixture.machineId,
+          sku: "catalog\u0000sku",
+          material: "PLA",
+          vendor: "Taven test",
+          priceMinorUnitsNumerator: "1",
+          priceMinorUnitsDenominator: "1",
+          currency: "EUR",
+          remainingMilligrams: "1",
+        },
+      ],
+      [
+        `/admin/nodes/${fixture.nodeId}/machines/${fixture.machineId}/status`,
+        { status: "ACTIVE", reason: "repair\u0000note" },
+      ],
+      [
+        "/admin/catalog/reference-profiles",
+        {
+          material: "PLA",
+          quality: "FINE",
+          slicerEngine: "orca",
+          slicerVersion: "2.1.0",
+          settings: { note: "catalog\u0000setting" },
+        },
+      ],
+    ] as const) {
+      const response = await command(path, body, `catalog-nul-${randomUUID()}`);
+      expect(response.status, path).toBe(400);
+    }
+
     const intOverflow = await command(
       `/admin/nodes/${fixture.nodeId}/calibrations`,
       {

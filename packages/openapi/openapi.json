@@ -1339,7 +1339,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           }
         },
@@ -1931,7 +1931,7 @@
           "color": {
             "maxLength": 100,
             "nullable": true,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           },
           "currency": {
@@ -1943,7 +1943,7 @@
           "lotCode": {
             "maxLength": 100,
             "nullable": true,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           },
           "machineId": {
@@ -1975,13 +1975,13 @@
           "sku": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           },
           "vendor": {
             "maxLength": 200,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           }
         },
@@ -2015,6 +2015,7 @@
           },
           "settings": {
             "additionalProperties": true,
+            "description": "String keys and values must not contain U+0000.",
             "type": "object"
           },
           "xyCompensationMicrometers": {
@@ -2072,18 +2073,19 @@
           },
           "settings": {
             "additionalProperties": true,
+            "description": "String keys and values must not contain U+0000.",
             "type": "object"
           },
           "slicerEngine": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           },
           "slicerVersion": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           }
         },
@@ -2203,18 +2205,19 @@
           },
           "settings": {
             "additionalProperties": true,
+            "description": "String keys and values must not contain U+0000.",
             "type": "object"
           },
           "slicerEngine": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           },
           "slicerVersion": {
             "maxLength": 100,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           }
         },
@@ -3701,7 +3704,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           }
         },
@@ -3781,7 +3784,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           },
           "status": {
@@ -4240,7 +4243,7 @@
           "reason": {
             "maxLength": 1000,
             "minLength": 1,
-            "pattern": "\\S",
+            "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$",
             "type": "string"
           },
           "status": {

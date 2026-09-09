@@ -816,6 +816,7 @@ function settings(value: unknown): Prisma.InputJsonObject {
     throw new BadRequestException("settings must be an object");
   }
   try {
+    rejectNulCharacters(value as CanonicalJson, "settings");
     canonicalJson(value as CanonicalJson);
   } catch (error) {
     if (error instanceof ResourceValidationError) {
@@ -849,6 +850,9 @@ function text(value: unknown, name: string, maxLength?: number): string {
     throw new BadRequestException(`${name} must not be blank`);
   }
   const normalized = value.trim();
+  if (normalized.includes("\u0000")) {
+    throw new BadRequestException(`${name} must not contain NUL characters`);
+  }
   const length = codePointLength(normalized);
   if (length === 0) {
     throw new BadRequestException(`${name} must not be blank`);
@@ -861,6 +865,29 @@ function text(value: unknown, name: string, maxLength?: number): string {
 
 function codePointLength(value: string): number {
   return Array.from(value).length;
+}
+
+function rejectNulCharacters(value: CanonicalJson, name: string): void {
+  if (typeof value === "string") {
+    if (value.includes("\u0000")) {
+      throw new BadRequestException(`${name} must not contain NUL characters`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) rejectNulCharacters(entry, name);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      if (key.includes("\u0000")) {
+        throw new BadRequestException(
+          `${name} must not contain NUL characters`,
+        );
+      }
+      rejectNulCharacters(entry, name);
+    }
+  }
 }
 
 function currency(value: unknown): string {

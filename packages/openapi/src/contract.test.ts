@@ -191,6 +191,7 @@ describe("OpenAPI artifact", () => {
       };
     };
     const schemas = contract.components.schemas;
+    const nonBlankTextPattern = "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$";
 
     expect(
       schemas.CreateReferenceProfileDto?.properties?.material,
@@ -202,6 +203,34 @@ describe("OpenAPI artifact", () => {
       schemas.CreateMachineCalibrationDto?.properties?.flowRatioPartsPerMillion,
     ).toMatchObject({ type: "integer", minimum: 1, maximum: 2_147_483_647 });
     const inventoryProperties = schemas.CreateInventoryDto?.properties;
+    const textProperties = [
+      schemas.CatalogReasonDto?.properties?.reason,
+      schemas.CreateReferenceProfileDto?.properties?.slicerEngine,
+      schemas.CreateReferenceProfileDto?.properties?.slicerVersion,
+      inventoryProperties?.sku,
+      inventoryProperties?.vendor,
+      inventoryProperties?.color,
+      inventoryProperties?.lotCode,
+    ];
+    for (const property of textProperties) {
+      expect(property?.pattern).toBe(nonBlankTextPattern);
+      expect("valid catalog text").toMatch(
+        new RegExp(property?.pattern as string),
+      );
+      expect("invalid\u0000catalog text").not.toMatch(
+        new RegExp(property?.pattern as string),
+      );
+    }
+    expect(
+      schemas.CreateReferenceProfileDto?.properties?.settings,
+    ).toMatchObject({
+      description: "String keys and values must not contain U+0000.",
+    });
+    expect(
+      schemas.CreateMachineCalibrationDto?.properties?.settings,
+    ).toMatchObject({
+      description: "String keys and values must not contain U+0000.",
+    });
     const numerator = inventoryProperties?.priceMinorUnitsNumerator;
     const denominator = inventoryProperties?.priceMinorUnitsDenominator;
     const remaining = inventoryProperties?.remainingMilligrams;

@@ -2159,6 +2159,7 @@ export interface components {
             flowRatioPartsPerMillion: number;
             /** Format: uuid */
             machineId: string;
+            /** @description String keys and values must not contain U+0000. */
             settings: {
                 [key: string]: unknown;
             };
@@ -2176,6 +2177,7 @@ export interface components {
             quality: "DRAFT" | "STANDARD" | "FINE";
             /** Format: uuid */
             referenceProfileId: string;
+            /** @description String keys and values must not contain U+0000. */
             settings: {
                 [key: string]: unknown;
             };
@@ -2212,6 +2214,7 @@ export interface components {
             material: "PLA" | "PETG";
             /** @enum {string} */
             quality: "DRAFT" | "STANDARD" | "FINE";
+            /** @description String keys and values must not contain U+0000. */
             settings: {
                 [key: string]: unknown;
             };
