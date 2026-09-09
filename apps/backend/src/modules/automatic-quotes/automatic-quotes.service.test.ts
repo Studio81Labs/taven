@@ -168,17 +168,18 @@ describe("AutomaticQuotesService", () => {
   it("rejects a quote view when no current price binding exists", async () => {
     const sessionId = "00000000-0000-4000-8000-000000000001";
     const token = "a".repeat(43);
+    const observedAt = new Date("2030-01-01T00:00:00.000Z");
     const transaction = {
       $queryRaw: vi
         .fn()
         .mockResolvedValueOnce([{ id: sessionId }])
-        .mockResolvedValueOnce([{ observed_at: new Date() }]),
+        .mockResolvedValueOnce([{ observed_at: observedAt }]),
       quoteSession: {
         findUniqueOrThrow: vi.fn().mockResolvedValue({
           id: sessionId,
           publicTokenHash: createHash("sha256").update(token).digest("hex"),
           status: "OPEN",
-          expiresAt: new Date("2026-09-09T12:00:00.000Z"),
+          expiresAt: new Date("2030-01-01T00:00:01.000Z"),
         }),
       },
       automaticOrderOrigin: {
