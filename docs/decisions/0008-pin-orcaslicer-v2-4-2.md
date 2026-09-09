@@ -81,3 +81,13 @@ headless, deterministic, or supported-format contract, changing engines is a
 new ADR and fixture comparison, not an unreviewed image edit. Distribution of
 the runtime image must retain the applicable licenses, notices, and source offer
 required by AGPL-3.0 and the bundled profiles.
+
+## Deterministic profile-bundle provenance (2026-09-10)
+
+The profile-bundle digest includes canonically serialized provenance and uses
+the ADR 0015 UTF-16 code-unit comparator. A resulting bundle-digest change is a
+determinism correction, not a substantive upgrade, only when it provably leaves
+`profiles/resolved/**` and `image.ociDigest` unchanged. It does not require
+building old and new runtimes. The complete upgrade procedure above still
+applies to every engine, profile-content, base-image, package, or invocation
+change.
