@@ -40,7 +40,7 @@ const PRODUCTION_ARTIFACT_FORMATS = ["GCODE_3MF", "BGCODE", "GCODE"] as const;
 const MACHINE_STATUSES = ["ACTIVE", "MAINTENANCE", "DISABLED"] as const;
 const INVENTORY_STATUSES = ["AVAILABLE", "DEPLETED", "RETIRED"] as const;
 const NON_BLANK_TEXT =
-  "^(?=[\\s\\S]*\\S)(?:[\\u0001-\\uD7FF\\uE000-\\uFFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$";
+  "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$";
 const SETTINGS = {
   type: Object,
   additionalProperties: true,
