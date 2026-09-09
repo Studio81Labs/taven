@@ -6,7 +6,10 @@ on:
     paths: &worker-paths
       - "apps/slicer-worker/**"
       - "apps/backend/scripts/seed.ts"
+      - "infra/**"
       - "packages/slicer-contracts/**"
+      - "scripts/ci/check-boundaries.mjs"
+      - "scripts/ci/check-workflow-coverage.mjs"
       - "tools/slicing-fixtures/**"
       - ".dockerignore"
       - "package.json"
@@ -44,6 +47,7 @@ jobs:
       - run: pnpm slicer-worker:test
       - run: pnpm slicer-worker:build
       - run: pnpm slicer-worker:identity:check
+      - run: pnpm stack:config:check
 
   runtime:
     name: "worker: pinned Orca runtime & corpus"

@@ -1293,6 +1293,43 @@ export async function checkBoundaries(repoRoot = process.cwd()) {
     }
   }
 
+  const backendWorkerImplementation = [
+    /^@taven\/slicer-worker(?:\/|$)/,
+    /(?:^|\/)apps\/slicer-worker(?:\/|$)/,
+  ];
+  const backendFixtureRuntime = "@taven/slicer-worker/fixture-runtime";
+  for (const [directory, allowFixtureRuntime] of [
+    ["apps/backend/src", false],
+    ["apps/backend/test", true],
+  ]) {
+    for (const file of await sourceFiles(path.join(repoRoot, directory))) {
+      const source = await readFile(file, "utf8");
+      for (const specifier of importSpecifiers(source, file)) {
+        const candidates = [specifier];
+        if (specifier.startsWith(".")) {
+          candidates.push(
+            path.relative(
+              repoRoot,
+              path.resolve(path.dirname(file), specifier),
+            ),
+          );
+        }
+        if (
+          candidates.some((candidate) =>
+            backendWorkerImplementation.some((pattern) =>
+              pattern.test(candidate),
+            ),
+          ) &&
+          (!allowFixtureRuntime || specifier !== backendFixtureRuntime)
+        ) {
+          violations.push(
+            `${path.relative(repoRoot, file)} imports forbidden worker implementation '${specifier}'`,
+          );
+        }
+      }
+    }
+  }
+
   return violations;
 }
 

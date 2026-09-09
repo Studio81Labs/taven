@@ -8,6 +8,7 @@ on:
       - "scripts/ci/**"
       - ".github/workflows/**"
       - "package.json"
+      - "pnpm-lock.yaml"
   pull_request:
     branches: [main]
     paths: *ci-paths
@@ -25,11 +26,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.2.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
+      - run: pnpm install --frozen-lockfile
       - run: node scripts/ci/check-workflow-coverage.mjs
       - run: node scripts/ci/check-boundaries.mjs
+      - run: pnpm exec vitest run scripts/ci/check-boundaries.test.mjs
       - run: node scripts/ci/assert-local-database-url.mjs --self-test
       - name: Python policy checks
         run: |
@@ -55,6 +59,13 @@ jobs:
           set -euo pipefail
           missing=0
           for f in scripts/ci/*.test.sh scripts/ci/*.test.py; do
+            [[ -e "$f" ]] || continue
+            grep -q "$(basename "$f")" .github/workflows/ci-scripts.yml || {
+              echo "::error::${f} is not run by this workflow"
+              missing=1
+            }
+          done
+          for f in scripts/ci/*.test.mjs; do
             [[ -e "$f" ]] || continue
             grep -q "$(basename "$f")" .github/workflows/ci-scripts.yml || {
               echo "::error::${f} is not run by this workflow"

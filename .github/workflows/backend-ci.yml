@@ -8,6 +8,7 @@ on:
       - "apps/backend/**"
       - "packages/core/**"
       - "packages/slicer-contracts/**"
+      - "scripts/ci/check-boundaries.mjs"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -39,6 +40,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm backend:lint
+      - run: pnpm boundaries:check
       - run: pnpm backend:typecheck
       - run: pnpm backend:test
       - run: pnpm backend:build
