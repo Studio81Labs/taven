@@ -25,6 +25,7 @@ const pathFilteredWorkflows = {
   ],
   "slicer-worker-ci.yml": [
     "apps/slicer-worker/**",
+    "apps/backend/scripts/seed.ts",
     "packages/slicer-contracts/**",
     "tools/slicing-fixtures/**",
     ".dockerignore",

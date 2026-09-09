@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 import {
   Material,
@@ -15,6 +17,18 @@ import {
   resourceRevisionDigest,
   type CanonicalJson,
 } from "../src/modules/resources/resource-identity";
+const runtimeLock = JSON.parse(
+  readFileSync(
+    path.resolve(
+      __dirname,
+      "../../../tools/slicing-fixtures/runtime.lock.json",
+    ),
+    "utf8",
+  ),
+) as { engine: { name: string; version: string } };
+
+const pinnedSlicerEngine = runtimeLock.engine.name;
+const pinnedSlicerVersion = runtimeLock.engine.version;
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for seeding");
@@ -221,8 +235,8 @@ async function main() {
         id,
         material,
         quality: PrintQuality.STANDARD,
-        slicerEngine: "orca-slicer",
-        slicerVersion: "2.3.1",
+        slicerEngine: pinnedSlicerEngine,
+        slicerVersion: pinnedSlicerVersion,
         settings: { profile: "standard", material },
         state: RevisionState.ACTIVE,
         activatedAt: at,
@@ -277,8 +291,8 @@ async function main() {
         material,
         quality: PrintQuality.STANDARD,
         nozzleDiameterMicrometers: 400,
-        slicerEngine: "orca-slicer",
-        slicerVersion: "2.3.1",
+        slicerEngine: pinnedSlicerEngine,
+        slicerVersion: pinnedSlicerVersion,
         settings: { profile: "standard", material, nozzle: 400 },
         productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
       } satisfies CanonicalJson;

@@ -28,6 +28,7 @@ describe("worker configuration", () => {
     });
     expect(config.redisUrl).toContain("rediss:");
     expect(config.storage.endpoint).toBe("https://storage.internal/");
+    expect(config.engine.name).toBe("orca-slicer");
     expect(config.engine.version).toBe("2.4.2");
     expect(redisConnection(config.redisUrl)).toMatchObject({
       host: "redis.internal",

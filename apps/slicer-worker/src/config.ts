@@ -1,3 +1,5 @@
+import runtimeLock from "../../../tools/slicing-fixtures/runtime.lock.json" with { type: "json" };
+
 export type WorkerConfig = {
   redisUrl: string;
   storage: {
@@ -23,9 +25,12 @@ export type WorkerConfig = {
   };
 };
 
-const DEFAULT_ORCA_IMAGE_SHA256 =
-  "bd93c5e4f02ee51509351fa7bf005773a7abd257d768f83a626abf7a319f786f";
-const PINNED_ORCA_VERSION = "2.4.2";
+const PINNED_ORCA_NAME = runtimeLock.engine.name;
+const PINNED_ORCA_VERSION = runtimeLock.engine.version;
+const DEFAULT_ORCA_IMAGE_SHA256 = runtimeLock.image.ociDigest.replace(
+  "sha256:",
+  "",
+);
 const MAXIMUM_ORCA_TIMEOUT_MILLISECONDS = 30 * 60 * 1_000;
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -119,7 +124,7 @@ export function readWorkerConfig(
     },
     engine: {
       executable: env.TAVEN_ORCA_EXECUTABLE?.trim() || "/opt/orca/AppRun",
-      name: "orcaslicer",
+      name: PINNED_ORCA_NAME,
       version: pinnedOrcaVersion(env.TAVEN_ORCA_VERSION),
       imageSha256: sha256(
         env.TAVEN_ORCA_IMAGE_SHA256,
