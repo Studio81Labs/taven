@@ -184,6 +184,17 @@ describe("SlicerProfileSnapshotService", () => {
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotIntegrityError);
   });
 
+  it("does not apply preset limits to model inspection jobs", async () => {
+    const service = new SlicerProfileSnapshotService(
+      {} as PrismaService,
+      { putImmutableObject: vi.fn() } as unknown as ObjectStorage,
+    );
+
+    await expect(
+      service.ensureJobSnapshots({ kind: "model_inspection" } as SlicingJob),
+    ).resolves.toBeUndefined();
+  });
+
   it("materializes activation snapshots only from committed revision settings", async () => {
     const settings = machineBundle();
     const calibrationSettings = bundle({ flow_ratio: "1" });

@@ -189,15 +189,17 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
         );
       }
     }
-    try {
-      assertPresetBundleAggregateLimits(
-        expectations.map((expectation) => expectation.settings),
-      );
-    } catch (error) {
-      if (error instanceof PresetBundleValidationError) {
-        throw new SlicerProfileSnapshotIntegrityError(error.message);
+    if (expectations.length > 0) {
+      try {
+        assertPresetBundleAggregateLimits(
+          expectations.map((expectation) => expectation.settings),
+        );
+      } catch (error) {
+        if (error instanceof PresetBundleValidationError) {
+          throw new SlicerProfileSnapshotIntegrityError(error.message);
+        }
+        throw error;
       }
-      throw error;
     }
     await this.provision(expectations);
   }

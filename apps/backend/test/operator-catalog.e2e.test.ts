@@ -754,7 +754,7 @@ describe("operator catalog commands", () => {
     expect(activated).toMatchObject({ id: created.id, state: "ACTIVE" });
     await expect(
       objects.readObjectRange(snapshot.objectKey, 0, snapshot.bytes.byteLength),
-    ).resolves.toEqual(snapshot.bytes);
+    ).resolves.toEqual(Buffer.from(snapshot.bytes));
   });
 
   it("rejects malformed command bodies, untrusted nodes, and catalog-write access", async () => {
