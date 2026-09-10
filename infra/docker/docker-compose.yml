@@ -336,8 +336,8 @@ services:
     pids_limit: 320
     entrypoint: ["/bin/sh", "/usr/local/bin/taven-orca-runner"]
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001,mode=0700
-      - /work:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=0700
+      - /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001,mode=0770
+      - /work:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=0770
     environment:
       TAVEN_ORCA_RUNNER_ROOT: /var/run/taven-orca
       TAVEN_SLICER_MAX_ARTIFACT_BYTES: "536870912"
