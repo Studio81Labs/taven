@@ -103,7 +103,7 @@ while true; do
     request_directories_owned=true
     for writable_directory in "$request/output" "$request/tmp" "$request/tmp/data"; do
       if [ ! -d "$writable_directory" ] || \
-         [ "$(stat -c '%u:%g' "$writable_directory" 2>/dev/null || true)" != "10001:10001" ]; then
+         [ "$(stat -c '%u:%g:%a' "$writable_directory" 2>/dev/null || true)" != "10001:10001:770" ]; then
         request_directories_owned=false
         break
       fi

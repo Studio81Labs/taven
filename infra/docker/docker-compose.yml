@@ -323,7 +323,7 @@ services:
       target: runtime
       platforms: ["linux/amd64"]
     init: true
-    user: "0:0"
+    user: "0:10001"
     network_mode: none
     read_only: true
     cap_drop: ["ALL"]
@@ -477,4 +477,4 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: size=1073741824,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev
+      o: size=1073741824,uid=10001,gid=10001,mode=0770,noexec,nosuid,nodev

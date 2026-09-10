@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
+  chmod,
   copyFile,
   mkdir,
   mkdtemp,
@@ -762,21 +763,30 @@ export class OrcaSidecarEngine implements OrcaEngine {
     );
     let runnerOwnsCleanup = false;
     try {
+      await chmod(requestDirectory, 0o770);
       await mkdir(path.join(requestDirectory, "output"), {
         recursive: true,
-        mode: 0o700,
+        mode: 0o770,
       });
       await mkdir(path.join(requestDirectory, "tmp", "data"), {
         recursive: true,
-        mode: 0o700,
+        mode: 0o770,
       });
+      await Promise.all(
+        [
+          path.join(requestDirectory, "output"),
+          path.join(requestDirectory, "tmp"),
+          path.join(requestDirectory, "tmp", "data"),
+        ].map((directory) => chmod(directory, 0o770)),
+      );
       await writeFile(
         path.join(requestDirectory, "lease-expires-at"),
         `${Math.ceil(
           (Date.now() + this.config.timeoutMilliseconds + 60_000) / 1_000,
         )}\n`,
-        { mode: 0o400 },
+        { mode: 0o440 },
       );
+      await chmod(path.join(requestDirectory, "lease-expires-at"), 0o440);
       const profileDirectory = path.join(requestDirectory, "profiles");
       const settingsDirectory = path.join(profileDirectory, "settings");
       const filamentsDirectory = path.join(profileDirectory, "filaments");

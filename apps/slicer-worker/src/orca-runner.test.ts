@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -76,5 +77,56 @@ describe("Orca runner lifecycle", () => {
     await expect(exists(cancelled)).resolves.toBe(false);
     await expect(exists(expired)).resolves.toBe(false);
     await expect(exists(preparing)).resolves.toBe(true);
+  });
+
+  it("fails a ready request when its writable workspace is not group accessible", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "taven-runner-workspace-"));
+    cleanup.push(root);
+    const request = path.join(root, "request-wrong-mode");
+    const toolsDirectory = path.join(root, "tools");
+    const future = Math.ceil(Date.now() / 1_000) + 120;
+
+    await mkdir(path.join(request, "output"), { recursive: true });
+    await mkdir(path.join(request, "tmp", "data"), { recursive: true });
+    await mkdir(path.join(request, "profiles", "settings"), {
+      recursive: true,
+    });
+    await mkdir(toolsDirectory);
+    await writeFile(
+      path.join(toolsDirectory, "find"),
+      `#!/bin/sh
+case "$1" in
+  */profiles/settings) printf '%s\\n' /work/profiles/settings/0.json ;;
+esac
+`,
+    );
+    await chmod(path.join(toolsDirectory, "find"), 0o755);
+    await chmod(path.join(request, "output"), 0o700);
+    await writeFile(path.join(request, "lease-expires-at"), `${future}\n`);
+    await writeFile(path.join(request, "copies"), "1\n");
+    await writeFile(path.join(request, "artifact-format"), "gcode\n");
+    await writeFile(path.join(request, "timeout-seconds"), "60\n");
+    await writeFile(path.join(request, "geometry.stl"), "solid test\n");
+    await writeFile(
+      path.join(request, "profiles", "settings", "0.json"),
+      "{}\n",
+    );
+    await writeFile(path.join(request, "ready"), "\n");
+
+    await execute("/bin/sh", [path.resolve("orca-runner.sh")], {
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        PATH: `${toolsDirectory}:${process.env.PATH}`,
+        TAVEN_ORCA_RUNNER_ROOT: root,
+        TAVEN_ORCA_RUNNER_ONCE: "true",
+      },
+    });
+
+    await expect(
+      readFile(path.join(request, "failure-code"), "utf8"),
+    ).resolves.toBe("ENGINE_UNAVAILABLE\n");
+    await expect(exists(path.join(request, "processing"))).resolves.toBe(false);
+    await expect(exists(path.join(request, "failed"))).resolves.toBe(true);
   });
 });

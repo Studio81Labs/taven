@@ -23,11 +23,12 @@ and exact-Orca containers without a Docker socket. The Node consumer is the
 only process with private Redis and S3 access. It passes checksummed geometry
 and profile bytes through a private volume to the isolated Orca sidecar, which
 has `network_mode: none`, a read-only root, no credentials, and per-process
-`prlimit` and deadline enforcement. Its minimal root broker owns only the mount
-namespace capabilities needed to create a fresh sandbox; every Orca child runs
-as UID 10001 with no capabilities, a cleared environment, and only its own
-read-only inputs plus writable output and temporary directories. The shared
-exchange is a 1 GiB Compose-managed tmpfs, bounding aggregate scratch, output,
+`prlimit` and deadline enforcement. Its minimal root broker shares GID 10001
+with the Node worker and owns only the mount namespace capabilities needed to
+create a fresh sandbox; every Orca child runs as UID 10001 with no capabilities,
+a cleared environment, and only its own read-only inputs plus writable output
+and temporary directories. The shared exchange is a 1 GiB Compose-managed tmpfs
+accessible only to UID 10001 or GID 10001, bounding aggregate scratch, output,
 and request data even if Orca creates many individually small files. Both sides
 reclaim every job workspace after its terminal result or lease expiry. The
 one-shot volume initializer has only `CHOWN`; it exits before either app starts.
