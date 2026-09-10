@@ -45,6 +45,16 @@ function kind(
   return "override";
 }
 
+function presets(value: Prisma.JsonValue): OrcaPreset[] {
+  if (!isPreset(value) || !Array.isArray(value.presets)) {
+    invalid("Slicer revision settings must be a version 1 preset bundle");
+  }
+  if (!value.presets.every(isPreset)) {
+    invalid("Slicer preset bundle must contain preset objects");
+  }
+  return value.presets;
+}
+
 export function assertRevisionPresetBundle(
   value: Prisma.JsonValue,
   revision: "reference" | "machine" | "print" | "calibration",
@@ -74,5 +84,24 @@ export function assertRevisionPresetBundle(
     }
   } else if (!kinds.every((entry) => entry === "override")) {
     invalid(`${revision} bundles may contain override presets only`);
+  }
+}
+
+/** Matches the worker's single-digit sidecar filename limit before dispatch. */
+export function assertPresetBundleAggregateLimits(
+  values: readonly Prisma.JsonValue[],
+): void {
+  let settings = 0;
+  let filaments = 0;
+  for (const value of values) {
+    for (const preset of presets(value)) {
+      if (kind(preset) === "filament") filaments += 1;
+      else settings += 1;
+    }
+  }
+  if (settings === 0 || settings >= 10 || filaments >= 10) {
+    invalid(
+      "Slicer preset bundle must contain one through nine settings and filament presets",
+    );
   }
 }

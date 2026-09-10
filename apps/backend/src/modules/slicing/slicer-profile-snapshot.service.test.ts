@@ -57,11 +57,14 @@ const bundle = (...presets: Prisma.JsonObject[]): PresetBundleJson =>
     bundleVersion: 1,
     presets,
   }) as PresetBundleJson;
-const machineBundle = () =>
+const machineBundle = (filamentCount = 1) =>
   bundle(
     { type: "machine", name: "machine" },
     { type: "process", name: "process" },
-    { type: "filament", name: "filament" },
+    ...Array.from({ length: filamentCount }, (_, index) => ({
+      type: "filament",
+      name: `filament-${index}`,
+    })),
   );
 
 describe("SlicerProfileSnapshotService", () => {
@@ -145,6 +148,40 @@ describe("SlicerProfileSnapshotService", () => {
     await expect(
       service.ensureJobSnapshots(candidateJob(hashes, "gcode")),
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotMismatchError);
+  });
+
+  it("rejects aggregate preset counts the worker cannot materialize", async () => {
+    const machine = machineBundle(10);
+    const calibration = bundle({ flow_ratio: "1" });
+    const config = bundle({ layer_height: "0.2" });
+    const service = new SlicerProfileSnapshotService(
+      {
+        machineProfile: {
+          findUnique: vi.fn().mockResolvedValue({
+            settings: machine,
+            slicerEngine: "orcaslicer",
+            slicerVersion: "2.4.2",
+            productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
+          }),
+        },
+        machineCalibration: {
+          findUnique: vi.fn().mockResolvedValue({ settings: calibration }),
+        },
+        printConfigRevision: {
+          findUnique: vi.fn().mockResolvedValue({ settings: config }),
+        },
+      } as unknown as PrismaService,
+      { putImmutableObject: vi.fn() } as unknown as ObjectStorage,
+    );
+    const hashes = {
+      machine: slicerSettingsSnapshot(machine).contentSha256,
+      calibration: slicerSettingsSnapshot(calibration).contentSha256,
+      config: slicerSettingsSnapshot(config).contentSha256,
+    };
+
+    await expect(
+      service.ensureJobSnapshots(candidateJob(hashes)),
+    ).rejects.toBeInstanceOf(SlicerProfileSnapshotIntegrityError);
   });
 
   it("materializes activation snapshots only from committed revision settings", async () => {

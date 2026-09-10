@@ -21,6 +21,7 @@ import {
 import { slicerRevisionObjectKey } from "../storage/storage-keys";
 import { toSlicerProductionArtifactFormat } from "./production-artifact-format";
 import {
+  assertPresetBundleAggregateLimits,
   assertRevisionPresetBundle,
   PresetBundleValidationError,
 } from "./preset-bundle";
@@ -187,6 +188,16 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
           `${expectation.label} content hash does not match persisted settings`,
         );
       }
+    }
+    try {
+      assertPresetBundleAggregateLimits(
+        expectations.map((expectation) => expectation.settings),
+      );
+    } catch (error) {
+      if (error instanceof PresetBundleValidationError) {
+        throw new SlicerProfileSnapshotIntegrityError(error.message);
+      }
+      throw error;
     }
     await this.provision(expectations);
   }
