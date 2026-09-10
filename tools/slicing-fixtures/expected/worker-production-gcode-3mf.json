@@ -1,0 +1,105 @@
+{
+  "case": "worker-production-gcode-3mf",
+  "engine": {
+    "imageDigest": "sha256:bd93c5e4f02ee51509351fa7bf005773a7abd257d768f83a626abf7a319f786f",
+    "invocationBundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44",
+    "name": "orca-slicer",
+    "version": "2.4.2"
+  },
+  "execution": {
+    "exitCode": 0,
+    "result": {
+      "error": "Success.",
+      "layerHeight": 0.20000000298023224,
+      "plateIndex": 0,
+      "returnCode": 0,
+      "slicedPlates": [
+        {
+          "id": 1,
+          "triangleCount": 24,
+          "warning": ""
+        },
+        {
+          "id": 2,
+          "triangleCount": 12,
+          "warning": ""
+        }
+      ],
+      "sparseInfillDensity": 10,
+      "wallLoops": 2
+    },
+    "signal": null,
+    "stderr": [
+      "error: XDG_RUNTIME_DIR is invalid or not set in the environment."
+    ],
+    "stdout": []
+  },
+  "input": {
+    "cloneCount": 3,
+    "expectedInvalidGeometry": false,
+    "file": "cube.stl",
+    "paintedExtruders": [],
+    "secondaryFilamentSha256": null,
+    "sha256": "25180bbac89a3ad812538e23447b6556c9684b278aec45ca7e015eef21730120"
+  },
+  "invocation": {
+    "arguments": [
+      "--debug",
+      "2",
+      "--slice",
+      "0",
+      "--outputdir",
+      "/output",
+      "--datadir",
+      "/tmp/data",
+      "--load-settings",
+      "/input/profiles/settings/0.json;/input/profiles/settings/1.json",
+      "--load-filaments",
+      "/input/profiles/filaments/0.json",
+      "--load-assemble-list",
+      "/input/assembly.json",
+      "--export-3mf",
+      "toolpath.gcode.3mf",
+      "--min-save"
+    ],
+    "sha256": "facf6e44c9d5f4b7cbe7783fb2b16fa9b75cb6e6d04b87c368c1aae1658a12f6"
+  },
+  "outputs": [
+    {
+      "file": "toolpath.gcode.3mf",
+      "plates": [
+        {
+          "estimatedSeconds": 1409,
+          "filamentUsage": [
+            {
+              "cubicCentimeters": 5.05,
+              "grams": 6.26,
+              "millimeters": 2099.09,
+              "slot": 1
+            }
+          ],
+          "file": "Metadata/plate_1.gcode",
+          "normalizedSha256": "13f386d8cd3a3ab5146711eae8aa7f7638acbbaea3af1b7fa14772d4418574bb"
+        },
+        {
+          "estimatedSeconds": 1242,
+          "filamentUsage": [
+            {
+              "cubicCentimeters": 2.55,
+              "grams": 3.16,
+              "millimeters": 1059.55,
+              "slot": 1
+            }
+          ],
+          "file": "Metadata/plate_2.gcode",
+          "normalizedSha256": "568f6187c8ed80850b90bfed8c044e853e644a5efed904395d5849e9a6b74ff8"
+        }
+      ]
+    }
+  ],
+  "profiles": {
+    "bundleSha256": "1f9861ea7f9b4e0f4259932bd3dca7801d0416a1d0ff4842076b781ac0eb9a0c",
+    "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
+  },
+  "schemaVersion": 1
+}

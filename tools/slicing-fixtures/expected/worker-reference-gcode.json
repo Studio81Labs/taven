@@ -1,5 +1,5 @@
 {
-  "case": "quantity-pla",
+  "case": "worker-reference-gcode",
   "engine": {
     "imageDigest": "sha256:bd93c5e4f02ee51509351fa7bf005773a7abd257d768f83a626abf7a319f786f",
     "invocationBundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44",
@@ -16,11 +16,11 @@
       "slicedPlates": [
         {
           "id": 1,
-          "triangleCount": 24,
+          "triangleCount": 12,
           "warning": ""
         }
       ],
-      "sparseInfillDensity": 15,
+      "sparseInfillDensity": 10,
       "wallLoops": 2
     },
     "signal": null,
@@ -28,7 +28,7 @@
     "stdout": []
   },
   "input": {
-    "cloneCount": 2,
+    "cloneCount": 1,
     "expectedInvalidGeometry": false,
     "file": "cube.stl",
     "paintedExtruders": [],
@@ -46,30 +46,26 @@
       "--datadir",
       "/tmp/data",
       "--load-settings",
-      "/opt/taven/profiles/process.json;/opt/taven/profiles/machine.json",
+      "/input/profiles/settings/0.json;/input/profiles/settings/1.json",
       "--load-filaments",
-      "/opt/taven/profiles/filament.json",
-      "--arrange",
-      "1",
-      "--clone-objects",
-      "2",
-      "/input/cube.stl"
+      "/input/profiles/filaments/0.json",
+      "/input/geometry.stl"
     ],
-    "sha256": "b330f3906bac3b34b9acf4f9f3efab737bfa955d761343c1e5074b5c93fa5617"
+    "sha256": "bd24530c7a11dfbd068cce0010034b80a105ab671dce2b59cb848ea136a8779e"
   },
   "outputs": [
     {
-      "estimatedSeconds": 1440,
+      "estimatedSeconds": 1242,
       "filamentUsage": [
         {
-          "cubicCentimeters": 5.77,
-          "grams": 7.15,
-          "millimeters": 2398.21,
+          "cubicCentimeters": 2.55,
+          "grams": 3.16,
+          "millimeters": 1059.55,
           "slot": 1
         }
       ],
       "file": "plate_1.gcode",
-      "normalizedSha256": "7ee924a737a93489000d48a5995b9ab3af36dfb683271e37cb068312727b9b92"
+      "normalizedSha256": "67021b1229a63d1fe578a259f5f03a7c086b051e02b64846e363fa5db807ce08"
     }
   ],
   "profiles": {

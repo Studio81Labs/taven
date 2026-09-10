@@ -23,7 +23,7 @@
     "bundleSha256": "1f9861ea7f9b4e0f4259932bd3dca7801d0416a1d0ff4842076b781ac0eb9a0c"
   },
   "invocation": {
-    "bundleSha256": "7f362a10e7a6d51a9f8c607a8a7f4ece93b7b98375462dfb748f5514ff6a218d"
+    "bundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44"
   },
   "image": {
     "tag": "taven/orca-slicer:2.4.2-fixtures",

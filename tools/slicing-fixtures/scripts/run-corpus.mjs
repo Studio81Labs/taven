@@ -45,6 +45,10 @@ if (lock.profiles.upstreamRevision !== lock.engine.sourceRevision) {
 }
 
 const profileDirectory = path.join(fixtureRoot, "profiles", "resolved");
+const catalogProfileDirectory = path.resolve(
+  fixtureRoot,
+  "../catalog-profiles/resolved",
+);
 const fixtureDirectory = path.join(fixtureRoot, "fixtures");
 const cases = [
   {
@@ -80,6 +84,29 @@ const cases = [
       error: "The input model file to the slicer can not be parsed.",
     },
   },
+  {
+    name: "worker-reference-gcode",
+    fixture: "cube.stl",
+    operation: "worker",
+    cloneCount: 1,
+    trianglesPerObject: 12,
+  },
+  {
+    name: "worker-cloned-gcode",
+    fixture: "cube.stl",
+    operation: "worker",
+    cloneCount: 2,
+    trianglesPerObject: 12,
+  },
+  {
+    name: "worker-production-gcode-3mf",
+    fixture: "cube.stl",
+    operation: "worker",
+    cloneCount: 3,
+    trianglesPerObject: 12,
+    platePlan: [2, 1],
+    artifactFormat: "gcode_3mf",
+  },
 ];
 
 function digest(value) {
@@ -90,6 +117,37 @@ const runtimeProfileDirectory = "/opt/taven/profiles";
 const filamentPath = `${runtimeProfileDirectory}/filament.json`;
 
 function slicerArguments(fixtureCase) {
+  if (fixtureCase.operation === "worker") {
+    const arguments_ = [
+      "--debug",
+      "2",
+      "--slice",
+      "0",
+      "--outputdir",
+      "/output",
+      "--datadir",
+      "/tmp/data",
+      "--load-settings",
+      "/input/profiles/settings/0.json;/input/profiles/settings/1.json",
+      "--load-filaments",
+      "/input/profiles/filaments/0.json",
+    ];
+    if (fixtureCase.platePlan) {
+      arguments_.push("--load-assemble-list", "/input/assembly.json");
+    } else if (fixtureCase.cloneCount > 1) {
+      arguments_.push(
+        "--arrange",
+        "1",
+        "--clone-objects",
+        String(fixtureCase.cloneCount),
+      );
+    }
+    if (fixtureCase.artifactFormat === "gcode_3mf") {
+      arguments_.push("--export-3mf", "toolpath.gcode.3mf", "--min-save");
+    }
+    if (!fixtureCase.platePlan) arguments_.push("/input/geometry.stl");
+    return arguments_;
+  }
   const arguments_ = [
     "--debug",
     "2",
@@ -120,6 +178,49 @@ function slicerArguments(fixtureCase) {
   arguments_.push(`/input/${fixtureCase.fixture}`);
   return arguments_;
 }
+
+async function assertWorkerInvocationContract() {
+  const runner = await readFile(
+    path.resolve(fixtureRoot, "../../apps/slicer-worker/orca-runner.sh"),
+    "utf8",
+  );
+  const invocationStart = runner.indexOf("    set -- \\\n      --debug 2 \\\n");
+  const invocationEnd = runner.indexOf(
+    "\n\n    diagnostics_fifo",
+    invocationStart,
+  );
+  const normalize = (value) => value.replace(/\\s+/gu, " ").trim();
+  const actual = normalize(runner.slice(invocationStart, invocationEnd));
+  const expected = normalize(`
+    set -- \\
+      --debug 2 \\
+      --slice 0 \\
+      --outputdir /work/output \\
+      --datadir /tmp/data \\
+      --load-settings "$settings"
+    if [ -n "$filaments" ]; then
+      set -- "$@" --load-filaments "$filaments"
+    fi
+    if [ -f "$request/assembly.json" ]; then
+      set -- "$@" --load-assemble-list /work/assembly.json
+    elif [ "$copies" -gt 1 ]; then
+      set -- "$@" --arrange 1 --clone-objects "$copies"
+    fi
+    if [ "$artifact_format" = gcode_3mf ]; then
+      set -- "$@" --export-3mf toolpath.gcode.3mf --min-save
+    fi
+    if [ ! -f "$request/assembly.json" ]; then
+      set -- "$@" /work/geometry.stl
+    fi
+  `);
+  if (actual !== expected) {
+    throw new Error(
+      "Worker argument construction no longer matches corpus vectors",
+    );
+  }
+}
+
+await assertWorkerInvocationContract();
 
 const invocationCases = cases.map((fixtureCase) => ({
   case: fixtureCase.name,
@@ -325,7 +426,7 @@ function validateExecution(fixtureCase, execution, resultFile, outputs) {
     )
   ) {
     throw new Error(
-      `Fixture ${fixtureCase.name} did not produce a successful slice`,
+      `Fixture ${fixtureCase.name} did not produce a successful slice: exit ${execution.status}, return ${resultFile?.return_code ?? "none"}, error ${resultFile?.error_string ?? "none"}`,
     );
   }
 }
@@ -356,13 +457,114 @@ async function prepareInput(directory, fixtureCase) {
   return destination;
 }
 
+async function prepareWorkerInput(directory, fixtureCase) {
+  const geometry = path.join(directory, "geometry.stl");
+  const settings = path.join(directory, "profiles", "settings");
+  const filaments = path.join(directory, "profiles", "filaments");
+  await Promise.all([
+    mkdir(settings, { recursive: true }),
+    mkdir(filaments, { recursive: true }),
+  ]);
+  await Promise.all([
+    copyFile(
+      path.join(fixtureDirectory, "single-pla", fixtureCase.fixture),
+      geometry,
+    ),
+    copyFile(
+      path.join(catalogProfileDirectory, "machine.json"),
+      path.join(settings, "0.json"),
+    ),
+    copyFile(
+      path.join(catalogProfileDirectory, "filament-pla.json"),
+      path.join(filaments, "0.json"),
+    ),
+  ]);
+  const processPreset = JSON.parse(
+    await readFile(path.join(catalogProfileDirectory, "process.json"), "utf8"),
+  );
+  // This is the complete active 10% print and calibration override set seeded
+  // by apps/backend/scripts/seed.ts, merged in the worker's precedence order.
+  Object.assign(
+    processPreset,
+    {
+      brim_width: "0",
+      enable_support: "0",
+      layer_height: "0.2",
+      sparse_infill_density: "10%",
+    },
+    {
+      elefant_foot_compensation: "0",
+      xy_contour_compensation: "0",
+      xy_hole_compensation: "0",
+    },
+  );
+  await writeFile(path.join(settings, "1.json"), stableJson(processPreset));
+  if (fixtureCase.platePlan) {
+    await writeFile(
+      path.join(directory, "assembly.json"),
+      JSON.stringify({
+        plates: fixtureCase.platePlan.map((count, index) => ({
+          plate_name: `Plate ${index + 1}`,
+          need_arrange: true,
+          objects: [{ path: "/input/geometry.stl", count, filaments: [1] }],
+        })),
+      }),
+    );
+  }
+  return geometry;
+}
+
+async function gcode3mfOutput(outputDirectory, fixtureCase) {
+  const archive = path.join(outputDirectory, "toolpath.gcode.3mf");
+  const listing = spawnSync("unzip", ["-Z1", archive], { encoding: "utf8" });
+  if (listing.status !== 0)
+    throw new Error(
+      `Worker ${fixtureCase.name} did not emit a readable G-code 3MF`,
+    );
+  const entries = listing.stdout.split("\n").filter(Boolean);
+  if (!entries.includes("Metadata/slice_info.config"))
+    throw new Error(`Worker ${fixtureCase.name} did not emit slice metadata`);
+  const plates = entries
+    .filter((entry) => /^Metadata\/plate_\d+\.gcode$/u.test(entry))
+    .sort();
+  if (plates.length !== fixtureCase.platePlan.length)
+    throw new Error(`Worker ${fixtureCase.name} emitted the wrong plate count`);
+  const output = [];
+  for (const plate of plates) {
+    const gcode = spawnSync("unzip", ["-p", archive, plate], {
+      encoding: "utf8",
+    });
+    const checksum = spawnSync("unzip", ["-p", archive, `${plate}.md5`], {
+      encoding: "utf8",
+    });
+    const observed = createHash("md5")
+      .update(gcode.stdout)
+      .digest("hex")
+      .toUpperCase();
+    if (
+      gcode.status !== 0 ||
+      checksum.status !== 0 ||
+      checksum.stdout.trim() !== observed
+    ) {
+      throw new Error(
+        `Worker ${fixtureCase.name} emitted an invalid plate checksum`,
+      );
+    }
+    output.push({ file: plate, ...parseGcode(gcode.stdout) });
+  }
+  return { file: "toolpath.gcode.3mf", plates: output };
+}
+
 async function runCase(runRoot, fixtureCase) {
   const inputDirectory = path.join(runRoot, fixtureCase.name, "input");
   const outputDirectory = path.join(runRoot, fixtureCase.name, "output");
   await mkdir(inputDirectory, { recursive: true });
   await mkdir(outputDirectory, { recursive: true });
   await chmod(outputDirectory, 0o777);
-  const input = await prepareInput(inputDirectory, fixtureCase);
+  const input =
+    fixtureCase.operation === "worker"
+      ? await prepareWorkerInput(inputDirectory, fixtureCase)
+      : await prepareInput(inputDirectory, fixtureCase);
   let secondaryFilamentDigest = null;
   if (fixtureCase.name === "painted-multimaterial") {
     const secondaryFilament = JSON.parse(
@@ -429,7 +631,16 @@ async function runCase(runRoot, fixtureCase) {
       return { file, ...parseGcode(source) };
     }),
   );
-  validateExecution(fixtureCase, execution, resultFile, outputs);
+  const packagedOutput =
+    fixtureCase.artifactFormat === "gcode_3mf"
+      ? await gcode3mfOutput(outputDirectory, fixtureCase)
+      : null;
+  validateExecution(
+    fixtureCase,
+    execution,
+    resultFile,
+    packagedOutput ? packagedOutput.plates : outputs,
+  );
   const inputContents = await readFile(input);
   const paintedSource =
     fixtureCase.name === "painted-multimaterial"
@@ -482,7 +693,7 @@ async function runCase(runRoot, fixtureCase) {
       stderr: normalizeDiagnostics(execution.stderr ?? ""),
       result: normalizedResult(resultFile),
     },
-    outputs,
+    outputs: packagedOutput ? [packagedOutput] : outputs,
   };
 }
 
