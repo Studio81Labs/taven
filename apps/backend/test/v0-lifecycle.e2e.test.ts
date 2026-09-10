@@ -905,8 +905,12 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
       if (reconciled >= expectedAtLeast) return;
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
     }
+    const dispatches = await prisma.outboxMessage.findMany({
+      where: { messageType: { startsWith: "slicing." } },
+      select: { status: true, attempts: true, lastError: true },
+    });
     throw new Error(
-      `fixture worker did not reconcile ${expectedAtLeast} slicing dispatches on ${slicingQueueName}`,
+      `fixture worker did not reconcile ${expectedAtLeast} slicing dispatches on ${slicingQueueName}: ${JSON.stringify(dispatches)}`,
     );
   }
 });
