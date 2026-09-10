@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   access,
+  chmod,
   copyFile,
   mkdir,
   mkdtemp,
@@ -762,35 +763,53 @@ export class OrcaSidecarEngine implements OrcaEngine {
     );
     let runnerOwnsCleanup = false;
     try {
+      await chmod(requestDirectory, 0o770);
       await mkdir(path.join(requestDirectory, "output"), {
         recursive: true,
-        mode: 0o700,
+        mode: 0o770,
       });
       await mkdir(path.join(requestDirectory, "tmp", "data"), {
         recursive: true,
-        mode: 0o700,
+        mode: 0o770,
       });
+      await Promise.all(
+        [
+          path.join(requestDirectory, "output"),
+          path.join(requestDirectory, "tmp"),
+          path.join(requestDirectory, "tmp", "data"),
+        ].map((directory) => chmod(directory, 0o770)),
+      );
       await writeFile(
         path.join(requestDirectory, "lease-expires-at"),
         `${Math.ceil(
           (Date.now() + this.config.timeoutMilliseconds + 60_000) / 1_000,
         )}\n`,
-        { mode: 0o400 },
+        { mode: 0o440 },
       );
+      await chmod(path.join(requestDirectory, "lease-expires-at"), 0o440);
       const profileDirectory = path.join(requestDirectory, "profiles");
       const settingsDirectory = path.join(profileDirectory, "settings");
       const filamentsDirectory = path.join(profileDirectory, "filaments");
-      await mkdir(settingsDirectory, { recursive: true });
-      await mkdir(filamentsDirectory, { recursive: true });
+      await mkdir(settingsDirectory, { recursive: true, mode: 0o770 });
+      await mkdir(filamentsDirectory, { recursive: true, mode: 0o770 });
+      await Promise.all(
+        [profileDirectory, settingsDirectory, filamentsDirectory].map(
+          (directory) => chmod(directory, 0o770),
+        ),
+      );
       await copyFile(
         input.geometryPath,
         path.join(requestDirectory, "geometry.stl"),
       );
       for (const [index, profile] of profiles.settings.entries()) {
-        await copyFile(profile, path.join(settingsDirectory, `${index}.json`));
+        const target = path.join(settingsDirectory, `${index}.json`);
+        await copyFile(profile, target);
+        await chmod(target, 0o400);
       }
       for (const [index, profile] of profiles.filaments.entries()) {
-        await copyFile(profile, path.join(filamentsDirectory, `${index}.json`));
+        const target = path.join(filamentsDirectory, `${index}.json`);
+        await copyFile(profile, target);
+        await chmod(target, 0o400);
       }
       await writeFile(
         path.join(requestDirectory, "copies"),

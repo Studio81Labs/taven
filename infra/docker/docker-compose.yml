@@ -308,7 +308,10 @@ services:
     cap_add: ["CHOWN"]
     security_opt: ["no-new-privileges:true"]
     entrypoint: ["/bin/sh", "-c"]
-    command: ["chown 10001:10001 /var/run/taven-orca"]
+    command:
+      [
+        'chown 0:0 /var/run/taven-orca && chmod 0770 /var/run/taven-orca && for request in /var/run/taven-orca/request-*; do [ -d "$$request" ] || continue; chown 0:0 "$$request" && chown -R 0:0 "$$request" && rm -rf "$$request"; done; chown 10001:10001 /var/run/taven-orca',
+      ]
     volumes:
       - slicerexchange:/var/run/taven-orca
     restart: "no"
@@ -323,7 +326,7 @@ services:
       target: runtime
       platforms: ["linux/amd64"]
     init: true
-    user: "0:0"
+    user: "0:10001"
     network_mode: none
     read_only: true
     cap_drop: ["ALL"]
@@ -477,4 +480,4 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: size=1073741824,uid=10001,gid=10001,mode=0700,noexec,nosuid,nodev
+      o: size=1073741824,uid=10001,gid=10001,mode=0770,noexec,nosuid,nodev

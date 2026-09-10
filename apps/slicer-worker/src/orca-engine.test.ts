@@ -79,12 +79,30 @@ function productionPackage(
 async function expectProducerOwnedDirectories(request: string): Promise<void> {
   const expectedUid = process.getuid?.();
   const expectedGid = process.getgid?.();
-  for (const relative of ["output", "tmp", "tmp/data"]) {
+  for (const relative of [
+    "output",
+    "tmp",
+    "tmp/data",
+    "profiles",
+    "profiles/settings",
+    "profiles/filaments",
+  ]) {
     const metadata = await stat(path.join(request, relative));
     expect(metadata.isDirectory()).toBe(true);
     if (expectedUid !== undefined) expect(metadata.uid).toBe(expectedUid);
     if (expectedGid !== undefined) expect(metadata.gid).toBe(expectedGid);
-    expect(metadata.mode & 0o700).toBe(0o700);
+    expect(metadata.mode & 0o777).toBe(0o770);
+  }
+  expect((await stat(request)).mode & 0o777).toBe(0o770);
+  expect(
+    (await stat(path.join(request, "lease-expires-at"))).mode & 0o777,
+  ).toBe(0o440);
+  for (const relative of ["profiles/settings", "profiles/filaments"]) {
+    for (const profile of await readdir(path.join(request, relative))) {
+      expect(
+        (await stat(path.join(request, relative, profile))).mode & 0o777,
+      ).toBe(0o400);
+    }
   }
 }
 
