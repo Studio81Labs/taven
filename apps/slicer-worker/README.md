@@ -38,7 +38,8 @@ at `slicer-revisions/<content-sha256>/settings.json`. Their bytes must hash to
 the settings-snapshot digest carried by the v2 job; this is intentionally
 separate from the database revision-identity digest. Every snapshot is a
 `{ "bundleVersion": 1, "presets": [...] }` bundle. The backend validates it at
-startup and before dispatch, and the worker validates it again before use.
+activation and before enqueue, while bootstrap repairs canonical snapshot bytes
+without executing the bundle validator; the worker validates it again before use.
 
 Reference and machine bundles order a machine preset, a process preset, then
 one or more filament presets. Print-config and calibration bundles contain only
