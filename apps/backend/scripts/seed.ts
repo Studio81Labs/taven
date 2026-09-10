@@ -115,7 +115,7 @@ async function revision<T extends RevisionKind>(
   if (byId) {
     if (byId.kind !== kind || byId.digest !== expectedDigest)
       throw new Error(
-        `Seed revision identity ${id} is immutable and does not match`,
+        `Seeded fixture payload for revision ${id} changed; reset with pnpm stack:reset (or reset the non-Compose database) before running db:seed`,
       );
   } else {
     await tx.revisionIdentity.create({
