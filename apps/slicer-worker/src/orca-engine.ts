@@ -790,17 +790,26 @@ export class OrcaSidecarEngine implements OrcaEngine {
       const profileDirectory = path.join(requestDirectory, "profiles");
       const settingsDirectory = path.join(profileDirectory, "settings");
       const filamentsDirectory = path.join(profileDirectory, "filaments");
-      await mkdir(settingsDirectory, { recursive: true });
-      await mkdir(filamentsDirectory, { recursive: true });
+      await mkdir(settingsDirectory, { recursive: true, mode: 0o770 });
+      await mkdir(filamentsDirectory, { recursive: true, mode: 0o770 });
+      await Promise.all(
+        [profileDirectory, settingsDirectory, filamentsDirectory].map(
+          (directory) => chmod(directory, 0o770),
+        ),
+      );
       await copyFile(
         input.geometryPath,
         path.join(requestDirectory, "geometry.stl"),
       );
       for (const [index, profile] of profiles.settings.entries()) {
-        await copyFile(profile, path.join(settingsDirectory, `${index}.json`));
+        const target = path.join(settingsDirectory, `${index}.json`);
+        await copyFile(profile, target);
+        await chmod(target, 0o400);
       }
       for (const [index, profile] of profiles.filaments.entries()) {
-        await copyFile(profile, path.join(filamentsDirectory, `${index}.json`));
+        const target = path.join(filamentsDirectory, `${index}.json`);
+        await copyFile(profile, target);
+        await chmod(target, 0o400);
       }
       await writeFile(
         path.join(requestDirectory, "copies"),
