@@ -13,6 +13,7 @@ const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.TAVEN_REDIS_URL ?? "redis://127.0.0.1:6381";
 const queuePrefix = `taven-v0-lifecycle-${randomUUID()}`;
 const scope = `v0-lifecycle-${randomUUID()}`;
+const seededStandardPrintConfigId = "92222222-2222-4222-8222-222222222222";
 
 const machineBundle = (overrides: Record<string, unknown> = {}) => ({
   bundleVersion: 1,
@@ -807,9 +808,8 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
     machineCapabilityId: string;
     printConfigRevisionId: string;
   }> {
-    const printConfig = await prisma.printConfigRevision.findFirst({
-      where: { quality: "STANDARD", infillPercent: 20 },
-      orderBy: { id: "asc" },
+    const printConfig = await prisma.printConfigRevision.findUnique({
+      where: { id: seededStandardPrintConfigId },
       select: { id: true },
     });
     if (!printConfig) {
@@ -905,12 +905,8 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
       if (reconciled >= expectedAtLeast) return;
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
     }
-    const dispatches = await prisma.outboxMessage.findMany({
-      where: { messageType: { startsWith: "slicing." } },
-      select: { status: true, attempts: true, lastError: true },
-    });
     throw new Error(
-      `fixture worker did not reconcile ${expectedAtLeast} slicing dispatches on ${slicingQueueName}: ${JSON.stringify(dispatches)}`,
+      `fixture worker did not reconcile ${expectedAtLeast} slicing dispatches on ${slicingQueueName}`,
     );
   }
 });
