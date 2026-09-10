@@ -559,37 +559,48 @@ export class SlicingProcessor {
     const unique = [
       ...new Set(revisions.map((revision) => revision.contentSha256)),
     ];
-    const snapshots = await Promise.all(
-      unique.map(async (digest) => {
-        const profile = await this.store.read(
-          `slicer-revisions/${digest}/settings.json`,
-          1024 * 1024,
-          digest,
-        );
-        if (!profile) {
-          throw new SlicingWorkerError(
-            "deterministic_invalid",
-            "INVALID_PROFILE",
-            "Immutable slicer profile snapshot is missing",
+    const bundles = new Map(
+      await Promise.all(
+        unique.map(async (digest) => {
+          const profile = await this.store.read(
+            `slicer-revisions/${digest}/settings.json`,
+            1024 * 1024,
+            digest,
           );
-        }
-        let value: unknown;
-        try {
-          value = JSON.parse(
-            new TextDecoder("utf-8", { fatal: true }).decode(profile.bytes),
-          );
-        } catch {
-          throw new SlicingWorkerError(
-            "deterministic_invalid",
-            "INVALID_PROFILE",
-            "Immutable slicer profile snapshot is not valid JSON",
-          );
-        }
-        return validateRevisionBundle(
-          value,
-          revisions.find((revision) => revision.contentSha256 === digest)!.kind,
-        ).presets;
-      }),
+          if (!profile) {
+            throw new SlicingWorkerError(
+              "deterministic_invalid",
+              "INVALID_PROFILE",
+              "Immutable slicer profile snapshot is missing",
+            );
+          }
+          let value: unknown;
+          try {
+            value = JSON.parse(
+              new TextDecoder("utf-8", { fatal: true }).decode(profile.bytes),
+            );
+          } catch {
+            throw new SlicingWorkerError(
+              "deterministic_invalid",
+              "INVALID_PROFILE",
+              "Immutable slicer profile snapshot is not valid JSON",
+            );
+          }
+          return [digest, value] as const;
+        }),
+      ),
+    );
+    const validated = revisions.map((revision) => ({
+      contentSha256: revision.contentSha256,
+      presets: validateRevisionBundle(
+        bundles.get(revision.contentSha256),
+        revision.kind,
+      ).presets,
+    }));
+    const snapshots = unique.map(
+      (digest) =>
+        validated.find((revision) => revision.contentSha256 === digest)!
+          .presets,
     );
     const settings: OrcaPreset[] = [];
     const filaments: OrcaPreset[] = [];

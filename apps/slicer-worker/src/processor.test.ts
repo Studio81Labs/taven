@@ -657,6 +657,38 @@ describe("SlicingProcessor", () => {
     }
   });
 
+  it("validates every requested role before deduplicating a profile snapshot", async () => {
+    const store = new MemoryStore();
+    const machineProfile = machineBundle();
+    const machineHash = sha256(machineProfile);
+    store.objects.set(
+      `slicer-revisions/${machineHash}/settings.json`,
+      machineProfile,
+    );
+    const processor = new SlicingProcessor(store, new FakeEngine(), config);
+    const profiles = processor as unknown as {
+      profiles(
+        workspace: string,
+        revisions: readonly {
+          contentSha256: string;
+          kind: "reference" | "machine" | "print" | "calibration";
+        }[],
+      ): Promise<string[]>;
+    };
+    const workspace = await mkdtemp(path.join(tmpdir(), "taven-slicer-test-"));
+
+    try {
+      await expect(
+        profiles.profiles(workspace, [
+          { contentSha256: machineHash, kind: "machine" },
+          { contentSha256: machineHash, kind: "print" },
+        ]),
+      ).rejects.toMatchObject({ code: "INVALID_PROFILE" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("reuses immutable candidate occupancy caches and never persists G-code", async () => {
     const store = new MemoryStore();
     const engine = new FakeEngine();
