@@ -11,6 +11,7 @@ import {
   SlicerProfileSnapshotIntegrityError,
   SlicerProfileSnapshotService,
   SlicerProfileSnapshotUnavailableError,
+  slicerSettingsSnapshot,
 } from "../src/modules/slicing/slicer-profile-snapshot.service";
 import {
   OBJECT_STORAGE,
@@ -717,17 +718,14 @@ describe("operator catalog commands", () => {
   });
 
   it("accepts initial UTF-16 reference-profile snapshot bytes and object keys", async () => {
-    const settings = { a: 1, B: 2 };
-    const bytes = new TextEncoder().encode('{"B":2,"a":1}');
-    const contentSha256 =
-      "1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9";
-    const objectKey = `slicer-revisions/${contentSha256}/settings.json`;
+    const settings = machineBundle({ a: 1, B: 2 });
+    const snapshot = slicerSettingsSnapshot(settings);
     const objects = app.get<ObjectStorage>(OBJECT_STORAGE);
     await objects.putImmutableObject({
-      objectKey,
+      objectKey: snapshot.objectKey,
       contentType: "application/json",
-      contentHash: contentSha256,
-      bytes,
+      contentHash: snapshot.contentSha256,
+      bytes: snapshot.bytes,
     });
     const created = await responseBody(
       command(
@@ -755,8 +753,8 @@ describe("operator catalog commands", () => {
     );
     expect(activated).toMatchObject({ id: created.id, state: "ACTIVE" });
     await expect(
-      objects.readObjectRange(objectKey, 0, bytes.byteLength),
-    ).resolves.toEqual(bytes);
+      objects.readObjectRange(snapshot.objectKey, 0, snapshot.bytes.byteLength),
+    ).resolves.toEqual(snapshot.bytes);
   });
 
   it("rejects malformed command bodies, untrusted nodes, and catalog-write access", async () => {

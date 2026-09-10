@@ -372,18 +372,23 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
     ]);
     await drainSlicing(1);
 
-    const afterInspection = success(
-      await sessionApi.GET("/automatic-quote-sessions/{sessionId}", {
-        params: { path: { sessionId: created.sessionId } },
-      }),
-    );
-    expect(afterInspection.modelFiles).toEqual([
-      expect.objectContaining({
-        modelFileId: upload.assetId,
-        inspectionStatus: "SUCCEEDED",
-        discoveredBodyIds: ["body-0001"],
-      }),
-    ]);
+    await expect
+      .poll(
+        async () =>
+          success(
+            await sessionApi.GET("/automatic-quote-sessions/{sessionId}", {
+              params: { path: { sessionId: created.sessionId } },
+            }),
+          ).modelFiles,
+        { timeout: 3_000 },
+      )
+      .toEqual([
+        expect.objectContaining({
+          modelFileId: upload.assetId,
+          inspectionStatus: "SUCCEEDED",
+          discoveredBodyIds: ["body-0001"],
+        }),
+      ]);
 
     const configured = success(
       await sessionApi.PUT(

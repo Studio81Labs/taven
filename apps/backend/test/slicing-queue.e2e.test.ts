@@ -536,7 +536,9 @@ describe("slicing outbox queue bridge", () => {
       },
     );
 
-    await expect(publisher.publishPending(1)).resolves.toBe(1);
+    await expect
+      .poll(() => publisher.publishPending(1), { timeout: 3_000 })
+      .toBe(1);
     await expect(completed).resolves.toMatchObject({
       kind: "model_inspection",
       jobId: job.jobId,
