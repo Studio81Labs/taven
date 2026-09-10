@@ -14,6 +14,23 @@ fail_request() {
   touch "$request_directory/failed"
 }
 
+remove_tree() {
+  tree=$1
+  if [ "$(id -u)" -eq 0 ] && [ -x /usr/bin/setpriv ]; then
+    /usr/bin/setpriv \
+      --reuid=10001 \
+      --regid=10001 \
+      --clear-groups \
+      --bounding-set=-all \
+      --inh-caps=-all \
+      --ambient-caps=-all \
+      --no-new-privs \
+      /bin/rm -rf "$tree"
+  else
+    rm -rf "$tree"
+  fi
+}
+
 request_expired() {
   request_directory=$1
   lease=$(cat "$request_directory/lease-expires-at" 2>/dev/null || true)
@@ -36,7 +53,7 @@ while true; do
     [ -d "$request" ] || continue
 
     if [ -f "$request/cancel" ]; then
-      rm -rf "$request"
+      remove_tree "$request"
       processed=true
       continue
     fi
@@ -50,27 +67,27 @@ while true; do
     fi
     if [ -f "$request/complete" ] || [ -f "$request/failed" ]; then
       if request_expired "$request"; then
-        rm -rf "$request"
+        remove_tree "$request"
         processed=true
       fi
       continue
     fi
     if [ ! -f "$request/ready" ]; then
       if request_expired "$request"; then
-        rm -rf "$request"
+        remove_tree "$request"
         processed=true
       fi
       continue
     fi
     if request_expired "$request"; then
-      rm -rf "$request"
+      remove_tree "$request"
       processed=true
       continue
     fi
     mv "$request/ready" "$request/processing" 2>/dev/null || continue
     processed=true
     if [ -f "$request/cancel" ]; then
-      rm -rf "$request"
+      remove_tree "$request"
       continue
     fi
 
@@ -183,7 +200,7 @@ while true; do
     rm -f "$diagnostics_fifo"
 
     if [ -f "$request/cancel" ]; then
-      rm -rf "$request"
+      remove_tree "$request"
       continue
     fi
     diagnostic_bytes=$(wc -c < "$request/diagnostics")
@@ -194,7 +211,7 @@ while true; do
       rm -f "$request/processing"
       touch "$request/complete"
     else
-      rm -rf "$request/output"
+      remove_tree "$request/output"
       case "$engine_status" in
         126|127) failure_code=ENGINE_UNAVAILABLE ;;
         137) failure_code=ENGINE_TIMEOUT ;;

@@ -37,6 +37,7 @@ describe("Orca runner lifecycle", () => {
   it("recovers restart markers and reaps cancelled or expired requests", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "taven-runner-lifecycle-"));
     cleanup.push(root);
+    await chmod(root, 0o777);
     const future = Math.ceil(Date.now() / 1_000) + 120;
     const past = Math.floor(Date.now() / 1_000) - 1;
 
@@ -82,6 +83,7 @@ describe("Orca runner lifecycle", () => {
   it("fails a ready request when its writable workspace is not group accessible", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "taven-runner-workspace-"));
     cleanup.push(root);
+    await chmod(root, 0o777);
     const request = path.join(root, "request-wrong-mode");
     const toolsDirectory = path.join(root, "tools");
     const future = Math.ceil(Date.now() / 1_000) + 120;
