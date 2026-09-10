@@ -44,12 +44,13 @@ without executing the bundle validator; the worker validates it again before use
 
 Reference and machine bundles order a machine preset, a process preset, then
 one or more filament presets. Print-config and calibration bundles contain only
-override presets. The worker passes settings as machine, process, print-config,
-then calibration and preserves filament bundle order. It rejects ten or more
-settings presets because the broker's C-locale filename ordering is only
-unambiguous below that bound. `post_process`, `print_host`, `printhost_*`, and
-`bbl_use_printhost` are rejected; printer G-code fields remain valid preset
-content.
+override presets. OrcaSlicer accepts exactly one machine preset and one process
+preset, so the worker materializes settings as machine plus a process preset
+merged in bundle order: process, then print-config, then calibration (last
+write wins). Every override key must already exist in the process preset;
+filament bundle order is preserved. `post_process`, `print_host`,
+`printhost_*`, and `bbl_use_printhost` are rejected before this merge; printer
+G-code fields remain valid preset content.
 Candidate jobs upload metrics-only
 JSON under `slice-metrics/`; only reference jobs write non-production reference
 G-code and only contract-authorized production jobs write under `gcode/`.

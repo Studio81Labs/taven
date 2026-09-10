@@ -14,7 +14,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { readBoundedZipEntries } from "./bounded-zip.js";
-import { SlicingWorkerError } from "./failures.js";
+import { safeMessage, SlicingWorkerError } from "./failures.js";
 import type { WorkerConfig } from "./config.js";
 
 export type OrcaSliceRequest = {
@@ -866,6 +866,7 @@ export class OrcaSidecarEngine implements OrcaEngine {
     const code = (
       await readFile(path.join(requestDirectory, "failure-code"), "utf8")
     ).trim();
+    await this.logRunnerFailure(requestDirectory, code);
     if (code === "ENGINE_TIMEOUT") {
       return new SlicingWorkerError(
         "retryable_infrastructure",
@@ -897,10 +898,33 @@ export class OrcaSidecarEngine implements OrcaEngine {
       );
     }
     return new SlicingWorkerError(
-      "deterministic_invalid",
-      "INVALID_GEOMETRY",
-      "Pinned slicing engine rejected the canonical geometry",
+      "retryable_infrastructure",
+      "ENGINE_UNAVAILABLE",
+      "Pinned slicing engine returned an unrecognized failure",
+      5_000,
     );
+  }
+
+  private async logRunnerFailure(
+    requestDirectory: string,
+    failureCode: string,
+  ): Promise<void> {
+    const [returnCode, diagnostics] = await Promise.all([
+      readFile(path.join(requestDirectory, "engine-return-code"), "utf8")
+        .then((value) => value.trim())
+        .catch(() => null),
+      readFile(path.join(requestDirectory, "diagnostics"))
+        .then((value) => value.subarray(0, this.config.maximumDiagnosticBytes))
+        .catch(() => null),
+    ]);
+    const summary = diagnostics
+      ? safeMessage(new TextDecoder().decode(diagnostics))
+      : null;
+    if (returnCode || summary) {
+      console.warn(
+        `Pinned slicing engine failed with ${failureCode}${returnCode ? ` (return code ${returnCode})` : ""}${summary ? `: ${summary}` : ""}`,
+      );
+    }
   }
 
   private async readResult(

@@ -31,6 +31,30 @@ remove_tree() {
   fi
 }
 
+result_return_code() {
+  result_file=$1/output/result.json
+  [ -f "$result_file" ] || return 1
+  result_code=$(
+    /usr/bin/grep -Eo '"return_code"[[:space:]]*:[[:space:]]*-?[0-9]+' "$result_file" \
+      | /usr/bin/head -n 1 \
+      | /usr/bin/sed 's/.*:[[:space:]]*//' \
+      || true
+  )
+  case "$result_code" in
+    -[0-9]*|[0-9]*) printf '%s\n' "$result_code" ;;
+    *) return 1 ;;
+  esac
+}
+
+preserve_result_return_code() {
+  request_directory=$1
+  if result_code=$(result_return_code "$request_directory"); then
+    printf '%s\n' "$result_code" > "$request_directory/engine-return-code.tmp"
+    mv "$request_directory/engine-return-code.tmp" \
+      "$request_directory/engine-return-code"
+  fi
+}
+
 request_expired() {
   request_directory=$1
   lease=$(cat "$request_directory/lease-expires-at" 2>/dev/null || true)
@@ -211,16 +235,22 @@ while true; do
       rm -f "$request/processing"
       touch "$request/complete"
     else
+      result_code=''
+      preserve_result_return_code "$request"
       remove_tree "$request/output"
       case "$engine_status" in
         126|127) failure_code=ENGINE_UNAVAILABLE ;;
         137) failure_code=ENGINE_TIMEOUT ;;
         141|152|153) failure_code=RESOURCE_LIMIT_EXCEEDED ;;
         *)
-          if [ "$diagnostic_bytes" -ge "$maximum_diagnostic_bytes" ]; then
+          if [ "${result_code:-}" = -5 ]; then
+            failure_code=INVALID_PROFILE
+          elif [ "${result_code:-}" = -6 ]; then
+            failure_code=INVALID_GEOMETRY
+          elif [ "$diagnostic_bytes" -ge "$maximum_diagnostic_bytes" ]; then
             failure_code=RESOURCE_LIMIT_EXCEEDED
           else
-            failure_code=INVALID_GEOMETRY
+            failure_code=ENGINE_UNAVAILABLE
           fi
           ;;
       esac

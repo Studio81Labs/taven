@@ -6,6 +6,16 @@ export type PresetBundle = {
   presets: readonly OrcaPreset[];
 };
 
+export type RevisionPresetBundle = {
+  kind: "reference" | "machine" | "print" | "calibration";
+  presets: readonly OrcaPreset[];
+};
+
+export type MaterializedPresetBundle = {
+  settings: readonly [OrcaPreset, OrcaPreset];
+  filaments: readonly OrcaPreset[];
+};
+
 const deniedKeys = new Set(["post_process", "print_host", "bbl_use_printhost"]);
 
 function invalid(message: string): never {
@@ -96,4 +106,44 @@ export function validateRevisionBundle(
     invalid(`${revision} bundles may contain override presets only`);
   }
   return bundle;
+}
+
+/**
+ * OrcaSlicer accepts one typed machine preset and one typed process preset.
+ * Print and calibration revisions are deliberately stored as overrides, so the
+ * worker applies them to the process preset immediately before invocation.
+ */
+export function materializePresetBundles(
+  revisions: readonly RevisionPresetBundle[],
+): MaterializedPresetBundle {
+  const base = revisions.find(
+    (revision) => revision.kind === "reference" || revision.kind === "machine",
+  );
+  if (!base) {
+    invalid(
+      "Slicer preset materialization requires a machine or reference bundle",
+    );
+  }
+  const machine = base.presets[0]!;
+  const process = base.presets[1]!;
+  const filaments = base.presets.slice(2);
+  const mergedProcess: OrcaPreset = { ...process };
+
+  for (const revision of revisions) {
+    if (revision.kind !== "print" && revision.kind !== "calibration") {
+      continue;
+    }
+    for (const override of revision.presets) {
+      for (const [key, value] of Object.entries(override)) {
+        if (!(key in mergedProcess)) {
+          invalid(
+            `Orca ${revision.kind} override key ${key} is absent from the process preset`,
+          );
+        }
+        mergedProcess[key] = value;
+      }
+    }
+  }
+
+  return { settings: [machine, mergedProcess], filaments };
 }
