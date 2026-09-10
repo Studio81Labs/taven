@@ -103,24 +103,30 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
       this.prisma.machineCalibration.findMany({ select: { settings: true } }),
       this.prisma.printConfigRevision.findMany({ select: { settings: true } }),
     ]);
-    await this.provision([
-      ...revisions[0].map(({ settings }) => ({
-        settings,
-        revision: "reference" as const,
-      })),
-      ...revisions[1].map(({ settings }) => ({
-        settings,
-        revision: "machine" as const,
-      })),
-      ...revisions[2].map(({ settings }) => ({
-        settings,
-        revision: "calibration" as const,
-      })),
-      ...revisions[3].map(({ settings }) => ({
-        settings,
-        revision: "print" as const,
-      })),
-    ]);
+    // Bootstrap only repairs immutable bytes for rows that may predate this
+    // contract. Activation and dispatch validate the bundle before it can be
+    // executed, so an unvalidated draft cannot prevent the API from starting.
+    await this.provision(
+      [
+        ...revisions[0].map(({ settings }) => ({
+          settings,
+          revision: "reference" as const,
+        })),
+        ...revisions[1].map(({ settings }) => ({
+          settings,
+          revision: "machine" as const,
+        })),
+        ...revisions[2].map(({ settings }) => ({
+          settings,
+          revision: "calibration" as const,
+        })),
+        ...revisions[3].map(({ settings }) => ({
+          settings,
+          revision: "print" as const,
+        })),
+      ],
+      false,
+    );
   }
 
   async provisionReferenceProfile(
@@ -202,10 +208,13 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
 
   private async provision(
     expectations: readonly Pick<SnapshotExpectation, "settings" | "revision">[],
+    validateBundle = true,
   ): Promise<void> {
     const unique = new Map<string, SlicerSettingsSnapshot>();
     for (const { settings, revision } of expectations) {
-      const snapshot = this.snapshot(settings, revision);
+      const snapshot = validateBundle
+        ? this.snapshot(settings, revision)
+        : slicerSettingsSnapshot(settings);
       unique.set(snapshot.contentSha256, snapshot);
     }
     for (const snapshot of unique.values()) {

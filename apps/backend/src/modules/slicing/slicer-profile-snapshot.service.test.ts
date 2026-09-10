@@ -234,14 +234,20 @@ describe("SlicerProfileSnapshotService", () => {
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotUnavailableError);
   });
 
-  it("repairs snapshots from all committed revision families at bootstrap", async () => {
+  it("repairs snapshots without applying dispatch validation at bootstrap", async () => {
     const referenceSettings = machineBundle();
     const machineSettings = machineBundle();
     const calibrationSettings = bundle({ flow_ratio: "1" });
     const printSettings = bundle({ layer_height: "0.2" });
+    const unvalidatedDraftSettings = { draftOnly: true };
     const putImmutableObject = vi.fn().mockResolvedValue(undefined);
     const referenceProfile = {
-      findMany: vi.fn().mockResolvedValue([{ settings: referenceSettings }]),
+      findMany: vi
+        .fn()
+        .mockResolvedValue([
+          { settings: referenceSettings },
+          { settings: unvalidatedDraftSettings },
+        ]),
     };
     const machineProfile = {
       findMany: vi.fn().mockResolvedValue([{ settings: machineSettings }]),
@@ -267,7 +273,7 @@ describe("SlicerProfileSnapshotService", () => {
     expect(machineProfile.findMany).toHaveBeenCalledOnce();
     expect(machineCalibration.findMany).toHaveBeenCalledOnce();
     expect(printConfigRevision.findMany).toHaveBeenCalledOnce();
-    expect(putImmutableObject).toHaveBeenCalledTimes(3);
+    expect(putImmutableObject).toHaveBeenCalledTimes(4);
   });
 
   it.each(["post_process", "print_host", "printhost_url", "bbl_use_printhost"])(
