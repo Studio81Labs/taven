@@ -99,6 +99,7 @@ describe("Orca runner lifecycle", () => {
     await chmod(root, 0o777);
     const request = path.join(root, "request-wrong-mode");
     const toolsDirectory = path.join(root, "tools");
+    const statLog = path.join(root, "stat.log");
     const future = Math.ceil(Date.now() / 1_000) + 120;
 
     await mkdir(path.join(request, "output"), { recursive: true });
@@ -118,6 +119,7 @@ esac
     await writeFile(
       path.join(toolsDirectory, "stat"),
       `#!/bin/sh
+printf '%s\\n' "$3" >> "$TAVEN_TEST_STAT_LOG"
 case "$3" in
   */output) printf '%s\\n' 10001:10001:700 ;;
   *) printf '%s\\n' 10001:10001:770 ;;
@@ -145,12 +147,16 @@ esac
         PATH: `${toolsDirectory}:${process.env.PATH}`,
         TAVEN_ORCA_RUNNER_ROOT: root,
         TAVEN_ORCA_RUNNER_ONCE: "true",
+        TAVEN_TEST_STAT_LOG: statLog,
       },
     });
 
     await expect(
       readFile(path.join(request, "failure-code"), "utf8"),
     ).resolves.toBe("ENGINE_UNAVAILABLE\n");
+    await expect(readFile(statLog, "utf8")).resolves.toContain(
+      path.join(request, "output"),
+    );
     await expect(exists(path.join(request, "processing"))).resolves.toBe(false);
     await expect(exists(path.join(request, "failed"))).resolves.toBe(true);
   });
