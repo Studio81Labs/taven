@@ -32,6 +32,7 @@ const pathFilteredWorkflows = {
     "scripts/ci/check-boundaries.mjs",
     "scripts/ci/check-workflow-coverage.mjs",
     "tools/slicing-fixtures/**",
+    "tools/catalog-profiles/**",
     ".dockerignore",
   ],
   "packages-ci.yml": ["packages/**"],

@@ -11,6 +11,7 @@ on:
       - "scripts/ci/check-boundaries.mjs"
       - "scripts/ci/check-workflow-coverage.mjs"
       - "tools/slicing-fixtures/**"
+      - "tools/catalog-profiles/**"
       - ".dockerignore"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -64,5 +65,6 @@ jobs:
           version: v0.36.1
           driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - run: pnpm slicer-worker:profiles:check
+      - run: pnpm catalog-profiles:check
       - run: pnpm slicer-worker:orca:build
       - run: pnpm slicer-worker:orca:test

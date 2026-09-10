@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProductionArtifactFormat } from "@prisma/client";
+import { ProductionArtifactFormat, type Prisma } from "@prisma/client";
 import type { SlicingJob } from "@taven/slicer-contracts" with {
   "resolution-mode": "import",
 };
@@ -47,6 +47,26 @@ function candidateJob(
   } as unknown as SlicingJob;
 }
 
+type PresetBundleJson = Prisma.JsonObject & {
+  bundleVersion: number;
+  presets: Prisma.JsonObject[];
+};
+
+const bundle = (...presets: Prisma.JsonObject[]): PresetBundleJson =>
+  ({
+    bundleVersion: 1,
+    presets,
+  }) as PresetBundleJson;
+const machineBundle = (filamentCount = 1) =>
+  bundle(
+    { type: "machine", name: "machine" },
+    { type: "process", name: "process" },
+    ...Array.from({ length: filamentCount }, (_, index) => ({
+      type: "filament",
+      name: `filament-${index}`,
+    })),
+  );
+
 describe("SlicerProfileSnapshotService", () => {
   it("hashes canonical settings bytes independently of object key order", () => {
     const first = slicerSettingsSnapshot({
@@ -83,9 +103,9 @@ describe("SlicerProfileSnapshotService", () => {
   });
 
   it("validates exact job hashes before provisioning immutable snapshots", async () => {
-    const machine = { machine: "h2s" };
-    const calibration = { flow_ratio: "1" };
-    const config = { layer_height: "0.2" };
+    const machine = machineBundle();
+    const calibration = bundle({ flow_ratio: "1" });
+    const config = bundle({ layer_height: "0.2" });
     const putImmutableObject = vi.fn().mockResolvedValue(undefined);
     const prisma = {
       machineProfile: {
@@ -130,8 +150,94 @@ describe("SlicerProfileSnapshotService", () => {
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotMismatchError);
   });
 
+  it("rejects aggregate preset counts the worker cannot materialize", async () => {
+    const machine = machineBundle(10);
+    const calibration = bundle({ flow_ratio: "1" });
+    const config = bundle({ layer_height: "0.2" });
+    const service = new SlicerProfileSnapshotService(
+      {
+        machineProfile: {
+          findUnique: vi.fn().mockResolvedValue({
+            settings: machine,
+            slicerEngine: "orcaslicer",
+            slicerVersion: "2.4.2",
+            productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
+          }),
+        },
+        machineCalibration: {
+          findUnique: vi.fn().mockResolvedValue({ settings: calibration }),
+        },
+        printConfigRevision: {
+          findUnique: vi.fn().mockResolvedValue({ settings: config }),
+        },
+      } as unknown as PrismaService,
+      { putImmutableObject: vi.fn() } as unknown as ObjectStorage,
+    );
+    const hashes = {
+      machine: slicerSettingsSnapshot(machine).contentSha256,
+      calibration: slicerSettingsSnapshot(calibration).contentSha256,
+      config: slicerSettingsSnapshot(config).contentSha256,
+    };
+
+    await expect(
+      service.ensureJobSnapshots(candidateJob(hashes)),
+    ).rejects.toBeInstanceOf(SlicerProfileSnapshotIntegrityError);
+  });
+
+  it("deduplicates aggregate preset counts by immutable snapshot digest", async () => {
+    const machine = machineBundle();
+    const override = bundle(
+      { flow_ratio: "1" },
+      { layer_height: "0.2" },
+      { wall_loops: "3" },
+      { infill_density: "15%" },
+    );
+    const putImmutableObject = vi.fn().mockResolvedValue(undefined);
+    const service = new SlicerProfileSnapshotService(
+      {
+        machineProfile: {
+          findUnique: vi.fn().mockResolvedValue({
+            settings: machine,
+            slicerEngine: "orcaslicer",
+            slicerVersion: "2.4.2",
+            productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
+          }),
+        },
+        machineCalibration: {
+          findUnique: vi.fn().mockResolvedValue({ settings: override }),
+        },
+        printConfigRevision: {
+          findUnique: vi.fn().mockResolvedValue({ settings: override }),
+        },
+      } as unknown as PrismaService,
+      { putImmutableObject } as unknown as ObjectStorage,
+    );
+    const hashes = {
+      machine: slicerSettingsSnapshot(machine).contentSha256,
+      calibration: slicerSettingsSnapshot(override).contentSha256,
+      config: slicerSettingsSnapshot(override).contentSha256,
+    };
+
+    await expect(
+      service.ensureJobSnapshots(candidateJob(hashes)),
+    ).resolves.toBeUndefined();
+    expect(putImmutableObject).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not apply preset limits to model inspection jobs", async () => {
+    const service = new SlicerProfileSnapshotService(
+      {} as PrismaService,
+      { putImmutableObject: vi.fn() } as unknown as ObjectStorage,
+    );
+
+    await expect(
+      service.ensureJobSnapshots({ kind: "model_inspection" } as SlicingJob),
+    ).resolves.toBeUndefined();
+  });
+
   it("materializes activation snapshots only from committed revision settings", async () => {
-    const settings = { layer_height: "0.2" };
+    const settings = machineBundle();
+    const calibrationSettings = bundle({ flow_ratio: "1" });
     const putImmutableObject = vi.fn().mockResolvedValue(undefined);
     const referenceProfile = {
       findUnique: vi.fn().mockResolvedValue({ settings }),
@@ -140,7 +246,7 @@ describe("SlicerProfileSnapshotService", () => {
       findUnique: vi.fn(),
     };
     const machineCalibration = {
-      findFirst: vi.fn().mockResolvedValue({ settings }),
+      findFirst: vi.fn().mockResolvedValue({ settings: calibrationSettings }),
     };
     const prisma = {
       referenceProfile,
@@ -166,7 +272,7 @@ describe("SlicerProfileSnapshotService", () => {
 
     await expect(
       service.provisionMachineCalibration("node-id", "calibration-id"),
-    ).resolves.toEqual(snapshot);
+    ).resolves.toEqual(slicerSettingsSnapshot(calibrationSettings));
     expect(machineCalibration.findFirst).toHaveBeenCalledWith({
       where: { id: "calibration-id", nodeId: "node-id" },
       select: { settings: true },
@@ -188,9 +294,7 @@ describe("SlicerProfileSnapshotService", () => {
     const conflict = new SlicerProfileSnapshotService(
       {
         referenceProfile: {
-          findUnique: vi
-            .fn()
-            .mockResolvedValue({ settings: { quality: "fine" } }),
+          findUnique: vi.fn().mockResolvedValue({ settings: machineBundle() }),
         },
       } as unknown as PrismaService,
       {
@@ -206,9 +310,7 @@ describe("SlicerProfileSnapshotService", () => {
     const unavailable = new SlicerProfileSnapshotService(
       {
         referenceProfile: {
-          findUnique: vi
-            .fn()
-            .mockResolvedValue({ settings: { quality: "fine" } }),
+          findUnique: vi.fn().mockResolvedValue({ settings: machineBundle() }),
         },
       } as unknown as PrismaService,
       {
@@ -220,20 +322,29 @@ describe("SlicerProfileSnapshotService", () => {
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotUnavailableError);
   });
 
-  it("repairs snapshots from all committed revision families at bootstrap", async () => {
-    const initialSettings = { a: 1, B: 2 };
+  it("repairs snapshots without applying dispatch validation at bootstrap", async () => {
+    const referenceSettings = machineBundle();
+    const machineSettings = machineBundle();
+    const calibrationSettings = bundle({ flow_ratio: "1" });
+    const printSettings = bundle({ layer_height: "0.2" });
+    const unvalidatedDraftSettings = { draftOnly: true };
     const putImmutableObject = vi.fn().mockResolvedValue(undefined);
     const referenceProfile = {
-      findMany: vi.fn().mockResolvedValue([{ settings: initialSettings }]),
+      findMany: vi
+        .fn()
+        .mockResolvedValue([
+          { settings: referenceSettings },
+          { settings: unvalidatedDraftSettings },
+        ]),
     };
     const machineProfile = {
-      findMany: vi.fn().mockResolvedValue([{ settings: initialSettings }]),
+      findMany: vi.fn().mockResolvedValue([{ settings: machineSettings }]),
     };
     const machineCalibration = {
-      findMany: vi.fn().mockResolvedValue([{ settings: initialSettings }]),
+      findMany: vi.fn().mockResolvedValue([{ settings: calibrationSettings }]),
     };
     const printConfigRevision = {
-      findMany: vi.fn().mockResolvedValue([{ settings: initialSettings }]),
+      findMany: vi.fn().mockResolvedValue([{ settings: printSettings }]),
     };
     const service = new SlicerProfileSnapshotService(
       {
@@ -250,14 +361,28 @@ describe("SlicerProfileSnapshotService", () => {
     expect(machineProfile.findMany).toHaveBeenCalledOnce();
     expect(machineCalibration.findMany).toHaveBeenCalledOnce();
     expect(printConfigRevision.findMany).toHaveBeenCalledOnce();
-    expect(putImmutableObject).toHaveBeenCalledOnce();
-    expect(putImmutableObject).toHaveBeenCalledWith({
-      objectKey:
-        "slicer-revisions/1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9/settings.json",
-      bytes: Buffer.from('{"B":2,"a":1}', "utf8"),
-      contentHash:
-        "1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9",
-      contentType: "application/json",
-    });
+    expect(putImmutableObject).toHaveBeenCalledTimes(4);
   });
+
+  it.each(["post_process", "print_host", "printhost_url", "bbl_use_printhost"])(
+    "rejects unsafe %s settings before dispatch",
+    async (key) => {
+      const settings = machineBundle();
+      settings.presets[1]![key] = "unsafe";
+      const service = new SlicerProfileSnapshotService(
+        {
+          referenceProfile: {
+            findUnique: vi.fn().mockResolvedValue({ settings }),
+          },
+          printConfigRevision: {
+            findUnique: vi.fn().mockResolvedValue({ settings: bundle({}) }),
+          },
+        } as unknown as PrismaService,
+        { putImmutableObject: vi.fn() } as unknown as ObjectStorage,
+      );
+      await expect(
+        service.provisionReferenceProfile("reference-id"),
+      ).rejects.toBeInstanceOf(SlicerProfileSnapshotIntegrityError);
+    },
+  );
 });

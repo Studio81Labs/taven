@@ -6,6 +6,13 @@ file, storage, backend, or worker implementation code.
 
 ## Compatibility policy
 
+Persisted catalog revision `settings` are intentionally outside the v2 queue
+contract. They are immutable backend snapshots addressed by a revision hash,
+not message fields. Their initial persisted representation is a version-1 Orca
+preset bundle with no legacy tier; the backend and worker validate it
+independently, while this package continues to carry opaque snapshot pointers
+only. This does not change queue contract version 2.
+
 The v2 queue carries strict, discriminated contracts for model inspection,
 reference slicing, machine candidate estimates, and accepted-job production
 slicing. Producers and consumers must reject unknown versions and fields. A

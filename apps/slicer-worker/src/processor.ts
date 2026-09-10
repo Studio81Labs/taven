@@ -28,8 +28,16 @@ import {
   type OrcaSliceOutput,
 } from "./orca-engine.js";
 import type { WorkerConfig } from "./config.js";
+import {
+  classifyPreset,
+  validateRevisionBundle,
+  type OrcaPreset,
+} from "./preset-bundle.js";
 
-type Revision = { contentSha256: string };
+type Revision = {
+  contentSha256: string;
+  kind: "reference" | "machine" | "print" | "calibration";
+};
 
 function envelope(job: SlicingJob, engine: WorkerConfig["engine"]) {
   return {
@@ -275,8 +283,8 @@ export class SlicingProcessor {
     const inspected = inspectModel("stl", geometry.bytes);
     if (job.kind === "reference_slice") {
       const profiles = await this.profiles(workspace, [
-        job.input.referenceProfile,
-        job.input.printConfig,
+        { ...job.input.referenceProfile, kind: "reference" },
+        { ...job.input.printConfig, kind: "print" },
       ]);
       const objectKey = referenceArtifactObjectKey(job.inputFingerprintSha256);
       const artifact = await this.reusableArtifact(
@@ -318,9 +326,9 @@ export class SlicingProcessor {
       };
     }
     const profiles = await this.profiles(workspace, [
-      job.input.machineProfile,
-      job.input.machineCalibration,
-      job.input.printConfig,
+      { ...job.input.machineProfile, kind: "machine" },
+      { ...job.input.printConfig, kind: "print" },
+      { ...job.input.machineCalibration, kind: "calibration" },
     ]);
     if (job.kind === "candidate_estimate") {
       const occupancySlices = [];
@@ -542,29 +550,104 @@ export class SlicingProcessor {
     revisions: readonly Revision[],
   ): Promise<string[]> {
     const directory = path.join(workspace, "profiles");
-    await mkdir(directory, { recursive: true });
+    const settingsDirectory = path.join(directory, "settings");
+    const filamentsDirectory = path.join(directory, "filaments");
+    await Promise.all([
+      mkdir(settingsDirectory, { recursive: true }),
+      mkdir(filamentsDirectory, { recursive: true }),
+    ]);
     const unique = [
       ...new Set(revisions.map((revision) => revision.contentSha256)),
     ];
-    return Promise.all(
-      unique.map(async (digest) => {
-        const profile = await this.store.read(
-          `slicer-revisions/${digest}/settings.json`,
-          1024 * 1024,
-          digest,
-        );
-        if (!profile) {
-          throw new SlicingWorkerError(
-            "deterministic_invalid",
-            "INVALID_PROFILE",
-            "Immutable slicer profile snapshot is missing",
+    const bundles = new Map(
+      await Promise.all(
+        unique.map(async (digest) => {
+          const profile = await this.store.read(
+            `slicer-revisions/${digest}/settings.json`,
+            1024 * 1024,
+            digest,
           );
-        }
-        const destination = path.join(directory, `${digest}.json`);
-        await writeFile(destination, profile.bytes, { mode: 0o400 });
-        return destination;
-      }),
+          if (!profile) {
+            throw new SlicingWorkerError(
+              "deterministic_invalid",
+              "INVALID_PROFILE",
+              "Immutable slicer profile snapshot is missing",
+            );
+          }
+          let value: unknown;
+          try {
+            value = JSON.parse(
+              new TextDecoder("utf-8", { fatal: true }).decode(profile.bytes),
+            );
+          } catch {
+            throw new SlicingWorkerError(
+              "deterministic_invalid",
+              "INVALID_PROFILE",
+              "Immutable slicer profile snapshot is not valid JSON",
+            );
+          }
+          return [digest, value] as const;
+        }),
+      ),
     );
+    const validated = revisions.map((revision) => ({
+      contentSha256: revision.contentSha256,
+      presets: validateRevisionBundle(
+        bundles.get(revision.contentSha256),
+        revision.kind,
+      ).presets,
+    }));
+    const snapshots = unique.map(
+      (digest) =>
+        validated.find((revision) => revision.contentSha256 === digest)!
+          .presets,
+    );
+    const settings: OrcaPreset[] = [];
+    const filaments: OrcaPreset[] = [];
+    for (const presets of snapshots) {
+      for (const preset of presets) {
+        if (classifyPreset(preset) === "filament") filaments.push(preset);
+        else settings.push(preset);
+      }
+    }
+    if (
+      settings.length === 0 ||
+      settings.length >= 10 ||
+      filaments.length >= 10
+    ) {
+      throw new SlicingWorkerError(
+        "deterministic_invalid",
+        "INVALID_PROFILE",
+        "Slicer preset bundle must contain one through nine settings and filament presets",
+      );
+    }
+    const writePresets = async (
+      presets: readonly OrcaPreset[],
+      target: string,
+    ) =>
+      Promise.all(
+        presets.map((preset, index) =>
+          writeFile(
+            path.join(target, `${index}.json`),
+            JSON.stringify(preset),
+            {
+              mode: 0o400,
+            },
+          ),
+        ),
+      );
+    await Promise.all([
+      writePresets(settings, settingsDirectory),
+      writePresets(filaments, filamentsDirectory),
+    ]);
+    return [
+      ...settings.map((_, index) =>
+        path.join(settingsDirectory, `${index}.json`),
+      ),
+      ...filaments.map((_, index) =>
+        path.join(filamentsDirectory, `${index}.json`),
+      ),
+    ];
   }
 
   private async reusableArtifact(

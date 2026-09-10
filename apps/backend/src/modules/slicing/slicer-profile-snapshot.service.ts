@@ -20,6 +20,11 @@ import {
 } from "../storage/object-storage.port";
 import { slicerRevisionObjectKey } from "../storage/storage-keys";
 import { toSlicerProductionArtifactFormat } from "./production-artifact-format";
+import {
+  assertPresetBundleAggregateLimits,
+  assertRevisionPresetBundle,
+  PresetBundleValidationError,
+} from "./preset-bundle";
 
 type RevisionPointer = {
   revisionId: string;
@@ -28,6 +33,7 @@ type RevisionPointer = {
 
 type SnapshotExpectation = {
   label: string;
+  revision: "reference" | "machine" | "print" | "calibration";
   pointer: RevisionPointer;
   settings: Prisma.JsonValue;
 };
@@ -98,8 +104,29 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
       this.prisma.machineCalibration.findMany({ select: { settings: true } }),
       this.prisma.printConfigRevision.findMany({ select: { settings: true } }),
     ]);
+    // Bootstrap only repairs immutable bytes for rows that may predate this
+    // contract. Activation and dispatch validate the bundle before it can be
+    // executed, so an unvalidated draft cannot prevent the API from starting.
     await this.provision(
-      revisions.flatMap((rows) => rows.map(({ settings }) => settings)),
+      [
+        ...revisions[0].map(({ settings }) => ({
+          settings,
+          revision: "reference" as const,
+        })),
+        ...revisions[1].map(({ settings }) => ({
+          settings,
+          revision: "machine" as const,
+        })),
+        ...revisions[2].map(({ settings }) => ({
+          settings,
+          revision: "calibration" as const,
+        })),
+        ...revisions[3].map(({ settings }) => ({
+          settings,
+          revision: "print" as const,
+        })),
+      ],
+      false,
     );
   }
 
@@ -115,7 +142,7 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
         "reference profile revision was not found",
       );
     }
-    return this.provisionCommittedSettings(revision.settings);
+    return this.provisionCommittedSettings(revision.settings, "reference");
   }
 
   async provisionMachineProfile(
@@ -130,7 +157,7 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
         "machine profile revision was not found",
       );
     }
-    return this.provisionCommittedSettings(revision.settings);
+    return this.provisionCommittedSettings(revision.settings, "machine");
   }
 
   async provisionMachineCalibration(
@@ -146,14 +173,14 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
         "machine calibration revision was not found",
       );
     }
-    return this.provisionCommittedSettings(revision.settings);
+    return this.provisionCommittedSettings(revision.settings, "calibration");
   }
 
   async ensureJobSnapshots(job: SlicingJob): Promise<void> {
     const expectations = await this.expectationsFor(job);
     const snapshots = expectations.map((expectation) => ({
       expectation,
-      snapshot: slicerSettingsSnapshot(expectation.settings),
+      snapshot: this.snapshot(expectation.settings, expectation.revision),
     }));
     for (const { expectation, snapshot } of snapshots) {
       if (expectation.pointer.contentSha256 !== snapshot.contentSha256) {
@@ -162,15 +189,49 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
         );
       }
     }
-    await this.provision(expectations.map(({ settings }) => settings));
+    if (expectations.length > 0) {
+      try {
+        const uniqueSettings = new Map(
+          snapshots.map(({ snapshot, expectation }) => [
+            snapshot.contentSha256,
+            expectation.settings,
+          ]),
+        );
+        assertPresetBundleAggregateLimits([...uniqueSettings.values()]);
+      } catch (error) {
+        if (error instanceof PresetBundleValidationError) {
+          throw new SlicerProfileSnapshotIntegrityError(error.message);
+        }
+        throw error;
+      }
+    }
+    await this.provision(expectations);
+  }
+
+  private snapshot(
+    settings: Prisma.JsonValue,
+    revision: SnapshotExpectation["revision"],
+  ): SlicerSettingsSnapshot {
+    try {
+      assertRevisionPresetBundle(settings, revision);
+      return slicerSettingsSnapshot(settings);
+    } catch (error) {
+      if (error instanceof PresetBundleValidationError) {
+        throw new SlicerProfileSnapshotIntegrityError(error.message);
+      }
+      throw error;
+    }
   }
 
   private async provision(
-    settings: readonly Prisma.JsonValue[],
+    expectations: readonly Pick<SnapshotExpectation, "settings" | "revision">[],
+    validateBundle = true,
   ): Promise<void> {
     const unique = new Map<string, SlicerSettingsSnapshot>();
-    for (const value of settings) {
-      const snapshot = slicerSettingsSnapshot(value);
+    for (const { settings, revision } of expectations) {
+      const snapshot = validateBundle
+        ? this.snapshot(settings, revision)
+        : slicerSettingsSnapshot(settings);
       unique.set(snapshot.contentSha256, snapshot);
     }
     for (const snapshot of unique.values()) {
@@ -185,10 +246,11 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
 
   private async provisionCommittedSettings(
     settings: Prisma.JsonValue,
+    revision: SnapshotExpectation["revision"],
   ): Promise<SlicerSettingsSnapshot> {
     let snapshot: SlicerSettingsSnapshot;
     try {
-      snapshot = slicerSettingsSnapshot(settings);
+      snapshot = this.snapshot(settings, revision);
     } catch (error) {
       if (error instanceof SlicerProfileSnapshotMismatchError) {
         throw new SlicerProfileSnapshotIntegrityError(error.message);
@@ -242,11 +304,13 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
       return [
         {
           label: "reference profile",
+          revision: "reference",
           pointer: job.input.referenceProfile,
           settings: profile.settings,
         },
         {
           label: "print configuration",
+          revision: "print",
           pointer: job.input.printConfig,
           settings: config.settings,
         },
@@ -290,16 +354,19 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
     return [
       {
         label: "machine profile",
+        revision: "machine",
         pointer: job.input.machineProfile,
         settings: profile.settings,
       },
       {
         label: "machine calibration",
+        revision: "calibration",
         pointer: job.input.machineCalibration,
         settings: calibration.settings,
       },
       {
         label: "print configuration",
+        revision: "print",
         pointer: job.input.printConfig,
         settings: config.settings,
       },

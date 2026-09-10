@@ -11,6 +11,7 @@ import {
   SlicerProfileSnapshotIntegrityError,
   SlicerProfileSnapshotService,
   SlicerProfileSnapshotUnavailableError,
+  slicerSettingsSnapshot,
 } from "../src/modules/slicing/slicer-profile-snapshot.service";
 import {
   OBJECT_STORAGE,
@@ -25,6 +26,21 @@ const uploadClientHashKey = "operator-catalog-test-upload-client-hash-key-32";
 const quoteCapabilityKey =
   "operator-catalog-test-quote-capability-key-with-at-least-32-characters";
 const testScope = randomUUID();
+
+const machineBundle = (overrides: Record<string, unknown> = {}) => ({
+  bundleVersion: 1,
+  presets: [
+    { type: "machine" },
+    { type: "process", ...overrides },
+    { type: "filament" },
+  ],
+});
+
+const overrideBundle = (overrides: Record<string, unknown> = {}) => ({
+  bundleVersion: 1,
+  presets: [overrides],
+});
+
 process.env.TAVEN_ENVIRONMENT ??= "development";
 process.env.TAVEN_QUOTE_CAPABILITY_KEY ??= quoteCapabilityKey;
 process.env.TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS ??= "[]";
@@ -104,11 +120,11 @@ describe("operator catalog commands", () => {
       quality: "FINE",
       slicerEngine: "orca",
       slicerVersion: "2.1.0",
-      settings: {
+      settings: machineBundle({
         layerHeight: 120,
         profile: "operator-catalog",
         testScope,
-      },
+      }),
     };
     const snapshots = app.get(SlicerProfileSnapshotService);
     const createdReferenceProvision = vi.spyOn(
@@ -211,7 +227,7 @@ describe("operator catalog commands", () => {
           flowRatioPartsPerMillion: 1_000_000,
           xyCompensationMicrometers: 10,
           elephantFootCompensationMicrometers: -5,
-          settings: { testScope, zOffset: -5 },
+          settings: overrideBundle({ testScope, zOffset: -5 }),
         },
         `catalog-calibration-${randomUUID()}`,
       ),
@@ -378,7 +394,7 @@ describe("operator catalog commands", () => {
       quality: "FINE",
       slicerEngine: "orca",
       slicerVersion: "2.1.0",
-      settings: { profile: "activation-gate", testScope },
+      settings: machineBundle({ profile: "activation-gate", testScope }),
     };
 
     const createKey = `catalog-draft-only-${randomUUID()}`;
@@ -428,11 +444,11 @@ describe("operator catalog commands", () => {
         createPath,
         {
           ...createBody,
-          settings: {
+          settings: machineBundle({
             é: "composed",
             "e\u0301": "decomposed",
             testScope,
-          },
+          }),
         },
         unicodeOrderKey,
       ),
@@ -444,11 +460,11 @@ describe("operator catalog commands", () => {
         createPath,
         {
           ...createBody,
-          settings: {
+          settings: machineBundle({
             testScope,
             "e\u0301": "decomposed",
             é: "composed",
-          },
+          }),
         },
         unicodeOrderKey,
       ),
@@ -458,7 +474,7 @@ describe("operator catalog commands", () => {
     const concurrentKey = `catalog-concurrent-same-${randomUUID()}`;
     const concurrentBody = {
       ...createBody,
-      settings: { profile: "concurrent-same", testScope },
+      settings: machineBundle({ profile: "concurrent-same", testScope }),
     };
     const concurrentResponses = await Promise.all([
       command(createPath, concurrentBody, concurrentKey),
@@ -666,7 +682,10 @@ describe("operator catalog commands", () => {
         createPath,
         {
           ...createBody,
-          settings: { profile: "activation-integrity", testScope },
+          settings: machineBundle({
+            profile: "activation-integrity",
+            testScope,
+          }),
         },
         `catalog-activation-integrity-create-${randomUUID()}`,
       ),
@@ -699,17 +718,14 @@ describe("operator catalog commands", () => {
   });
 
   it("accepts initial UTF-16 reference-profile snapshot bytes and object keys", async () => {
-    const settings = { a: 1, B: 2 };
-    const bytes = new TextEncoder().encode('{"B":2,"a":1}');
-    const contentSha256 =
-      "1b16a30c88c01fbb4fcc0385bd01a0dc71c997ffacff6ebefe8f1f529eba16d9";
-    const objectKey = `slicer-revisions/${contentSha256}/settings.json`;
+    const settings = machineBundle({ a: 1, B: 2 });
+    const snapshot = slicerSettingsSnapshot(settings);
     const objects = app.get<ObjectStorage>(OBJECT_STORAGE);
     await objects.putImmutableObject({
-      objectKey,
+      objectKey: snapshot.objectKey,
       contentType: "application/json",
-      contentHash: contentSha256,
-      bytes,
+      contentHash: snapshot.contentSha256,
+      bytes: snapshot.bytes,
     });
     const created = await responseBody(
       command(
@@ -737,8 +753,8 @@ describe("operator catalog commands", () => {
     );
     expect(activated).toMatchObject({ id: created.id, state: "ACTIVE" });
     await expect(
-      objects.readObjectRange(objectKey, 0, bytes.byteLength),
-    ).resolves.toEqual(bytes);
+      objects.readObjectRange(snapshot.objectKey, 0, snapshot.bytes.byteLength),
+    ).resolves.toEqual(new Uint8Array(snapshot.bytes));
   });
 
   it("rejects malformed command bodies, untrusted nodes, and catalog-write access", async () => {
@@ -994,7 +1010,7 @@ describe("operator catalog commands", () => {
           quality: "FINE",
           slicerEngine: "orca",
           slicerVersion: "2.1.0",
-          settings: { profile: "incompatible", testScope },
+          settings: machineBundle({ profile: "incompatible", testScope }),
         },
         `catalog-incompatible-reference-${randomUUID()}`,
       ),
@@ -1021,7 +1037,7 @@ describe("operator catalog commands", () => {
         slicerVersion: "2.1.0",
         nozzleDiameterMicrometers: 400,
         productionArtifactFormat: "GCODE_3MF",
-        settings: { profile: "incompatible" },
+        settings: machineBundle({ profile: "incompatible" }),
       },
       `catalog-incompatible-${randomUUID()}`,
     );
@@ -1036,7 +1052,7 @@ describe("operator catalog commands", () => {
         quality: "FINE",
         slicerEngine: "orca",
         slicerVersion: "2.1.0",
-        settings: nestedSettings(65),
+        settings: machineBundle(nestedSettings(65)),
       },
       `catalog-deep-settings-${randomUUID()}`,
     );

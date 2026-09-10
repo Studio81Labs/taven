@@ -13,6 +13,21 @@ const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.TAVEN_REDIS_URL ?? "redis://127.0.0.1:6381";
 const queuePrefix = `taven-v0-lifecycle-${randomUUID()}`;
 const scope = `v0-lifecycle-${randomUUID()}`;
+const seededStandardPrintConfigId = "92222222-2222-4222-8222-222222222222";
+
+const machineBundle = (overrides: Record<string, unknown> = {}) => ({
+  bundleVersion: 1,
+  presets: [
+    { type: "machine" },
+    { type: "process", ...overrides },
+    { type: "filament" },
+  ],
+});
+
+const overrideBundle = (overrides: Record<string, unknown> = {}) => ({
+  bundleVersion: 1,
+  presets: [overrides],
+});
 
 const environment = {
   redisUrl: process.env.TAVEN_REDIS_URL,
@@ -185,7 +200,7 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
           quality: "STANDARD",
           slicerEngine: "fixture",
           slicerVersion: "0.0.0",
-          settings: { profile: scope, layerHeight: 200 },
+          settings: machineBundle({ profile: scope, layerHeight: 200 }),
         },
       }),
     );
@@ -227,7 +242,7 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
           slicerVersion: "0.0.0",
           nozzleDiameterMicrometers: 400,
           productionArtifactFormat: "GCODE_3MF",
-          settings: { profile: scope, machine: "fixture" },
+          settings: machineBundle({ profile: scope, machine: "fixture" }),
         },
       }),
     );
@@ -255,7 +270,7 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
           flowRatioPartsPerMillion: 1_000_000,
           xyCompensationMicrometers: 0,
           elephantFootCompensationMicrometers: 0,
-          settings: { calibration: scope },
+          settings: overrideBundle({ calibration: scope }),
         },
       }),
     );
@@ -358,18 +373,23 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
     ]);
     await drainSlicing(1);
 
-    const afterInspection = success(
-      await sessionApi.GET("/automatic-quote-sessions/{sessionId}", {
-        params: { path: { sessionId: created.sessionId } },
-      }),
-    );
-    expect(afterInspection.modelFiles).toEqual([
-      expect.objectContaining({
-        modelFileId: upload.assetId,
-        inspectionStatus: "SUCCEEDED",
-        discoveredBodyIds: ["body-0001"],
-      }),
-    ]);
+    await expect
+      .poll(
+        async () =>
+          success(
+            await sessionApi.GET("/automatic-quote-sessions/{sessionId}", {
+              params: { path: { sessionId: created.sessionId } },
+            }),
+          ).modelFiles,
+        { timeout: 3_000 },
+      )
+      .toEqual([
+        expect.objectContaining({
+          modelFileId: upload.assetId,
+          inspectionStatus: "SUCCEEDED",
+          discoveredBodyIds: ["body-0001"],
+        }),
+      ]);
 
     const configured = success(
       await sessionApi.PUT(
@@ -788,9 +808,8 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
     machineCapabilityId: string;
     printConfigRevisionId: string;
   }> {
-    const printConfig = await prisma.printConfigRevision.findFirst({
-      where: { quality: "STANDARD", infillPercent: 20 },
-      orderBy: { id: "asc" },
+    const printConfig = await prisma.printConfigRevision.findUnique({
+      where: { id: seededStandardPrintConfigId },
       select: { id: true },
     });
     if (!printConfig) {
