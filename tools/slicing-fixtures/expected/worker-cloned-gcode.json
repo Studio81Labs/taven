@@ -59,17 +59,17 @@
   },
   "outputs": [
     {
-      "estimatedSeconds": 1408,
+      "estimatedSeconds": 1409,
       "filamentUsage": [
         {
-          "cubicCentimeters": 5.04,
-          "grams": 6.25,
-          "millimeters": 2097.16,
+          "cubicCentimeters": 5.05,
+          "grams": 6.26,
+          "millimeters": 2099.09,
           "slot": 1
         }
       ],
       "file": "plate_1.gcode",
-      "normalizedSha256": "8965d1e81bb73c46b607acdf9a5de2feef3e4e5931d9a21fe34840341495c581"
+      "normalizedSha256": "d1459aa59340ad8ecf7a5792fdeafc519c300e1407e5baf9b17704903da2479c"
     }
   ],
   "profiles": {

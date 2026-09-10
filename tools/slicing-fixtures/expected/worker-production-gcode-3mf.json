@@ -69,17 +69,17 @@
       "file": "toolpath.gcode.3mf",
       "plates": [
         {
-          "estimatedSeconds": 1408,
+          "estimatedSeconds": 1409,
           "filamentUsage": [
             {
-              "cubicCentimeters": 5.04,
-              "grams": 6.25,
-              "millimeters": 2097.16,
+              "cubicCentimeters": 5.05,
+              "grams": 6.26,
+              "millimeters": 2099.09,
               "slot": 1
             }
           ],
           "file": "Metadata/plate_1.gcode",
-          "normalizedSha256": "f55ab9938dc9a9a0bc9d5098ec824d93d06e151227bc3ce5020c542080093940"
+          "normalizedSha256": "13f386d8cd3a3ab5146711eae8aa7f7638acbbaea3af1b7fa14772d4418574bb"
         },
         {
           "estimatedSeconds": 1242,
@@ -87,12 +87,12 @@
             {
               "cubicCentimeters": 2.55,
               "grams": 3.16,
-              "millimeters": 1058.58,
+              "millimeters": 1059.55,
               "slot": 1
             }
           ],
           "file": "Metadata/plate_2.gcode",
-          "normalizedSha256": "e683730eee904b164729f210f487e59c7d0171eeeae433014a2645f49844b0cc"
+          "normalizedSha256": "568f6187c8ed80850b90bfed8c044e853e644a5efed904395d5849e9a6b74ff8"
         }
       ]
     }

@@ -184,19 +184,36 @@ async function assertWorkerInvocationContract() {
     path.resolve(fixtureRoot, "../../apps/slicer-worker/orca-runner.sh"),
     "utf8",
   );
-  const required = [
-    "--debug 2",
-    "--slice 0",
-    "--outputdir /work/output",
-    "--datadir /tmp/data",
-    '--load-settings "$settings"',
-    '--load-filaments "$filaments"',
-    "--load-assemble-list /work/assembly.json",
-    '--arrange 1 --clone-objects "$copies"',
-    "--export-3mf toolpath.gcode.3mf --min-save",
-    "/work/geometry.stl",
-  ];
-  if (required.some((value) => !runner.includes(value))) {
+  const invocationStart = runner.indexOf("    set -- \\\n      --debug 2 \\\n");
+  const invocationEnd = runner.indexOf(
+    "\n\n    diagnostics_fifo",
+    invocationStart,
+  );
+  const normalize = (value) => value.replace(/\\s+/gu, " ").trim();
+  const actual = normalize(runner.slice(invocationStart, invocationEnd));
+  const expected = normalize(`
+    set -- \\
+      --debug 2 \\
+      --slice 0 \\
+      --outputdir /work/output \\
+      --datadir /tmp/data \\
+      --load-settings "$settings"
+    if [ -n "$filaments" ]; then
+      set -- "$@" --load-filaments "$filaments"
+    fi
+    if [ -f "$request/assembly.json" ]; then
+      set -- "$@" --load-assemble-list /work/assembly.json
+    elif [ "$copies" -gt 1 ]; then
+      set -- "$@" --arrange 1 --clone-objects "$copies"
+    fi
+    if [ "$artifact_format" = gcode_3mf ]; then
+      set -- "$@" --export-3mf toolpath.gcode.3mf --min-save
+    fi
+    if [ ! -f "$request/assembly.json" ]; then
+      set -- "$@" /work/geometry.stl
+    fi
+  `);
+  if (actual !== expected) {
     throw new Error(
       "Worker argument construction no longer matches corpus vectors",
     );
@@ -465,7 +482,22 @@ async function prepareWorkerInput(directory, fixtureCase) {
   const processPreset = JSON.parse(
     await readFile(path.join(catalogProfileDirectory, "process.json"), "utf8"),
   );
-  processPreset.sparse_infill_density = "10%";
+  // This is the complete active 10% print and calibration override set seeded
+  // by apps/backend/scripts/seed.ts, merged in the worker's precedence order.
+  Object.assign(
+    processPreset,
+    {
+      brim_width: "0",
+      enable_support: "0",
+      layer_height: "0.2",
+      sparse_infill_density: "10%",
+    },
+    {
+      elefant_foot_compensation: "0",
+      xy_contour_compensation: "0",
+      xy_hole_compensation: "0",
+    },
+  );
   await writeFile(path.join(settings, "1.json"), stableJson(processPreset));
   if (fixtureCase.platePlan) {
     await writeFile(

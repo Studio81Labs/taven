@@ -60,12 +60,12 @@
         {
           "cubicCentimeters": 2.55,
           "grams": 3.16,
-          "millimeters": 1058.58,
+          "millimeters": 1059.55,
           "slot": 1
         }
       ],
       "file": "plate_1.gcode",
-      "normalizedSha256": "defbfc143e975b009d079b20ec8e4b20528469c99e8bd0a764516d2f88857f03"
+      "normalizedSha256": "67021b1229a63d1fe578a259f5f03a7c086b051e02b64846e363fa5db807ce08"
     }
   ],
   "profiles": {
