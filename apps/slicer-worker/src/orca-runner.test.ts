@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import {
   access,
   chmod,
+  chown,
   mkdir,
   mkdtemp,
   readFile,
@@ -33,6 +34,14 @@ async function exists(candidate: string): Promise<boolean> {
   }
 }
 
+async function makeRootCleanupFixtureAccessible(
+  directory: string,
+): Promise<void> {
+  if (process.getuid?.() !== 0) return;
+  await chown(directory, 10001, 10001);
+  await chmod(directory, 0o770);
+}
+
 describe("Orca runner lifecycle", () => {
   it("recovers restart markers and reaps cancelled or expired requests", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "taven-runner-lifecycle-"));
@@ -43,20 +52,24 @@ describe("Orca runner lifecycle", () => {
 
     const processing = path.join(root, "request-processing");
     await mkdir(processing);
+    await makeRootCleanupFixtureAccessible(processing);
     await writeFile(path.join(processing, "processing"), "\n");
     await writeFile(path.join(processing, "lease-expires-at"), `${future}\n`);
 
     const cancelled = path.join(root, "request-cancelled");
     await mkdir(cancelled);
+    await makeRootCleanupFixtureAccessible(cancelled);
     await writeFile(path.join(cancelled, "cancel"), "\n");
 
     const expired = path.join(root, "request-expired");
     await mkdir(expired);
+    await makeRootCleanupFixtureAccessible(expired);
     await writeFile(path.join(expired, "complete"), "\n");
     await writeFile(path.join(expired, "lease-expires-at"), `${past}\n`);
 
     const preparing = path.join(root, "request-preparing");
     await mkdir(preparing);
+    await makeRootCleanupFixtureAccessible(preparing);
     await writeFile(path.join(preparing, "lease-expires-at"), `${future}\n`);
 
     await execute("/bin/sh", [path.resolve("orca-runner.sh")], {
