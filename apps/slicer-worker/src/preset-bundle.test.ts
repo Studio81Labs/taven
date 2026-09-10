@@ -57,7 +57,7 @@ describe("validateRevisionBundle", () => {
     expect(process.layer_height).toBe("0.28");
   });
 
-  it("rejects unknown and denied override keys before materialization", () => {
+  it("rejects unknown, inherited, and denied override keys before materialization", () => {
     expect(() =>
       materializePresetBundles([
         {
@@ -71,6 +71,19 @@ describe("validateRevisionBundle", () => {
         { kind: "print", presets: [{ unknown_override: "1" }] },
       ]),
     ).toThrow("unknown_override is absent from the process preset");
+    expect(() =>
+      materializePresetBundles([
+        {
+          kind: "reference",
+          presets: [
+            { type: "machine" },
+            { type: "process", layer_height: "0.2" },
+            { type: "filament" },
+          ],
+        },
+        { kind: "print", presets: [{ constructor: "unsafe" }] },
+      ]),
+    ).toThrow("constructor is absent from the process preset");
     expect(() =>
       validateRevisionBundle(
         { bundleVersion: 1, presets: [{ post_process: "rm -rf /" }] },

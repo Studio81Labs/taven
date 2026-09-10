@@ -135,7 +135,7 @@ export function materializePresetBundles(
     }
     for (const override of revision.presets) {
       for (const [key, value] of Object.entries(override)) {
-        if (!(key in mergedProcess)) {
+        if (!Object.hasOwn(mergedProcess, key)) {
           invalid(
             `Orca ${revision.kind} override key ${key} is absent from the process preset`,
           );

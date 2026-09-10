@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   mkdtemp,
+  mkdir,
   readFile,
   readdir,
   rm,
@@ -490,5 +491,33 @@ describe("Orca sidecar protocol", () => {
     expect(message).not.toContain("/tmp/secret-token");
     expect(message.length).toBeLessThanOrEqual(512 + 96);
     expect(await readdir(root)).toEqual([]);
+  });
+
+  it("preserves deterministic invalid geometry reported by the runner", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "taven-runner-test-"));
+    cleanup.push(root);
+    const request = path.join(root, "request-failed");
+    await mkdir(request);
+    await writeFile(path.join(request, "failure-code"), "INVALID_GEOMETRY\n");
+    const engine = new OrcaSidecarEngine(
+      {
+        executable: "/opt/orca/AppRun",
+        name: "orcaslicer",
+        version: "2.4.2",
+        imageSha256: "b".repeat(64),
+        timeoutMilliseconds: 1_000,
+        runnerRoot: root,
+        maximumArtifactBytes: 1024,
+        maximumDiagnosticBytes: 1024,
+      },
+      root,
+    ) as unknown as {
+      runnerFailure(requestDirectory: string): Promise<unknown>;
+    };
+
+    await expect(engine.runnerFailure(request)).resolves.toMatchObject({
+      failureClass: "deterministic_invalid",
+      code: "INVALID_GEOMETRY",
+    });
   });
 });

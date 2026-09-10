@@ -897,6 +897,13 @@ export class OrcaSidecarEngine implements OrcaEngine {
         "Pinned slicing profile could not be loaded",
       );
     }
+    if (code === "INVALID_GEOMETRY") {
+      return new SlicingWorkerError(
+        "deterministic_invalid",
+        "INVALID_GEOMETRY",
+        "Pinned slicing engine rejected the canonical geometry",
+      );
+    }
     return new SlicingWorkerError(
       "retryable_infrastructure",
       "ENGINE_UNAVAILABLE",
