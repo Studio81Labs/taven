@@ -37,6 +37,13 @@ function assertSafe(value: Prisma.JsonValue): void {
 function kind(
   preset: OrcaPreset,
 ): "machine" | "process" | "filament" | "override" {
+  if (
+    "filament_settings_id" in preset &&
+    preset.type !== undefined &&
+    preset.type !== "filament"
+  ) {
+    invalid("Orca preset has conflicting type and filament settings markers");
+  }
   if (preset.type === "machine") return "machine";
   if (preset.type === "process") return "process";
   if (preset.type === "filament" || "filament_settings_id" in preset)
