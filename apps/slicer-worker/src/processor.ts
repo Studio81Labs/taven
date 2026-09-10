@@ -599,11 +599,15 @@ export class SlicingProcessor {
         else settings.push(preset);
       }
     }
-    if (settings.length === 0 || settings.length >= 10) {
+    if (
+      settings.length === 0 ||
+      settings.length >= 10 ||
+      filaments.length >= 10
+    ) {
       throw new SlicingWorkerError(
         "deterministic_invalid",
         "INVALID_PROFILE",
-        "Slicer preset bundle must contain one through nine settings presets",
+        "Slicer preset bundle must contain one through nine settings and filament presets",
       );
     }
     const writePresets = async (

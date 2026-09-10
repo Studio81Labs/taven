@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   geometrySelectionSha256,
@@ -616,6 +617,44 @@ describe("SlicingProcessor", () => {
     expect(store.writes).toEqual([
       referenceArtifactObjectKey(job.inputFingerprintSha256),
     ]);
+  });
+
+  it("rejects ten filament presets before lexicographic sidecar ordering can change them", async () => {
+    const store = new MemoryStore();
+    const referenceProfile = presetBundle(
+      { type: "machine", name: "machine" },
+      { type: "process", name: "process" },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        type: "filament",
+        name: `filament-${index}`,
+      })),
+    );
+    const referenceHash = sha256(referenceProfile);
+    store.objects.set(
+      `slicer-revisions/${referenceHash}/settings.json`,
+      referenceProfile,
+    );
+    const processor = new SlicingProcessor(store, new FakeEngine(), config);
+    const profiles = processor as unknown as {
+      profiles(
+        workspace: string,
+        revisions: readonly {
+          contentSha256: string;
+          kind: "reference" | "machine" | "print" | "calibration";
+        }[],
+      ): Promise<string[]>;
+    };
+    const workspace = await mkdtemp(path.join(tmpdir(), "taven-slicer-test-"));
+
+    try {
+      await expect(
+        profiles.profiles(workspace, [
+          { contentSha256: referenceHash, kind: "reference" },
+        ]),
+      ).rejects.toMatchObject({ code: "INVALID_PROFILE" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("reuses immutable candidate occupancy caches and never persists G-code", async () => {
