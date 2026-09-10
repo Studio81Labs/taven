@@ -613,7 +613,7 @@ describe("SlicingProcessor", () => {
       engine.profileContents[0]!.map(
         (value) => (JSON.parse(value) as { name: string }).name,
       ),
-    ).toEqual(["machine", "process", "print-config", "filament"]);
+    ).toEqual(["machine", "print-config", "filament"]);
     expect(store.writes).toEqual([
       referenceArtifactObjectKey(job.inputFingerprintSha256),
     ]);

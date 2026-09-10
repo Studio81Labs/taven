@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   mkdtemp,
+  mkdir,
   readFile,
   readdir,
   rm,
@@ -9,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   OrcaSidecarEngine,
   parseOrcaArtifact,
@@ -107,6 +108,7 @@ async function expectProducerOwnedDirectories(request: string): Promise<void> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     cleanup
       .splice(0)
@@ -413,5 +415,109 @@ describe("Orca sidecar protocol", () => {
     ).resolves.toMatchObject({ artifactBytes: expect.any(Uint8Array) });
     await fakeRunner;
     expect(await readdir(root)).toEqual([]);
+  });
+
+  it("logs a bounded sanitized sidecar diagnostic without exposing it in the result", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "taven-runner-test-"));
+    const workspace = await mkdtemp(path.join(tmpdir(), "taven-engine-test-"));
+    cleanup.push(root, workspace);
+    const geometryPath = path.join(workspace, "geometry.stl");
+    const profilePath = path.join(workspace, "machine.json");
+    await writeFile(geometryPath, "solid fixture\nendsolid fixture\n");
+    await writeFile(profilePath, "{}\n");
+    const fakeRunner = (async () => {
+      for (;;) {
+        const requestName = (await readdir(root)).find((name) =>
+          name.startsWith("request-"),
+        );
+        if (!requestName) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          continue;
+        }
+        const request = path.join(root, requestName);
+        try {
+          await readFile(path.join(request, "ready"));
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          continue;
+        }
+        await writeFile(path.join(request, "engine-return-code"), "-5\n");
+        await writeFile(
+          path.join(request, "diagnostics"),
+          "failed reading /tmp/secret-token from engine\u0000",
+        );
+        await writeFile(
+          path.join(request, "failure-code"),
+          "INVALID_PROFILE\n",
+        );
+        await writeFile(path.join(request, "failed"), "\n");
+        return;
+      }
+    })();
+    const warning = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    const engine = new OrcaSidecarEngine(
+      {
+        executable: "/opt/orca/AppRun",
+        name: "orcaslicer",
+        version: "2.4.2",
+        imageSha256: "b".repeat(64),
+        timeoutMilliseconds: 1_000,
+        runnerRoot: root,
+        maximumArtifactBytes: 1024,
+        maximumDiagnosticBytes: 16,
+      },
+      root,
+    );
+
+    await expect(
+      engine.slice({
+        workspace,
+        geometryPath,
+        profilePaths: [profilePath],
+        copies: 1,
+        artifactFormat: "gcode",
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_PROFILE",
+      message: "Pinned slicing profile could not be loaded",
+    });
+    await fakeRunner;
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("INVALID_PROFILE (return code -5)"),
+    );
+    const message = warning.mock.calls[0]?.[0] as string;
+    expect(message).not.toContain("/tmp/secret-token");
+    expect(message.length).toBeLessThanOrEqual(512 + 96);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it("preserves deterministic invalid geometry reported by the runner", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "taven-runner-test-"));
+    cleanup.push(root);
+    const request = path.join(root, "request-failed");
+    await mkdir(request);
+    await writeFile(path.join(request, "failure-code"), "INVALID_GEOMETRY\n");
+    const engine = new OrcaSidecarEngine(
+      {
+        executable: "/opt/orca/AppRun",
+        name: "orcaslicer",
+        version: "2.4.2",
+        imageSha256: "b".repeat(64),
+        timeoutMilliseconds: 1_000,
+        runnerRoot: root,
+        maximumArtifactBytes: 1024,
+        maximumDiagnosticBytes: 1024,
+      },
+      root,
+    ) as unknown as {
+      runnerFailure(requestDirectory: string): Promise<unknown>;
+    };
+
+    await expect(engine.runnerFailure(request)).resolves.toMatchObject({
+      failureClass: "deterministic_invalid",
+      code: "INVALID_GEOMETRY",
+    });
   });
 });

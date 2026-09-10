@@ -29,7 +29,7 @@ import {
 } from "./orca-engine.js";
 import type { WorkerConfig } from "./config.js";
 import {
-  classifyPreset,
+  materializePresetBundles,
   validateRevisionBundle,
   type OrcaPreset,
 } from "./preset-bundle.js";
@@ -591,34 +591,19 @@ export class SlicingProcessor {
       ),
     );
     const validated = revisions.map((revision) => ({
+      kind: revision.kind,
       contentSha256: revision.contentSha256,
       presets: validateRevisionBundle(
         bundles.get(revision.contentSha256),
         revision.kind,
       ).presets,
     }));
-    const snapshots = unique.map(
-      (digest) =>
-        validated.find((revision) => revision.contentSha256 === digest)!
-          .presets,
-    );
-    const settings: OrcaPreset[] = [];
-    const filaments: OrcaPreset[] = [];
-    for (const presets of snapshots) {
-      for (const preset of presets) {
-        if (classifyPreset(preset) === "filament") filaments.push(preset);
-        else settings.push(preset);
-      }
-    }
-    if (
-      settings.length === 0 ||
-      settings.length >= 10 ||
-      filaments.length >= 10
-    ) {
+    const { settings, filaments } = materializePresetBundles(validated);
+    if (filaments.length === 0 || filaments.length >= 10) {
       throw new SlicingWorkerError(
         "deterministic_invalid",
         "INVALID_PROFILE",
-        "Slicer preset bundle must contain one through nine settings and filament presets",
+        "Slicer preset bundle must contain one through nine filament presets",
       );
     }
     const writePresets = async (
