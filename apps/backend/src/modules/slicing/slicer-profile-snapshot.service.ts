@@ -191,9 +191,13 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
     }
     if (expectations.length > 0) {
       try {
-        assertPresetBundleAggregateLimits(
-          expectations.map((expectation) => expectation.settings),
+        const uniqueSettings = new Map(
+          snapshots.map(({ snapshot, expectation }) => [
+            snapshot.contentSha256,
+            expectation.settings,
+          ]),
         );
+        assertPresetBundleAggregateLimits([...uniqueSettings.values()]);
       } catch (error) {
         if (error instanceof PresetBundleValidationError) {
           throw new SlicerProfileSnapshotIntegrityError(error.message);

@@ -184,6 +184,46 @@ describe("SlicerProfileSnapshotService", () => {
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotIntegrityError);
   });
 
+  it("deduplicates aggregate preset counts by immutable snapshot digest", async () => {
+    const machine = machineBundle();
+    const override = bundle(
+      { flow_ratio: "1" },
+      { layer_height: "0.2" },
+      { wall_loops: "3" },
+      { infill_density: "15%" },
+    );
+    const putImmutableObject = vi.fn().mockResolvedValue(undefined);
+    const service = new SlicerProfileSnapshotService(
+      {
+        machineProfile: {
+          findUnique: vi.fn().mockResolvedValue({
+            settings: machine,
+            slicerEngine: "orcaslicer",
+            slicerVersion: "2.4.2",
+            productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
+          }),
+        },
+        machineCalibration: {
+          findUnique: vi.fn().mockResolvedValue({ settings: override }),
+        },
+        printConfigRevision: {
+          findUnique: vi.fn().mockResolvedValue({ settings: override }),
+        },
+      } as unknown as PrismaService,
+      { putImmutableObject } as unknown as ObjectStorage,
+    );
+    const hashes = {
+      machine: slicerSettingsSnapshot(machine).contentSha256,
+      calibration: slicerSettingsSnapshot(override).contentSha256,
+      config: slicerSettingsSnapshot(override).contentSha256,
+    };
+
+    await expect(
+      service.ensureJobSnapshots(candidateJob(hashes)),
+    ).resolves.toBeUndefined();
+    expect(putImmutableObject).toHaveBeenCalledTimes(2);
+  });
+
   it("does not apply preset limits to model inspection jobs", async () => {
     const service = new SlicerProfileSnapshotService(
       {} as PrismaService,
