@@ -327,6 +327,7 @@ services:
       platforms: ["linux/amd64"]
     init: true
     user: "0:10001"
+    working_dir: /
     network_mode: none
     read_only: true
     cap_drop: ["ALL"]
