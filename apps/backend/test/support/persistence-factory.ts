@@ -3,6 +3,20 @@ import type { PoolClient } from "pg";
 
 type Sql = Pick<PoolClient, "query">;
 
+const machineBundle = (overrides: Record<string, unknown> = {}) => ({
+  bundleVersion: 1,
+  presets: [
+    { type: "machine" },
+    { type: "process", ...overrides },
+    { type: "filament" },
+  ],
+});
+
+const overrideBundle = (overrides: Record<string, unknown> = {}) => ({
+  bundleVersion: 1,
+  presets: [overrides],
+});
+
 export type PersistenceFoundation = {
   nodeId: string;
   machineId: string;
@@ -403,7 +417,7 @@ export class PersistenceFactory {
           "STANDARD",
           "orca",
           "test",
-          JSON.stringify({}),
+          JSON.stringify(machineBundle()),
           "ACTIVE",
           createdAt,
         ],
@@ -436,7 +450,7 @@ export class PersistenceFactory {
         "orca",
         "test",
         "gcode_3mf",
-        JSON.stringify({}),
+        JSON.stringify(machineBundle()),
         "ACTIVE",
         createdAt,
       ],
@@ -454,7 +468,7 @@ export class PersistenceFactory {
         1_000_000,
         0,
         0,
-        JSON.stringify({}),
+        JSON.stringify(overrideBundle()),
         "ACTIVE",
         createdAt,
       ],
@@ -492,7 +506,7 @@ export class PersistenceFactory {
           "STANDARD",
           20 + index,
           200,
-          JSON.stringify({ itemIndex: index }),
+          JSON.stringify(overrideBundle({ itemIndex: index })),
         ],
       );
       await this.sql.query(

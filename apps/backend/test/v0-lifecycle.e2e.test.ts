@@ -14,6 +14,20 @@ const redisUrl = process.env.TAVEN_REDIS_URL ?? "redis://127.0.0.1:6381";
 const queuePrefix = `taven-v0-lifecycle-${randomUUID()}`;
 const scope = `v0-lifecycle-${randomUUID()}`;
 
+const machineBundle = (overrides: Record<string, unknown> = {}) => ({
+  bundleVersion: 1,
+  presets: [
+    { type: "machine" },
+    { type: "process", ...overrides },
+    { type: "filament" },
+  ],
+});
+
+const overrideBundle = (overrides: Record<string, unknown> = {}) => ({
+  bundleVersion: 1,
+  presets: [overrides],
+});
+
 const environment = {
   redisUrl: process.env.TAVEN_REDIS_URL,
   bindingFlows: process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED,
@@ -185,7 +199,7 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
           quality: "STANDARD",
           slicerEngine: "fixture",
           slicerVersion: "0.0.0",
-          settings: { profile: scope, layerHeight: 200 },
+          settings: machineBundle({ profile: scope, layerHeight: 200 }),
         },
       }),
     );
@@ -227,7 +241,7 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
           slicerVersion: "0.0.0",
           nozzleDiameterMicrometers: 400,
           productionArtifactFormat: "GCODE_3MF",
-          settings: { profile: scope, machine: "fixture" },
+          settings: machineBundle({ profile: scope, machine: "fixture" }),
         },
       }),
     );
@@ -255,7 +269,7 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
           flowRatioPartsPerMillion: 1_000_000,
           xyCompensationMicrometers: 0,
           elephantFootCompensationMicrometers: 0,
-          settings: { calibration: scope },
+          settings: overrideBundle({ calibration: scope }),
         },
       }),
     );
