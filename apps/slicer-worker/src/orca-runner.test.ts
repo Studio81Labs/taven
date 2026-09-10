@@ -100,7 +100,17 @@ case "$1" in
 esac
 `,
     );
+    await writeFile(
+      path.join(toolsDirectory, "stat"),
+      `#!/bin/sh
+case "$3" in
+  */output) printf '%s\\n' 10001:10001:700 ;;
+  *) printf '%s\\n' 10001:10001:770 ;;
+esac
+`,
+    );
     await chmod(path.join(toolsDirectory, "find"), 0o755);
+    await chmod(path.join(toolsDirectory, "stat"), 0o755);
     await chmod(path.join(request, "output"), 0o700);
     await writeFile(path.join(request, "lease-expires-at"), `${future}\n`);
     await writeFile(path.join(request, "copies"), "1\n");
