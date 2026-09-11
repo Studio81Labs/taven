@@ -82,7 +82,8 @@ jobs:
           test -n "$container"
           docker inspect "$container" --format 'AppArmorProfile: {{.AppArmorProfile}}'
           test "$(docker inspect "$container" --format '{{.AppArmorProfile}}')" = "unconfined"
-          docker exec "$container" /usr/bin/bwrap \
+          broker_network_namespace="$(docker exec "$container" /usr/bin/readlink /proc/self/ns/net)"
+          docker exec --env BROKER_NETWORK_NAMESPACE="$broker_network_namespace" "$container" /usr/bin/unshare --net -- /usr/bin/bwrap \
             --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try \
             --die-with-parent --new-session \
             --ro-bind / / \
@@ -92,4 +93,13 @@ jobs:
             --dev /dev \
             --chdir /tmp \
             --clearenv \
-            /usr/bin/true
+            --setenv BROKER_NETWORK_NAMESPACE "$broker_network_namespace" \
+            /usr/bin/setpriv \
+              --reuid=10001 \
+              --regid=10001 \
+              --clear-groups \
+              --bounding-set=-all \
+              --inh-caps=-all \
+              --ambient-caps=-all \
+              --no-new-privs \
+              /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1'
