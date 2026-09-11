@@ -349,7 +349,7 @@ async function monitorRequestWorkspace(): Promise<{
     '[ -r "$status" ] || continue;',
     "command=$(tr '\\000' ' ' < \"${status%/status}/cmdline\" 2>/dev/null || true);",
     'case "$command" in *"/opt/orca/AppRun"*)',
-    'case "$command" in *"/usr/bin/unshare --net --"*"--unshare-pid"*"--unshare-ipc"*"--unshare-uts"*"--ro-bind $request_root /work"*"--bind $request_root/output /work/output"*"--tmpfs $runner_root"*"--bind $request_root/tmp /tmp"*) ;; *) continue ;; esac;',
+    'case "$command" in *"--unshare-pid"*"--unshare-ipc"*"--unshare-uts"*"--ro-bind $request_root /work"*"--bind $request_root/output /work/output"*"--tmpfs $runner_root"*"--bind $request_root/tmp /tmp"*) ;; *) continue ;; esac;',
     'for child_status in "${status%/status}"/root/proc/[0-9]*/status; do',
     '[ -r "$child_status" ] || continue;',
     'child_uid=$(awk \'/^Uid:/{print $2 ":" $3 ":" $4 ":" $5}\' "$child_status");',
