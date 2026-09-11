@@ -3,8 +3,10 @@
 Independent BullMQ consumer for the versioned slicing queue. The v2 processor
 downloads immutable inputs by generated object key and checksum, inspects STL
 and 3MF sources, writes selected canonical geometries, reuses machine-occupancy
-metric caches, and invokes the pinned OrcaSlicer runtime. The legacy v1 queue
-retains its fixture drain handler only.
+metric caches, and invokes the pinned OrcaSlicer runtime. Taven is fresh and
+undeployed, so no v1 queue or jobs exist to drain: the worker consumes only the
+version-2 queue. The deterministic v2 fixture handler remains deliberately as
+the backend E2E seam.
 
 The worker is intentionally absent from `pnpm dev`. Start the Compose worker
 profile explicitly with `pnpm stack:worker` when local slicing is required.

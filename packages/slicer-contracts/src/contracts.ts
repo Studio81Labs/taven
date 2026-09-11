@@ -6,40 +6,6 @@ import {
 } from "@taven/core";
 import { z } from "zod";
 
-/**
- * Deprecated v1 exports exist only while the legacy queue drains. New
- * producers must publish v2 messages to SLICING_QUEUE_NAME.
- */
-export const LEGACY_V1_SLICING_CONTRACT_VERSION = 1 as const;
-export const LEGACY_V1_SLICING_QUEUE_NAME = "taven-slicing-v1" as const;
-
-const LegacyV1Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
-
-// Keep these schemas shape-compatible with the original v1 payload
-// shape. Tightening them would make already-enqueued jobs impossible to drain.
-export const LegacyV1SlicingJobSchema = z.object({
-  contractVersion: z.literal(LEGACY_V1_SLICING_CONTRACT_VERSION),
-  jobId: z.uuid(),
-  inputObjectKey: z.string().min(1),
-  inputSha256: LegacyV1Sha256Schema,
-  profileVersion: z.string().min(1),
-  profileSha256: LegacyV1Sha256Schema,
-});
-
-export const LegacyV1SlicingResultSchema = z.object({
-  contractVersion: z.literal(LEGACY_V1_SLICING_CONTRACT_VERSION),
-  jobId: z.uuid(),
-  engine: z.object({
-    name: z.string().min(1),
-    version: z.string().min(1),
-    profileSha256: LegacyV1Sha256Schema,
-  }),
-  output: z.object({
-    kind: z.literal("fixture"),
-    metadataSha256: LegacyV1Sha256Schema,
-  }),
-});
-
 export const SLICING_CONTRACT_VERSION = 2 as const;
 export const SLICING_QUEUE_NAME = "taven-slicing-v2" as const;
 export const SLICING_MESSAGE_MAX_BYTES = 64 * 1024;
@@ -1472,8 +1438,6 @@ export const SlicingResultSchema = z
 
 export type SlicingJob = z.infer<typeof SlicingJobSchema>;
 export type SlicingResult = z.infer<typeof SlicingResultSchema>;
-export type LegacyV1SlicingJob = z.infer<typeof LegacyV1SlicingJobSchema>;
-export type LegacyV1SlicingResult = z.infer<typeof LegacyV1SlicingResultSchema>;
 export type ModelInspectionJob = z.infer<typeof ModelInspectionJobSchema>;
 export type ReferenceSliceJob = z.infer<typeof ReferenceSliceJobSchema>;
 export type CandidateEstimateJob = z.infer<typeof CandidateEstimateJobSchema>;

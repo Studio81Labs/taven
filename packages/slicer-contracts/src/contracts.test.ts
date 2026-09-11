@@ -4,10 +4,6 @@ import {
   CandidateEstimateResultSchema,
   ConfirmedUnitConversionSchema,
   GeometrySelectionSchema,
-  LEGACY_V1_SLICING_CONTRACT_VERSION,
-  LEGACY_V1_SLICING_QUEUE_NAME,
-  LegacyV1SlicingJobSchema,
-  LegacyV1SlicingResultSchema,
   ModelInspectionJobSchema,
   ModelInspectionResultSchema,
   PreflightFindingSchema,
@@ -187,14 +183,6 @@ const productionInput = {
   acceptedJobId: ids.acceptedJob,
   productionReservationId: ids.reservation,
 };
-const legacyV1Job = {
-  contractVersion: LEGACY_V1_SLICING_CONTRACT_VERSION,
-  jobId: ids.job,
-  inputObjectKey: "fixture/input.stl",
-  inputSha256: hash("a"),
-  profileVersion: "fixture-v1",
-  profileSha256: hash("b"),
-};
 const engine = { name: "orca", version: "2.0", imageSha256: hash("2") };
 const sliceMetrics = {
   boundingBox: {
@@ -326,29 +314,10 @@ describe("versioned slicing jobs", () => {
     );
   });
 
-  it("keeps the legacy v1 contract isolated for queue draining", () => {
-    expect(LEGACY_V1_SLICING_QUEUE_NAME).toBe("taven-slicing-v1");
+  it("keeps the initial version-2 queue identity stable", () => {
+    expect(SLICING_CONTRACT_VERSION).toBe(2);
     expect(SLICING_QUEUE_NAME).toBe("taven-slicing-v2");
-    expect(LEGACY_V1_SLICING_QUEUE_NAME).not.toBe(SLICING_QUEUE_NAME);
-    expect(LEGACY_V1_SLICING_QUEUE_NAME).not.toContain(":");
     expect(SLICING_QUEUE_NAME).not.toContain(":");
-    expect(LegacyV1SlicingJobSchema.parse(legacyV1Job)).toEqual(legacyV1Job);
-    expect(() => SlicingJobSchema.parse(legacyV1Job)).toThrow();
-
-    const legacyResult = {
-      contractVersion: LEGACY_V1_SLICING_CONTRACT_VERSION,
-      jobId: ids.job,
-      engine: {
-        name: "fixture",
-        version: "0.0.0",
-        profileSha256: legacyV1Job.profileSha256,
-      },
-      output: { kind: "fixture", metadataSha256: hash("c") },
-    };
-    expect(LegacyV1SlicingResultSchema.parse(legacyResult)).toEqual(
-      legacyResult,
-    );
-    expect(() => SlicingResultSchema.parse(legacyResult)).toThrow();
   });
 
   it("accepts all four discriminated job kinds", () => {

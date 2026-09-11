@@ -80,9 +80,9 @@ function sliceMetrics(quantity: number, plateCount: number, bodyCount: number) {
 }
 
 /**
- * Deterministic fixture dispatch used until issue #27 installs real processors.
- * Keeping every v2 kind structurally executable prevents one shared queue from
- * rejecting otherwise conforming messages during repository and image tests.
+ * Deliberate deterministic v2 seam for backend E2E tests. Keeping every v2
+ * kind structurally executable verifies the backend queue boundary without
+ * requiring the pinned Orca runtime in that suite.
  */
 export function runFixtureSlicingJob(input: unknown): SlicingResult {
   const job = SlicingJobSchema.parse(input);
