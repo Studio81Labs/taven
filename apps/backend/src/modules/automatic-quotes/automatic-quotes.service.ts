@@ -452,8 +452,8 @@ export class AutomaticQuotesService {
         ),
         priceListRevision: priceList.revision,
         assumptions: {
-          printConfigRevisionId: selected.printConfigRevisionId,
-          referenceProfileId: selected.referenceProfileId,
+          printConfigRevisionId: selectedWithCapacity.printConfigRevisionId,
+          referenceProfileId: selectedWithCapacity.referenceProfileId,
           material: input.material,
           quality: input.quality,
           infillPreset: input.infillPreset,
@@ -6519,25 +6519,31 @@ function assertPositiveFinite(
 }
 
 function millimetersToMicrometers(value: number): bigint {
-  return decimalToInteger(value, 1_000, "dimension");
+  return decimalToInteger(value, 3, "dimension");
 }
 
 function cubicMillimetersToCubicMicrometers(value: number): bigint {
-  return decimalToInteger(value, 1_000_000_000, "volume");
+  return decimalToInteger(value, 9, "volume");
 }
 
-function decimalToInteger(
+export function decimalToInteger(
   value: number,
-  multiplier: number,
+  decimalPlaces: number,
   name: string,
 ): bigint {
-  const scaled = value * multiplier;
-  if (!Number.isFinite(scaled) || !Number.isSafeInteger(Math.round(scaled))) {
-    throw new BadRequestException(
-      `Estimate ${name} cannot be represented safely`,
-    );
+  const parts = /^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(value.toString());
+  if (!parts) {
+    throw new BadRequestException(`Estimate ${name} cannot be represented`);
   }
-  return BigInt(Math.round(scaled));
+  const [_, whole, fraction = "", exponent = "0"] = parts;
+  const unscaled = BigInt(`${whole}${fraction}`);
+  const shift = decimalPlaces + Number(exponent) - fraction.length;
+  if (shift >= 0) return unscaled * 10n ** BigInt(shift);
+
+  // Inputs are positive, so this is equivalent to Math.round without first
+  // converting the scaled value through an imprecise JavaScript number.
+  const divisor = 10n ** BigInt(-shift);
+  return (unscaled + divisor / 2n) / divisor;
 }
 
 function normalizeClientAddress(value: string): string {

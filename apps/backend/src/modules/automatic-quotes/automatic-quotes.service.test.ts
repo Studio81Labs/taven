@@ -2,9 +2,18 @@ import { ConflictException, GoneException } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { PrismaService } from "../../prisma/prisma.service";
-import { AutomaticQuotesService } from "./automatic-quotes.service";
+import {
+  AutomaticQuotesService,
+  decimalToInteger,
+} from "./automatic-quotes.service";
 
 describe("AutomaticQuotesService", () => {
+  it("converts API-valid volumes beyond JavaScript's safe integer range", () => {
+    expect(decimalToInteger(9_261_000, 9, "volume")).toBe(
+      9_261_000_000_000_000n,
+    );
+  });
+
   it("filters configured delivery options when pricing is unavailable", async () => {
     const priceList = { findUnique: vi.fn().mockResolvedValue(null) };
     const service = new AutomaticQuotesService(
