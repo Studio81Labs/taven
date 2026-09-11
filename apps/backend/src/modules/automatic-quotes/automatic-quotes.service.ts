@@ -6538,12 +6538,20 @@ export function decimalToInteger(
   const [_, whole, fraction = "", exponent = "0"] = parts;
   const unscaled = BigInt(`${whole}${fraction}`);
   const shift = decimalPlaces + Number(exponent) - fraction.length;
-  if (shift >= 0) return unscaled * 10n ** BigInt(shift);
+  let scaled: bigint;
+  if (shift >= 0) {
+    scaled = unscaled * 10n ** BigInt(shift);
+  } else {
+    // Inputs are positive, so this is equivalent to Math.round without first
+    // converting the scaled value through an imprecise JavaScript number.
+    const divisor = 10n ** BigInt(-shift);
+    scaled = (unscaled + divisor / 2n) / divisor;
+  }
+  if (scaled <= 0n) {
+    throw new BadRequestException(`Estimate ${name} must remain positive`);
+  }
 
-  // Inputs are positive, so this is equivalent to Math.round without first
-  // converting the scaled value through an imprecise JavaScript number.
-  const divisor = 10n ** BigInt(-shift);
-  return (unscaled + divisor / 2n) / divisor;
+  return scaled;
 }
 
 function normalizeClientAddress(value: string): string {

@@ -14,6 +14,12 @@ describe("AutomaticQuotesService", () => {
     );
   });
 
+  it("rejects positive values that cannot retain a whole target unit", () => {
+    expect(() => decimalToInteger(0.0004, 3, "dimension")).toThrow(
+      "Estimate dimension must remain positive",
+    );
+  });
+
   it("filters configured delivery options when pricing is unavailable", async () => {
     const priceList = { findUnique: vi.fn().mockResolvedValue(null) };
     const service = new AutomaticQuotesService(
