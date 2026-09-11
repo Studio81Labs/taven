@@ -91,3 +91,23 @@ determinism correction, not a substantive upgrade, only when it provably leaves
 building old and new runtimes. The complete upgrade procedure above still
 applies to every engine, profile-content, base-image, package, or invocation
 change.
+
+## Bubblewrap host-LSM requirement (2026-09-11)
+
+The `orca-runner` broker must create a fresh Bubblewrap mount namespace for
+each request. Its first bind-mount operation needs `CAP_SYS_ADMIN` and is not
+permitted by Docker's default AppArmor profile, even when its seccomp profile
+is unconfined. On an AppArmor host the Compose service therefore sets
+`apparmor=unconfined` for `orca-runner` only. The same Compose configuration is
+used in CI and production so the broker is proven on an LSM-enforcing host.
+
+This is a narrowly scoped host-confinement exemption, not a relaxation of the
+Orca execution boundary. The broker remains unprivileged, networkless,
+read-only, and dropped from every capability except `SYS_ADMIN`, `SETUID`,
+`SETGID`, and `SETPCAP`; no worker-profile service receives a Docker socket.
+Each Orca child still runs as UID 10001 in Bubblewrap with empty bounding,
+inheritable, and ambient capability sets, `no_new_privs`, isolated pid/ipc/uts
+and mount namespaces, and no network. A host enforcing SELinux rather than
+AppArmor requires the equivalent host-policy exemption; provisioning that
+policy belongs to deployment work and must not be replaced by `privileged` or
+additional capabilities.

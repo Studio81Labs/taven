@@ -34,6 +34,17 @@ reclaim every job workspace after its terminal result or lease expiry. The
 one-shot volume initializer has only `CHOWN`; it exits before either app starts.
 All worker services remain opt-in.
 
+The broker must be allowed to create that stronger per-request Bubblewrap
+sandbox. On AppArmor hosts its Compose service therefore uses
+`apparmor=unconfined`; this exemption applies only to `orca-runner`, not the
+Node worker or the initializer. It does not add capabilities or make the
+container privileged: the broker remains networkless and read-only with only
+`SYS_ADMIN`, `SETUID`, `SETGID`, and `SETPCAP`, and Bubblewrap removes every
+capability from the Orca child. A SELinux-enforcing production host needs the
+equivalent exemption expressed through its host policy (for example
+`label=disable` or a tailored policy); do not substitute a broader Docker
+privilege setting.
+
 Profile and configuration revisions are provider-neutral immutable S3 objects
 at `slicer-revisions/<content-sha256>/settings.json`. Their bytes must hash to
 the settings-snapshot digest carried by the v2 job; this is intentionally

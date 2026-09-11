@@ -332,7 +332,8 @@ services:
     read_only: true
     cap_drop: ["ALL"]
     cap_add: ["SYS_ADMIN", "SETUID", "SETGID", "SETPCAP"]
-    security_opt: ["no-new-privileges:true", "seccomp=unconfined"]
+    security_opt:
+      ["no-new-privileges:true", "seccomp=unconfined", "apparmor=unconfined"]
     pids_limit: 320
     entrypoint: ["/bin/sh", "/usr/local/bin/taven-orca-runner"]
     tmpfs:
