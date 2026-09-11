@@ -64,6 +64,7 @@
     "slicer-worker:lint": "pnpm -C apps/slicer-worker lint",
     "slicer-worker:typecheck": "pnpm -C apps/slicer-worker typecheck",
     "slicer-worker:test": "pnpm -C apps/slicer-worker test",
+    "slicer-worker:integration": "pnpm -C apps/slicer-worker test:integration",
     "slicer-worker:profiles:check": "node tools/slicing-fixtures/scripts/generate-profiles.mjs --check",
     "slicer-worker:profiles:update": "node tools/slicing-fixtures/scripts/generate-profiles.mjs --write",
     "catalog-profiles:check": "node tools/catalog-profiles/scripts/generate-catalog.mjs --check",

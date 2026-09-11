@@ -23,7 +23,9 @@
     "pretest": "pnpm contracts:build",
     "test": "vitest run",
     "pretest:watch": "pnpm contracts:build",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "pretest:integration": "pnpm contracts:build",
+    "test:integration": "TAVEN_SLICER_WORKER_INTEGRATION=1 vitest run src/runtime-e2e.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",
