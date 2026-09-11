@@ -111,3 +111,18 @@ and mount namespaces, and no network. A host enforcing SELinux rather than
 AppArmor requires the equivalent host-policy exemption; provisioning that
 policy belongs to deployment work and must not be replaced by `privileged` or
 additional capabilities.
+
+## Child network namespace (2026-09-11)
+
+Each Orca child receives a separate network namespace through
+`/usr/bin/unshare --net --` immediately before Bubblewrap. Bubblewrap's
+`--unshare-net` is deliberately not used: it always configures loopback, which
+requires `CAP_NET_ADMIN`. The pinned `util-linux` `unshare(1)` creates the
+namespace without that setup, so the broker retains exactly `SYS_ADMIN`,
+`SETUID`, `SETGID`, and `SETPCAP`; no capability or Compose posture changes.
+
+A separate namespace is not evidence that no interfaces exist, so the runtime
+suite proves the required property behaviorally: an outbound connection from
+the real sandbox must fail. `unshare(1)` execs into Bubblewrap, leaving the
+existing `prlimit` and timeout chain, including Bubblewrap's
+`--die-with-parent`, unchanged.

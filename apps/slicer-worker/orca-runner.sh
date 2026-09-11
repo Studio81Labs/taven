@@ -185,6 +185,7 @@ while true; do
          --nproc=256 \
          --fsize="$maximum_artifact_bytes" \
          -- /usr/bin/timeout --signal=KILL "$timeout_seconds" \
+         /usr/bin/unshare --net -- \
          /usr/bin/bwrap \
          --unshare-pid \
          --unshare-ipc \
