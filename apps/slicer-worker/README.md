@@ -45,6 +45,14 @@ equivalent exemption expressed through its host policy (for example
 `label=disable` or a tailored policy); do not substitute a broader Docker
 privilege setting.
 
+Every Orca invocation runs through `prlimit`, `timeout`,
+`/usr/bin/unshare --net --`, Bubblewrap, then `setpriv`. `unshare(1)` creates
+the child network namespace before Bubblewrap without configuring loopback;
+Bubblewrap's `--unshare-net` is deliberately not used because it configures
+loopback and would require `CAP_NET_ADMIN`. The broker retains its approved
+four capabilities, while the child has no capabilities and receives no
+outbound network access.
+
 Profile and configuration revisions are provider-neutral immutable S3 objects
 at `slicer-revisions/<content-sha256>/settings.json`. Their bytes must hash to
 the settings-snapshot digest carried by the v2 job; this is intentionally

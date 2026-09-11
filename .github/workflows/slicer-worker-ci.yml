@@ -82,7 +82,8 @@ jobs:
           test -n "$container"
           docker inspect "$container" --format 'AppArmorProfile: {{.AppArmorProfile}}'
           test "$(docker inspect "$container" --format '{{.AppArmorProfile}}')" = "unconfined"
-          docker exec "$container" /usr/bin/bwrap \
+          broker_network_namespace="$(docker exec "$container" /usr/bin/readlink /proc/self/ns/net)"
+          docker exec --env BROKER_NETWORK_NAMESPACE="$broker_network_namespace" "$container" /usr/bin/unshare --net -- /usr/bin/bwrap \
             --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try \
             --die-with-parent --new-session \
             --ro-bind / / \
@@ -92,4 +93,118 @@ jobs:
             --dev /dev \
             --chdir /tmp \
             --clearenv \
-            /usr/bin/true
+            --setenv BROKER_NETWORK_NAMESPACE "$broker_network_namespace" \
+            /usr/bin/setpriv \
+              --reuid=10001 \
+              --regid=10001 \
+              --clear-groups \
+              --bounding-set=-all \
+              --inh-caps=-all \
+              --ambient-caps=-all \
+              --no-new-privs \
+              /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1'
+          fixture_root="$RUNNER_TEMP/taven-worker-reference-gcode"
+          export FIXTURE_ROOT="$fixture_root"
+          node --input-type=module <<'NODE'
+          import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+          import path from "node:path";
+
+          const root = process.env.FIXTURE_ROOT;
+          const profiles = path.join(root, "profiles");
+          await Promise.all([
+            mkdir(path.join(profiles, "settings"), { recursive: true }),
+            mkdir(path.join(profiles, "filaments"), { recursive: true }),
+            cp(
+              "tools/slicing-fixtures/fixtures/single-pla/cube.stl",
+              path.join(root, "geometry.stl"),
+            ),
+            cp(
+              "tools/catalog-profiles/resolved/machine.json",
+              path.join(profiles, "settings", "0.json"),
+            ),
+            cp(
+              "tools/catalog-profiles/resolved/filament-pla.json",
+              path.join(profiles, "filaments", "0.json"),
+            ),
+          ]);
+          const processPreset = JSON.parse(
+            await readFile("tools/catalog-profiles/resolved/process.json", "utf8"),
+          );
+          Object.assign(
+            processPreset,
+            {
+              brim_width: "0",
+              enable_support: "0",
+              layer_height: "0.2",
+              sparse_infill_density: "10%",
+            },
+            {
+              elefant_foot_compensation: "0",
+              xy_contour_compensation: "0",
+              xy_hole_compensation: "0",
+            },
+          );
+          await Promise.all([
+            writeFile(path.join(profiles, "settings", "1.json"), JSON.stringify(processPreset)),
+            writeFile(path.join(root, "copies"), "1\n"),
+            writeFile(path.join(root, "artifact-format"), "gcode\n"),
+            writeFile(path.join(root, "timeout-seconds"), "120\n"),
+          ]);
+          NODE
+          docker exec "$container" /bin/sh -ec '
+            /usr/bin/setpriv --reuid=10001 --regid=10001 --clear-groups \
+              --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+              /bin/rm -rf /var/run/taven-orca/request-identity
+            /usr/bin/setpriv --reuid=10001 --regid=10001 --clear-groups \
+              --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+              /bin/mkdir -m 770 /var/run/taven-orca/request-identity
+          '
+          (cd "$fixture_root" && tar -cf - *) | docker exec -i "$container" /bin/tar --no-same-owner --no-same-permissions -m -C /var/run/taven-orca/request-identity -xf -
+          docker exec "$container" /bin/sh -ec '
+            request=/var/run/taven-orca/request-identity
+            /usr/bin/setpriv --reuid=10001 --regid=10001 --clear-groups \
+              --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+              /bin/mkdir -m 770 -p "$request/output" "$request/tmp/data"
+            /usr/bin/setpriv --reuid=10001 --regid=10001 --clear-groups \
+              --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+              /bin/chmod 770 "$request/tmp"
+            touch "$request/ready"
+          '
+          docker exec "$container" /bin/sh -ec '
+            request=/var/run/taven-orca/request-identity
+            attempts=0
+            while [ ! -f "$request/complete" ] && [ ! -f "$request/failed" ] && [ "$attempts" -lt 1250 ]; do
+              sleep 0.1
+              attempts=$((attempts + 1))
+            done
+            if [ ! -f "$request/complete" ]; then
+              printf "Broker fixture did not complete after %s attempts\n" "$attempts" >&2
+              find "$request" -maxdepth 2 -printf "%M %u:%g %p\n" >&2
+              for diagnostic in failure-code diagnostics engine-return-code; do
+                if [ -f "$request/$diagnostic" ]; then
+                  printf "\n--- %s ---\n" "$diagnostic" >&2
+                  cat "$request/$diagnostic" >&2
+                fi
+              done
+              exit 1
+            fi
+          '
+          docker exec "$container" /bin/tar -C /var/run/taven-orca/request-identity/output -cf - plate_1.gcode | tar -C "$fixture_root" -xf -
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFile } from "node:fs/promises";
+          import path from "node:path";
+
+          const source = await readFile(path.join(process.env.FIXTURE_ROOT, "plate_1.gcode"), "utf8");
+          const normalized = source.replace(
+            /^(; generated by OrcaSlicer \S+ on )\d{4}-\d{2}-\d{2} at \d{2}:\d{2}:\d{2}$/mu,
+            "$1<timestamp>",
+          );
+          const actual = createHash("sha256").update(normalized).digest("hex");
+          const expected = JSON.parse(
+            await readFile("tools/slicing-fixtures/expected/worker-reference-gcode.json", "utf8"),
+          ).outputs[0].normalizedSha256;
+          if (actual !== expected) {
+            throw new Error(`Sandboxed fixture hash drifted: expected ${expected}, received ${actual}`);
+          }
+          NODE

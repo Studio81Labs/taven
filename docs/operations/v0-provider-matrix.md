@@ -91,8 +91,10 @@ selected.
       outside the default Compose profile, allow only bounded job input/output
       mounts, and prove it exits after draining work. Keep the BullMQ wrapper on
       the private network for Redis and object storage, but run each Orca child
-      in a network namespace with no interfaces or outbound access. Prove the
-      isolation without mounting the host Docker socket.
+      in a distinct network namespace with no outbound access. Interface
+      presence is not the criterion because namespaces naturally include
+      loopback and kernel-created tunnel devices; prove isolation
+      behaviorally without mounting the host Docker socket.
 
 ### PostgreSQL, Redis, object storage, and backups
 

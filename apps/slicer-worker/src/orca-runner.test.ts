@@ -43,6 +43,17 @@ async function makeRootCleanupFixtureAccessible(
 }
 
 describe("Orca runner lifecycle", () => {
+  it("creates a network namespace before Bubblewrap", async () => {
+    const runner = await readFile(path.resolve("orca-runner.sh"), "utf8");
+    const unshare = runner.indexOf("/usr/bin/unshare --net --");
+    const bubblewrap = runner.indexOf("/usr/bin/bwrap");
+
+    expect(unshare).toBeGreaterThanOrEqual(0);
+    expect(bubblewrap).toBeGreaterThanOrEqual(0);
+    expect(unshare).toBeLessThan(bubblewrap);
+    expect(runner).not.toContain("--unshare-net");
+  });
+
   it("recovers restart markers and reaps cancelled or expired requests", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "taven-runner-lifecycle-"));
     cleanup.push(root);
