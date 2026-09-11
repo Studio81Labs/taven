@@ -32,6 +32,12 @@ const quoteCapabilityKey =
 const localAutomaticQuoteSubjectHash = createHmac("sha256", quoteCapabilityKey)
   .update("anonymous-automatic-quote\0" + "127.0.0.1")
   .digest("hex");
+const localAutomaticQuoteEstimateSubjectHash = createHmac(
+  "sha256",
+  quoteCapabilityKey,
+)
+  .update("anonymous-automatic-quote-estimate\0" + "127.0.0.1")
+  .digest("hex");
 process.env.TAVEN_QUOTE_CAPABILITY_KEY ??= quoteCapabilityKey;
 process.env.TAVEN_DELIVERY_ENDPOINTS_JSON ??= JSON.stringify([
   {
@@ -115,8 +121,119 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
 
   afterEach(async () => {
     await prisma.anonymousQuoteLimit.deleteMany({
-      where: { subjectHash: localAutomaticQuoteSubjectHash },
+      where: {
+        subjectHash: {
+          in: [
+            localAutomaticQuoteSubjectHash,
+            `automatic-quote-estimate:client:${localAutomaticQuoteEstimateSubjectHash}`,
+            "automatic-quote-estimate:global",
+          ],
+        },
+      },
     });
+  });
+
+  it("returns an ephemeral local-geometry estimate without creating quote work", async () => {
+    const before = await Promise.all([
+      prisma.quoteSession.count(),
+      prisma.order.count(),
+      prisma.job.count(),
+      prisma.businessEvent.count(),
+    ]);
+    const result = await api("automatic-quote-estimates", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        volumeMm3: 8_000,
+        dimensionsMm: { width: 20, depth: 20, height: 20 },
+        material: "PLA",
+        quality: "STANDARD",
+        infillPreset: "STANDARD",
+        quantity: 1,
+      }),
+    });
+
+    expect(result.response.status).toBe(200);
+    expect(result.body).toMatchObject({
+      price: {
+        kind: "ROUGH_ESTIMATE",
+        currency: "CZK",
+        totalMinor: expect.any(Number),
+      },
+      priceListRevision: "automatic-v0-czk",
+      assumptions: {
+        material: "PLA",
+        quality: "STANDARD",
+        infillPreset: "STANDARD",
+        quantity: 1,
+        delivery: "NOT_FINALIZED",
+      },
+    });
+    expect(
+      await Promise.all([
+        prisma.quoteSession.count(),
+        prisma.order.count(),
+        prisma.job.count(),
+        prisma.businessEvent.count(),
+      ]),
+    ).toEqual(before);
+    await expect(
+      prisma.anonymousQuoteLimit.findUniqueOrThrow({
+        where: {
+          subjectHash: `automatic-quote-estimate:client:${localAutomaticQuoteEstimateSubjectHash}`,
+        },
+        select: { issuedCount: true },
+      }),
+    ).resolves.toEqual({ issuedCount: 1 });
+  });
+
+  it("rejects unsafe local geometry and keeps estimate publication fail closed", async () => {
+    const invalid = await api("automatic-quote-estimates", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        volumeMm3: 9_000,
+        dimensionsMm: { width: 20, depth: 20, height: 20 },
+        material: "PLA",
+        quality: "STANDARD",
+        infillPreset: "STANDARD",
+        quantity: 1,
+        clientPrice: 1,
+      }),
+    });
+    expect(invalid.response.status).toBe(400);
+
+    const configured = process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED;
+    process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = "false";
+    try {
+      const disabled = await api("automatic-quote-estimates", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          volumeMm3: 8_000,
+          dimensionsMm: { width: 20, depth: 20, height: 20 },
+          material: "PLA",
+          quality: "STANDARD",
+          infillPreset: "STANDARD",
+          quantity: 1,
+        }),
+      });
+      expect(disabled.response.status).toBe(503);
+      expect(disabled.body).toMatchObject({ code: "LAUNCH_APPROVAL_REQUIRED" });
+      await expect(
+        prisma.anonymousQuoteLimit.findUnique({
+          where: {
+            subjectHash: `automatic-quote-estimate:client:${localAutomaticQuoteEstimateSubjectHash}`,
+          },
+        }),
+      ).resolves.toBeNull();
+    } finally {
+      if (configured === undefined) {
+        delete process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED;
+      } else {
+        process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = configured;
+      }
+    }
   });
 
   it("fails closed before preparing a binding quote", async () => {

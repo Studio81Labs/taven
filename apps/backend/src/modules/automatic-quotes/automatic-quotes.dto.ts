@@ -301,6 +301,71 @@ export class AutomaticQuotePriceDto {
   components!: AutomaticQuotePriceComponentDto[];
 }
 
+export class AutomaticQuoteEstimateDimensionsDto {
+  @ApiProperty({ type: Number, minimum: Number.MIN_VALUE, maximum: 1_000_000 })
+  width!: number;
+
+  @ApiProperty({ type: Number, minimum: Number.MIN_VALUE, maximum: 1_000_000 })
+  depth!: number;
+
+  @ApiProperty({ type: Number, minimum: Number.MIN_VALUE, maximum: 1_000_000 })
+  height!: number;
+}
+
+export class CreateAutomaticQuoteEstimateDto {
+  @ApiProperty({ type: Number, minimum: Number.MIN_VALUE, maximum: 1e18 })
+  volumeMm3!: number;
+
+  @ApiProperty({ type: AutomaticQuoteEstimateDimensionsDto })
+  dimensionsMm!: AutomaticQuoteEstimateDimensionsDto;
+
+  @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
+  material!: "PLA" | "PETG";
+
+  @ApiProperty({ type: String, enum: ["DRAFT", "STANDARD", "FINE"] })
+  quality!: "DRAFT" | "STANDARD" | "FINE";
+
+  @ApiProperty({ type: String, enum: ["DECORATIVE", "STANDARD", "STRONG"] })
+  infillPreset!: "DECORATIVE" | "STANDARD" | "STRONG";
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 1_000 })
+  quantity!: number;
+}
+
+export class AutomaticQuoteEstimateAssumptionsDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  printConfigRevisionId!: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  referenceProfileId!: string;
+
+  @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
+  material!: "PLA" | "PETG";
+
+  @ApiProperty({ type: String, enum: ["DRAFT", "STANDARD", "FINE"] })
+  quality!: "DRAFT" | "STANDARD" | "FINE";
+
+  @ApiProperty({ type: String, enum: ["DECORATIVE", "STANDARD", "STRONG"] })
+  infillPreset!: "DECORATIVE" | "STANDARD" | "STRONG";
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 1_000 })
+  quantity!: number;
+
+  @ApiProperty({ type: String })
+  delivery!: "NOT_FINALIZED";
+}
+
+export class AutomaticQuoteEstimateDto {
+  @ApiProperty({ type: AutomaticQuotePriceDto })
+  price!: AutomaticQuotePriceDto;
+
+  @ApiProperty({ type: String })
+  priceListRevision!: string;
+
+  @ApiProperty({ type: AutomaticQuoteEstimateAssumptionsDto })
+  assumptions!: AutomaticQuoteEstimateAssumptionsDto;
+}
+
 export class AutomaticQuoteExpressDto {
   @ApiProperty({ type: Boolean })
   requested!: boolean;

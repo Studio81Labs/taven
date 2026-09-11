@@ -18,20 +18,22 @@ type AnonymousQuoteLimitRow = {
 export async function reserveAnonymousQuote(
   transaction: Transaction,
   subjectHash: string,
+  namespace?: string,
 ): Promise<void> {
+  const subjects = anonymousQuoteLimitSubjects(subjectHash, namespace);
   const observedAt = await databaseNow(transaction);
   const windowExpiresAt = new Date(
     observedAt.getTime() + ANONYMOUS_QUOTE_WINDOW_MILLISECONDS,
   );
   const global = await lockAnonymousQuoteLimit(
     transaction,
-    ANONYMOUS_QUOTE_GLOBAL_SUBJECT,
+    subjects.global,
     observedAt,
     windowExpiresAt,
   );
   const subject = await lockAnonymousQuoteLimit(
     transaction,
-    subjectHash,
+    subjects.client,
     observedAt,
     windowExpiresAt,
   );
@@ -57,11 +59,11 @@ export async function reserveAnonymousQuote(
     );
   }
   await transaction.anonymousQuoteLimit.update({
-    where: { subjectHash: ANONYMOUS_QUOTE_GLOBAL_SUBJECT },
+    where: { subjectHash: subjects.global },
     data: { issuedCount: { increment: 1 } },
   });
   await transaction.anonymousQuoteLimit.update({
-    where: { subjectHash },
+    where: { subjectHash: subjects.client },
     data: { issuedCount: { increment: 1 } },
   });
   await transaction.$executeRaw`
@@ -69,6 +71,7 @@ export async function reserveAnonymousQuote(
       SELECT subject_hash
       FROM anonymous_quote_limits
       WHERE subject_hash <> ${ANONYMOUS_QUOTE_GLOBAL_SUBJECT}
+        AND subject_hash NOT LIKE '%:global'
         AND window_expires_at <= ${observedAt}
       ORDER BY window_expires_at, subject_hash
       FOR UPDATE SKIP LOCKED
@@ -78,6 +81,22 @@ export async function reserveAnonymousQuote(
     USING expired
     WHERE limits.subject_hash = expired.subject_hash
   `;
+}
+
+function anonymousQuoteLimitSubjects(
+  subjectHash: string,
+  namespace: string | undefined,
+): Readonly<{ global: string; client: string }> {
+  if (!namespace) {
+    return { global: ANONYMOUS_QUOTE_GLOBAL_SUBJECT, client: subjectHash };
+  }
+  if (!/^[a-z0-9-]{1,64}$/.test(namespace)) {
+    throw new Error("Anonymous quote limit namespace is invalid");
+  }
+  return {
+    global: `${namespace}:global`,
+    client: `${namespace}:client:${subjectHash}`,
+  };
 }
 
 async function lockAnonymousQuoteLimit(

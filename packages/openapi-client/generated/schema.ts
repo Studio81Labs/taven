@@ -1205,6 +1205,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/automatic-quote-estimates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Calculate an immediate non-binding estimate from local geometry only */
+        post: operations["AutomaticQuoteEstimatesController_estimate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/automatic-quote-sessions": {
         parameters: {
             query?: never;
@@ -1779,6 +1796,30 @@ export interface components {
             label: string;
             providerEndpointId: string;
         };
+        AutomaticQuoteEstimateAssumptionsDto: {
+            delivery: string;
+            /** @enum {string} */
+            infillPreset: "DECORATIVE" | "STANDARD" | "STRONG";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
+            quantity: number;
+            /** Format: uuid */
+            referenceProfileId: string;
+        };
+        AutomaticQuoteEstimateDimensionsDto: {
+            depth: number;
+            height: number;
+            width: number;
+        };
+        AutomaticQuoteEstimateDto: {
+            assumptions: components["schemas"]["AutomaticQuoteEstimateAssumptionsDto"];
+            price: components["schemas"]["AutomaticQuotePriceDto"];
+            priceListRevision: string;
+        };
         AutomaticQuoteExpressDto: {
             eligible: boolean;
             reasons: string[];
@@ -2117,6 +2158,17 @@ export interface components {
             knownOrders: number;
             provisionalOrders: number;
             value: components["schemas"]["MetricMoneyDto"] | null;
+        };
+        CreateAutomaticQuoteEstimateDto: {
+            dimensionsMm: components["schemas"]["AutomaticQuoteEstimateDimensionsDto"];
+            /** @enum {string} */
+            infillPreset: "DECORATIVE" | "STANDARD" | "STRONG";
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
+            quantity: number;
+            volumeMm3: number;
         };
         CreateAutomaticQuoteSessionDto: {
             attribution?: components["schemas"]["AttributionDto"];
@@ -5981,6 +6033,50 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["OperatorQuoteRequestPageDto"];
                 };
+            };
+        };
+    };
+    AutomaticQuoteEstimatesController_estimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAutomaticQuoteEstimateDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomaticQuoteEstimateDto"];
+                };
+            };
+            /** @description Geometry or public monetary result is outside safe bounds */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Anonymous estimate limit is exhausted */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Estimate publication awaits launch approval or its default configuration is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
