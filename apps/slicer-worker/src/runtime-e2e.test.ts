@@ -64,6 +64,7 @@ const composeEnvironment = {
   TAVEN_S3_BUCKET: "taven",
   TAVEN_S3_ACCESS_KEY_ID: "taven",
   TAVEN_S3_SECRET_ACCESS_KEY: "taven-local-only",
+  TAVEN_S3_REGION: "us-east-1",
 };
 const composeFiles = [
   "compose",
@@ -380,6 +381,11 @@ async function monitorRequestWorkspace(): Promise<{
 
 async function assertBrokerSecurity(): Promise<void> {
   const services = ["slicer-worker", "orca-runner", "slicer-volume-init"];
+  const expectedCapabilities = {
+    "slicer-worker": [],
+    "orca-runner": ["CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_ADMIN"],
+    "slicer-volume-init": ["CAP_CHOWN"],
+  } as const;
   let runner: string | undefined;
   for (const service of services) {
     const container = await composeOutput(["ps", "-a", "-q", service]);
@@ -405,9 +411,7 @@ async function assertBrokerSecurity(): Promise<void> {
     };
     const caps = inspection.HostConfig.CapAdd ?? [];
     expect(inspection.HostConfig.CapDrop ?? []).toContain("ALL");
-    expect(caps ?? []).not.toContain("CAP_DAC_OVERRIDE");
-    expect(caps ?? []).not.toContain("CAP_DAC_READ_SEARCH");
-    expect(caps ?? []).not.toContain("CAP_FOWNER");
+    expect([...caps].sort()).toEqual([...expectedCapabilities[service]].sort());
     expect(
       inspection.Mounts.some(
         ({ Destination, Source }) =>
@@ -419,12 +423,6 @@ async function assertBrokerSecurity(): Promise<void> {
       expect(inspection.HostConfig.Privileged).toBe(false);
       expect(inspection.HostConfig.NetworkMode).toBe("none");
       expect(inspection.HostConfig.ReadonlyRootfs).toBe(true);
-      expect([...caps].sort()).toEqual([
-        "CAP_SETGID",
-        "CAP_SETPCAP",
-        "CAP_SETUID",
-        "CAP_SYS_ADMIN",
-      ]);
       expect(inspection.Config.User).toBe("0:10001");
       expect(inspection.Image).toBe(
         await execute("docker", [
