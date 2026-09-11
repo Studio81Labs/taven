@@ -328,15 +328,31 @@ async function loadInputs(): Promise<RuntimeInputs> {
   };
 }
 
-async function monitorRequestWorkspace(): Promise<string[]> {
+async function monitorRequestWorkspace(): Promise<{
+  modes: string[];
+  childSecurity: string[];
+}> {
   const command = [
     "attempt=0;",
     'while [ "$attempt" -lt 4000 ]; do',
     "for request in /var/run/taven-orca/request-*; do",
     '[ -d "$request" ] || continue;',
     '[ -d "$request/output" ] && [ -d "$request/tmp" ] && [ -d "$request/tmp/data" ] && [ -d "$request/profiles" ] && [ -d "$request/profiles/settings" ] && [ -d "$request/profiles/filaments" ] || continue;',
-    'stat -c \'%u:%g:%a\' "$request" "$request/output" "$request/tmp" "$request/tmp/data" "$request/profiles" "$request/profiles/settings" "$request/profiles/filaments";',
+    'modes=$(stat -c \'%u:%g:%a\' "$request" "$request/output" "$request/tmp" "$request/tmp/data" "$request/profiles" "$request/profiles/settings" "$request/profiles/filaments");',
+    "for status in /proc/[0-9]*/status; do",
+    '[ -r "$status" ] || continue;',
+    "command=$(tr '\\000' ' ' < \"${status%/status}/cmdline\" 2>/dev/null || true);",
+    'case "$command" in *"/opt/orca/AppRun"*)',
+    'for child_status in "${status%/status}"/root/proc/[0-9]*/status; do',
+    '[ -r "$child_status" ] || continue;',
+    "child_uid=$(awk '/^Uid:/{print $2}' \"$child_status\");",
+    '[ "$child_uid" = "10001" ] || continue;',
+    'printf "%s\\n" "$modes";',
+    'printf "%s\\n" "$child_uid";',
+    'for name in CapInh CapPrm CapEff CapBnd CapAmb; do awk -v name="$name" \'$1 == name ":" { print $2 }\' "$child_status"; done;',
     "exit 0;",
+    "done;; esac;",
+    "done;",
     "done;",
     "attempt=$((attempt + 1));",
     "sleep 0.01;",
@@ -350,13 +366,16 @@ async function monitorRequestWorkspace(): Promise<string[]> {
     "-ec",
     command,
   ]);
-  const modes = result.split("\n").filter(Boolean);
-  if (modes.length !== 7) {
+  const observation = result.split("\n").filter(Boolean);
+  if (observation.length !== 13) {
     throw new Error(
-      "The real Orca runner exposed an incomplete request workspace",
+      "The real Orca runner did not expose a complete unprivileged child",
     );
   }
-  return modes;
+  return {
+    modes: observation.slice(0, 7),
+    childSecurity: observation.slice(7),
+  };
 }
 
 async function assertBrokerSecurity(): Promise<void> {
@@ -430,51 +449,6 @@ async function assertBrokerSecurity(): Promise<void> {
       "/var/run/taven-orca",
     ]),
   ).toBe("10001:10001:770");
-  const childSecurity = await composeOutput([
-    "exec",
-    "-T",
-    "orca-runner",
-    "/usr/bin/bwrap",
-    "--unshare-pid",
-    "--unshare-ipc",
-    "--unshare-uts",
-    "--unshare-cgroup-try",
-    "--die-with-parent",
-    "--new-session",
-    "--ro-bind",
-    "/",
-    "/",
-    "--tmpfs",
-    "/run/taven-orca",
-    "--tmpfs",
-    "/tmp",
-    "--proc",
-    "/proc",
-    "--dev",
-    "/dev",
-    "--chdir",
-    "/tmp",
-    "--clearenv",
-    "/usr/bin/setpriv",
-    "--reuid=10001",
-    "--regid=10001",
-    "--clear-groups",
-    "--bounding-set=-all",
-    "--inh-caps=-all",
-    "--ambient-caps=-all",
-    "--no-new-privs",
-    "/bin/sh",
-    "-ec",
-    'id -u; for name in CapInh CapPrm CapEff CapBnd CapAmb; do awk -v name="$name" \'$1 == name ":" { print $2 }\' /proc/self/status; done',
-  ]);
-  expect(childSecurity.split("\n")).toEqual([
-    "10001",
-    "0000000000000000",
-    "0000000000000000",
-    "0000000000000000",
-    "0000000000000000",
-    "0000000000000000",
-  ]);
 }
 
 async function runnerDiagnostics(): Promise<string> {
@@ -591,7 +565,7 @@ async function runSequence(captureWorkspace: boolean) {
       `Reference slice failed with ${referenceResult.outcome.code}: ${await runnerDiagnostics()}`,
     );
   }
-  const workspaceModes = await workspaceMonitor;
+  const workspaceObservation = await workspaceMonitor;
   const referenceOutcome = success(referenceResult);
   expect(referenceResult.engine.name).toBe(runtimeLock.engine.name);
   expect(referenceOutcome.artifact.objectKey).toBe(
@@ -691,7 +665,8 @@ async function runSequence(captureWorkspace: boolean) {
       productionArtifact,
       productionOutcome.metrics.plateCount,
     ),
-    workspaceModes,
+    workspaceModes: workspaceObservation?.modes,
+    childSecurity: workspaceObservation?.childSecurity,
     outputKeys: [
       referenceOutcome.artifact.objectKey,
       ...occupancySliceTargets.map(
@@ -932,6 +907,14 @@ describe.skipIf(!integrationEnabled)("pinned Orca runtime end to end", () => {
       await assertBrokerSecurity();
       const first = await runSequence(true);
       expect(first.workspaceModes).toEqual(Array(7).fill("10001:10001:770"));
+      expect(first.childSecurity).toEqual([
+        "10001",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+      ]);
       await Promise.all(first.outputKeys.map((key) => store.delete(key)));
       const second = await runSequence(false);
       expect({
