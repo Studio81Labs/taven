@@ -354,6 +354,7 @@ async function monitorRequestWorkspace(): Promise<{
     'printf "%s\\n" "$modes";',
     'printf "%s\\n" "$child_uid";',
     'for name in CapInh CapPrm CapEff CapBnd CapAmb; do awk -v name="$name" \'$1 == name ":" { print $2 }\' "$child_status"; done;',
+    "awk '/^NoNewPrivs:/{print $2}' \"$child_status\";",
     'printf "%s\\n" "mnt:isolated" "pid:isolated" "ipc:isolated" "uts:isolated";',
     "exit 0;",
     "done;; esac;",
@@ -372,19 +373,32 @@ async function monitorRequestWorkspace(): Promise<{
     command,
   ]);
   const observation = result.split("\n").filter(Boolean);
-  if (observation.length !== 17) {
+  if (observation.length !== 18) {
     throw new Error(
       "The real Orca runner did not expose a complete unprivileged child",
     );
   }
   return {
     modes: observation.slice(0, 7),
-    childSecurity: observation.slice(7, 13),
-    sandboxIsolation: observation.slice(13),
+    childSecurity: observation.slice(7, 14),
+    sandboxIsolation: observation.slice(14),
   };
 }
 
 async function assertBrokerSecurity(): Promise<void> {
+  const rendered = JSON.parse(
+    await composeOutput(["config", "--format", "json"]),
+  ) as {
+    services: Record<string, { profiles?: string[]; volumes?: unknown[] }>;
+  };
+  for (const [service, definition] of Object.entries(rendered.services)) {
+    if (definition.profiles?.includes("worker")) {
+      expect(
+        JSON.stringify(definition.volumes ?? []),
+        `${service} volumes`,
+      ).not.toContain("docker.sock");
+    }
+  }
   const services = ["slicer-worker", "orca-runner", "slicer-volume-init"];
   const expectedCapabilities = {
     "slicer-worker": [],
@@ -918,6 +932,7 @@ describe.skipIf(!integrationEnabled)("pinned Orca runtime end to end", () => {
         "0000000000000000",
         "0000000000000000",
         "0000000000000000",
+        "1",
       ]);
       expect(first.sandboxIsolation).toEqual([
         "mnt:isolated",
