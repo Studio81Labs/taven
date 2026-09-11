@@ -102,7 +102,7 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    image: quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     ports:
       - "127.0.0.1:${TAVEN_MINIO_PORT:-9010}:9000"
