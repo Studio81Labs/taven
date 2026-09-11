@@ -32,6 +32,7 @@ const loading = ref(false);
 const selecting = ref(false);
 const errorMessage = ref<string>();
 let selectionGeneration = 0;
+let widgetLoading: Promise<PacketaWidget> | undefined;
 
 onBeforeUnmount(() => {
   selectionGeneration += 1;
@@ -103,19 +104,11 @@ async function commitSelection(
 
 async function loadWidget(): Promise<PacketaWidget> {
   if (window.Packeta?.Widget) return window.Packeta.Widget;
-  await new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(
-      'script[data-taven-packeta-widget="v6"]',
-    );
-    if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener(
-        "error",
-        () => reject(new Error("widget load failed")),
-        { once: true },
-      );
-      return;
-    }
+  if (widgetLoading) return widgetLoading;
+  document
+    .querySelector<HTMLScriptElement>('script[data-taven-packeta-widget="v6"]')
+    ?.remove();
+  widgetLoading = new Promise<void>((resolve, reject) => {
     const script = document.createElement("script");
     script.src = "https://widget.packeta.com/v6/www/js/library.js";
     script.async = true;
@@ -123,13 +116,22 @@ async function loadWidget(): Promise<PacketaWidget> {
     script.addEventListener("load", () => resolve(), { once: true });
     script.addEventListener(
       "error",
-      () => reject(new Error("widget load failed")),
+      () => {
+        script.remove();
+        reject(new Error("widget load failed"));
+      },
       { once: true },
     );
     document.head.append(script);
-  });
-  if (!window.Packeta?.Widget) throw new Error("widget unavailable");
-  return window.Packeta.Widget;
+  })
+    .then(() => {
+      if (!window.Packeta?.Widget) throw new Error("widget unavailable");
+      return window.Packeta.Widget;
+    })
+    .finally(() => {
+      widgetLoading = undefined;
+    });
+  return widgetLoading;
 }
 </script>
 

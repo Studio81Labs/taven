@@ -79,6 +79,7 @@ import {
   DELIVERY_CAPABILITY,
   type DeliveryCapabilityPort,
   type DeliveryCapabilityOption,
+  type DeliverySelectorProjection,
 } from "./delivery-capability.port";
 import {
   nextReferenceOccupancyProbe,
@@ -203,6 +204,22 @@ type ReferenceOccupancyResolution =
   | { kind: "resolved"; partsPerPlate: number }
   | { kind: "pending"; partsPerPlate: number }
   | { kind: "failed" };
+
+export function requiresShipmentHandoff(input: {
+  readyItems: boolean;
+  checkoutReady: boolean;
+  deliveryOptions: readonly unknown[];
+  deliverySelector: DeliverySelectorProjection;
+  handoffReasons: readonly string[];
+}): boolean {
+  return (
+    input.readyItems &&
+    !input.checkoutReady &&
+    input.deliveryOptions.length === 0 &&
+    input.deliverySelector.mode === "CONFIGURED" &&
+    !input.handoffReasons.includes("SHIPMENT_INELIGIBLE")
+  );
+}
 
 @Injectable()
 export class AutomaticQuotesService {
@@ -5222,11 +5239,13 @@ export class AutomaticQuotesService {
       order.status === OrderStatus.QUOTED &&
       Boolean(active && currentPlan && currentReservation);
     if (
-      readyItems &&
-      !checkoutReady &&
-      deliveryOptions.length === 0 &&
-      !deliverySelector.available &&
-      !handoffReasons.includes("SHIPMENT_INELIGIBLE")
+      requiresShipmentHandoff({
+        readyItems,
+        checkoutReady,
+        deliveryOptions,
+        deliverySelector,
+        handoffReasons,
+      })
     ) {
       handoffReasons.push("SHIPMENT_INELIGIBLE");
     }

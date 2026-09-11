@@ -556,12 +556,12 @@ function readCommittedDeliveryCapability(
   if (
     !nonBlankText(input.providerEndpointId) ||
     !nonBlankText(input.endpointType) ||
-    !nonBlankText(address?.label) ||
-    !nonBlankText(address?.country) ||
     supportedCategoryIds.length === 0 ||
     (isPacketa &&
       (input.endpointType !== "pickup_point" ||
         capability?.version !== 1 ||
+        !nonBlankText(address?.label) ||
+        !nonBlankText(address?.country) ||
         supportedCategoryIds.some(
           (category) => category !== "pickup" && category !== "zbox",
         )))

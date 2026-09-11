@@ -6,6 +6,7 @@ import {
   AutomaticQuotesService,
   conservativePartsPerPlate,
   decimalToInteger,
+  requiresShipmentHandoff,
 } from "./automatic-quotes.service";
 
 describe("AutomaticQuotesService", () => {
@@ -69,6 +70,37 @@ describe("AutomaticQuotesService", () => {
         },
       ]),
     ).resolves.toEqual([]);
+  });
+
+  it("hands off empty configured delivery choices but keeps provider discovery available", () => {
+    const base = {
+      readyItems: true,
+      checkoutReady: false,
+      deliveryOptions: [],
+      handoffReasons: [],
+    };
+
+    expect(
+      requiresShipmentHandoff({
+        ...base,
+        deliverySelector: {
+          mode: "CONFIGURED",
+          available: true,
+          allowedEndpointTypes: ["pickup_point"],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      requiresShipmentHandoff({
+        ...base,
+        deliverySelector: {
+          mode: "PACKETA",
+          available: true,
+          allowedEndpointTypes: ["pickup_point"],
+          widget: { accountId: "widget-key", options: {} },
+        },
+      }),
+    ).toBe(false);
   });
 
   it.each(["P2002", "23505"])(
