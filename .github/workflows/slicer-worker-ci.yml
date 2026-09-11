@@ -82,3 +82,14 @@ jobs:
           test -n "$container"
           docker inspect "$container" --format 'AppArmorProfile: {{.AppArmorProfile}}'
           test "$(docker inspect "$container" --format '{{.AppArmorProfile}}')" = "unconfined"
+          docker exec "$container" /usr/bin/bwrap \
+            --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try \
+            --die-with-parent --new-session \
+            --ro-bind / / \
+            --tmpfs /run/taven-orca \
+            --tmpfs /tmp \
+            --proc /proc \
+            --dev /dev \
+            --chdir /tmp \
+            --clearenv \
+            /usr/bin/true
