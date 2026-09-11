@@ -408,12 +408,17 @@ export class AutomaticQuotesService {
     const volumeCubicMicrometers = cubicMillimetersToCubicMicrometers(
       input.volumeMm3,
     );
+    const referencePartsPerPlate = conservativePartsPerPlate(
+      localGeometry,
+      selectedWithCapacity,
+      input.quantity,
+    );
     const estimated = roughSliceMetrics(
       {
         material: input.material,
         infillPreset: input.infillPreset,
         quantity: input.quantity,
-        referencePartsPerPlate: input.quantity,
+        referencePartsPerPlate,
       },
       volumeCubicMicrometers,
       parameters,
@@ -426,7 +431,7 @@ export class AutomaticQuotesService {
           referenceProfileId: selectedWithCapacity.referenceProfileId,
           material: input.material,
           quantity: input.quantity,
-          referencePartsPerPlate: input.quantity,
+          referencePartsPerPlate,
           primary: estimated.primary,
           tail: estimated.tail,
           ...localGeometry,
@@ -4863,7 +4868,13 @@ export class AutomaticQuotesService {
     const configurationCapabilities =
       await this.configurationCapabilities(client);
     const configurationOptions = configurationCapabilities.map(
-      ({ referenceProfileId: _referenceProfileId, ...option }) => option,
+      ({
+        referenceProfileId: _referenceProfileId,
+        buildVolumeXMicrometers: _buildVolumeXMicrometers,
+        buildVolumeYMicrometers: _buildVolumeYMicrometers,
+        buildVolumeZMicrometers: _buildVolumeZMicrometers,
+        ...option
+      }) => option,
     );
     const itemDtos = await this.mapSnapshotReads(
       client,
@@ -5268,6 +5279,9 @@ export class AutomaticQuotesService {
       color: row.color,
       quality: row.quality,
       infillPreset: infillPreset(row.infillPercent),
+      buildVolumeXMicrometers: row.buildVolumeXMicrometers,
+      buildVolumeYMicrometers: row.buildVolumeYMicrometers,
+      buildVolumeZMicrometers: row.buildVolumeZMicrometers,
     }));
   }
 
@@ -6586,6 +6600,58 @@ function geometryFitsCapability(
     capability.buildVolumeZMicrometers,
   ].sort(compare);
   return bounds.every((bound, index) => bound <= buildVolume[index]!);
+}
+
+export function conservativePartsPerPlate(
+  geometry: {
+    boundsXMicrometers: bigint;
+    boundsYMicrometers: bigint;
+    boundsZMicrometers: bigint;
+  },
+  capability: {
+    buildVolumeXMicrometers: bigint;
+    buildVolumeYMicrometers: bigint;
+    buildVolumeZMicrometers: bigint;
+  },
+  maximumParts: number,
+): number {
+  const dimensions = [
+    geometry.boundsXMicrometers,
+    geometry.boundsYMicrometers,
+    geometry.boundsZMicrometers,
+  ] as const;
+  const buildVolume = [
+    capability.buildVolumeXMicrometers,
+    capability.buildVolumeYMicrometers,
+    capability.buildVolumeZMicrometers,
+  ] as const;
+  const maximum = BigInt(maximumParts);
+  let conservative: number | undefined;
+  for (const [x, y, z] of [
+    [dimensions[0], dimensions[1], dimensions[2]],
+    [dimensions[0], dimensions[2], dimensions[1]],
+    [dimensions[1], dimensions[0], dimensions[2]],
+    [dimensions[1], dimensions[2], dimensions[0]],
+    [dimensions[2], dimensions[0], dimensions[1]],
+    [dimensions[2], dimensions[1], dimensions[0]],
+  ]) {
+    if (x > buildVolume[0] || y > buildVolume[1] || z > buildVolume[2]) {
+      continue;
+    }
+    // A plate can tile across its two planar axes; copies must not be stacked
+    // through its build height.
+    const count = (buildVolume[0] / x) * (buildVolume[1] / y);
+    conservative = Math.min(
+      conservative ?? maximumParts,
+      Number(count > maximum ? maximum : count),
+    );
+  }
+  if (!conservative) {
+    throw new BadRequestException(
+      "Estimate geometry exceeds active build volumes",
+    );
+  }
+  return conservative;
 }
 
 function quoteCapabilityKeyRing(): {

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
   AutomaticQuotesService,
+  conservativePartsPerPlate,
   decimalToInteger,
 } from "./automatic-quotes.service";
 
@@ -18,6 +19,24 @@ describe("AutomaticQuotesService", () => {
     expect(() => decimalToInteger(0.0004, 3, "dimension")).toThrow(
       "Estimate dimension must remain positive",
     );
+  });
+
+  it("counts only planar copies when estimating plates", () => {
+    expect(
+      conservativePartsPerPlate(
+        {
+          boundsXMicrometers: 200_000n,
+          boundsYMicrometers: 200_000n,
+          boundsZMicrometers: 1_000n,
+        },
+        {
+          buildVolumeXMicrometers: 220_000n,
+          buildVolumeYMicrometers: 220_000n,
+          buildVolumeZMicrometers: 220_000n,
+        },
+        100,
+      ),
+    ).toBe(1);
   });
 
   it("filters configured delivery options when pricing is unavailable", async () => {
