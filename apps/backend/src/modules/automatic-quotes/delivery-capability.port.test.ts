@@ -177,6 +177,26 @@ describe("PacketaDeliveryCapabilityAdapter", () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 
+  it("requires an explicit provider validation success value", async () => {
+    const adapter = new PacketaDeliveryCapabilityAdapter(
+      { accountId: "public-widget-key", widgetOptions: {} },
+      (async (url) => {
+        if (String(url).includes("/branch.json"))
+          return Response.json([packetaPickupPoint]);
+        if (String(url).includes("/box.json")) return Response.json([]);
+        return Response.json({ isValid: "false" });
+      }) as typeof fetch,
+    );
+
+    await expect(
+      adapter.validateSelection({
+        providerEndpointId: "pickup-1",
+        endpointType: "pickup_point",
+        parcels: [testParcel],
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
   it("uses a usable stale snapshot for every concurrent caller when refresh fails", async () => {
     let currentTime = 0;
     let refreshFeedCalls = 0;
@@ -254,6 +274,47 @@ describe("PacketaDeliveryCapabilityAdapter", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("does not use expired metadata while a stale refresh retry is throttled", async () => {
+    let currentTime = 0;
+    let refreshAttempts = 0;
+    const adapter = new PacketaDeliveryCapabilityAdapter(
+      { accountId: "public-widget-key", widgetOptions: {} },
+      (async (url) => {
+        if (String(url).includes("/branch.json")) {
+          if (currentTime > 0) {
+            refreshAttempts += 1;
+            throw new Error("provider unavailable");
+          }
+          return Response.json([packetaPickupPoint]);
+        }
+        if (String(url).includes("/box.json")) return Response.json([]);
+        return Response.json({ isValid: true });
+      }) as typeof fetch,
+      () => currentTime,
+    );
+
+    await adapter.prepareSelection({
+      providerEndpointId: "pickup-1",
+      endpointType: "pickup_point",
+    });
+    currentTime = 24 * 60 * 60 * 1_000 - 1;
+    await expect(
+      adapter.prepareSelection({
+        providerEndpointId: "pickup-1",
+        endpointType: "pickup_point",
+      }),
+    ).resolves.toMatchObject({ providerEndpointId: "pickup-1" });
+    currentTime += 2;
+
+    await expect(
+      adapter.prepareSelection({
+        providerEndpointId: "pickup-1",
+        endpointType: "pickup_point",
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(refreshAttempts).toBe(2);
+  });
+
   it("reads committed snapshots across a selector-mode rollout", () => {
     const configuredAdapter = new ConfiguredDeliveryCapabilityAdapter();
     const packetaAdapter = new PacketaDeliveryCapabilityAdapter({
@@ -297,4 +358,11 @@ const packetaPickupPoint = {
   zip: "110 00",
   country: "cz",
   displayFrontend: 1,
+};
+
+const testParcel = {
+  weightMilligrams: 1_000_000n,
+  xMicrometers: 100_000n,
+  yMicrometers: 100_000n,
+  zMicrometers: 100_000n,
 };

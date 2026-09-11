@@ -295,7 +295,7 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
           "Delivery provider is unavailable",
         );
       }
-      if (!jsonRecord(body)?.isValid) {
+      if (jsonRecord(body)?.isValid !== true) {
         throw new BadRequestException(
           "Delivery endpoint is unavailable or incompatible",
         );
@@ -317,24 +317,29 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
     const now = this.now();
     const age = current ? now - current.fetchedAt : Number.POSITIVE_INFINITY;
     if (current && age < PACKETA_FEED_REFRESH_MS) return current;
-    if (current && this.retryAfter && now < this.retryAfter) return current;
-    if (this.inFlight)
-      return this.withStaleFallback(this.inFlight, current, age);
+    if (
+      current &&
+      this.retryAfter &&
+      now < this.retryAfter &&
+      this.isUsableStaleSnapshot(current)
+    ) {
+      return current;
+    }
+    if (this.inFlight) return this.withStaleFallback(this.inFlight, current);
     this.inFlight = this.fetchSnapshot().finally(() => {
       this.inFlight = undefined;
     });
-    return this.withStaleFallback(this.inFlight, current, age);
+    return this.withStaleFallback(this.inFlight, current);
   }
 
   private async withStaleFallback(
     refresh: Promise<PacketaFeedSnapshot>,
     current: PacketaFeedSnapshot | undefined,
-    age: number,
   ): Promise<PacketaFeedSnapshot> {
     try {
       return await refresh;
     } catch (error) {
-      if (current && age <= PACKETA_FEED_MAX_AGE_MS) {
+      if (current && this.isUsableStaleSnapshot(current)) {
         this.retryAfter = this.now() + PACKETA_FEED_RETRY_DELAY_MS;
         return current;
       }
@@ -386,6 +391,10 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
         "Delivery endpoint is unavailable or incompatible",
       );
     return point;
+  }
+
+  private isUsableStaleSnapshot(snapshot: PacketaFeedSnapshot): boolean {
+    return this.now() - snapshot.fetchedAt <= PACKETA_FEED_MAX_AGE_MS;
   }
 
   private async fetchFeed(url: string): Promise<readonly unknown[]> {
