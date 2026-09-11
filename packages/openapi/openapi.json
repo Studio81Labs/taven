@@ -385,6 +385,105 @@
         ],
         "type": "object"
       },
+      "AutomaticQuoteEstimateAssumptionsDto": {
+        "properties": {
+          "delivery": {
+            "enum": [
+              "NOT_FINALIZED"
+            ],
+            "type": "string"
+          },
+          "infillPreset": {
+            "enum": [
+              "DECORATIVE",
+              "STANDARD",
+              "STRONG"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "STANDARD"
+            ],
+            "type": "string"
+          },
+          "quantity": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "printConfigRevisionId",
+          "referenceProfileId",
+          "material",
+          "quality",
+          "infillPreset",
+          "quantity",
+          "delivery"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteEstimateDimensionsDto": {
+        "additionalProperties": false,
+        "properties": {
+          "depth": {
+            "maximum": 1000000,
+            "minimum": 0.0005,
+            "type": "number"
+          },
+          "height": {
+            "maximum": 1000000,
+            "minimum": 0.0005,
+            "type": "number"
+          },
+          "width": {
+            "maximum": 1000000,
+            "minimum": 0.0005,
+            "type": "number"
+          }
+        },
+        "required": [
+          "width",
+          "depth",
+          "height"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteEstimateDto": {
+        "properties": {
+          "assumptions": {
+            "$ref": "#/components/schemas/AutomaticQuoteEstimateAssumptionsDto"
+          },
+          "price": {
+            "$ref": "#/components/schemas/AutomaticQuotePriceDto"
+          },
+          "priceListRevision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "price",
+          "priceListRevision",
+          "assumptions"
+        ],
+        "type": "object"
+      },
       "AutomaticQuoteExpressDto": {
         "properties": {
           "eligible": {
@@ -1772,6 +1871,54 @@
           "provisionalOrders",
           "value",
           "explicitCoverage"
+        ],
+        "type": "object"
+      },
+      "CreateAutomaticQuoteEstimateDto": {
+        "additionalProperties": false,
+        "properties": {
+          "dimensionsMm": {
+            "$ref": "#/components/schemas/AutomaticQuoteEstimateDimensionsDto"
+          },
+          "infillPreset": {
+            "enum": [
+              "DECORATIVE",
+              "STANDARD",
+              "STRONG"
+            ],
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "quality": {
+            "enum": [
+              "STANDARD"
+            ],
+            "type": "string"
+          },
+          "quantity": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "volumeMm3": {
+            "maximum": 1000000000000000000,
+            "minimum": 5e-10,
+            "type": "number"
+          }
+        },
+        "required": [
+          "volumeMm3",
+          "dimensionsMm",
+          "material",
+          "quality",
+          "infillPreset",
+          "quantity"
         ],
         "type": "object"
       },
@@ -12548,6 +12695,47 @@
         "summary": "Page the operator quote-request queue",
         "tags": [
           "operator quote requests"
+        ]
+      }
+    },
+    "/automatic-quote-estimates": {
+      "post": {
+        "operationId": "AutomaticQuoteEstimatesController_estimate",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAutomaticQuoteEstimateDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomaticQuoteEstimateDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": "Geometry, STANDARD-only quality, or public monetary result is outside safe bounds"
+          },
+          "429": {
+            "description": "Anonymous estimate limit is exhausted"
+          },
+          "503": {
+            "description": "Estimate publication awaits launch approval or its default configuration is unavailable"
+          }
+        },
+        "summary": "Calculate an immediate non-binding estimate from local geometry only",
+        "tags": [
+          "automatic quotes"
         ]
       }
     },

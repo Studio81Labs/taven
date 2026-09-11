@@ -5,6 +5,9 @@ import { formatFileSize } from "../../utils/model-file";
 const {
   canUpload,
   cancelUpload,
+  estimate,
+  estimateLoading,
+  estimateMessage,
   errorMessage,
   filename,
   geometry,
@@ -16,11 +19,13 @@ const {
   quote,
   resetState,
   retry,
+  retryEstimate,
   selectFile,
   sessionPersisted,
   startUpload,
   uploadProgress,
 } = useModelUploadQuote({
+  estimateEnabled: true,
   preserveStoredSessionOnSelection: true,
   restoreSession: false,
 });
@@ -81,6 +86,14 @@ function millimeters(value: number): string {
 function cubicCentimeters(value: number): string {
   return `${new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 1 }).format(value / 1_000)} cm³`;
 }
+
+function currency(value: number, code: string): string {
+  return new Intl.NumberFormat("cs-CZ", {
+    currency: code,
+    style: "currency",
+    maximumFractionDigits: 0,
+  }).format(value / 100);
+}
 </script>
 
 <template>
@@ -116,7 +129,7 @@ function cubicCentimeters(value: number): string {
     </label>
 
     <div
-      v-else-if="isBusy"
+      v-else-if="phase === 'uploading' || (phase === 'preparing' && !geometry)"
       class="flex min-h-64 flex-col justify-center bg-white p-6"
       role="status"
       aria-live="polite"
@@ -153,7 +166,7 @@ function cubicCentimeters(value: number): string {
     </div>
 
     <div
-      v-else-if="phase === 'ready'"
+      v-else-if="phase === 'ready' || (phase === 'preparing' && geometry)"
       class="flex min-h-64 flex-col justify-center bg-white p-6"
       role="status"
       aria-live="polite"
@@ -200,6 +213,47 @@ function cubicCentimeters(value: number): string {
             </dd>
           </div>
         </dl>
+        <section
+          class="mt-4 border border-[#1b44e8] bg-[#eef2ff] p-4"
+          aria-live="polite"
+        >
+          <p class="font-mono text-xs tracking-wider text-[#1b44e8] uppercase">
+            Nezávazný rychlý odhad
+          </p>
+          <p v-if="estimateLoading" class="mt-2 text-[#54554c]">
+            Počítáme orientační cenu z rozměrů modelu.
+          </p>
+          <template v-else-if="estimate">
+            <p class="mt-2 text-2xl font-semibold">
+              {{
+                currency(
+                  estimate.price.totalMinor ?? 0,
+                  estimate.price.currency,
+                )
+              }}
+            </p>
+            <p class="mt-2 text-sm text-[#54554c]">
+              Odhad pro {{ estimate.assumptions.material }}, standardní kvalitu,
+              výplň {{ estimate.assumptions.infillPreset.toLowerCase() }} a 1
+              kus. Doprava ani závazná cena v něm nejsou zahrnuté.
+            </p>
+          </template>
+          <template v-else>
+            <p class="mt-2 text-sm text-[#54554c]">
+              {{
+                estimateMessage ??
+                "Rychlý odhad zatím není dostupný. Rozměry zkontrolujte v původním programu."
+              }}
+            </p>
+            <button
+              class="mt-3 font-semibold underline decoration-[#1b44e8] decoration-2 underline-offset-4"
+              type="button"
+              @click="retryEstimate"
+            >
+              Zkusit odhad znovu
+            </button>
+          </template>
+        </section>
       </template>
       <p v-else-if="previewMessage" class="mt-4 text-[#54554c]">
         {{ previewMessage }}

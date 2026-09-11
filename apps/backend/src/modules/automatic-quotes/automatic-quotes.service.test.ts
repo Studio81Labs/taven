@@ -2,9 +2,47 @@ import { ConflictException, GoneException } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { PrismaService } from "../../prisma/prisma.service";
-import { AutomaticQuotesService } from "./automatic-quotes.service";
+import {
+  AutomaticQuotesService,
+  conservativePartsPerPlate,
+  decimalToInteger,
+} from "./automatic-quotes.service";
 
 describe("AutomaticQuotesService", () => {
+  it("converts API-valid volumes beyond JavaScript's safe integer range", () => {
+    expect(decimalToInteger(9_261_000, 9, "volume")).toBe(
+      9_261_000_000_000_000n,
+    );
+  });
+
+  it("rejects positive values that cannot retain a whole target unit", () => {
+    expect(() => decimalToInteger(0.0004, 3, "dimension")).toThrow(
+      "Estimate dimension must remain positive",
+    );
+  });
+
+  it("accepts the documented conversion-resolution minima", () => {
+    expect(decimalToInteger(0.0005, 3, "dimension")).toBe(1n);
+    expect(decimalToInteger(5e-10, 9, "volume")).toBe(1n);
+  });
+
+  it("uses one part per plate when local geometry cannot prove clearance", () => {
+    expect(
+      conservativePartsPerPlate(
+        {
+          boundsXMicrometers: 110_000n,
+          boundsYMicrometers: 110_000n,
+          boundsZMicrometers: 110_000n,
+        },
+        {
+          buildVolumeXMicrometers: 220_000n,
+          buildVolumeYMicrometers: 220_000n,
+          buildVolumeZMicrometers: 220_000n,
+        },
+      ),
+    ).toBe(1);
+  });
+
   it("filters configured delivery options when pricing is unavailable", async () => {
     const priceList = { findUnique: vi.fn().mockResolvedValue(null) };
     const service = new AutomaticQuotesService(

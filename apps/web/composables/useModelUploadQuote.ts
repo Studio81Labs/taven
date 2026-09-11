@@ -31,12 +31,17 @@ type ReplaceConfiguration =
 type RiskDecision = components["schemas"]["AutomaticQuoteRiskDecisionDto"];
 type DeliveryDestination =
   components["schemas"]["SelectAutomaticQuoteDestinationDto"];
+type AutomaticQuoteEstimate =
+  components["schemas"]["AutomaticQuoteEstimateDto"];
 
 const backgroundQuotePhases: ReadonlySet<QuoteSession["phase"]> = new Set([
   "INSPECTION_PENDING",
   "REFERENCE_SLICES_PENDING",
   "ELIGIBILITY_PENDING",
 ]);
+// Keep this below the 200 ms post-parse estimate budget while coalescing
+// rapid file reselections before they spend an anonymous estimate allowance.
+const ESTIMATE_SELECTION_SETTLE_DELAY_MS = 100;
 
 export function isBackgroundQuotePhase(phase: QuoteSession["phase"]): boolean {
   return backgroundQuotePhases.has(phase);
@@ -186,7 +191,18 @@ function requestMessage(
   return "Požadavek se nepodařilo dokončit. Zkontrolujte připojení a zkuste to znovu.";
 }
 
+function estimateRequestMessage(status: number): string {
+  if (status === 429) {
+    return "Rychlý odhad je teď dočasně vytížený. Počkejte chvíli a zkuste ho znovu.";
+  }
+  if (status === 503) {
+    return "Rychlý odhad teď není k dispozici. Rozměry modelu zůstávají k dispozici pro kontrolu.";
+  }
+  return "Rychlý odhad se nepodařilo připravit. Zkontrolujte rozměry v původním programu nebo model exportujte znovu.";
+}
+
 export interface UseModelUploadQuoteOptions {
+  estimateEnabled?: boolean;
   preserveStoredSessionOnSelection?: boolean;
   restoreSession?: boolean;
 }
@@ -197,6 +213,12 @@ export function clearsStoredSessionOnSelection(
   return options.preserveStoredSessionOnSelection !== true;
 }
 
+export function requestsImmediateEstimate(
+  options: UseModelUploadQuoteOptions,
+): boolean {
+  return options.estimateEnabled === true;
+}
+
 export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   const { $api } = useNuxtApp();
   const phase = ref<UploadWorkflowPhase>("idle");
@@ -204,6 +226,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   const metadata = ref<ValidatedModelFile>();
   const sha256 = ref<string>();
   const geometry = shallowRef<ModelGeometry>();
+  const estimate = shallowRef<AutomaticQuoteEstimate>();
+  const estimateMessage = ref<string>();
+  const estimateLoading = ref(false);
   const previewMessage = ref<string>();
   const errorMessage = ref<string>();
   const handoffMessage = ref<string>();
@@ -217,6 +242,8 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   const restoredFilename = ref<string>();
   let selectionRevision = 0;
   let uploadController: AbortController | undefined;
+  let estimateController: AbortController | undefined;
+  let estimateTimer: ReturnType<typeof setTimeout> | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let pollController: AbortController | undefined;
   let commandController: AbortController | undefined;
@@ -242,6 +269,24 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     pollTimer = undefined;
     pollController?.abort();
     pollController = undefined;
+  }
+
+  function cancelScheduledEstimate(): void {
+    if (estimateTimer) clearTimeout(estimateTimer);
+    estimateTimer = undefined;
+  }
+
+  function scheduleEstimate(
+    parsedGeometry: ModelGeometry,
+    revision: number,
+  ): void {
+    cancelScheduledEstimate();
+    estimateTimer = setTimeout(() => {
+      estimateTimer = undefined;
+      if (!disposed && revision === selectionRevision) {
+        void requestEstimate(parsedGeometry, revision);
+      }
+    }, ESTIMATE_SELECTION_SETTLE_DELAY_MS);
   }
 
   function scheduleQuoteRefresh(delay: number): void {
@@ -274,6 +319,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     selectionRevision += 1;
     uploadController?.abort();
     uploadController = undefined;
+    estimateController?.abort();
+    estimateController = undefined;
+    cancelScheduledEstimate();
     commandController?.abort();
     commandController = undefined;
     responseGuard.reset();
@@ -283,6 +331,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     metadata.value = undefined;
     sha256.value = undefined;
     geometry.value = undefined;
+    estimate.value = undefined;
+    estimateMessage.value = undefined;
+    estimateLoading.value = false;
     previewMessage.value = undefined;
     errorMessage.value = undefined;
     commandError.value = undefined;
@@ -324,6 +375,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       if (buffer.byteLength <= MAX_LOCAL_PREVIEW_BYTES) {
         try {
           geometry.value = await parseModelGeometry(valid.format, buffer);
+          if (requestsImmediateEstimate(options)) {
+            scheduleEstimate(geometry.value, revision);
+          }
         } catch (error) {
           if (
             error instanceof ModelGeometryError &&
@@ -342,8 +396,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
         previewMessage.value =
           "Soubor je pro místní náhled příliš velký. Bezpečně ho zkontrolujeme po nahrání.";
       }
-      sha256.value = await hashPromise;
+      const hash = await hashPromise;
       if (revision !== selectionRevision) return;
+      sha256.value = hash;
       phase.value = "ready";
     } catch (error) {
       if (revision !== selectionRevision) return;
@@ -359,6 +414,67 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
         error instanceof Error ? error.message : "Soubor se nepodařilo načíst.";
       phase.value = "error";
     }
+  }
+
+  async function requestEstimate(
+    parsedGeometry: ModelGeometry,
+    revision: number,
+  ): Promise<void> {
+    estimateController?.abort();
+    const controller = new AbortController();
+    estimateController = controller;
+    estimateLoading.value = true;
+    estimate.value = undefined;
+    estimateMessage.value = undefined;
+    try {
+      const result = await $api.POST("/automatic-quote-estimates", {
+        body: {
+          dimensionsMm: parsedGeometry.dimensions,
+          infillPreset: "STANDARD",
+          material: "PLA",
+          quality: "STANDARD",
+          quantity: 1,
+          volumeMm3: parsedGeometry.volumeMm3,
+        },
+        signal: controller.signal,
+      });
+      if (
+        disposed ||
+        controller.signal.aborted ||
+        revision !== selectionRevision ||
+        estimateController !== controller ||
+        quote.value?.roughEstimate ||
+        quote.value?.bindingQuote
+      ) {
+        return;
+      }
+      if (!result.response.ok || !result.data) {
+        estimateMessage.value = estimateRequestMessage(result.response.status);
+        return;
+      }
+      estimate.value = result.data;
+    } catch {
+      if (
+        !disposed &&
+        !controller.signal.aborted &&
+        revision === selectionRevision
+      ) {
+        estimateMessage.value = estimateRequestMessage(0);
+      }
+    } finally {
+      if (estimateController === controller) {
+        estimateController = undefined;
+        estimateLoading.value = false;
+      }
+    }
+  }
+
+  function retryEstimate(): void {
+    const parsedGeometry = geometry.value;
+    if (!parsedGeometry || disposed || !requestsImmediateEstimate(options))
+      return;
+    cancelScheduledEstimate();
+    void requestEstimate(parsedGeometry, selectionRevision);
   }
 
   function selectFile(file: File): Promise<void> {
@@ -377,6 +493,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     selectionRevision += 1;
     uploadController?.abort();
     uploadController = undefined;
+    estimateController?.abort();
+    estimateController = undefined;
+    cancelScheduledEstimate();
     commandController?.abort();
     commandController = undefined;
     commandPending.value = false;
@@ -387,6 +506,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     metadata.value = undefined;
     sha256.value = undefined;
     geometry.value = undefined;
+    estimate.value = undefined;
+    estimateMessage.value = undefined;
+    estimateLoading.value = false;
     previewMessage.value = undefined;
     errorMessage.value = undefined;
     commandError.value = undefined;
@@ -397,6 +519,14 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
 
   function applyQuote(nextQuote: QuoteSession): boolean {
     quote.value = nextQuote;
+    if (nextQuote.roughEstimate || nextQuote.bindingQuote) {
+      estimateController?.abort();
+      estimateController = undefined;
+      cancelScheduledEstimate();
+      estimateLoading.value = false;
+      estimate.value = undefined;
+      estimateMessage.value = undefined;
+    }
     if (nextQuote.phase === "EXPIRED") {
       phase.value = "expired";
       stopPolling();
@@ -819,6 +949,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     selectionRevision += 1;
     uploadController?.abort();
     uploadController = undefined;
+    estimateController?.abort();
+    estimateController = undefined;
+    cancelScheduledEstimate();
     responseGuard.reset();
     stopPolling();
     discardUploadCheckpoint();
@@ -826,6 +959,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     metadata.value = undefined;
     sha256.value = undefined;
     geometry.value = undefined;
+    estimate.value = undefined;
+    estimateMessage.value = undefined;
+    estimateLoading.value = false;
     previewMessage.value = undefined;
     errorMessage.value = undefined;
     handoffMessage.value = undefined;
@@ -903,6 +1039,8 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   onBeforeUnmount(() => {
     disposed = true;
     uploadController?.abort();
+    estimateController?.abort();
+    cancelScheduledEstimate();
     commandController?.abort();
     stopPolling();
   });
@@ -913,6 +1051,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     cancelAdditionalModel,
     cancelUpload,
     commandError,
+    estimate,
+    estimateLoading,
+    estimateMessage,
     commandPending,
     decideRisk,
     errorMessage,
@@ -930,6 +1071,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     removeItem,
     resetState,
     retry,
+    retryEstimate,
     selectDestination,
     selectAdditionalFile,
     selectFile,

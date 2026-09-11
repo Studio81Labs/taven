@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { PrismaModule } from "../../prisma/prisma.module";
 import { ResourcesModule } from "../resources/resources.module";
+import { AutomaticQuoteEstimatesController } from "./automatic-quote-estimates.controller";
 import { AutomaticQuotesController } from "./automatic-quotes.controller";
 import { AutomaticQuotesService } from "./automatic-quotes.service";
 import {
@@ -10,7 +11,7 @@ import {
 
 @Module({
   imports: [PrismaModule, ResourcesModule],
-  controllers: [AutomaticQuotesController],
+  controllers: [AutomaticQuotesController, AutomaticQuoteEstimatesController],
   providers: [
     AutomaticQuotesService,
     ConfiguredDeliveryCapabilityAdapter,

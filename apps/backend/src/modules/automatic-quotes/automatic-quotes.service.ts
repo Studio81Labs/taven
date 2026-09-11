@@ -5,6 +5,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
 import {
@@ -59,6 +60,7 @@ import {
 import { candidatePlateCapacities } from "./candidate-plate-capacities";
 import type {
   AttachAutomaticQuoteModelFileDto,
+  AutomaticQuoteEstimateDto,
   AutomaticQuoteHandoffCapabilityDto,
   AutomaticQuoteItemDto,
   AutomaticQuoteModelFileDto,
@@ -66,6 +68,7 @@ import type {
   AutomaticQuoteSessionDto,
   AutomaticQuoteRiskDecisionDto,
   ConfigureAutomaticQuoteItemDto,
+  CreateAutomaticQuoteEstimateDto,
   CreateAutomaticQuoteSessionDto,
   RecordAutomaticQuoteObservationDto,
   ReplaceAutomaticQuoteConfigurationDto,
@@ -324,6 +327,152 @@ export class AutomaticQuotesService {
       `Bearer ${created.sessionToken}`,
     );
     return { ...view, sessionToken: created.sessionToken };
+  }
+
+  /**
+   * This endpoint deliberately has no quote-session, storage, queue or
+   * idempotency effect. It prices a local browser geometry summary against one
+   * currently active configuration, then returns only the public provisional
+   * price projection. The short-lived anonymous limit is the sole write.
+   */
+  async estimate(
+    input: CreateAutomaticQuoteEstimateDto,
+    clientAddress: string,
+  ): Promise<AutomaticQuoteEstimateDto> {
+    assertBindingQuoteFlowsEnabled();
+    assertEstimateInput(input);
+    await this.prisma.$transaction((transaction) =>
+      reserveAnonymousQuote(
+        transaction,
+        automaticQuoteEstimateClientSubject(
+          quoteCapabilityKeyRing().all[0]!.key,
+          clientAddress,
+        ),
+        "automatic-quote-estimate",
+      ),
+    );
+
+    const localGeometry = {
+      boundsXMicrometers: millimetersToMicrometers(input.dimensionsMm.width),
+      boundsYMicrometers: millimetersToMicrometers(input.dimensionsMm.depth),
+      boundsZMicrometers: millimetersToMicrometers(input.dimensionsMm.height),
+    };
+    const [priceList, capabilities] = await Promise.all([
+      this.prisma.priceList.findUnique({
+        where: {
+          currency_revision: {
+            currency: "CZK",
+            revision: AUTOMATIC_PRICE_LIST_REVISION,
+          },
+        },
+      }),
+      this.configurationCapabilities(),
+    ]);
+    if (!priceList) {
+      throw new ServiceUnavailableException("Estimate pricing is unavailable");
+    }
+    const selected = capabilities.find(
+      (option) =>
+        option.material === input.material &&
+        option.quality === input.quality &&
+        option.infillPreset === input.infillPreset,
+    );
+    if (!selected) {
+      throw new ServiceUnavailableException(
+        "Estimate defaults are currently unavailable",
+      );
+    }
+    const selectedWithCapacity = (
+      await this.configurationCapabilities(this.prisma, localGeometry)
+    ).find(
+      (option) =>
+        option.material === input.material &&
+        option.quality === input.quality &&
+        option.infillPreset === input.infillPreset,
+    );
+    if (!selectedWithCapacity) {
+      throw new BadRequestException(
+        "Estimate geometry exceeds active build volumes",
+      );
+    }
+
+    const parameters = parseAutomaticQuotePricingParameters(
+      priceList.parameters,
+    );
+    if (BigInt(input.quantity) > parameters.maximumAutomaticQuantity) {
+      throw new BadRequestException(
+        "Estimate quantity exceeds the automatic quote limit",
+      );
+    }
+    const itemId = "local-geometry-estimate";
+    const volumeCubicMicrometers = cubicMillimetersToCubicMicrometers(
+      input.volumeMm3,
+    );
+    const referencePartsPerPlate = conservativePartsPerPlate(
+      localGeometry,
+      selectedWithCapacity,
+    );
+    const estimated = roughSliceMetrics(
+      {
+        material: input.material,
+        infillPreset: input.infillPreset,
+        quantity: input.quantity,
+        referencePartsPerPlate,
+      },
+      volumeCubicMicrometers,
+      parameters,
+    );
+    const prepared = await prepareAutomaticQuote({
+      priceList,
+      items: [
+        {
+          id: itemId,
+          referenceProfileId: selectedWithCapacity.referenceProfileId,
+          material: input.material,
+          quantity: input.quantity,
+          referencePartsPerPlate,
+          primary: estimated.primary,
+          tail: estimated.tail,
+          ...localGeometry,
+          fulfilmentSlots: Array.from(
+            { length: input.quantity },
+            (_, index) => ({
+              packingUnitKey: `local-geometry-estimate:${index + 1}`,
+            }),
+          ),
+        },
+      ],
+      expressRequested: false,
+      materialAndColorAvailable: true,
+      withinBuildLimits: true,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+    });
+    try {
+      return {
+        price: provisionalPriceDto(
+          prepared.prepared.price,
+          new Map([[itemId, 0]]),
+        ),
+        priceListRevision: priceList.revision,
+        assumptions: {
+          printConfigRevisionId: selectedWithCapacity.printConfigRevisionId,
+          referenceProfileId: selectedWithCapacity.referenceProfileId,
+          material: input.material,
+          quality: input.quality,
+          infillPreset: input.infillPreset,
+          quantity: input.quantity,
+          delivery: "NOT_FINALIZED",
+        },
+      };
+    } catch (error) {
+      if (error instanceof ConflictException) {
+        throw new BadRequestException(
+          "Estimate exceeds the public monetary range",
+        );
+      }
+      throw error;
+    }
   }
 
   async getSession(
@@ -4718,7 +4867,13 @@ export class AutomaticQuotesService {
     const configurationCapabilities =
       await this.configurationCapabilities(client);
     const configurationOptions = configurationCapabilities.map(
-      ({ referenceProfileId: _referenceProfileId, ...option }) => option,
+      ({
+        referenceProfileId: _referenceProfileId,
+        buildVolumeXMicrometers: _buildVolumeXMicrometers,
+        buildVolumeYMicrometers: _buildVolumeYMicrometers,
+        buildVolumeZMicrometers: _buildVolumeZMicrometers,
+        ...option
+      }) => option,
     );
     const itemDtos = await this.mapSnapshotReads(
       client,
@@ -5025,6 +5180,11 @@ export class AutomaticQuotesService {
   // gate before persisting the selection or allowing slicing to be enqueued.
   private async configurationCapabilities(
     client: Transaction | PrismaService = this.prisma,
+    geometry?: {
+      boundsXMicrometers: bigint;
+      boundsYMicrometers: bigint;
+      boundsZMicrometers: bigint;
+    },
   ) {
     const rows = await client.$queryRaw<
       Array<{
@@ -5035,6 +5195,9 @@ export class AutomaticQuotesService {
         color: string | null;
         quality: "DRAFT" | "STANDARD" | "FINE";
         infillPercent: number;
+        buildVolumeXMicrometers: bigint;
+        buildVolumeYMicrometers: bigint;
+        buildVolumeZMicrometers: bigint;
       }>
     >`
       SELECT DISTINCT
@@ -5044,7 +5207,10 @@ export class AutomaticQuotesService {
         profile.material::text AS material,
         inventory.color,
         config.quality::text AS quality,
-        config.infill_percent AS "infillPercent"
+        config.infill_percent AS "infillPercent",
+        capability.build_volume_x_micrometers AS "buildVolumeXMicrometers",
+        capability.build_volume_y_micrometers AS "buildVolumeYMicrometers",
+        capability.build_volume_z_micrometers AS "buildVolumeZMicrometers"
       FROM reference_profiles reference
       JOIN machine_profiles profile
         ON profile.reference_profile_id = reference.id
@@ -5062,6 +5228,8 @@ export class AutomaticQuotesService {
        AND machine.status = 'ACTIVE'
        AND machine.installed_nozzle_micrometers =
            profile.nozzle_diameter_micrometers
+      JOIN machine_capabilities capability
+        ON capability.id = machine.machine_capability_id
       JOIN nodes node
         ON node.id = machine.node_id
        AND node.active
@@ -5085,7 +5253,10 @@ export class AutomaticQuotesService {
         reference.activated_at DESC NULLS LAST,
         reference.id
     `;
-    const options = new Map<string, (typeof rows)[number]>();
+    const compatibleRows = geometry
+      ? rows.filter((row) => geometryFitsCapability(geometry, row))
+      : rows;
+    const options = new Map<string, (typeof compatibleRows)[number]>();
     const addOption = (row: (typeof rows)[number]) => {
       const key = JSON.stringify([
         row.printConfigRevisionId,
@@ -5096,7 +5267,7 @@ export class AutomaticQuotesService {
       ]);
       if (!options.has(key)) options.set(key, row);
     };
-    for (const row of rows) {
+    for (const row of compatibleRows) {
       addOption(row);
       if (row.color !== null) addOption({ ...row, color: null });
     }
@@ -5107,6 +5278,9 @@ export class AutomaticQuotesService {
       color: row.color,
       quality: row.quality,
       infillPreset: infillPreset(row.infillPercent),
+      buildVolumeXMicrometers: row.buildVolumeXMicrometers,
+      buildVolumeYMicrometers: row.buildVolumeYMicrometers,
+      buildVolumeZMicrometers: row.buildVolumeZMicrometers,
     }));
   }
 
@@ -5888,7 +6062,7 @@ function provisionalPriceDto(
         }>;
       },
   itemOrdinals: ReadonlyMap<string, number>,
-): AutomaticQuoteSessionDto["roughEstimate"] {
+): NonNullable<AutomaticQuoteSessionDto["roughEstimate"]> {
   return {
     kind: "ROUGH_ESTIMATE",
     currency: price.breakdown.subtotal.currency,
@@ -6253,6 +6427,146 @@ function automaticQuoteClientSubject(
     .digest("hex");
 }
 
+function automaticQuoteEstimateClientSubject(
+  capabilityKey: string,
+  clientAddress: string,
+): string {
+  return createHmac("sha256", capabilityKey)
+    .update(
+      `anonymous-automatic-quote-estimate\0${normalizeClientAddress(clientAddress)}`,
+    )
+    .digest("hex");
+}
+
+function assertEstimateInput(input: CreateAutomaticQuoteEstimateDto): void {
+  if (
+    !isPlainRecord(input) ||
+    Buffer.byteLength(JSON.stringify(input)) > 4096
+  ) {
+    throw new BadRequestException("Estimate input is invalid");
+  }
+  assertExactKeys(input, [
+    "volumeMm3",
+    "dimensionsMm",
+    "material",
+    "quality",
+    "infillPreset",
+    "quantity",
+  ]);
+  assertPositiveFinite(input.volumeMm3, "volumeMm3", 1e18);
+  if (!isPlainRecord(input.dimensionsMm)) {
+    throw new BadRequestException("Estimate dimensions are invalid");
+  }
+  assertExactKeys(input.dimensionsMm, ["width", "depth", "height"]);
+  for (const [name, value] of Object.entries(input.dimensionsMm)) {
+    assertPositiveFinite(value, `dimensionsMm.${name}`, 1_000_000);
+  }
+  const boundingBoxVolume =
+    input.dimensionsMm.width *
+    input.dimensionsMm.depth *
+    input.dimensionsMm.height;
+  const tolerance = Math.max(0.000001, boundingBoxVolume * 1e-9);
+  if (input.volumeMm3 > boundingBoxVolume + tolerance) {
+    throw new BadRequestException(
+      "Estimate volume exceeds the supplied bounding box",
+    );
+  }
+  if (input.material !== "PLA" && input.material !== "PETG") {
+    throw new BadRequestException("Estimate material is invalid");
+  }
+  if (input.quality !== "STANDARD") {
+    throw new BadRequestException("Estimate quality must be STANDARD");
+  }
+  if (
+    !(["DECORATIVE", "STANDARD", "STRONG"] as const).includes(
+      input.infillPreset,
+    )
+  ) {
+    throw new BadRequestException("Estimate infill preset is invalid");
+  }
+  if (
+    !Number.isInteger(input.quantity) ||
+    input.quantity < 1 ||
+    input.quantity > 1_000
+  ) {
+    throw new BadRequestException("Estimate quantity is invalid");
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null)
+  );
+}
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): void {
+  const keys = Object.keys(value).sort();
+  const allowed = [...expected].sort();
+  if (
+    keys.length !== allowed.length ||
+    keys.some((key, index) => key !== allowed[index])
+  ) {
+    throw new BadRequestException("Estimate input contains unsupported fields");
+  }
+}
+
+function assertPositiveFinite(
+  value: unknown,
+  name: string,
+  maximum: number,
+): void {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    value > maximum
+  ) {
+    throw new BadRequestException(`Estimate ${name} is invalid`);
+  }
+}
+
+function millimetersToMicrometers(value: number): bigint {
+  return decimalToInteger(value, 3, "dimension");
+}
+
+function cubicMillimetersToCubicMicrometers(value: number): bigint {
+  return decimalToInteger(value, 9, "volume");
+}
+
+export function decimalToInteger(
+  value: number,
+  decimalPlaces: number,
+  name: string,
+): bigint {
+  const parts = /^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(value.toString());
+  if (!parts) {
+    throw new BadRequestException(`Estimate ${name} cannot be represented`);
+  }
+  const [_, whole, fraction = "", exponent = "0"] = parts;
+  const unscaled = BigInt(`${whole}${fraction}`);
+  const shift = decimalPlaces + Number(exponent) - fraction.length;
+  let scaled: bigint;
+  if (shift >= 0) {
+    scaled = unscaled * 10n ** BigInt(shift);
+  } else {
+    // Inputs are positive, so this is equivalent to Math.round without first
+    // converting the scaled value through an imprecise JavaScript number.
+    const divisor = 10n ** BigInt(-shift);
+    scaled = (unscaled + divisor / 2n) / divisor;
+  }
+  if (scaled <= 0n) {
+    throw new BadRequestException(`Estimate ${name} must remain positive`);
+  }
+
+  return scaled;
+}
+
 function normalizeClientAddress(value: string): string {
   const normalized = value.trim().toLowerCase();
   return normalized.startsWith("::ffff:")
@@ -6285,6 +6599,50 @@ function geometryFitsCapability(
     capability.buildVolumeZMicrometers,
   ].sort(compare);
   return bounds.every((bound, index) => bound <= buildVolume[index]!);
+}
+
+export function conservativePartsPerPlate(
+  geometry: {
+    boundsXMicrometers: bigint;
+    boundsYMicrometers: bigint;
+    boundsZMicrometers: bigint;
+  },
+  capability: {
+    buildVolumeXMicrometers: bigint;
+    buildVolumeYMicrometers: bigint;
+    buildVolumeZMicrometers: bigint;
+  },
+): number {
+  const dimensions = [
+    geometry.boundsXMicrometers,
+    geometry.boundsYMicrometers,
+    geometry.boundsZMicrometers,
+  ] as const;
+  const buildVolume = [
+    capability.buildVolumeXMicrometers,
+    capability.buildVolumeYMicrometers,
+    capability.buildVolumeZMicrometers,
+  ] as const;
+  const orientations: readonly (readonly [bigint, bigint, bigint])[] = [
+    [dimensions[0], dimensions[1], dimensions[2]],
+    [dimensions[0], dimensions[2], dimensions[1]],
+    [dimensions[1], dimensions[0], dimensions[2]],
+    [dimensions[1], dimensions[2], dimensions[0]],
+    [dimensions[2], dimensions[0], dimensions[1]],
+    [dimensions[2], dimensions[1], dimensions[0]],
+  ];
+  for (const [x, y, z] of orientations) {
+    if (x > buildVolume[0] || y > buildVolume[1] || z > buildVolume[2]) {
+      continue;
+    }
+    // The local bounding box cannot prove a safe inter-part clearance, so a
+    // non-binding estimate must not assume that distinct copies can share a
+    // plate. Slicing determines actual packing later in the quote lifecycle.
+    return 1;
+  }
+  throw new BadRequestException(
+    "Estimate geometry exceeds active build volumes",
+  );
 }
 
 function quoteCapabilityKeyRing(): {

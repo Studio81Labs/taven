@@ -1,7 +1,15 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiSchema,
+  type ApiSchemaOptions,
+} from "@nestjs/swagger";
 import { AttributionDto } from "../metrics/attribution.dto";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+const CLOSED_ESTIMATE_REQUEST_SCHEMA: ApiSchemaOptions & {
+  additionalProperties: false;
+} = { additionalProperties: false };
 
 export class CreateAutomaticQuoteSessionDto {
   @ApiPropertyOptional({ type: AttributionDto })
@@ -299,6 +307,73 @@ export class AutomaticQuotePriceDto {
 
   @ApiProperty({ type: [AutomaticQuotePriceComponentDto] })
   components!: AutomaticQuotePriceComponentDto[];
+}
+
+@ApiSchema(CLOSED_ESTIMATE_REQUEST_SCHEMA)
+export class AutomaticQuoteEstimateDimensionsDto {
+  @ApiProperty({ type: Number, minimum: 0.0005, maximum: 1_000_000 })
+  width!: number;
+
+  @ApiProperty({ type: Number, minimum: 0.0005, maximum: 1_000_000 })
+  depth!: number;
+
+  @ApiProperty({ type: Number, minimum: 0.0005, maximum: 1_000_000 })
+  height!: number;
+}
+
+@ApiSchema(CLOSED_ESTIMATE_REQUEST_SCHEMA)
+export class CreateAutomaticQuoteEstimateDto {
+  @ApiProperty({ type: Number, minimum: 5e-10, maximum: 1e18 })
+  volumeMm3!: number;
+
+  @ApiProperty({ type: AutomaticQuoteEstimateDimensionsDto })
+  dimensionsMm!: AutomaticQuoteEstimateDimensionsDto;
+
+  @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
+  material!: "PLA" | "PETG";
+
+  @ApiProperty({ type: String, enum: ["STANDARD"] })
+  quality!: "STANDARD";
+
+  @ApiProperty({ type: String, enum: ["DECORATIVE", "STANDARD", "STRONG"] })
+  infillPreset!: "DECORATIVE" | "STANDARD" | "STRONG";
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 1_000 })
+  quantity!: number;
+}
+
+export class AutomaticQuoteEstimateAssumptionsDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  printConfigRevisionId!: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  referenceProfileId!: string;
+
+  @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
+  material!: "PLA" | "PETG";
+
+  @ApiProperty({ type: String, enum: ["STANDARD"] })
+  quality!: "STANDARD";
+
+  @ApiProperty({ type: String, enum: ["DECORATIVE", "STANDARD", "STRONG"] })
+  infillPreset!: "DECORATIVE" | "STANDARD" | "STRONG";
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 1_000 })
+  quantity!: number;
+
+  @ApiProperty({ type: String, enum: ["NOT_FINALIZED"] })
+  delivery!: "NOT_FINALIZED";
+}
+
+export class AutomaticQuoteEstimateDto {
+  @ApiProperty({ type: AutomaticQuotePriceDto })
+  price!: AutomaticQuotePriceDto;
+
+  @ApiProperty({ type: String })
+  priceListRevision!: string;
+
+  @ApiProperty({ type: AutomaticQuoteEstimateAssumptionsDto })
+  assumptions!: AutomaticQuoteEstimateAssumptionsDto;
 }
 
 export class AutomaticQuoteExpressDto {
