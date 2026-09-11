@@ -143,7 +143,6 @@ function normalizedProductionPackage(bytes: Uint8Array, plateCount: number) {
     maximumTotalBytes: 512 * 1024 * 1024,
   });
   return {
-    sliceInfoSha256: sha256(entries.get("Metadata/slice_info.config")!),
     plates: Array.from({ length: plateCount }, (_, index) => {
       const name = `Metadata/plate_${index + 1}.gcode`;
       const gcode = entries.get(name)!;
