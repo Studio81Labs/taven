@@ -302,18 +302,18 @@ export class AutomaticQuotePriceDto {
 }
 
 export class AutomaticQuoteEstimateDimensionsDto {
-  @ApiProperty({ type: Number, minimum: Number.MIN_VALUE, maximum: 1_000_000 })
+  @ApiProperty({ type: Number, minimum: 0.0005, maximum: 1_000_000 })
   width!: number;
 
-  @ApiProperty({ type: Number, minimum: Number.MIN_VALUE, maximum: 1_000_000 })
+  @ApiProperty({ type: Number, minimum: 0.0005, maximum: 1_000_000 })
   depth!: number;
 
-  @ApiProperty({ type: Number, minimum: Number.MIN_VALUE, maximum: 1_000_000 })
+  @ApiProperty({ type: Number, minimum: 0.0005, maximum: 1_000_000 })
   height!: number;
 }
 
 export class CreateAutomaticQuoteEstimateDto {
-  @ApiProperty({ type: Number, minimum: Number.MIN_VALUE, maximum: 1e18 })
+  @ApiProperty({ type: Number, minimum: 5e-10, maximum: 1e18 })
   volumeMm3!: number;
 
   @ApiProperty({ type: AutomaticQuoteEstimateDimensionsDto })

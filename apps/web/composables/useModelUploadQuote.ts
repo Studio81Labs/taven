@@ -39,7 +39,9 @@ const backgroundQuotePhases: ReadonlySet<QuoteSession["phase"]> = new Set([
   "REFERENCE_SLICES_PENDING",
   "ELIGIBILITY_PENDING",
 ]);
-const ESTIMATE_SELECTION_SETTLE_DELAY_MS = 500;
+// Keep this below the 200 ms post-parse estimate budget while coalescing
+// rapid file reselections before they spend an anonymous estimate allowance.
+const ESTIMATE_SELECTION_SETTLE_DELAY_MS = 100;
 
 export function isBackgroundQuotePhase(phase: QuoteSession["phase"]): boolean {
   return backgroundQuotePhases.has(phase);

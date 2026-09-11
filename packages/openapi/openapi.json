@@ -442,17 +442,17 @@
         "properties": {
           "depth": {
             "maximum": 1000000,
-            "minimum": 5e-324,
+            "minimum": 0.0005,
             "type": "number"
           },
           "height": {
             "maximum": 1000000,
-            "minimum": 5e-324,
+            "minimum": 0.0005,
             "type": "number"
           },
           "width": {
             "maximum": 1000000,
-            "minimum": 5e-324,
+            "minimum": 0.0005,
             "type": "number"
           }
         },
@@ -1907,7 +1907,7 @@
           },
           "volumeMm3": {
             "maximum": 1000000000000000000,
-            "minimum": 5e-324,
+            "minimum": 5e-10,
             "type": "number"
           }
         },

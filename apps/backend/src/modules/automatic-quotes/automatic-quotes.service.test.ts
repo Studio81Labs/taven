@@ -21,6 +21,11 @@ describe("AutomaticQuotesService", () => {
     );
   });
 
+  it("accepts the documented conversion-resolution minima", () => {
+    expect(decimalToInteger(0.0005, 3, "dimension")).toBe(1n);
+    expect(decimalToInteger(5e-10, 9, "volume")).toBe(1n);
+  });
+
   it("uses one part per plate when local geometry cannot prove clearance", () => {
     expect(
       conservativePartsPerPlate(
