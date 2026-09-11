@@ -388,6 +388,9 @@
       "AutomaticQuoteEstimateAssumptionsDto": {
         "properties": {
           "delivery": {
+            "enum": [
+              "NOT_FINALIZED"
+            ],
             "type": "string"
           },
           "infillPreset": {

@@ -1797,7 +1797,8 @@ export interface components {
             providerEndpointId: string;
         };
         AutomaticQuoteEstimateAssumptionsDto: {
-            delivery: string;
+            /** @enum {string} */
+            delivery: "NOT_FINALIZED";
             /** @enum {string} */
             infillPreset: "DECORATIVE" | "STANDARD" | "STRONG";
             /** @enum {string} */

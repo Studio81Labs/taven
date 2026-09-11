@@ -129,7 +129,7 @@ function currency(value: number, code: string): string {
     </label>
 
     <div
-      v-else-if="isBusy && !geometry"
+      v-else-if="phase === 'uploading' || (phase === 'preparing' && !geometry)"
       class="flex min-h-64 flex-col justify-center bg-white p-6"
       role="status"
       aria-live="polite"

@@ -361,7 +361,7 @@ export class AutomaticQuoteEstimateAssumptionsDto {
   @ApiProperty({ type: "integer", minimum: 1, maximum: 1_000 })
   quantity!: number;
 
-  @ApiProperty({ type: String })
+  @ApiProperty({ type: String, enum: ["NOT_FINALIZED"] })
   delivery!: "NOT_FINALIZED";
 }
 
