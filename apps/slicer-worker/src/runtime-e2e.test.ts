@@ -352,8 +352,8 @@ async function monitorRequestWorkspace(): Promise<{
     'case "$command" in *"--unshare-pid"*"--unshare-ipc"*"--unshare-uts"*"--ro-bind $request_root /work"*"--bind $request_root/output /work/output"*"--tmpfs $runner_root"*"--bind $request_root/tmp /tmp"*) ;; *) continue ;; esac;',
     'for child_status in "${status%/status}"/root/proc/[0-9]*/status; do',
     '[ -r "$child_status" ] || continue;',
-    "child_uid=$(awk '/^Uid:/{print $2}' \"$child_status\");",
-    '[ "$child_uid" = "10001" ] || continue;',
+    'child_uid=$(awk \'/^Uid:/{print $2 ":" $3 ":" $4 ":" $5}\' "$child_status");',
+    '[ "$child_uid" = "10001:10001:10001:10001" ] || continue;',
     'printf "%s\\n" "$modes";',
     'printf "%s\\n" "$child_uid";',
     'for name in CapInh CapPrm CapEff CapBnd CapAmb; do awk -v name="$name" \'$1 == name ":" { print $2 }\' "$child_status"; done;',
@@ -932,7 +932,7 @@ describe.skipIf(!integrationEnabled)("pinned Orca runtime end to end", () => {
       const first = await runSequence(true);
       expect(first.workspaceModes).toEqual(Array(7).fill("10001:10001:770"));
       expect(first.childSecurity).toEqual([
-        "10001",
+        "10001:10001:10001:10001",
         "0000000000000000",
         "0000000000000000",
         "0000000000000000",
