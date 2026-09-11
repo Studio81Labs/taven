@@ -68,3 +68,17 @@ jobs:
       - run: pnpm catalog-profiles:check
       - run: pnpm slicer-worker:orca:build
       - run: pnpm slicer-worker:orca:test
+      - name: Record broker LSM boundary
+        env:
+          COMPOSE_PROJECT_NAME: taven-runtime-lsm
+        run: |
+          docker info --format 'SecurityOptions: {{json .SecurityOptions}}'
+          docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker up -d slicer-volume-init orca-runner
+          cleanup() {
+            docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker down --volumes --remove-orphans
+          }
+          trap cleanup EXIT
+          container="$(docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker ps -q orca-runner)"
+          test -n "$container"
+          docker inspect "$container" --format 'AppArmorProfile: {{.AppArmorProfile}}'
+          test "$(docker inspect "$container" --format '{{.AppArmorProfile}}')" = "unconfined"
