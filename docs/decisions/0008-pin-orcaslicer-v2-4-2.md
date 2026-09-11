@@ -37,7 +37,9 @@ filesystem except for bounded work/output mounts, no Orca account, and no Bambu
 network plug-in. The BullMQ wrapper remains connected to the private Compose
 network so it can consume Redis jobs and transfer input/output through the
 configured object store; it exposes no public port. Each Orca subprocess runs
-inside a separate network namespace with no interfaces or outbound access. The
+inside a separate network namespace with no outbound access, proven
+behaviourally. A network namespace still contains loopback and kernel-created
+tunnel devices, so interface presence is not the isolation criterion. The
 isolation must be enforced and tested without mounting the host Docker socket.
 If the selected CLI path still requires a display, the wrapper supplies a
 private Xvfb display; it must not depend on an interactive desktop.
@@ -65,9 +67,16 @@ runtimes, and runs a license-safe corpus twice from clean directories. The
 minimum corpus covers single-material PLA, quantity or multi-plate arrangement,
 painted or multi-material 3MF, and invalid geometry. Review compares normalized
 metadata, warnings/errors, plate decisions, estimated time/material, and output
-hashes. Any engine, profile, base-image, dependency, or invocation change creates
-a new engine/profile revision. The old image remains available until all jobs
-that reference it have drained or expired.
+hashes. Any engine, profile, base-image, dependency, or Orca CLI invocation
+vector change creates a new engine/profile revision. The old image remains
+available until all jobs that reference it have drained or expired.
+
+Confinement around the engine — capabilities, namespaces, LSM posture, rlimits,
+and the exec chain — is outside engine/profile identity provided it cannot change
+the artifact. A confinement change must demonstrate unchanged normalized output
+for at least one corpus fixture and prove its security property behaviourally in
+the configured broker runtime. If normalized output changes, it is an identity
+change and follows the complete upgrade procedure above.
 
 ## Consequences
 
