@@ -352,6 +352,11 @@ export class AutomaticQuotesService {
       ),
     );
 
+    const localGeometry = {
+      boundsXMicrometers: millimetersToMicrometers(input.dimensionsMm.width),
+      boundsYMicrometers: millimetersToMicrometers(input.dimensionsMm.depth),
+      boundsZMicrometers: millimetersToMicrometers(input.dimensionsMm.height),
+    };
     const [priceList, capabilities] = await Promise.all([
       this.prisma.priceList.findUnique({
         where: {
@@ -375,6 +380,19 @@ export class AutomaticQuotesService {
     if (!selected) {
       throw new ServiceUnavailableException(
         "Estimate defaults are currently unavailable",
+      );
+    }
+    const selectedWithCapacity = (
+      await this.configurationCapabilities(this.prisma, localGeometry)
+    ).find(
+      (option) =>
+        option.material === input.material &&
+        option.quality === input.quality &&
+        option.infillPreset === input.infillPreset,
+    );
+    if (!selectedWithCapacity) {
+      throw new BadRequestException(
+        "Estimate geometry exceeds active build volumes",
       );
     }
 
@@ -405,21 +423,13 @@ export class AutomaticQuotesService {
       items: [
         {
           id: itemId,
-          referenceProfileId: selected.referenceProfileId,
+          referenceProfileId: selectedWithCapacity.referenceProfileId,
           material: input.material,
           quantity: input.quantity,
           referencePartsPerPlate: input.quantity,
           primary: estimated.primary,
           tail: estimated.tail,
-          boundsXMicrometers: millimetersToMicrometers(
-            input.dimensionsMm.width,
-          ),
-          boundsYMicrometers: millimetersToMicrometers(
-            input.dimensionsMm.depth,
-          ),
-          boundsZMicrometers: millimetersToMicrometers(
-            input.dimensionsMm.height,
-          ),
+          ...localGeometry,
           fulfilmentSlots: Array.from(
             { length: input.quantity },
             (_, index) => ({
@@ -5160,6 +5170,11 @@ export class AutomaticQuotesService {
   // gate before persisting the selection or allowing slicing to be enqueued.
   private async configurationCapabilities(
     client: Transaction | PrismaService = this.prisma,
+    geometry?: {
+      boundsXMicrometers: bigint;
+      boundsYMicrometers: bigint;
+      boundsZMicrometers: bigint;
+    },
   ) {
     const rows = await client.$queryRaw<
       Array<{
@@ -5170,6 +5185,9 @@ export class AutomaticQuotesService {
         color: string | null;
         quality: "DRAFT" | "STANDARD" | "FINE";
         infillPercent: number;
+        buildVolumeXMicrometers: bigint;
+        buildVolumeYMicrometers: bigint;
+        buildVolumeZMicrometers: bigint;
       }>
     >`
       SELECT DISTINCT
@@ -5179,7 +5197,10 @@ export class AutomaticQuotesService {
         profile.material::text AS material,
         inventory.color,
         config.quality::text AS quality,
-        config.infill_percent AS "infillPercent"
+        config.infill_percent AS "infillPercent",
+        capability.build_volume_x_micrometers AS "buildVolumeXMicrometers",
+        capability.build_volume_y_micrometers AS "buildVolumeYMicrometers",
+        capability.build_volume_z_micrometers AS "buildVolumeZMicrometers"
       FROM reference_profiles reference
       JOIN machine_profiles profile
         ON profile.reference_profile_id = reference.id
@@ -5197,6 +5218,8 @@ export class AutomaticQuotesService {
        AND machine.status = 'ACTIVE'
        AND machine.installed_nozzle_micrometers =
            profile.nozzle_diameter_micrometers
+      JOIN machine_capabilities capability
+        ON capability.id = machine.machine_capability_id
       JOIN nodes node
         ON node.id = machine.node_id
        AND node.active
@@ -5220,7 +5243,10 @@ export class AutomaticQuotesService {
         reference.activated_at DESC NULLS LAST,
         reference.id
     `;
-    const options = new Map<string, (typeof rows)[number]>();
+    const compatibleRows = geometry
+      ? rows.filter((row) => geometryFitsCapability(geometry, row))
+      : rows;
+    const options = new Map<string, (typeof compatibleRows)[number]>();
     const addOption = (row: (typeof rows)[number]) => {
       const key = JSON.stringify([
         row.printConfigRevisionId,
@@ -5231,7 +5257,7 @@ export class AutomaticQuotesService {
       ]);
       if (!options.has(key)) options.set(key, row);
     };
-    for (const row of rows) {
+    for (const row of compatibleRows) {
       addOption(row);
       if (row.color !== null) addOption({ ...row, color: null });
     }

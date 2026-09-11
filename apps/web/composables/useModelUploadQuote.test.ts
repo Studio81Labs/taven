@@ -9,11 +9,17 @@ import {
   isTerminalQuoteHandoff,
   isTerminalAttachmentStatus,
   isTerminalUploadConfirmationStatus,
+  requestsImmediateEstimate,
   requiresPreparationAdvance,
   resolveUploadSession,
 } from "./useModelUploadQuote";
 
 describe("model selection persistence", () => {
+  it("requests a local estimate only for consumers that render it", () => {
+    expect(requestsImmediateEstimate({})).toBe(false);
+    expect(requestsImmediateEstimate({ estimateEnabled: true })).toBe(true);
+  });
+
   it("preserves an existing quote while the landing validates its replacement", () => {
     expect(
       clearsStoredSessionOnSelection({

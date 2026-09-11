@@ -6,6 +6,7 @@ const ANONYMOUS_QUOTE_CLIENT_MAX_ISSUED = 5;
 const ANONYMOUS_QUOTE_GLOBAL_MAX_ISSUED = 100;
 const ANONYMOUS_QUOTE_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_QUOTE_LIMIT_CLEANUP_BATCH = 100;
+const ANONYMOUS_QUOTE_LIMIT_SUBJECT_MAX_LENGTH = 64;
 
 type Transaction = Prisma.TransactionClient;
 type AnonymousQuoteLimitRow = {
@@ -93,9 +94,19 @@ function anonymousQuoteLimitSubjects(
   if (!/^[a-z0-9-]{1,64}$/.test(namespace)) {
     throw new Error("Anonymous quote limit namespace is invalid");
   }
+  const clientPrefix = `${namespace}:client:`;
+  const clientSubjectLength =
+    ANONYMOUS_QUOTE_LIMIT_SUBJECT_MAX_LENGTH - clientPrefix.length;
+  if (clientSubjectLength < 16) {
+    throw new Error("Anonymous quote limit namespace is too long");
+  }
   return {
     global: `${namespace}:global`,
-    client: `${namespace}:client:${subjectHash}`,
+    // The stored key is intentionally bounded by the schema's VarChar(64).
+    // Callers provide cryptographic client subjects, so retaining 128 bits
+    // leaves the namespace isolated without making the rate-limit key too
+    // large for persistence.
+    client: `${clientPrefix}${subjectHash.slice(0, clientSubjectLength)}`,
   };
 }
 

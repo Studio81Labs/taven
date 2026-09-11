@@ -199,6 +199,7 @@ function estimateRequestMessage(status: number): string {
 }
 
 export interface UseModelUploadQuoteOptions {
+  estimateEnabled?: boolean;
   preserveStoredSessionOnSelection?: boolean;
   restoreSession?: boolean;
 }
@@ -207,6 +208,12 @@ export function clearsStoredSessionOnSelection(
   options: UseModelUploadQuoteOptions,
 ): boolean {
   return options.preserveStoredSessionOnSelection !== true;
+}
+
+export function requestsImmediateEstimate(
+  options: UseModelUploadQuoteOptions,
+): boolean {
+  return options.estimateEnabled === true;
 }
 
 export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
@@ -345,7 +352,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       if (buffer.byteLength <= MAX_LOCAL_PREVIEW_BYTES) {
         try {
           geometry.value = await parseModelGeometry(valid.format, buffer);
-          void requestEstimate(geometry.value, revision);
+          if (requestsImmediateEstimate(options)) {
+            void requestEstimate(geometry.value, revision);
+          }
         } catch (error) {
           if (
             error instanceof ModelGeometryError &&
@@ -438,7 +447,8 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
 
   function retryEstimate(): void {
     const parsedGeometry = geometry.value;
-    if (!parsedGeometry || disposed) return;
+    if (!parsedGeometry || disposed || !requestsImmediateEstimate(options))
+      return;
     void requestEstimate(parsedGeometry, selectionRevision);
   }
 

@@ -25,6 +25,7 @@ const {
   startUpload,
   uploadProgress,
 } = useModelUploadQuote({
+  estimateEnabled: true,
   preserveStoredSessionOnSelection: true,
   restoreSession: false,
 });

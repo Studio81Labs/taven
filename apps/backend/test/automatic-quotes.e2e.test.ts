@@ -38,6 +38,7 @@ const localAutomaticQuoteEstimateSubjectHash = createHmac(
 )
   .update("anonymous-automatic-quote-estimate\0" + "127.0.0.1")
   .digest("hex");
+const localAutomaticQuoteEstimateLimitSubject = `automatic-quote-estimate:client:${localAutomaticQuoteEstimateSubjectHash.slice(0, 32)}`;
 process.env.TAVEN_QUOTE_CAPABILITY_KEY ??= quoteCapabilityKey;
 process.env.TAVEN_DELIVERY_ENDPOINTS_JSON ??= JSON.stringify([
   {
@@ -125,7 +126,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         subjectHash: {
           in: [
             localAutomaticQuoteSubjectHash,
-            `automatic-quote-estimate:client:${localAutomaticQuoteEstimateSubjectHash}`,
+            localAutomaticQuoteEstimateLimitSubject,
             "automatic-quote-estimate:global",
           ],
         },
@@ -180,11 +181,31 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     await expect(
       prisma.anonymousQuoteLimit.findUniqueOrThrow({
         where: {
-          subjectHash: `automatic-quote-estimate:client:${localAutomaticQuoteEstimateSubjectHash}`,
+          subjectHash: localAutomaticQuoteEstimateLimitSubject,
         },
         select: { issuedCount: true },
       }),
     ).resolves.toEqual({ issuedCount: 1 });
+  });
+
+  it("refuses local geometry outside every active build volume", async () => {
+    const result = await api("automatic-quote-estimates", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        volumeMm3: 8_000,
+        dimensionsMm: { width: 1_000, depth: 1_000, height: 1_000 },
+        material: "PLA",
+        quality: "STANDARD",
+        infillPreset: "STANDARD",
+        quantity: 1,
+      }),
+    });
+
+    expect(result.response.status).toBe(400);
+    expect(result.body).toMatchObject({
+      message: "Estimate geometry exceeds active build volumes",
+    });
   });
 
   it("rejects unsafe local geometry and keeps estimate publication fail closed", async () => {
@@ -223,7 +244,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       await expect(
         prisma.anonymousQuoteLimit.findUnique({
           where: {
-            subjectHash: `automatic-quote-estimate:client:${localAutomaticQuoteEstimateSubjectHash}`,
+            subjectHash: localAutomaticQuoteEstimateLimitSubject,
           },
         }),
       ).resolves.toBeNull();
