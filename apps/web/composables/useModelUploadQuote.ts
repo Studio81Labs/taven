@@ -396,8 +396,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
         previewMessage.value =
           "Soubor je pro místní náhled příliš velký. Bezpečně ho zkontrolujeme po nahrání.";
       }
-      sha256.value = await hashPromise;
+      const hash = await hashPromise;
       if (revision !== selectionRevision) return;
+      sha256.value = hash;
       phase.value = "ready";
     } catch (error) {
       if (revision !== selectionRevision) return;
