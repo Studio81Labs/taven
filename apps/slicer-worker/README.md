@@ -54,6 +54,14 @@ G-code fields remain valid preset content.
 Candidate jobs upload metrics-only
 JSON under `slice-metrics/`; only reference jobs write non-production reference
 G-code and only contract-authorized production jobs write under `gcode/`.
+Artifact objects are immutable by slicing-input identity and self-consistent
+stored-content digest. `artifact.sha256` is therefore the integrity digest of
+the object actually stored, not a reproducibility identity: a concurrent
+losing worker adopts the valid stored winner rather than treating engine-clock
+bytes as invalid model input. Reference G-code alone normalizes Orca's generated
+header timestamp to the pinned runtime lock epoch before parsing, hashing, and
+storage because its metrics support pricing. Production G-code 3MF packages are
+stored verbatim for printer compatibility; the worker never repacks them.
 The pinned Orca runtime emits plain G-code and Bambu G-code 3MF packages.
 Because upstream OrcaSlicer 2.4.2 has no native binary-G-code exporter, a Prusa
 `bgcode` request returns a typed unsupported result instead of relabeling plain
