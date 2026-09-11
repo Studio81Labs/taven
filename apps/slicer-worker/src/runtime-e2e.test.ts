@@ -38,11 +38,17 @@ const dockerAvailable =
 if (integrationRequested && !dockerAvailable) {
   throw new Error("The enabled slicer-worker integration requires Docker");
 }
-const integrationEnabled =
-  integrationRequested &&
+const runtimeImageAvailable =
+  dockerAvailable &&
   spawnSync("docker", ["image", "inspect", runtimeLock.image.tag], {
     stdio: "ignore",
   }).status === 0;
+if (integrationRequested && !runtimeImageAvailable) {
+  throw new Error(
+    `The enabled slicer-worker integration requires ${runtimeLock.image.tag}`,
+  );
+}
+const integrationEnabled = integrationRequested && runtimeImageAvailable;
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../..",
@@ -55,6 +61,9 @@ const composeEnvironment = {
   TAVEN_REDIS_PORT: String(portBase),
   TAVEN_MINIO_PORT: String(portBase + 1),
   TAVEN_MINIO_CONSOLE_PORT: String(portBase + 2),
+  TAVEN_S3_BUCKET: "taven",
+  TAVEN_S3_ACCESS_KEY_ID: "taven",
+  TAVEN_S3_SECRET_ACCESS_KEY: "taven-local-only",
 };
 const composeFiles = [
   "compose",
@@ -367,6 +376,7 @@ async function assertBrokerSecurity(): Promise<void> {
       Config: { User: string };
       HostConfig: {
         CapAdd: string[] | null;
+        CapDrop: string[] | null;
         NetworkMode: string;
         Privileged: boolean;
         ReadonlyRootfs: boolean;
@@ -375,6 +385,7 @@ async function assertBrokerSecurity(): Promise<void> {
       Mounts: { Destination: string; Source: string }[];
     };
     const caps = inspection.HostConfig.CapAdd ?? [];
+    expect(inspection.HostConfig.CapDrop ?? []).toContain("ALL");
     expect(caps ?? []).not.toContain("CAP_DAC_OVERRIDE");
     expect(caps ?? []).not.toContain("CAP_DAC_READ_SEARCH");
     expect(caps ?? []).not.toContain("CAP_FOWNER");
