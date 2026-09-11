@@ -411,9 +411,7 @@
           },
           "quality": {
             "enum": [
-              "DRAFT",
-              "STANDARD",
-              "FINE"
+              "STANDARD"
             ],
             "type": "string"
           },
@@ -1894,9 +1892,7 @@
           },
           "quality": {
             "enum": [
-              "DRAFT",
-              "STANDARD",
-              "FINE"
+              "STANDARD"
             ],
             "type": "string"
           },
@@ -12723,7 +12719,7 @@
             "description": ""
           },
           "400": {
-            "description": "Geometry or public monetary result is outside safe bounds"
+            "description": "Geometry, STANDARD-only quality, or public monetary result is outside safe bounds"
           },
           "429": {
             "description": "Anonymous estimate limit is exhausted"

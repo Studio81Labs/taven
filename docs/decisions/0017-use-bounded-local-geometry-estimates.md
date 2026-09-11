@@ -2,7 +2,8 @@
 
 - **Status:** accepted
 - **Date:** 2026-09-11
-- **Decision authority:** Epic #9 technical implementation plan, issue #141
+- **Decision authority:** Epic #9 technical implementation plan, issue #141,
+  escalation #147
 
 ## Context
 
@@ -15,12 +16,20 @@ a binding price.
 ## Decision
 
 Expose a stateless `POST /automatic-quote-estimates` command accepting only a
-bounded volume, bounding box, material, quality, named infill preset, and
-quantity. It rejects unknown fields, source identifiers, prices, contacts, and
-unrepresentable geometry or money. The backend selects an active matching
-configuration and the active v0 price list, reuses the existing rough material
-and extrusion calculation plus provisional public price projection, and returns
-the selected revisions as observable assumptions.
+bounded volume, bounding box, material, required `quality: "STANDARD"`, named
+infill preset, and quantity. It rejects unknown fields, source identifiers,
+prices, contacts, DRAFT/FINE quality requests, and unrepresentable geometry or
+money. The backend selects an active matching STANDARD configuration and the
+active v0 price list, reuses the existing rough material and extrusion
+calculation plus provisional public price projection, and returns the selected
+revisions as observable assumptions.
+
+Escalation #147 established this narrow contract because the rough estimator
+has one extrusion-rate input and no approved quality-sensitive time or pricing
+factor. It must not invent a quality multiplier or silently coerce a requested
+quality. This restriction applies only to the immediate estimate: the existing
+configurator and slicing flow continue to expose DRAFT, STANDARD, and FINE,
+where quality prices are slice-derived.
 
 The command creates no session, upload, order, slice, reservation, payment,
 idempotency, or business-event record. Its only write is a separately
@@ -42,6 +51,6 @@ existing configuration/revision-bound quote remain authoritative. A scale
 conversion, mesh repair, or acknowledgement that bypasses blocking findings is
 outside this decision.
 
-Latency and accuracy are measured against representative fixtures; an unmet
-target requires the Epic escalation process rather than a customer-facing
-claim or a second pricing calculator.
+Latency and accuracy are measured against representative STANDARD fixtures;
+an unmet target requires the Epic escalation process rather than a
+customer-facing claim or a second pricing calculator.

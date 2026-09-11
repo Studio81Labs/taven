@@ -1805,7 +1805,7 @@ export interface components {
             /** Format: uuid */
             printConfigRevisionId: string;
             /** @enum {string} */
-            quality: "DRAFT" | "STANDARD" | "FINE";
+            quality: "STANDARD";
             quantity: number;
             /** Format: uuid */
             referenceProfileId: string;
@@ -2166,7 +2166,7 @@ export interface components {
             /** @enum {string} */
             material: "PLA" | "PETG";
             /** @enum {string} */
-            quality: "DRAFT" | "STANDARD" | "FINE";
+            quality: "STANDARD";
             quantity: number;
             volumeMm3: number;
         };
@@ -6057,7 +6057,7 @@ export interface operations {
                     "application/json": components["schemas"]["AutomaticQuoteEstimateDto"];
                 };
             };
-            /** @description Geometry or public monetary result is outside safe bounds */
+            /** @description Geometry, STANDARD-only quality, or public monetary result is outside safe bounds */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -28,7 +28,8 @@ export class AutomaticQuoteEstimatesController {
   @ApiBody({ type: CreateAutomaticQuoteEstimateDto })
   @ApiOkResponse({ type: AutomaticQuoteEstimateDto })
   @ApiBadRequestResponse({
-    description: "Geometry or public monetary result is outside safe bounds",
+    description:
+      "Geometry, STANDARD-only quality, or public monetary result is outside safe bounds",
   })
   @ApiTooManyRequestsResponse({
     description: "Anonymous estimate limit is exhausted",

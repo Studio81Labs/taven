@@ -223,6 +223,44 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       }),
     });
     expect(invalid.response.status).toBe(400);
+    await expect(
+      prisma.anonymousQuoteLimit.findUnique({
+        where: { subjectHash: localAutomaticQuoteEstimateLimitSubject },
+      }),
+    ).resolves.toBeNull();
+
+    for (const quality of ["DRAFT", "FINE", "UNKNOWN", null] as const) {
+      const unsupported = await api("automatic-quote-estimates", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          volumeMm3: 8_000,
+          dimensionsMm: { width: 20, depth: 20, height: 20 },
+          material: "PLA",
+          quality,
+          infillPreset: "STANDARD",
+          quantity: 1,
+        }),
+      });
+      expect(unsupported.response.status).toBe(400);
+    }
+    const missingQuality = await api("automatic-quote-estimates", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        volumeMm3: 8_000,
+        dimensionsMm: { width: 20, depth: 20, height: 20 },
+        material: "PLA",
+        infillPreset: "STANDARD",
+        quantity: 1,
+      }),
+    });
+    expect(missingQuality.response.status).toBe(400);
+    await expect(
+      prisma.anonymousQuoteLimit.findUnique({
+        where: { subjectHash: localAutomaticQuoteEstimateLimitSubject },
+      }),
+    ).resolves.toBeNull();
 
     const configured = process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED;
     process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = "false";
@@ -234,7 +272,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           volumeMm3: 8_000,
           dimensionsMm: { width: 20, depth: 20, height: 20 },
           material: "PLA",
-          quality: "STANDARD",
+          quality: "DRAFT",
           infillPreset: "STANDARD",
           quantity: 1,
         }),

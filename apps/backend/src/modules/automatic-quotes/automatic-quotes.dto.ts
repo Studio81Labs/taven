@@ -322,8 +322,8 @@ export class CreateAutomaticQuoteEstimateDto {
   @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
   material!: "PLA" | "PETG";
 
-  @ApiProperty({ type: String, enum: ["DRAFT", "STANDARD", "FINE"] })
-  quality!: "DRAFT" | "STANDARD" | "FINE";
+  @ApiProperty({ type: String, enum: ["STANDARD"] })
+  quality!: "STANDARD";
 
   @ApiProperty({ type: String, enum: ["DECORATIVE", "STANDARD", "STRONG"] })
   infillPreset!: "DECORATIVE" | "STANDARD" | "STRONG";
@@ -342,8 +342,8 @@ export class AutomaticQuoteEstimateAssumptionsDto {
   @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
   material!: "PLA" | "PETG";
 
-  @ApiProperty({ type: String, enum: ["DRAFT", "STANDARD", "FINE"] })
-  quality!: "DRAFT" | "STANDARD" | "FINE";
+  @ApiProperty({ type: String, enum: ["STANDARD"] })
+  quality!: "STANDARD";
 
   @ApiProperty({ type: String, enum: ["DECORATIVE", "STANDARD", "STRONG"] })
   infillPreset!: "DECORATIVE" | "STANDARD" | "STRONG";

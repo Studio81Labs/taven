@@ -6474,8 +6474,8 @@ function assertEstimateInput(input: CreateAutomaticQuoteEstimateDto): void {
   if (input.material !== "PLA" && input.material !== "PETG") {
     throw new BadRequestException("Estimate material is invalid");
   }
-  if (!(["DRAFT", "STANDARD", "FINE"] as const).includes(input.quality)) {
-    throw new BadRequestException("Estimate quality is invalid");
+  if (input.quality !== "STANDARD") {
+    throw new BadRequestException("Estimate quality must be STANDARD");
   }
   if (
     !(["DECORATIVE", "STANDARD", "STRONG"] as const).includes(

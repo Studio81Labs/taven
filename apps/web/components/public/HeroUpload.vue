@@ -233,10 +233,9 @@ function currency(value: number, code: string): string {
               }}
             </p>
             <p class="mt-2 text-sm text-[#54554c]">
-              Odhad pro {{ estimate.assumptions.material }},
-              {{ estimate.assumptions.quality.toLowerCase() }}, výplň
-              {{ estimate.assumptions.infillPreset.toLowerCase() }} a 1 kus.
-              Doprava ani závazná cena v něm nejsou zahrnuté.
+              Odhad pro {{ estimate.assumptions.material }}, standardní kvalitu,
+              výplň {{ estimate.assumptions.infillPreset.toLowerCase() }} a 1
+              kus. Doprava ani závazná cena v něm nejsou zahrnuté.
             </p>
           </template>
           <template v-else>
