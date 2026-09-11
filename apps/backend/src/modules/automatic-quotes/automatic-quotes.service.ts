@@ -6627,14 +6627,15 @@ export function conservativePartsPerPlate(
   ] as const;
   const maximum = BigInt(maximumParts);
   let conservative: number | undefined;
-  for (const [x, y, z] of [
+  const orientations: readonly (readonly [bigint, bigint, bigint])[] = [
     [dimensions[0], dimensions[1], dimensions[2]],
     [dimensions[0], dimensions[2], dimensions[1]],
     [dimensions[1], dimensions[0], dimensions[2]],
     [dimensions[1], dimensions[2], dimensions[0]],
     [dimensions[2], dimensions[0], dimensions[1]],
     [dimensions[2], dimensions[1], dimensions[0]],
-  ]) {
+  ];
+  for (const [x, y, z] of orientations) {
     if (x > buildVolume[0] || y > buildVolume[1] || z > buildVolume[2]) {
       continue;
     }
