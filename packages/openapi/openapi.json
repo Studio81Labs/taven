@@ -437,6 +437,7 @@
         "type": "object"
       },
       "AutomaticQuoteEstimateDimensionsDto": {
+        "additionalProperties": false,
         "properties": {
           "depth": {
             "maximum": 1000000,
@@ -1871,6 +1872,7 @@
         "type": "object"
       },
       "CreateAutomaticQuoteEstimateDto": {
+        "additionalProperties": false,
         "properties": {
           "dimensionsMm": {
             "$ref": "#/components/schemas/AutomaticQuoteEstimateDimensionsDto"

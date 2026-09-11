@@ -1,7 +1,15 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiSchema,
+  type ApiSchemaOptions,
+} from "@nestjs/swagger";
 import { AttributionDto } from "../metrics/attribution.dto";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+const CLOSED_ESTIMATE_REQUEST_SCHEMA: ApiSchemaOptions & {
+  additionalProperties: false;
+} = { additionalProperties: false };
 
 export class CreateAutomaticQuoteSessionDto {
   @ApiPropertyOptional({ type: AttributionDto })
@@ -301,6 +309,7 @@ export class AutomaticQuotePriceDto {
   components!: AutomaticQuotePriceComponentDto[];
 }
 
+@ApiSchema(CLOSED_ESTIMATE_REQUEST_SCHEMA)
 export class AutomaticQuoteEstimateDimensionsDto {
   @ApiProperty({ type: Number, minimum: 0.0005, maximum: 1_000_000 })
   width!: number;
@@ -312,6 +321,7 @@ export class AutomaticQuoteEstimateDimensionsDto {
   height!: number;
 }
 
+@ApiSchema(CLOSED_ESTIMATE_REQUEST_SCHEMA)
 export class CreateAutomaticQuoteEstimateDto {
   @ApiProperty({ type: Number, minimum: 5e-10, maximum: 1e18 })
   volumeMm3!: number;

@@ -223,6 +223,24 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       }),
     });
     expect(invalid.response.status).toBe(400);
+    const invalidDimensions = await api("automatic-quote-estimates", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        volumeMm3: 8_000,
+        dimensionsMm: {
+          width: 20,
+          depth: 20,
+          height: 20,
+          unit: "mm",
+        },
+        material: "PLA",
+        quality: "STANDARD",
+        infillPreset: "STANDARD",
+        quantity: 1,
+      }),
+    });
+    expect(invalidDimensions.response.status).toBe(400);
     await expect(
       prisma.anonymousQuoteLimit.findUnique({
         where: { subjectHash: localAutomaticQuoteEstimateLimitSubject },
