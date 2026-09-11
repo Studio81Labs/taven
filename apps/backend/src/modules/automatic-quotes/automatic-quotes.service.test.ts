@@ -6,6 +6,7 @@ import {
   AutomaticQuotesService,
   conservativePartsPerPlate,
   decimalToInteger,
+  isCarrierValidationReady,
   parcelConfigurationChange,
   requiresShipmentHandoff,
 } from "./automatic-quotes.service";
@@ -102,6 +103,38 @@ describe("AutomaticQuotesService", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("waits for reference slices before validating a Packeta selection", () => {
+    const packetaSelector = {
+      mode: "PACKETA" as const,
+      available: true,
+      allowedEndpointTypes: ["pickup_point"],
+      widget: { accountId: "widget-key", options: {} },
+    };
+
+    expect(
+      isCarrierValidationReady({
+        deliverySelector: packetaSelector,
+        allReferenceSliced: false,
+      }),
+    ).toBe(false);
+    expect(
+      isCarrierValidationReady({
+        deliverySelector: packetaSelector,
+        allReferenceSliced: true,
+      }),
+    ).toBe(true);
+    expect(
+      isCarrierValidationReady({
+        deliverySelector: {
+          mode: "CONFIGURED",
+          available: true,
+          allowedEndpointTypes: ["pickup_point"],
+        },
+        allReferenceSliced: false,
+      }),
+    ).toBe(true);
   });
 
   it("clears a Packeta destination after parcel configuration changes", async () => {

@@ -221,6 +221,13 @@ export function requiresShipmentHandoff(input: {
   );
 }
 
+export function isCarrierValidationReady(input: {
+  deliverySelector: DeliverySelectorProjection;
+  allReferenceSliced: boolean;
+}): boolean {
+  return input.deliverySelector.mode !== "PACKETA" || input.allReferenceSliced;
+}
+
 export async function parcelConfigurationChange(
   transaction: Transaction,
   orderId: string,
@@ -629,12 +636,14 @@ export class AutomaticQuotesService {
 
       // Handoff uses only the process-local selector policy and configured
       // options. It must never refresh Packeta metadata inside this transaction.
+      const deliverySelector = this.deliveryCapabilities.selectionPolicy();
       const deliveryOptions = this.deliveryCapabilities.configuredOptions();
       const snapshot = await this.buildHandoffSnapshot(
         transaction,
         sessionId,
         decisionAt,
         deliveryOptions,
+        deliverySelector,
       );
       const expiresAt = new Date(
         Math.min(
@@ -1379,11 +1388,13 @@ export class AutomaticQuotesService {
       // destination had never been selected.
       return this.getSession(sessionId, authorization);
     }
+    const deliverySelector = this.deliveryCapabilities.selectionPolicy();
     const prevalidated = await this.prevalidateDestination(
       sessionId,
       sessionCapability,
       providerEndpointId,
       endpointType,
+      deliverySelector,
     );
     const candidate = await this.deliveryCapabilities.prepareSelection({
       providerEndpointId,
@@ -1410,7 +1421,7 @@ export class AutomaticQuotesService {
         ),
     });
     if (
-      this.deliveryCapabilities.selectionPolicy().mode === "PACKETA" &&
+      deliverySelector.mode === "PACKETA" &&
       candidatePreparation.prepared.kind !== "binding_quote"
     ) {
       throw new BadRequestException(
@@ -4622,6 +4633,7 @@ export class AutomaticQuotesService {
     sessionCapability: string,
     providerEndpointId: string,
     endpointType: string,
+    deliverySelector: DeliverySelectorProjection,
   ): Promise<{
     configurationRevision: number;
     expressRequested: boolean;
@@ -4665,7 +4677,14 @@ export class AutomaticQuotesService {
       draft.items,
       parameters,
     );
-    if (!pricing || pricing.items.length === 0) {
+    if (
+      !pricing ||
+      pricing.items.length === 0 ||
+      !isCarrierValidationReady({
+        deliverySelector,
+        allReferenceSliced: pricing.allReferenceSliced,
+      })
+    ) {
       throw new ConflictException(
         "Automatic order is not ready for delivery selection",
       );
@@ -4740,6 +4759,7 @@ export class AutomaticQuotesService {
     sessionId: string,
     decisionAt: Date,
     deliveryOptions: readonly DeliveryCapabilityOption[],
+    deliverySelector: DeliverySelectorProjection,
   ): Promise<AutomaticQuoteHandoffSnapshot> {
     const source = await this.loadSession(sessionId, transaction);
     const order = source.automaticOrderOrigin!.order;
@@ -4934,10 +4954,13 @@ export class AutomaticQuotesService {
       order.status === OrderStatus.QUOTED &&
       Boolean(active && hasLiveReservation);
     if (
-      readyItems &&
-      !checkoutReady &&
-      availableDeliveryOptions.length === 0 &&
-      !reasons.includes("SHIPMENT_INELIGIBLE")
+      requiresShipmentHandoff({
+        readyItems,
+        checkoutReady,
+        deliveryOptions: availableDeliveryOptions,
+        deliverySelector,
+        handoffReasons: reasons,
+      })
     ) {
       reasons.push("SHIPMENT_INELIGIBLE");
     }
