@@ -163,11 +163,20 @@ export class S3WorkerObjectStore implements WorkerObjectStore {
       const existing = await this.read(objectKey, bytes.byteLength);
       if (existing) {
         if (
-          existing.sha256 !== digest ||
-          (immutableInputFingerprintSha256 !== undefined &&
-            (existing.immutableInputFingerprintSha256 !==
-              immutableInputFingerprintSha256 ||
-              existing.metadataContentSha256 !== digest))
+          immutableInputFingerprintSha256 !== undefined &&
+          (existing.immutableInputFingerprintSha256 !==
+            immutableInputFingerprintSha256 ||
+            existing.metadataContentSha256 !== existing.sha256)
+        ) {
+          throw new SlicingWorkerError(
+            "deterministic_invalid",
+            "INVALID_MODEL",
+            "Immutable object key does not match its identity or content digest",
+          );
+        }
+        if (
+          immutableInputFingerprintSha256 === undefined &&
+          existing.sha256 !== digest
         ) {
           throw new SlicingWorkerError(
             "deterministic_invalid",
@@ -175,7 +184,7 @@ export class S3WorkerObjectStore implements WorkerObjectStore {
             "Immutable object key already contains different bytes or identity",
           );
         }
-        return { sha256: digest, cacheHit: true };
+        return { sha256: existing.sha256, cacheHit: true };
       }
       await this.client.send(
         new PutObjectCommand({
@@ -204,13 +213,14 @@ export class S3WorkerObjectStore implements WorkerObjectStore {
       if (isPreconditionFailed(error)) {
         const winner = await this.read(objectKey, bytes.byteLength);
         if (
-          winner?.sha256 === digest &&
-          (immutableInputFingerprintSha256 === undefined ||
-            (winner.immutableInputFingerprintSha256 ===
-              immutableInputFingerprintSha256 &&
-              winner.metadataContentSha256 === digest))
+          winner &&
+          (immutableInputFingerprintSha256 === undefined
+            ? winner.sha256 === digest
+            : winner.immutableInputFingerprintSha256 ===
+                immutableInputFingerprintSha256 &&
+              winner.metadataContentSha256 === winner.sha256)
         ) {
-          return { sha256: digest, cacheHit: true };
+          return { sha256: winner.sha256, cacheHit: true };
         }
       }
       throw new SlicingWorkerError(

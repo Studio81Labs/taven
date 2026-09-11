@@ -30,6 +30,12 @@ Every dispatch includes a schema-verified SHA-256 fingerprint of canonical
 stable dispatch ID, and fingerprint. Retries keep that dispatch ID and key;
 correlation IDs and attempt numbers do not define the effect. Producers use
 `slicingInputFingerprint(kind, input)` rather than supplying their own digest.
+Artifact object keys bind that immutable input identity. An artifact's reported
+`sha256` is instead the integrity digest of the bytes actually stored at that
+key; concurrent workers adopt a valid winner with the same input identity and
+self-consistent stored-content metadata. Reference G-code normalizes only the
+Orca generation-header timestamp to the pinned runtime epoch before it is
+hashed, while production packages remain verbatim printer artifacts.
 Body subsets use `geometrySelectionSha256(bodyIds)`, which rejects duplicate or
 non-canonical ordering and binds the digest to the exact selected body set.
 Every result echoes the complete immutable input identity. Consumers use
