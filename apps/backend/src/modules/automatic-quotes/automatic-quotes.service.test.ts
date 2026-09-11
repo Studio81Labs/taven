@@ -21,20 +21,19 @@ describe("AutomaticQuotesService", () => {
     );
   });
 
-  it("counts only planar copies when estimating plates", () => {
+  it("uses one part per plate when local geometry cannot prove clearance", () => {
     expect(
       conservativePartsPerPlate(
         {
-          boundsXMicrometers: 200_000n,
-          boundsYMicrometers: 200_000n,
-          boundsZMicrometers: 1_000n,
+          boundsXMicrometers: 110_000n,
+          boundsYMicrometers: 110_000n,
+          boundsZMicrometers: 110_000n,
         },
         {
           buildVolumeXMicrometers: 220_000n,
           buildVolumeYMicrometers: 220_000n,
           buildVolumeZMicrometers: 220_000n,
         },
-        100,
       ),
     ).toBe(1);
   });

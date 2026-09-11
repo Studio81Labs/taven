@@ -411,7 +411,6 @@ export class AutomaticQuotesService {
     const referencePartsPerPlate = conservativePartsPerPlate(
       localGeometry,
       selectedWithCapacity,
-      input.quantity,
     );
     const estimated = roughSliceMetrics(
       {
@@ -6613,7 +6612,6 @@ export function conservativePartsPerPlate(
     buildVolumeYMicrometers: bigint;
     buildVolumeZMicrometers: bigint;
   },
-  maximumParts: number,
 ): number {
   const dimensions = [
     geometry.boundsXMicrometers,
@@ -6625,8 +6623,6 @@ export function conservativePartsPerPlate(
     capability.buildVolumeYMicrometers,
     capability.buildVolumeZMicrometers,
   ] as const;
-  const maximum = BigInt(maximumParts);
-  let conservative: number | undefined;
   const orientations: readonly (readonly [bigint, bigint, bigint])[] = [
     [dimensions[0], dimensions[1], dimensions[2]],
     [dimensions[0], dimensions[2], dimensions[1]],
@@ -6639,20 +6635,14 @@ export function conservativePartsPerPlate(
     if (x > buildVolume[0] || y > buildVolume[1] || z > buildVolume[2]) {
       continue;
     }
-    // A plate can tile across its two planar axes; copies must not be stacked
-    // through its build height.
-    const count = (buildVolume[0] / x) * (buildVolume[1] / y);
-    conservative = Math.min(
-      conservative ?? maximumParts,
-      Number(count > maximum ? maximum : count),
-    );
+    // The local bounding box cannot prove a safe inter-part clearance, so a
+    // non-binding estimate must not assume that distinct copies can share a
+    // plate. Slicing determines actual packing later in the quote lifecycle.
+    return 1;
   }
-  if (!conservative) {
-    throw new BadRequestException(
-      "Estimate geometry exceeds active build volumes",
-    );
-  }
-  return conservative;
+  throw new BadRequestException(
+    "Estimate geometry exceeds active build volumes",
+  );
 }
 
 function quoteCapabilityKeyRing(): {

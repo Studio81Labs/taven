@@ -39,6 +39,7 @@ const backgroundQuotePhases: ReadonlySet<QuoteSession["phase"]> = new Set([
   "REFERENCE_SLICES_PENDING",
   "ELIGIBILITY_PENDING",
 ]);
+const ESTIMATE_SELECTION_SETTLE_DELAY_MS = 500;
 
 export function isBackgroundQuotePhase(phase: QuoteSession["phase"]): boolean {
   return backgroundQuotePhases.has(phase);
@@ -240,6 +241,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   let selectionRevision = 0;
   let uploadController: AbortController | undefined;
   let estimateController: AbortController | undefined;
+  let estimateTimer: ReturnType<typeof setTimeout> | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let pollController: AbortController | undefined;
   let commandController: AbortController | undefined;
@@ -265,6 +267,24 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     pollTimer = undefined;
     pollController?.abort();
     pollController = undefined;
+  }
+
+  function cancelScheduledEstimate(): void {
+    if (estimateTimer) clearTimeout(estimateTimer);
+    estimateTimer = undefined;
+  }
+
+  function scheduleEstimate(
+    parsedGeometry: ModelGeometry,
+    revision: number,
+  ): void {
+    cancelScheduledEstimate();
+    estimateTimer = setTimeout(() => {
+      estimateTimer = undefined;
+      if (!disposed && revision === selectionRevision) {
+        void requestEstimate(parsedGeometry, revision);
+      }
+    }, ESTIMATE_SELECTION_SETTLE_DELAY_MS);
   }
 
   function scheduleQuoteRefresh(delay: number): void {
@@ -299,6 +319,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     uploadController = undefined;
     estimateController?.abort();
     estimateController = undefined;
+    cancelScheduledEstimate();
     commandController?.abort();
     commandController = undefined;
     responseGuard.reset();
@@ -353,7 +374,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
         try {
           geometry.value = await parseModelGeometry(valid.format, buffer);
           if (requestsImmediateEstimate(options)) {
-            void requestEstimate(geometry.value, revision);
+            scheduleEstimate(geometry.value, revision);
           }
         } catch (error) {
           if (
@@ -449,6 +470,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     const parsedGeometry = geometry.value;
     if (!parsedGeometry || disposed || !requestsImmediateEstimate(options))
       return;
+    cancelScheduledEstimate();
     void requestEstimate(parsedGeometry, selectionRevision);
   }
 
@@ -470,6 +492,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     uploadController = undefined;
     estimateController?.abort();
     estimateController = undefined;
+    cancelScheduledEstimate();
     commandController?.abort();
     commandController = undefined;
     commandPending.value = false;
@@ -496,6 +519,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     if (nextQuote.roughEstimate || nextQuote.bindingQuote) {
       estimateController?.abort();
       estimateController = undefined;
+      cancelScheduledEstimate();
       estimateLoading.value = false;
       estimate.value = undefined;
       estimateMessage.value = undefined;
@@ -924,6 +948,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     uploadController = undefined;
     estimateController?.abort();
     estimateController = undefined;
+    cancelScheduledEstimate();
     responseGuard.reset();
     stopPolling();
     discardUploadCheckpoint();
@@ -1012,6 +1037,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     disposed = true;
     uploadController?.abort();
     estimateController?.abort();
+    cancelScheduledEstimate();
     commandController?.abort();
     stopPolling();
   });
