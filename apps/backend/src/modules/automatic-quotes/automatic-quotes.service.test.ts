@@ -6,6 +6,7 @@ import {
   AutomaticQuotesService,
   conservativePartsPerPlate,
   decimalToInteger,
+  parcelConfigurationChange,
   requiresShipmentHandoff,
 } from "./automatic-quotes.service";
 
@@ -101,6 +102,26 @@ describe("AutomaticQuotesService", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("clears a Packeta destination after parcel configuration changes", async () => {
+    const findUniqueOrThrow = vi.fn().mockResolvedValue({
+      selectedDeliveryDestination: {
+        capabilitySnapshot: { provider: "packeta", version: 1 },
+      },
+    });
+
+    await expect(
+      parcelConfigurationChange(
+        {
+          automaticQuoteDraft: { findUniqueOrThrow },
+        } as never,
+        "order-id",
+      ),
+    ).resolves.toEqual({
+      configurationRevision: { increment: 1 },
+      selectedDeliveryDestinationId: null,
+    });
   });
 
   it.each(["P2002", "23505"])(

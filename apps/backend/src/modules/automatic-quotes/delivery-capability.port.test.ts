@@ -214,6 +214,12 @@ describe("PacketaDeliveryCapabilityAdapter", () => {
         }),
       ]),
     ).resolves.toHaveLength(2);
+    await expect(
+      adapter.prepareSelection({
+        providerEndpointId: "pickup-1",
+        endpointType: "pickup_point",
+      }),
+    ).resolves.toMatchObject({ providerEndpointId: "pickup-1" });
     expect(refreshFeedCalls).toBe(1);
   });
 

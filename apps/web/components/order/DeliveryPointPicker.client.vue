@@ -54,8 +54,7 @@ async function openPicker(): Promise<void> {
           trigger.value?.focus();
           return;
         }
-        const providerEndpointId =
-          typeof point.id === "string" ? point.id.trim() : "";
+        const providerEndpointId = pointId(point);
         if (!providerEndpointId) {
           errorMessage.value =
             "Vybrané výdejní místo nemá platný identifikátor. Zkuste výběr znovu.";
@@ -72,6 +71,13 @@ async function openPicker(): Promise<void> {
   } finally {
     loading.value = false;
   }
+}
+
+function pointId(point: PacketaPoint): string {
+  if (typeof point.id === "string") return point.id.trim();
+  return typeof point.id === "number" && Number.isFinite(point.id)
+    ? String(point.id)
+    : "";
 }
 
 async function commitSelection(

@@ -221,6 +221,25 @@ export function requiresShipmentHandoff(input: {
   );
 }
 
+export async function parcelConfigurationChange(
+  transaction: Transaction,
+  orderId: string,
+) {
+  const draft = await transaction.automaticQuoteDraft.findUniqueOrThrow({
+    where: { orderId },
+    select: {
+      selectedDeliveryDestination: { select: { capabilitySnapshot: true } },
+    },
+  });
+  return {
+    configurationRevision: { increment: 1 },
+    ...(asRecord(draft.selectedDeliveryDestination?.capabilitySnapshot)
+      ?.provider === "packeta"
+      ? { selectedDeliveryDestinationId: null }
+      : {}),
+  };
+}
+
 @Injectable()
 export class AutomaticQuotesService {
   constructor(
@@ -952,7 +971,7 @@ export class AutomaticQuotesService {
         });
         await transaction.automaticQuoteDraft.update({
           where: { orderId: origin.orderId },
-          data: { configurationRevision: { increment: 1 } },
+          data: await parcelConfigurationChange(transaction, origin.orderId),
         });
       },
     );
@@ -1189,7 +1208,7 @@ export class AutomaticQuotesService {
         });
         await transaction.automaticQuoteDraft.update({
           where: { orderId: origin.orderId },
-          data: { configurationRevision: { increment: 1 } },
+          data: await parcelConfigurationChange(transaction, origin.orderId),
         });
       },
     );
@@ -1240,7 +1259,7 @@ export class AutomaticQuotesService {
         });
         await transaction.automaticQuoteDraft.update({
           where: { orderId: origin.orderId },
-          data: { configurationRevision: { increment: 1 } },
+          data: await parcelConfigurationChange(transaction, origin.orderId),
         });
       },
     );

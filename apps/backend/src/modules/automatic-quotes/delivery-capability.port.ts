@@ -9,6 +9,7 @@ export const DELIVERY_CAPABILITY = Symbol("DELIVERY_CAPABILITY");
 
 const PACKETA_FEED_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 const PACKETA_FEED_REFRESH_MS = 60 * 60 * 1_000;
+const PACKETA_FEED_RETRY_DELAY_MS = 60_000;
 const PACKETA_REQUEST_TIMEOUT_MS = 5_000;
 const PACKETA_RESPONSE_LIMIT_BYTES = 10 * 1_024 * 1_024;
 
@@ -196,6 +197,7 @@ type FetchLike = typeof fetch;
 export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort {
   private snapshot?: PacketaFeedSnapshot;
   private inFlight: Promise<PacketaFeedSnapshot> | undefined;
+  private retryAfter: number | undefined;
 
   constructor(
     private readonly configuration: PacketaConfiguration,
@@ -223,22 +225,7 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
     providerEndpointId: string;
     endpointType: string;
   }): Promise<ResolvedDeliveryCapability> {
-    if (
-      input.endpointType !== "pickup_point" ||
-      !nonBlankText(input.providerEndpointId)
-    ) {
-      throw new BadRequestException(
-        "Delivery endpoint is unavailable or incompatible",
-      );
-    }
-    const point = (await this.currentSnapshot()).points.get(
-      input.providerEndpointId,
-    );
-    if (!point)
-      throw new BadRequestException(
-        "Delivery endpoint is unavailable or incompatible",
-      );
-    return packetaResolved(point);
+    return packetaResolved(await this.pointForSelection(input));
   }
 
   async validateSelection(input: {
@@ -251,12 +238,7 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
         "Delivery selection has no planned parcels",
       );
     }
-    const prepared = await this.prepareSelection(input);
-    const point = (await this.currentSnapshot()).points.get(
-      prepared.providerEndpointId,
-    );
-    if (!point)
-      throw new ServiceUnavailableException("Delivery provider is unavailable");
+    const point = await this.pointForSelection(input);
     for (const parcel of input.parcels)
       await this.validateParcel(point, parcel);
     return packetaResolved(point);
@@ -332,10 +314,10 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
 
   private async currentSnapshot(): Promise<PacketaFeedSnapshot> {
     const current = this.snapshot;
-    const age = current
-      ? this.now() - current.fetchedAt
-      : Number.POSITIVE_INFINITY;
+    const now = this.now();
+    const age = current ? now - current.fetchedAt : Number.POSITIVE_INFINITY;
     if (current && age < PACKETA_FEED_REFRESH_MS) return current;
+    if (current && this.retryAfter && now < this.retryAfter) return current;
     if (this.inFlight)
       return this.withStaleFallback(this.inFlight, current, age);
     this.inFlight = this.fetchSnapshot().finally(() => {
@@ -352,7 +334,10 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
     try {
       return await refresh;
     } catch (error) {
-      if (current && age <= PACKETA_FEED_MAX_AGE_MS) return current;
+      if (current && age <= PACKETA_FEED_MAX_AGE_MS) {
+        this.retryAfter = this.now() + PACKETA_FEED_RETRY_DELAY_MS;
+        return current;
+      }
       if (error instanceof ServiceUnavailableException) throw error;
       throw new ServiceUnavailableException("Delivery provider is unavailable");
     }
@@ -377,7 +362,30 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
       throw new ServiceUnavailableException("Delivery provider is unavailable");
     const snapshot = { fetchedAt: this.now(), points };
     this.snapshot = snapshot;
+    this.retryAfter = undefined;
     return snapshot;
+  }
+
+  private async pointForSelection(input: {
+    providerEndpointId: string;
+    endpointType: string;
+  }): Promise<PacketaPoint> {
+    if (
+      input.endpointType !== "pickup_point" ||
+      !nonBlankText(input.providerEndpointId)
+    ) {
+      throw new BadRequestException(
+        "Delivery endpoint is unavailable or incompatible",
+      );
+    }
+    const point = (await this.currentSnapshot()).points.get(
+      input.providerEndpointId,
+    );
+    if (!point)
+      throw new BadRequestException(
+        "Delivery endpoint is unavailable or incompatible",
+      );
+    return point;
   }
 
   private async fetchFeed(url: string): Promise<readonly unknown[]> {
