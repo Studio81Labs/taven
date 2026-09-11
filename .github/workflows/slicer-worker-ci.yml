@@ -208,3 +208,4 @@ jobs:
             throw new Error(`Sandboxed fixture hash drifted: expected ${expected}, received ${actual}`);
           }
           NODE
+      - run: pnpm slicer-worker:integration
