@@ -34,11 +34,13 @@ const execute = promisify(execFile);
 const integrationRequested =
   process.env.TAVEN_SLICER_WORKER_INTEGRATION === "1";
 const dockerAvailable =
+  integrationRequested &&
   spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 if (integrationRequested && !dockerAvailable) {
   throw new Error("The enabled slicer-worker integration requires Docker");
 }
 const runtimeImageAvailable =
+  integrationRequested &&
   dockerAvailable &&
   spawnSync("docker", ["image", "inspect", runtimeLock.image.tag], {
     stdio: "ignore",
