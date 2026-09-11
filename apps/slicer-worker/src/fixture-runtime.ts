@@ -1,9 +1,5 @@
-import {
-  LEGACY_V1_SLICING_QUEUE_NAME,
-  SLICING_QUEUE_NAME,
-} from "@taven/slicer-contracts";
+import { SLICING_QUEUE_NAME } from "@taven/slicer-contracts";
 import { runFixtureSlicingJob } from "./fixture-handler.js";
-import { runLegacyV1FixtureSlicingJob } from "./legacy-v1-fixture-handler.js";
 
 type FixtureProcessor = (input: unknown) => unknown;
 
@@ -39,23 +35,15 @@ export function redisConnection(redisUrl: string) {
 
 export function createSlicingWorkers<T>(
   createWorker: (queueName: string, processor: FixtureProcessor) => T,
-  legacyProcessor: FixtureProcessor,
   currentProcessor: FixtureProcessor,
-): [T, T] {
-  return [
-    createWorker(LEGACY_V1_SLICING_QUEUE_NAME, legacyProcessor),
-    createWorker(SLICING_QUEUE_NAME, currentProcessor),
-  ];
+): [T] {
+  return [createWorker(SLICING_QUEUE_NAME, currentProcessor)];
 }
 
 export function createFixtureWorkers<T>(
   createWorker: (queueName: string, processor: FixtureProcessor) => T,
-): [T, T] {
-  return createSlicingWorkers(
-    createWorker,
-    runLegacyV1FixtureSlicingJob,
-    runFixtureSlicingJob,
-  );
+): [T] {
+  return createSlicingWorkers(createWorker, runFixtureSlicingJob);
 }
 
 export async function closeSlicingWorkers(

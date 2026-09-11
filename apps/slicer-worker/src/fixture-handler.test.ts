@@ -9,7 +9,6 @@ import {
 } from "@taven/slicer-contracts";
 import { describe, expect, it } from "vitest";
 import { runFixtureSlicingJob } from "./fixture-handler.js";
-import { runLegacyV1FixtureSlicingJob } from "./legacy-v1-fixture-handler.js";
 
 const ids = {
   job: "93ce90b0-3ed3-4d64-8a46-f032f31fa21d",
@@ -496,29 +495,5 @@ describe("runFixtureSlicingJob", () => {
         originalResult,
       ),
     ).toThrow();
-  });
-});
-
-describe("runLegacyV1FixtureSlicingJob", () => {
-  const legacyJob = {
-    contractVersion: 1 as const,
-    jobId: ids.job,
-    inputObjectKey: "fixture/input.stl",
-    inputSha256: "a".repeat(64),
-    profileVersion: "fixture-v1",
-    profileSha256: "b".repeat(64),
-  };
-
-  it("keeps queued v1 jobs executable during the drain window", () => {
-    expect(runLegacyV1FixtureSlicingJob(legacyJob)).toMatchObject({
-      contractVersion: 1,
-      jobId: ids.job,
-      engine: { profileSha256: legacyJob.profileSha256 },
-      output: { kind: "fixture" },
-    });
-  });
-
-  it("does not accept v2 jobs on the v1 processor", () => {
-    expect(() => runLegacyV1FixtureSlicingJob(referenceJob)).toThrow();
   });
 });

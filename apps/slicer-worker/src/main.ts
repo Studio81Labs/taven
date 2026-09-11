@@ -1,7 +1,6 @@
 import "dotenv/config";
 import { Worker } from "bullmq";
 import { readWorkerConfig } from "./config.js";
-import { runLegacyV1FixtureSlicingJob } from "./legacy-v1-fixture-handler.js";
 import { S3WorkerObjectStore } from "./object-store.js";
 import { OrcaSidecarEngine } from "./orca-engine.js";
 import { SlicingProcessor } from "./processor.js";
@@ -41,7 +40,6 @@ const workers = createSlicingWorkers(
         maxStalledCount: 1,
       },
     ),
-  runLegacyV1FixtureSlicingJob,
   (input) => processor.process(input),
 );
 

@@ -17,15 +17,6 @@ const ids = {
   config: "66666666-6666-4666-8666-666666666666",
 } as const;
 
-const legacyJob = {
-  contractVersion: 1 as const,
-  jobId: ids.job,
-  inputObjectKey: "fixture/input.stl",
-  inputSha256: "a".repeat(64),
-  profileVersion: "fixture-v1",
-  profileSha256: "b".repeat(64),
-};
-
 const referenceInput = {
   geometry: {
     sourceModelFileId: ids.model,
@@ -64,7 +55,7 @@ const referenceJob = {
 };
 
 describe("fixture worker runtime", () => {
-  it("registers isolated v1 and v2 processors on their exact queues", () => {
+  it("registers the v2 processor on its exact queue", () => {
     const registrations: Array<{
       queueName: string;
       processor: (input: unknown) => unknown;
@@ -75,29 +66,20 @@ describe("fixture worker runtime", () => {
     });
 
     expect(registrations.map(({ queueName }) => queueName)).toEqual([
-      "taven-slicing-v1",
       "taven-slicing-v2",
     ]);
-    expect(registrations[0]!.processor(legacyJob)).toMatchObject({
-      contractVersion: 1,
-      jobId: ids.job,
-    });
-    expect(registrations[1]!.processor(referenceJob)).toMatchObject({
+    expect(registrations[0]!.processor(referenceJob)).toMatchObject({
       contractVersion: 2,
       kind: "reference_slice",
       jobId: ids.job,
     });
-    expect(() => registrations[0]!.processor(referenceJob)).toThrow();
-    expect(() => registrations[1]!.processor(legacyJob)).toThrow();
   });
 
   it("closes every queue consumer during shutdown", async () => {
-    const closeV1 = vi.fn(async () => undefined);
     const closeV2 = vi.fn(async () => undefined);
 
-    await closeFixtureWorkers([{ close: closeV1 }, { close: closeV2 }]);
+    await closeFixtureWorkers([{ close: closeV2 }]);
 
-    expect(closeV1).toHaveBeenCalledOnce();
     expect(closeV2).toHaveBeenCalledOnce();
   });
 });

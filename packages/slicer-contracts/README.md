@@ -16,14 +16,11 @@ only. This does not change queue contract version 2.
 The v2 queue carries strict, discriminated contracts for model inspection,
 reference slicing, machine candidate estimates, and accepted-job production
 slicing. Producers and consumers must reject unknown versions and fields. A
-breaking shape change gets a new contract version and queue name; consumers are
-deployed before producers, and an old queue is retired only after it drains.
-
-During the v1-to-v2 transition, the worker consumes both `taven-slicing-v1` and
-`taven-slicing-v2`. New producers publish only v2 messages. The v1 schema and
-fixture processor must remain deployed until the legacy queue has zero waiting,
-active, delayed, prioritized, and paused jobs; failed jobs require explicit
-triage before the v1 consumer is removed.
+breaking shape change requires a new contract version and queue name. A
+consumer for a future transition is deployed before its producer, and any
+retirement policy must be defined with that deployment. Taven's initial,
+undeployed state had no v1 queue or jobs to drain, so only
+`taven-slicing-v2` exists and the contract version remains 2.
 
 Every dispatch includes a schema-verified SHA-256 fingerprint of canonical
 `{ kind, input }` JSON and a job-scoped idempotency key derived from its kind,
