@@ -225,6 +225,28 @@ export class AutomaticQuoteDeliveryOptionDto {
   label!: string;
 }
 
+export class AutomaticQuoteDeliverySelectorWidgetDto {
+  @ApiProperty({ type: String })
+  accountId!: string;
+
+  @ApiProperty({ type: "object", additionalProperties: true })
+  options!: Record<string, unknown>;
+}
+
+export class AutomaticQuoteDeliverySelectorDto {
+  @ApiProperty({ type: String, enum: ["CONFIGURED", "PACKETA"] })
+  mode!: "CONFIGURED" | "PACKETA";
+
+  @ApiProperty({ type: Boolean })
+  available!: boolean;
+
+  @ApiProperty({ type: [String] })
+  allowedEndpointTypes!: string[];
+
+  @ApiPropertyOptional({ type: AutomaticQuoteDeliverySelectorWidgetDto })
+  widget?: AutomaticQuoteDeliverySelectorWidgetDto;
+}
+
 export class AutomaticQuoteQuantityComparisonDto {
   @ApiProperty({ type: "integer", minimum: 0 })
   itemOrdinal!: number;
@@ -444,6 +466,9 @@ export class AutomaticQuoteSessionDto {
 
   @ApiProperty({ type: [AutomaticQuoteDeliveryOptionDto] })
   deliveryOptions!: AutomaticQuoteDeliveryOptionDto[];
+
+  @ApiPropertyOptional({ type: AutomaticQuoteDeliverySelectorDto })
+  deliverySelector?: AutomaticQuoteDeliverySelectorDto;
 
   @ApiPropertyOptional({
     type: AutomaticQuoteDeliveryOptionDto,

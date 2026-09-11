@@ -51,6 +51,7 @@ import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.servi
 import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import { reserveAnonymousQuote } from "../quotes/anonymous-quote-limit";
 import {
+  deliveryValidationParcels,
   parseAutomaticQuotePricingParameters,
   prepareAutomaticQuote,
   type AutomaticBindingQuote,
@@ -590,10 +591,9 @@ export class AutomaticQuotesService {
         throw new ConflictException("Automatic quote handoff is unavailable");
       }
 
-      // This adapter is configuration-backed and immutable for its process
-      // lifetime. It has no carrier I/O; the snapshot only consumes this
-      // already validated process-local configuration.
-      const deliveryOptions = await this.deliveryCapabilities.list();
+      // Handoff uses only the process-local selector policy and configured
+      // options. It must never refresh Packeta metadata inside this transaction.
+      const deliveryOptions = this.deliveryCapabilities.configuredOptions();
       const snapshot = await this.buildHandoffSnapshot(
         transaction,
         sessionId,
@@ -1337,6 +1337,64 @@ export class AutomaticQuotesService {
       providerEndpointId,
       endpointType,
     });
+    if (await this.completedDestinationReplay(commandKey, fingerprint)) {
+      // A committed command is a local idempotency replay. In particular, a
+      // later Packeta outage must not make it look as though the historical
+      // destination had never been selected.
+      return this.getSession(sessionId, authorization);
+    }
+    const prevalidated = await this.prevalidateDestination(
+      sessionId,
+      sessionCapability,
+      providerEndpointId,
+      endpointType,
+    );
+    const candidate = await this.deliveryCapabilities.prepareSelection({
+      providerEndpointId,
+      endpointType,
+    });
+    const candidatePreparation = await prepareAutomaticQuote({
+      priceList: prevalidated.priceList,
+      items: prevalidated.items,
+      expressRequested: prevalidated.expressRequested,
+      materialAndColorAvailable: true,
+      withinBuildLimits: true,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+      deliveryDestination: {
+        id: deterministicUuid(
+          `automatic-delivery-prevalidation:${sessionId}:${prevalidated.configurationRevision}:destination`,
+        ),
+        capabilitySnapshot:
+          candidate.capabilitySnapshot as unknown as Prisma.JsonValue,
+      },
+      shipmentPlanIdForOrdinal: (ordinal) =>
+        deterministicUuid(
+          `automatic-delivery-prevalidation:${sessionId}:${prevalidated.configurationRevision}:${ordinal}`,
+        ),
+    });
+    if (
+      this.deliveryCapabilities.selectionPolicy().mode === "PACKETA" &&
+      candidatePreparation.prepared.kind !== "binding_quote"
+    ) {
+      throw new BadRequestException(
+        "Delivery endpoint is unavailable or incompatible",
+      );
+    }
+    const parcels =
+      candidatePreparation.prepared.kind === "binding_quote"
+        ? candidatePreparation.prepared.shipmentPlan.parcels.map((parcel) => ({
+            weightMilligrams: parcel.weightMilligrams,
+            xMicrometers: parcel.packingBox.xMicrometers,
+            yMicrometers: parcel.packingBox.yMicrometers,
+            zMicrometers: parcel.packingBox.zMicrometers,
+          }))
+        : prevalidated.unitParcels;
+    const resolved = await this.deliveryCapabilities.validateSelection({
+      providerEndpointId,
+      endpointType,
+      parcels,
+    });
     await this.idempotentEffect(
       "automatic-quote.select-destination",
       commandKey,
@@ -1344,10 +1402,6 @@ export class AutomaticQuotesService {
       async (transaction) => {
         const session = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(session, sessionCapability);
-        const resolved = await this.deliveryCapabilities.resolve({
-          providerEndpointId,
-          endpointType,
-        });
         const origin = await transaction.automaticOrderOrigin.findUnique({
           where: { quoteSessionId: sessionId },
         });
@@ -1359,6 +1413,13 @@ export class AutomaticQuotesService {
             selectedDeliveryDestination: true,
           },
         });
+        if (
+          draft.configurationRevision !== prevalidated.configurationRevision
+        ) {
+          throw new ConflictException(
+            "Delivery selection is stale after configuration changed",
+          );
+        }
         const current = draft.selectedDeliveryDestination;
         if (
           current &&
@@ -4515,6 +4576,99 @@ export class AutomaticQuotesService {
     };
   }
 
+  /**
+   * Provider work deliberately happens before the idempotent destination
+   * transaction. The transaction below fences this read with the revision it
+   * observed, so a concurrent configuration change cannot commit its result.
+   */
+  private async prevalidateDestination(
+    sessionId: string,
+    sessionCapability: string,
+    providerEndpointId: string,
+    endpointType: string,
+  ): Promise<{
+    configurationRevision: number;
+    expressRequested: boolean;
+    items: readonly AutomaticQuotePricingItem[];
+    priceList: {
+      id: string;
+      revision: string;
+      termsRevision: string;
+      currency: string;
+      parameters: Prisma.JsonValue;
+    };
+    unitParcels: ReturnType<typeof deliveryValidationParcels>;
+  }> {
+    void providerEndpointId;
+    void endpointType;
+    const session = await this.loadSession(sessionId);
+    assertOpenOrConvertedSession(session, sessionCapability);
+    const order = session.automaticOrderOrigin?.order;
+    const draft = order?.automaticQuoteDraft;
+    if (!order || !draft || draft.items.length === 0) {
+      throw new ConflictException(
+        "Automatic order is not ready for delivery selection",
+      );
+    }
+    const priceList = await this.prisma.priceList.findUnique({
+      where: {
+        currency_revision: {
+          currency: "CZK",
+          revision: AUTOMATIC_PRICE_LIST_REVISION,
+        },
+      },
+    });
+    if (!priceList)
+      throw new ConflictException("Automatic pricing is unavailable");
+    const parameters = parseAutomaticQuotePricingParameters(
+      priceList.parameters,
+    );
+    const pricing = await this.pricingItemsFromDraft(
+      this.prisma,
+      order.id,
+      draft.items,
+      parameters,
+    );
+    if (!pricing || pricing.items.length === 0) {
+      throw new ConflictException(
+        "Automatic order is not ready for delivery selection",
+      );
+    }
+    return {
+      configurationRevision: draft.configurationRevision,
+      expressRequested: draft.expressRequested,
+      items: pricing.items,
+      priceList,
+      unitParcels: deliveryValidationParcels(pricing.items, parameters),
+    };
+  }
+
+  private async completedDestinationReplay(
+    idempotencyKey: string,
+    fingerprint: string,
+  ): Promise<boolean> {
+    const existing = await this.prisma.idempotencyRecord.findFirst({
+      where: {
+        namespace: "automatic-quote.select-destination",
+        idempotencyKey,
+      },
+      orderBy: { generation: "desc" },
+    });
+    if (!existing || existing.expiresAt.getTime() <= Date.now()) return false;
+    if (existing.requestFingerprint !== fingerprint) {
+      throw new ConflictException(
+        "Idempotency key was already used with different input",
+      );
+    }
+    if (
+      existing.status !== IdempotencyStatus.COMPLETED ||
+      existing.responseBody === null
+    ) {
+      throw new ConflictException("Idempotent command is incomplete");
+    }
+    return true;
+  }
+
   private async serializableHandoffIssuance<T>(
     operation: (transaction: Transaction) => Promise<T>,
   ): Promise<T> {
@@ -4827,6 +4981,7 @@ export class AutomaticQuotesService {
     session: Awaited<ReturnType<AutomaticQuotesService["loadSession"]>>,
     client: Transaction | PrismaService = this.prisma,
   ): Promise<AutomaticQuoteSessionDto> {
+    const deliverySelector = this.deliveryCapabilities.selectionPolicy();
     const order = session.automaticOrderOrigin!.order;
     const draft = order.automaticQuoteDraft!;
     const expired =
@@ -5070,6 +5225,7 @@ export class AutomaticQuotesService {
       readyItems &&
       !checkoutReady &&
       deliveryOptions.length === 0 &&
+      !deliverySelector.available &&
       !handoffReasons.includes("SHIPMENT_INELIGIBLE")
     ) {
       handoffReasons.push("SHIPMENT_INELIGIBLE");
@@ -5124,6 +5280,19 @@ export class AutomaticQuotesService {
       items: itemDtos,
       configurationOptions,
       deliveryOptions: [...deliveryOptions],
+      deliverySelector: {
+        mode: deliverySelector.mode,
+        available: deliverySelector.available,
+        allowedEndpointTypes: [...deliverySelector.allowedEndpointTypes],
+        ...(deliverySelector.widget
+          ? {
+              widget: {
+                accountId: deliverySelector.widget.accountId,
+                options: deliverySelector.widget.options,
+              },
+            }
+          : {}),
+      },
       selectedDeliveryDestination,
       quantityComparisons,
       roughEstimate: rough?.quote ?? null,
@@ -5314,7 +5483,7 @@ export class AutomaticQuotesService {
         },
       }));
     const options =
-      configuredOptions ?? (await this.deliveryCapabilities.list());
+      configuredOptions ?? this.deliveryCapabilities.configuredOptions();
     if (!priceList) return [];
     const pricedCategories = new Set(
       parseAutomaticQuotePricingParameters(

@@ -61,7 +61,11 @@ const selectedDestination = ref("");
 const expressRequested = ref(false);
 const localError = ref<string>();
 const saving = ref(false);
+const pickerSelectionPending = ref(false);
 const configurationLocked = computed(() => props.pending || saving.value);
+const isPacketaSelector = computed(
+  () => props.quote.deliverySelector?.mode === "PACKETA",
+);
 
 watch(
   () => (props.quote.bindingQuote ? props.quote.sessionId : undefined),
@@ -119,8 +123,10 @@ const needsConfiguration = computed(
 const groups = computed(() =>
   modelGroupsFromAssignments(props.quote.modelFiles, assignments.value),
 );
-const currentPrice = computed(
-  () => props.quote.bindingQuote ?? props.quote.roughEstimate,
+const currentPrice = computed(() =>
+  pickerSelectionPending.value
+    ? props.quote.roughEstimate
+    : (props.quote.bindingQuote ?? props.quote.roughEstimate),
 );
 const priceComponents = computed(() =>
   visiblePriceComponents(currentPrice.value?.components ?? []),
@@ -433,6 +439,26 @@ async function submitDestination(): Promise<void> {
     await props.onPrepare();
   } finally {
     saving.value = false;
+  }
+}
+
+async function selectPacketaDestination(
+  destination: DeliveryDestination,
+): Promise<boolean> {
+  pickerSelectionPending.value = true;
+  try {
+    const selected = await props.onSelectDestination(destination);
+    if (!selected) return false;
+    if (
+      isExpressVisible(props.quote) &&
+      expressRequested.value !== props.quote.express.requested &&
+      !(await props.onSetExpress(expressRequested.value))
+    ) {
+      return false;
+    }
+    return await props.onPrepare();
+  } finally {
+    pickerSelectionPending.value = false;
   }
 }
 
@@ -884,7 +910,15 @@ function quantityPrice(choice: {
         Změna místa zruší současnou závaznou cenu a rezervaci. Novou cenu před
         platbou znovu výslovně zkontrolujete.
       </p>
-      <label class="wide-field">
+      <OrderDeliveryPointPicker
+        v-if="isPacketaSelector && quote.deliverySelector?.widget"
+        :account-id="quote.deliverySelector.widget.accountId"
+        :disabled="configurationLocked"
+        :on-select="selectPacketaDestination"
+        :options="quote.deliverySelector.widget.options"
+        :selected-label="quote.selectedDeliveryDestination?.label"
+      />
+      <label v-else class="wide-field">
         <span>Způsob a místo</span>
         <select v-model="selectedDestination" :disabled="configurationLocked">
           <option
@@ -905,6 +939,7 @@ function quantityPrice(choice: {
         <span>Expresní výroba pro celou objednávku</span>
       </label>
       <button
+        v-if="!isPacketaSelector"
         class="primary-button"
         type="button"
         :disabled="

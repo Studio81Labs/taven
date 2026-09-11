@@ -176,6 +176,25 @@ describe("automatic quote pricing preparation", () => {
     expect(result.prepared.reasons).toContain("SHIPMENT_INELIGIBLE");
   });
 
+  it("only narrows PriceList parcel limits with committed provider evidence", async () => {
+    const result = await prepareAutomaticQuote(
+      input({
+        deliveryDestination: {
+          id: "destination",
+          capabilitySnapshot: {
+            provider: "packeta",
+            supportedCategoryIds: ["box"],
+            endpointConstraints: { maxWeightMilligrams: "100000" },
+          },
+        },
+        shipmentPlanIdForOrdinal: (ordinal: number) => `plan-${ordinal}`,
+      }),
+    );
+
+    expect(result.prepared.kind).toBe("custom_request");
+    expect(result.prepared.reasons).toContain("SHIPMENT_INELIGIBLE");
+  });
+
   it("produces a binding total whose item and order components reconcile", async () => {
     const result = await prepareAutomaticQuote(
       input({

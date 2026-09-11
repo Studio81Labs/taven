@@ -1796,6 +1796,19 @@ export interface components {
             label: string;
             providerEndpointId: string;
         };
+        AutomaticQuoteDeliverySelectorDto: {
+            allowedEndpointTypes: string[];
+            available: boolean;
+            /** @enum {string} */
+            mode: "CONFIGURED" | "PACKETA";
+            widget?: components["schemas"]["AutomaticQuoteDeliverySelectorWidgetDto"];
+        };
+        AutomaticQuoteDeliverySelectorWidgetDto: {
+            accountId: string;
+            options: {
+                [key: string]: unknown;
+            };
+        };
         AutomaticQuoteEstimateAssumptionsDto: {
             /** @enum {string} */
             delivery: "NOT_FINALIZED";
@@ -1946,6 +1959,7 @@ export interface components {
             configurationOptions: components["schemas"]["AutomaticQuoteConfigurationOptionDto"][];
             configurationRevision: number;
             deliveryOptions: components["schemas"]["AutomaticQuoteDeliveryOptionDto"][];
+            deliverySelector?: components["schemas"]["AutomaticQuoteDeliverySelectorDto"];
             /** Format: date-time */
             expiresAt: string;
             express: components["schemas"]["AutomaticQuoteExpressDto"];
@@ -1973,6 +1987,7 @@ export interface components {
             configurationOptions: components["schemas"]["AutomaticQuoteConfigurationOptionDto"][];
             configurationRevision: number;
             deliveryOptions: components["schemas"]["AutomaticQuoteDeliveryOptionDto"][];
+            deliverySelector?: components["schemas"]["AutomaticQuoteDeliverySelectorDto"];
             /** Format: date-time */
             expiresAt: string;
             express: components["schemas"]["AutomaticQuoteExpressDto"];
@@ -6304,6 +6319,27 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AutomaticQuoteSessionDto"];
                 };
+            };
+            /** @description Destination is invalid, unavailable, or incompatible */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Configuration changed, destination is frozen, or idempotency input changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Carrier metadata or validation is temporarily unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

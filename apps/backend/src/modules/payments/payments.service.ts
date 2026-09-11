@@ -507,10 +507,13 @@ export class PaymentsService {
     }
     const destination =
       initial.order.automaticQuoteDraft!.selectedDeliveryDestination!;
-    const resolvedDestination = await this.deliveryCapabilities.resolve({
-      providerEndpointId: destination.providerEndpointId,
-      endpointType: destination.endpointType,
-    });
+    const resolvedDestination =
+      this.deliveryCapabilities.readCommittedCapability({
+        providerEndpointId: destination.providerEndpointId,
+        endpointType: destination.endpointType,
+        addressSnapshot: destination.addressSnapshot,
+        capabilitySnapshot: destination.capabilitySnapshot,
+      });
     assertDestinationStillCurrent(initial, resolvedDestination);
     const siteUrl = publicSiteUrl();
 
@@ -1127,9 +1130,11 @@ export class PaymentsService {
       context.order.automaticQuoteDraft!.selectedDeliveryDestination!;
     let resolved: ResolvedDeliveryCapability;
     try {
-      resolved = await this.deliveryCapabilities.resolve({
+      resolved = this.deliveryCapabilities.readCommittedCapability({
         providerEndpointId: destination.providerEndpointId,
         endpointType: destination.endpointType,
+        addressSnapshot: destination.addressSnapshot,
+        capabilitySnapshot: destination.capabilitySnapshot,
       });
     } catch (error) {
       if (error instanceof BadRequestException) return false;

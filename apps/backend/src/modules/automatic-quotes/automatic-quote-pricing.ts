@@ -104,6 +104,30 @@ export type AutomaticQuotePreparationInput = Readonly<{
   shipmentPlanIdForOrdinal?: (ordinal: number) => string;
 }>;
 
+/**
+ * Server-derived packed unit facts for carrier prevalidation. They deliberately
+ * contain no browser-supplied dimensions, capabilities, or prices.
+ */
+export function deliveryValidationParcels(
+  items: readonly AutomaticQuotePricingItem[],
+  parameters: Pick<
+    AutomaticQuotePricingParameters,
+    "packingPaddingMicrometers"
+  >,
+) {
+  return items.flatMap((item) =>
+    item.fulfilmentSlots.map(() => ({
+      weightMilligrams: perUnitWeight(item),
+      xMicrometers:
+        item.boundsXMicrometers + parameters.packingPaddingMicrometers * 2n,
+      yMicrometers:
+        item.boundsYMicrometers + parameters.packingPaddingMicrometers * 2n,
+      zMicrometers:
+        item.boundsZMicrometers + parameters.packingPaddingMicrometers * 2n,
+    })),
+  );
+}
+
 export type AutomaticBindingQuote = Extract<
   PreparedOrderQuote,
   { kind: "binding_quote" }
@@ -250,10 +274,17 @@ export async function prepareAutomaticQuote(
   if (!input.deliveryDestination || !input.shipmentPlanIdForOrdinal) {
     return { prepared: prepareOrderQuote(common), parameters };
   }
+  const capabilitySnapshot = record(
+    input.deliveryDestination.capabilitySnapshot,
+    "capabilitySnapshot",
+  );
   const supportedCategoryIds = stringArray(
-    record(input.deliveryDestination.capabilitySnapshot, "capabilitySnapshot")
-      .supportedCategoryIds,
+    capabilitySnapshot.supportedCategoryIds,
     "capabilitySnapshot.supportedCategoryIds",
+  );
+  const endpointMaxWeight = optionalPositiveInteger(
+    optionalRecord(capabilitySnapshot.endpointConstraints)?.maxWeightMilligrams,
+    "capabilitySnapshot.endpointConstraints.maxWeightMilligrams",
   );
   const plannerInput = {
     units: input.items.flatMap((item) =>
@@ -276,7 +307,14 @@ export async function prepareAutomaticQuote(
       maxYMicrometers: category.maxYMicrometers,
       maxZMicrometers: category.maxZMicrometers,
       maxDimensionSumMicrometers: category.maxDimensionSumMicrometers,
-      maxWeightMilligrams: category.maxWeightMilligrams,
+      // Provider facts may only narrow a versioned PriceList category. An
+      // absent fact retains legacy category-only semantics; it never creates
+      // a new eligible category.
+      maxWeightMilligrams: endpointMaxWeight
+        ? endpointMaxWeight < category.maxWeightMilligrams
+          ? endpointMaxWeight
+          : category.maxWeightMilligrams
+        : category.maxWeightMilligrams,
       maxParcelVolumeCubicMicrometers: category.maxParcelVolumeCubicMicrometers,
     })),
     supportedCategoryIds: new Set(supportedCategoryIds),
@@ -619,6 +657,14 @@ function positiveInteger(value: unknown, name: string): bigint {
   return parsed;
 }
 
+function optionalPositiveInteger(
+  value: unknown,
+  name: string,
+): bigint | undefined {
+  if (value === undefined) return undefined;
+  return positiveInteger(value, name);
+}
+
 function numberInteger(value: unknown, name: string): number {
   if (!Number.isSafeInteger(value) || Number(value) < 0) {
     throw new Error(`${name} must be a non-negative safe integer`);
@@ -631,6 +677,11 @@ function record(value: unknown, name: string): JsonRecord {
     throw new Error(`${name} must be an object`);
   }
   return value as JsonRecord;
+}
+
+function optionalRecord(value: unknown): JsonRecord | undefined {
+  if (value === undefined) return undefined;
+  return record(value, "optional JSON value");
 }
 
 function array(value: unknown, name: string): unknown[] {

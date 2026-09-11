@@ -5,8 +5,8 @@ import { AutomaticQuoteEstimatesController } from "./automatic-quote-estimates.c
 import { AutomaticQuotesController } from "./automatic-quotes.controller";
 import { AutomaticQuotesService } from "./automatic-quotes.service";
 import {
-  ConfiguredDeliveryCapabilityAdapter,
   DELIVERY_CAPABILITY,
+  deliveryCapabilityFromEnvironment,
 } from "./delivery-capability.port";
 
 @Module({
@@ -14,10 +14,9 @@ import {
   controllers: [AutomaticQuotesController, AutomaticQuoteEstimatesController],
   providers: [
     AutomaticQuotesService,
-    ConfiguredDeliveryCapabilityAdapter,
     {
       provide: DELIVERY_CAPABILITY,
-      useExisting: ConfiguredDeliveryCapabilityAdapter,
+      useFactory: deliveryCapabilityFromEnvironment,
     },
   ],
   exports: [AutomaticQuotesService, DELIVERY_CAPABILITY],
