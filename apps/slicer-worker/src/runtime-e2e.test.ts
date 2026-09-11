@@ -352,44 +352,62 @@ async function monitorRequestWorkspace(): Promise<string[]> {
 
 async function assertBrokerSecurity(): Promise<void> {
   const services = ["slicer-worker", "orca-runner", "slicer-volume-init"];
+  let runner: string | undefined;
   for (const service of services) {
     const container = await composeOutput(["ps", "-a", "-q", service]);
     expect(container, `${service} container`).not.toBe("");
-    const caps = JSON.parse(
+    const inspection = JSON.parse(
       await execute("docker", [
         "inspect",
         container,
         "--format",
-        "{{json .HostConfig.CapAdd}}",
+        "{{json .}}",
       ]).then(({ stdout }) => stdout),
-    ) as string[] | null;
+    ) as {
+      Config: { User: string };
+      HostConfig: {
+        CapAdd: string[] | null;
+        NetworkMode: string;
+        Privileged: boolean;
+        ReadonlyRootfs: boolean;
+      };
+      Image: string;
+      Mounts: { Destination: string; Source: string }[];
+    };
+    const caps = inspection.HostConfig.CapAdd ?? [];
     expect(caps ?? []).not.toContain("CAP_DAC_OVERRIDE");
     expect(caps ?? []).not.toContain("CAP_DAC_READ_SEARCH");
     expect(caps ?? []).not.toContain("CAP_FOWNER");
+    expect(
+      inspection.Mounts.some(
+        ({ Destination, Source }) =>
+          Destination.includes("docker.sock") || Source.includes("docker.sock"),
+      ),
+    ).toBe(false);
+    if (service === "orca-runner") {
+      runner = container;
+      expect(inspection.HostConfig.Privileged).toBe(false);
+      expect(inspection.HostConfig.NetworkMode).toBe("none");
+      expect(inspection.HostConfig.ReadonlyRootfs).toBe(true);
+      expect([...caps].sort()).toEqual([
+        "CAP_SETGID",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYS_ADMIN",
+      ]);
+      expect(inspection.Config.User).toBe("0:10001");
+      expect(inspection.Image).toBe(
+        await execute("docker", [
+          "image",
+          "inspect",
+          runtimeLock.image.tag,
+          "--format",
+          "{{.Id}}",
+        ]).then(({ stdout }) => stdout.trim()),
+      );
+    }
   }
-  const runner = await composeOutput(["ps", "-q", "orca-runner"]);
-  const runnerImage = await execute("docker", [
-    "inspect",
-    runner,
-    "--format",
-    "{{.Image}}",
-  ]).then(({ stdout }) => stdout.trim());
-  const verifiedImage = await execute("docker", [
-    "image",
-    "inspect",
-    runtimeLock.image.tag,
-    "--format",
-    "{{.Id}}",
-  ]).then(({ stdout }) => stdout.trim());
-  expect(runnerImage).toBe(verifiedImage);
-  expect(
-    await execute("docker", [
-      "inspect",
-      runner,
-      "--format",
-      "{{.Config.User}}",
-    ]).then(({ stdout }) => stdout.trim()),
-  ).toBe("0:10001");
+  expect(runner).toBeDefined();
   expect(
     await composeOutput([
       "exec",
@@ -401,6 +419,51 @@ async function assertBrokerSecurity(): Promise<void> {
       "/var/run/taven-orca",
     ]),
   ).toBe("10001:10001:770");
+  const childSecurity = await composeOutput([
+    "exec",
+    "-T",
+    "orca-runner",
+    "/usr/bin/bwrap",
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--unshare-cgroup-try",
+    "--die-with-parent",
+    "--new-session",
+    "--ro-bind",
+    "/",
+    "/",
+    "--tmpfs",
+    "/run/taven-orca",
+    "--tmpfs",
+    "/tmp",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--chdir",
+    "/tmp",
+    "--clearenv",
+    "/usr/bin/setpriv",
+    "--reuid=10001",
+    "--regid=10001",
+    "--clear-groups",
+    "--bounding-set=-all",
+    "--inh-caps=-all",
+    "--ambient-caps=-all",
+    "--no-new-privs",
+    "/bin/sh",
+    "-ec",
+    'id -u; for name in CapInh CapPrm CapEff CapBnd CapAmb; do awk -v name="$name" \'$1 == name ":" { print $2 }\' /proc/self/status; done',
+  ]);
+  expect(childSecurity.split("\n")).toEqual([
+    "10001",
+    "0000000000000000",
+    "0000000000000000",
+    "0000000000000000",
+    "0000000000000000",
+    "0000000000000000",
+  ]);
 }
 
 async function runnerDiagnostics(): Promise<string> {
