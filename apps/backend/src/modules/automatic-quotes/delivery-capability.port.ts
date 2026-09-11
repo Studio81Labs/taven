@@ -151,16 +151,7 @@ export class ConfiguredDeliveryCapabilityAdapter implements DeliveryCapabilityPo
   readCommittedCapability(
     input: CommittedDeliveryCapability,
   ): ResolvedDeliveryCapability {
-    const resolved = this.resolveConfigured(input);
-    if (
-      stableJson(input.addressSnapshot) !==
-        stableJson(resolved.addressSnapshot) ||
-      stableJson(input.capabilitySnapshot) !==
-        stableJson(resolved.capabilitySnapshot)
-    ) {
-      throw new BadRequestException("Committed delivery destination is stale");
-    }
-    return resolved;
+    return readCommittedDeliveryCapability(input);
   }
 
   private resolveConfigured(input: {
@@ -274,35 +265,7 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
   readCommittedCapability(
     input: CommittedDeliveryCapability,
   ): ResolvedDeliveryCapability {
-    if (input.endpointType !== "pickup_point")
-      throw new BadRequestException("Committed delivery destination is stale");
-    const capability = jsonRecord(input.capabilitySnapshot);
-    const address = jsonRecord(input.addressSnapshot);
-    const supportedCategoryIds = stringArray(capability?.supportedCategoryIds);
-    if (
-      capability?.provider !== "packeta" ||
-      capability.version !== 1 ||
-      !nonBlankText(input.providerEndpointId) ||
-      !nonBlankText(address?.label) ||
-      !nonBlankText(address?.country) ||
-      supportedCategoryIds.length === 0 ||
-      supportedCategoryIds.some(
-        (category) => category !== "pickup" && category !== "zbox",
-      )
-    ) {
-      throw new BadRequestException("Committed delivery destination is stale");
-    }
-    return {
-      providerEndpointId: input.providerEndpointId,
-      endpointType: input.endpointType,
-      addressSnapshot: freezeJson(
-        input.addressSnapshot as Prisma.InputJsonObject,
-      ),
-      capabilitySnapshot: freezeJson(
-        input.capabilitySnapshot as Prisma.InputJsonObject,
-      ),
-      supportedCategoryIds,
-    };
+    return readCommittedDeliveryCapability(input);
   }
 
   private async validateParcel(
@@ -373,12 +336,21 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
       ? this.now() - current.fetchedAt
       : Number.POSITIVE_INFINITY;
     if (current && age < PACKETA_FEED_REFRESH_MS) return current;
-    if (this.inFlight) return this.inFlight;
+    if (this.inFlight)
+      return this.withStaleFallback(this.inFlight, current, age);
     this.inFlight = this.fetchSnapshot().finally(() => {
       this.inFlight = undefined;
     });
+    return this.withStaleFallback(this.inFlight, current, age);
+  }
+
+  private async withStaleFallback(
+    refresh: Promise<PacketaFeedSnapshot>,
+    current: PacketaFeedSnapshot | undefined,
+    age: number,
+  ): Promise<PacketaFeedSnapshot> {
     try {
-      return await this.inFlight;
+      return await refresh;
     } catch (error) {
       if (current && age <= PACKETA_FEED_MAX_AGE_MS) return current;
       if (error instanceof ServiceUnavailableException) throw error;
@@ -390,10 +362,10 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
     const key = encodeURIComponent(this.configuration.accountId);
     const [branches, boxes] = await Promise.all([
       this.fetchFeed(
-        `https://pickup-point.api.packeta.com/v5/${key}/branch/json?lang=cs`,
+        `https://pickup-point.api.packeta.com/v5/${key}/branch.json?lang=cs`,
       ),
       this.fetchFeed(
-        `https://pickup-point.api.packeta.com/v5/${key}/box/json?lang=cs`,
+        `https://pickup-point.api.packeta.com/v5/${key}/box.json?lang=cs`,
       ),
     ]);
     const points = new Map<string, PacketaPoint>();
@@ -539,17 +511,74 @@ async function boundedJson(response: Response): Promise<unknown> {
     length &&
     (!/^\d+$/.test(length) || Number(length) > PACKETA_RESPONSE_LIMIT_BYTES)
   ) {
+    await response.body?.cancel();
     throw new ServiceUnavailableException("Delivery provider is unavailable");
   }
-  const body = await response.text();
-  if (body.length > PACKETA_RESPONSE_LIMIT_BYTES) {
-    throw new ServiceUnavailableException("Delivery provider is unavailable");
-  }
+  const body = await boundedResponseText(response);
   try {
     return JSON.parse(body) as unknown;
   } catch {
     throw new ServiceUnavailableException("Delivery provider is unavailable");
   }
+}
+
+async function boundedResponseText(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > PACKETA_RESPONSE_LIMIT_BYTES) {
+      await reader.cancel();
+      throw new ServiceUnavailableException("Delivery provider is unavailable");
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
+function readCommittedDeliveryCapability(
+  input: CommittedDeliveryCapability,
+): ResolvedDeliveryCapability {
+  const capability = jsonRecord(input.capabilitySnapshot);
+  const address = jsonRecord(input.addressSnapshot);
+  const supportedCategoryIds = stringArray(capability?.supportedCategoryIds);
+  const isPacketa = capability?.provider === "packeta";
+  if (
+    !nonBlankText(input.providerEndpointId) ||
+    !nonBlankText(input.endpointType) ||
+    !nonBlankText(address?.label) ||
+    !nonBlankText(address?.country) ||
+    supportedCategoryIds.length === 0 ||
+    (isPacketa &&
+      (input.endpointType !== "pickup_point" ||
+        capability?.version !== 1 ||
+        supportedCategoryIds.some(
+          (category) => category !== "pickup" && category !== "zbox",
+        )))
+  ) {
+    throw new BadRequestException("Committed delivery destination is stale");
+  }
+  return {
+    providerEndpointId: input.providerEndpointId,
+    endpointType: input.endpointType,
+    addressSnapshot: freezeJson(
+      input.addressSnapshot as Prisma.InputJsonObject,
+    ),
+    capabilitySnapshot: freezeJson(
+      input.capabilitySnapshot as Prisma.InputJsonObject,
+    ),
+    supportedCategoryIds,
+  };
 }
 
 function assertParcel(parcel: DeliveryValidationParcel): void {
@@ -694,17 +723,6 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const record = jsonRecord(value);
-  if (record)
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-      .join(",")}}`;
-  return JSON.stringify(value);
 }
 
 function jsonRecord(value: unknown): Record<string, unknown> | undefined {
