@@ -349,16 +349,26 @@ async function monitorRequestWorkspace(): Promise<{
     '[ -r "$status" ] || continue;',
     "command=$(tr '\\000' ' ' < \"${status%/status}/cmdline\" 2>/dev/null || true);",
     'case "$command" in *"/opt/orca/AppRun"*)',
-    'case "$command" in *"--unshare-pid"*"--unshare-ipc"*"--unshare-uts"*"--ro-bind $request_root /work"*"--bind $request_root/output /work/output"*"--tmpfs $runner_root"*"--bind $request_root/tmp /tmp"*) ;; *) continue ;; esac;',
+    'case "$command" in *"/usr/bin/unshare --net --"*"--unshare-pid"*"--unshare-ipc"*"--unshare-uts"*"--ro-bind $request_root /work"*"--bind $request_root/output /work/output"*"--tmpfs $runner_root"*"--bind $request_root/tmp /tmp"*) ;; *) continue ;; esac;',
     'for child_status in "${status%/status}"/root/proc/[0-9]*/status; do',
     '[ -r "$child_status" ] || continue;',
     'child_uid=$(awk \'/^Uid:/{print $2 ":" $3 ":" $4 ":" $5}\' "$child_status");',
     '[ "$child_uid" = "10001:10001:10001:10001" ] || continue;',
+    'child_gid=$(awk \'/^Gid:/{print $2 ":" $3 ":" $4 ":" $5}\' "$child_status");',
+    '[ "$child_gid" = "10001:10001:10001:10001" ] || continue;',
+    "child_groups=$(awk '/^Groups:/{print $2}' \"$child_status\");",
+    '[ "$child_groups" = "10001" ] || continue;',
+    'child_pid=$(dirname "$status");',
+    "broker_network_namespace=$(readlink /proc/self/ns/net);",
+    'child_network_namespace=$(readlink "$child_pid/ns/net");',
+    '[ "$child_network_namespace" != "$broker_network_namespace" ] || continue;',
+    '! /usr/bin/nsenter -t "$child_pid" -n /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1 || continue;',
     'printf "%s\\n" "$modes";',
     'printf "%s\\n" "$child_uid";',
+    'printf "%s\\n" "$child_gid" "$child_groups";',
     'for name in CapInh CapPrm CapEff CapBnd CapAmb; do awk -v name="$name" \'$1 == name ":" { print $2 }\' "$child_status"; done;',
     "awk '/^NoNewPrivs:/{print $2}' \"$child_status\";",
-    'printf "%s\\n" "mnt:isolated" "pid:isolated" "ipc:isolated" "uts:isolated";',
+    'printf "%s\\n" "mnt:isolated" "pid:isolated" "ipc:isolated" "uts:isolated" "net:isolated";',
     "exit 0;",
     "done;; esac;",
     "done;",
@@ -376,15 +386,15 @@ async function monitorRequestWorkspace(): Promise<{
     command,
   ]);
   const observation = result.split("\n").filter(Boolean);
-  if (observation.length !== 18) {
+  if (observation.length !== 21) {
     throw new Error(
       "The real Orca runner did not expose a complete unprivileged child",
     );
   }
   return {
     modes: observation.slice(0, 7),
-    childSecurity: observation.slice(7, 14),
-    sandboxIsolation: observation.slice(14),
+    childSecurity: observation.slice(7, 16),
+    sandboxIsolation: observation.slice(16),
   };
 }
 
@@ -933,6 +943,8 @@ describe.skipIf(!integrationEnabled)("pinned Orca runtime end to end", () => {
       expect(first.workspaceModes).toEqual(Array(7).fill("10001:10001:770"));
       expect(first.childSecurity).toEqual([
         "10001:10001:10001:10001",
+        "10001:10001:10001:10001",
+        "10001",
         "0000000000000000",
         "0000000000000000",
         "0000000000000000",
@@ -945,6 +957,7 @@ describe.skipIf(!integrationEnabled)("pinned Orca runtime end to end", () => {
         "pid:isolated",
         "ipc:isolated",
         "uts:isolated",
+        "net:isolated",
       ]);
       await Promise.all(first.outputKeys.map((key) => store.delete(key)));
       const second = await runSequence(false);
