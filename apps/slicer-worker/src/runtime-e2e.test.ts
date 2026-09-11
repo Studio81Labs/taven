@@ -67,6 +67,7 @@ const composeEnvironment = {
   TAVEN_S3_ACCESS_KEY_ID: "taven",
   TAVEN_S3_SECRET_ACCESS_KEY: "taven-local-only",
   TAVEN_S3_REGION: "us-east-1",
+  TAVEN_ORCA_IMAGE_SHA256: runtimeLock.image.ociDigest.replace("sha256:", ""),
 };
 const composeFiles = [
   "compose",
@@ -585,6 +586,9 @@ async function runSequence(captureWorkspace: boolean) {
   const workspaceObservation = await workspaceMonitor;
   const referenceOutcome = success(referenceResult);
   expect(referenceResult.engine.name).toBe(runtimeLock.engine.name);
+  expect(referenceResult.engine.imageSha256).toBe(
+    runtimeLock.image.ociDigest.replace("sha256:", ""),
+  );
   expect(referenceOutcome.artifact.objectKey).toBe(
     referenceArtifactObjectKey(referenceJob.inputFingerprintSha256),
   );
