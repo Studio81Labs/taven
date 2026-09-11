@@ -197,6 +197,49 @@ describe("PacketaDeliveryCapabilityAdapter", () => {
     ).rejects.toMatchObject({ status: 400 });
   });
 
+  it.each([401, 429])(
+    "treats provider validation HTTP %i as unavailable",
+    async (status) => {
+      const adapter = new PacketaDeliveryCapabilityAdapter(
+        { accountId: "public-widget-key", widgetOptions: {} },
+        (async (url) => {
+          if (String(url).includes("/branch.json"))
+            return Response.json([packetaPickupPoint]);
+          if (String(url).includes("/box.json")) return Response.json([]);
+          return Response.json({ error: "provider failure" }, { status });
+        }) as typeof fetch,
+      );
+
+      await expect(
+        adapter.validateSelection({
+          providerEndpointId: "pickup-1",
+          endpointType: "pickup_point",
+          parcels: [testParcel],
+        }),
+      ).rejects.toMatchObject({ status: 503 });
+    },
+  );
+
+  it("keeps a documented validation HTTP 400 as selection invalid", async () => {
+    const adapter = new PacketaDeliveryCapabilityAdapter(
+      { accountId: "public-widget-key", widgetOptions: {} },
+      (async (url) => {
+        if (String(url).includes("/branch.json"))
+          return Response.json([packetaPickupPoint]);
+        if (String(url).includes("/box.json")) return Response.json([]);
+        return Response.json({ error: "invalid selection" }, { status: 400 });
+      }) as typeof fetch,
+    );
+
+    await expect(
+      adapter.validateSelection({
+        providerEndpointId: "pickup-1",
+        endpointType: "pickup_point",
+        parcels: [testParcel],
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
   it("uses a usable stale snapshot for every concurrent caller when refresh fails", async () => {
     let currentTime = 0;
     let refreshFeedCalls = 0;
@@ -330,6 +373,15 @@ describe("PacketaDeliveryCapabilityAdapter", () => {
         supportedCategoryIds: ["pickup", "oversize"],
       },
     };
+    const legacyConfiguredPacketaSnapshot = {
+      providerEndpointId: "legacy-configured-packeta",
+      endpointType: "pickup_point",
+      addressSnapshot: { country: "CZ" },
+      capabilitySnapshot: {
+        provider: "packeta",
+        supportedCategoryIds: ["pickup", "oversize"],
+      },
+    };
     const packetaSnapshot = {
       providerEndpointId: "packeta-point",
       endpointType: "pickup_point",
@@ -347,6 +399,9 @@ describe("PacketaDeliveryCapabilityAdapter", () => {
     expect(
       configuredAdapter.readCommittedCapability(packetaSnapshot),
     ).toMatchObject(packetaSnapshot);
+    expect(
+      packetaAdapter.readCommittedCapability(legacyConfiguredPacketaSnapshot),
+    ).toMatchObject(legacyConfiguredPacketaSnapshot);
   });
 });
 

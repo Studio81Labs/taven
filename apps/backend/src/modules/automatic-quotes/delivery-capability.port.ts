@@ -286,7 +286,7 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
       );
       const body = await boundedJson(response);
       if (!response.ok) {
-        if (response.status >= 400 && response.status < 500) {
+        if (response.status === 400) {
           throw new BadRequestException(
             "Delivery endpoint is unavailable or incompatible",
           );
@@ -569,14 +569,17 @@ function readCommittedDeliveryCapability(
   const capability = jsonRecord(input.capabilitySnapshot);
   const address = jsonRecord(input.addressSnapshot);
   const supportedCategoryIds = stringArray(capability?.supportedCategoryIds);
-  const isPacketa = capability?.provider === "packeta";
+  // Configured endpoints predate the versioned Packeta snapshot and may use
+  // "packeta" as an arbitrary provider label. The version is the immutable
+  // discriminator emitted exclusively by `packetaResolved`.
+  const isVersionedPacketa =
+    capability?.provider === "packeta" && capability.version === 1;
   if (
     !nonBlankText(input.providerEndpointId) ||
     !nonBlankText(input.endpointType) ||
     supportedCategoryIds.length === 0 ||
-    (isPacketa &&
+    (isVersionedPacketa &&
       (input.endpointType !== "pickup_point" ||
-        capability?.version !== 1 ||
         !nonBlankText(address?.label) ||
         !nonBlankText(address?.country) ||
         supportedCategoryIds.some(
