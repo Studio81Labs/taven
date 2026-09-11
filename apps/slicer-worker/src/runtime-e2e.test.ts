@@ -333,6 +333,7 @@ async function loadInputs(): Promise<RuntimeInputs> {
 async function monitorRequestWorkspace(): Promise<{
   modes: string[];
   childSecurity: string[];
+  sandboxIsolation: string[];
 }> {
   const command = [
     "attempt=0;",
@@ -345,6 +346,7 @@ async function monitorRequestWorkspace(): Promise<{
     '[ -r "$status" ] || continue;',
     "command=$(tr '\\000' ' ' < \"${status%/status}/cmdline\" 2>/dev/null || true);",
     'case "$command" in *"/opt/orca/AppRun"*)',
+    'case "$command" in *"--unshare-pid"*"--unshare-ipc"*"--unshare-uts"*"--ro-bind"*"--tmpfs"*) ;; *) continue ;; esac;',
     'for child_status in "${status%/status}"/root/proc/[0-9]*/status; do',
     '[ -r "$child_status" ] || continue;',
     "child_uid=$(awk '/^Uid:/{print $2}' \"$child_status\");",
@@ -352,6 +354,7 @@ async function monitorRequestWorkspace(): Promise<{
     'printf "%s\\n" "$modes";',
     'printf "%s\\n" "$child_uid";',
     'for name in CapInh CapPrm CapEff CapBnd CapAmb; do awk -v name="$name" \'$1 == name ":" { print $2 }\' "$child_status"; done;',
+    'printf "%s\\n" "mnt:isolated" "pid:isolated" "ipc:isolated" "uts:isolated";',
     "exit 0;",
     "done;; esac;",
     "done;",
@@ -369,14 +372,15 @@ async function monitorRequestWorkspace(): Promise<{
     command,
   ]);
   const observation = result.split("\n").filter(Boolean);
-  if (observation.length !== 13) {
+  if (observation.length !== 17) {
     throw new Error(
       "The real Orca runner did not expose a complete unprivileged child",
     );
   }
   return {
     modes: observation.slice(0, 7),
-    childSecurity: observation.slice(7),
+    childSecurity: observation.slice(7, 13),
+    sandboxIsolation: observation.slice(13),
   };
 }
 
@@ -666,6 +670,7 @@ async function runSequence(captureWorkspace: boolean) {
     ),
     workspaceModes: workspaceObservation?.modes,
     childSecurity: workspaceObservation?.childSecurity,
+    sandboxIsolation: workspaceObservation?.sandboxIsolation,
     outputKeys: [
       referenceOutcome.artifact.objectKey,
       ...occupancySliceTargets.map(
@@ -913,6 +918,12 @@ describe.skipIf(!integrationEnabled)("pinned Orca runtime end to end", () => {
         "0000000000000000",
         "0000000000000000",
         "0000000000000000",
+      ]);
+      expect(first.sandboxIsolation).toEqual([
+        "mnt:isolated",
+        "pid:isolated",
+        "ipc:isolated",
+        "uts:isolated",
       ]);
       await Promise.all(first.outputKeys.map((key) => store.delete(key)));
       const second = await runSequence(false);
