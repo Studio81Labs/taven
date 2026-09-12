@@ -33,7 +33,6 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import {
-  approvedCheckoutTermsRevision,
   assertBindingQuoteFlowsEnabled,
   assertEffectiveQuoteRequestLegalDocuments,
 } from "../../launch-approval-gates";
@@ -1156,8 +1155,7 @@ export class QuotesService {
         ]);
         if (
           process.env.NODE_ENV !== "test" &&
-          (quote.termsRevision !== approvals.documents.terms.revision ||
-            quote.termsRevision !== approvedCheckoutTermsRevision())
+          quote.termsRevision !== approvals.documents.terms.revision
         ) {
           throw new ConflictException(
             "Offer terms revision is no longer approved",
