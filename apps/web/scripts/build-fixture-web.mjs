@@ -59,12 +59,6 @@ export const commercialContentApproval = {
 } as const;
 `;
 
-const termsRevision = process.env.TAVEN_TERMS_REVISION || "terms-test-v1";
-const claimPolicyRevision =
-  process.env.TAVEN_CLAIM_POLICY_REVISION || "claims-test-v1";
-const photoConsentRevision =
-  process.env.TAVEN_PHOTO_CONSENT_REVISION || "photo-consent-test-v1";
-
 const manifestContent = `import type {
   LegalDocument,
   LegalDocumentKey,
@@ -90,14 +84,14 @@ const fixtureDocument = (
 
 export const legalDocuments: Readonly<Record<LegalDocumentKey, LegalDocument>> = {
   terms: fixtureDocument(
-    ${JSON.stringify(termsRevision)},
+    "terms-test-v1",
     "/vop",
     "Obchodní podmínky",
     "Testovací obchodní podmínky pro fixture prostředí.",
     [{ title: "Základní ustanovení", paragraphs: ["Testovací znění obchodních podmínek."] }],
   ),
   claims: fixtureDocument(
-    ${JSON.stringify(claimPolicyRevision)},
+    "claims-test-v1",
     "/reklamace",
     "Reklamační řád",
     "Testovací reklamační řád pro fixture prostředí.",
@@ -125,7 +119,7 @@ export const legalDocuments: Readonly<Record<LegalDocumentKey, LegalDocument>> =
     [{ title: "Doba uchování", paragraphs: ["Testovací pravidla uchování dat."] }],
   ),
   photoConsent: fixtureDocument(
-    ${JSON.stringify(photoConsentRevision)},
+    "photo-consent-test-v1",
     "/fotografie-a-duvernost",
     "Fotografie a důvěrnost modelů",
     "Testovací pravidla pro fotografie a důvěrnost.",
