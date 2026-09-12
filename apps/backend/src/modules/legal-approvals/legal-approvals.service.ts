@@ -1,10 +1,10 @@
 import { Injectable, ServiceUnavailableException } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
+  activeLegalApprovalCatalog,
   evaluateLegalApprovals,
   type EvaluatedLegalApprovals,
   type LegalApprovalCatalog,
-  legalApprovalCatalog,
 } from "./legal-approvals.catalog";
 
 @Injectable()
@@ -17,7 +17,7 @@ export class LegalApprovalsService {
 
   evaluateAt(
     observedAt: Date,
-    catalog: LegalApprovalCatalog = legalApprovalCatalog,
+    catalog: LegalApprovalCatalog = activeLegalApprovalCatalog(),
   ): EvaluatedLegalApprovals {
     try {
       return evaluateLegalApprovals(observedAt, catalog);

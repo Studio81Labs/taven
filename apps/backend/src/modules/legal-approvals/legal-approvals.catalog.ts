@@ -40,6 +40,36 @@ export const legalApprovalCatalog: LegalApprovalCatalog = {
   },
 };
 
+/** Isolated test-only fixture; production always uses the draft catalog above. */
+export function activeLegalApprovalCatalog(
+  env: NodeJS.ProcessEnv = process.env,
+): LegalApprovalCatalog {
+  if (env.NODE_ENV !== "test") return legalApprovalCatalog;
+  const revisions: Record<LegalDocumentKey, string> = {
+    terms: env.TAVEN_TERMS_REVISION ?? "terms-test-v1",
+    claims: env.TAVEN_CLAIM_POLICY_REVISION ?? "claims-test-v1",
+    privacy: "privacy-test-v1",
+    prohibitedContent: "prohibited-content-test-v1",
+    retention: "retention-test-v1",
+    photoConsent: env.TAVEN_PHOTO_CONSENT_REVISION ?? "photo-consent-test-v1",
+  };
+  return {
+    schemaVersion: 1,
+    policyRevision: "legal-policy-test-fixture-v1",
+    documents: Object.fromEntries(
+      LEGAL_DOCUMENT_KEYS.map((key) => [
+        key,
+        {
+          revision: revisions[key],
+          status: "approved",
+          effectiveAt: "2000-01-01T00:00:00.000Z",
+          approvalEvidence: "test fixture",
+        },
+      ]),
+    ) as Record<LegalDocumentKey, LegalApprovalRecord>,
+  };
+}
+
 function draft(revision: string): LegalApprovalRecord {
   return {
     revision,
