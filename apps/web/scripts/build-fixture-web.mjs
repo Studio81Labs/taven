@@ -59,11 +59,29 @@ export const commercialContentApproval = {
 } as const;
 `;
 
-const manifestContent = `import type {
-  LegalDocument,
-  LegalDocumentKey,
-  LegalDocumentSection,
-} from "./launch-manifest";
+const manifestContent = `export type LegalDocumentKey =
+  | "terms"
+  | "claims"
+  | "privacy"
+  | "prohibitedContent"
+  | "retention"
+  | "photoConsent";
+
+export interface LegalDocumentSection {
+  readonly title: string;
+  readonly paragraphs: readonly string[];
+}
+
+export interface LegalDocument {
+  readonly id: string;
+  readonly path: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly sections: readonly LegalDocumentSection[];
+  readonly status: "approved";
+  readonly effectiveAt: string;
+  readonly approvalEvidence: string;
+}
 
 const fixtureDocument = (
   id: string,

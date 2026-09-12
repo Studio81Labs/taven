@@ -1,7 +1,7 @@
 import http from "node:http";
 import { URL } from "node:url";
 
-const PORT = Number(process.env.MOCK_BACKEND_PORT || 4175);
+const PORT = 4175;
 
 let testState = {
   legalStatus: "approved", // "approved" | "draft" | "error503"
@@ -241,7 +241,7 @@ const server = http.createServer(async (req, res) => {
     if (sessionEl) sessionEl.textContent = sessionId;
 
     function handleOutcome(outcome, targetPath) {
-      fetch("http://127.0.0.1:4175/__test/state", {
+      fetch("http://127.0.0.1:" + ${PORT} + "/__test/state", {
         method: "POST",
         body: JSON.stringify({ paymentOutcome: outcome }),
       }).then(() => {
@@ -396,7 +396,7 @@ const server = http.createServer(async (req, res) => {
       uploadId: "00000000-0000-0000-0000-000000000010",
       assetId: "00000000-0000-0000-0000-000000000011",
       accessToken: "token-file-test-001",
-      uploadUrl: "http://127.0.0.1:4175/mock-upload",
+      uploadUrl: `http://127.0.0.1:${PORT}/mock-upload`,
       requiredHeaders: {},
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
@@ -409,7 +409,7 @@ const server = http.createServer(async (req, res) => {
       uploadId: "00000000-0000-0000-0000-000000000020",
       assetId: "00000000-0000-0000-0000-000000000021",
       accessToken: "token-photo-001",
-      uploadUrl: "http://127.0.0.1:4175/mock-upload",
+      uploadUrl: `http://127.0.0.1:${PORT}/mock-upload`,
       requiredHeaders: {},
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
@@ -658,7 +658,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const paymentId = `pay-${Date.now()}`;
-      const checkoutUrl = `http://127.0.0.1:4175/mock-gateway?paymentId=${paymentId}&sessionId=${sessionId}`;
+      const checkoutUrl = `http://127.0.0.1:${PORT}/mock-gateway?paymentId=${paymentId}&sessionId=${sessionId}`;
       sendJson(res, 200, {
         paymentId,
         amountMinor: session.bindingQuote?.totalMinor || 43900,
