@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
-import { publicSite } from "../../content/public-site";
+import { legalDocuments } from "../../content/public-site";
+import { isServerVerifiedLegalDocument } from "../../utils/legal-availability";
+import { useLegalAvailability } from "../../composables/useLegalAvailability";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -26,6 +28,10 @@ usePublicPageMeta({
 });
 
 const route = useRoute();
+const automaticQuoteEnabled = useAutomaticQuoteEnabled();
+const { availability, refresh: refreshLegalAvailability } =
+  useLegalAvailability();
+onMounted(() => void refreshLegalAvailability());
 const source = normalizeAssistedQuoteSource(route.query.source);
 const initialPrefill = assistedQuotePrefill(source);
 const handoffContext = shallowRef<AssistedQuoteHandoffContext>();
@@ -67,6 +73,40 @@ const requestFieldsLocked = computed(() => submitted.value);
 const photoFieldsLocked = computed(
   () => submitted.value && !attachmentsEditable.value,
 );
+const privacyNoticeEffective = computed(() =>
+  isServerVerifiedLegalDocument(
+    "privacy",
+    legalDocuments.privacy,
+    availability.value,
+  ),
+);
+const retentionPolicyEffective = computed(() =>
+  isServerVerifiedLegalDocument(
+    "retention",
+    legalDocuments.retention,
+    availability.value,
+  ),
+);
+const prohibitedContentPolicyEffective = computed(() =>
+  isServerVerifiedLegalDocument(
+    "prohibitedContent",
+    legalDocuments.prohibitedContent,
+    availability.value,
+  ),
+);
+const photoConsentEffective = computed(() =>
+  isServerVerifiedLegalDocument(
+    "photoConsent",
+    legalDocuments.photoConsent,
+    availability.value,
+  ),
+);
+watch(privacyNoticeEffective, (effective) => {
+  if (!effective) privacyAcknowledged.value = false;
+});
+watch(photoConsentEffective, (effective) => {
+  if (!effective) photoPublicationConsent.value = false;
+});
 const hasDimensions = computed(() =>
   [widthMm.value, depthMm.value, heightMm.value].some(isPositiveDimension),
 );
@@ -77,6 +117,9 @@ const canSubmit = computed(
     contactName.value.trim().length > 0 &&
     contactEmail.value.trim().length > 0 &&
     !selectionError.value &&
+    privacyNoticeEffective.value &&
+    retentionPolicyEffective.value &&
+    prohibitedContentPolicyEffective.value &&
     privacyAcknowledged.value,
 );
 const minimumDate = localDateValue(new Date());
@@ -146,6 +189,8 @@ function removePhoto(index: number): void {
 }
 
 async function submitRequest(): Promise<void> {
+  await refreshLegalAvailability();
+  if (!canSubmit.value) return;
   selectionError.value = undefined;
   const measurements: Record<string, unknown> = {};
   if (isPositiveDimension(widthMm.value)) measurements.widthMm = widthMm.value;
@@ -243,7 +288,7 @@ function isPositiveDimension(value: number | ""): value is number {
               Reference {{ created.publicReference }}
             </p>
             <NuxtLink
-              v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
+              v-if="automaticQuoteEnabled"
               class="secondary-button"
               to="/objednavka"
             >
@@ -404,18 +449,40 @@ function isPositiveDimension(value: number | ""): value is number {
           <fieldset class="privacy-fieldset" :disabled="requestFieldsLocked">
             <legend>Soukromí</legend>
             <label class="consent-row">
-              <input v-model="privacyAcknowledged" required type="checkbox" />
+              <input
+                v-model="privacyAcknowledged"
+                required
+                type="checkbox"
+                :disabled="!privacyNoticeEffective"
+              />
               <span>
                 Beru na vědomí, že kontaktní údaje a podklady použijeme k
-                posouzení poptávky a komunikaci o nabídce. Fotografie dostanou
-                při nahrání vlastní termín smazání. *
+                posouzení poptávky a komunikaci o nabídce podle
+                <NuxtLink class="underline" :to="legalDocuments.privacy.path"
+                  >zásad zpracování osobních údajů</NuxtLink
+                >. Fotografie dostanou při nahrání vlastní termín smazání. *
+                <template v-if="!privacyNoticeEffective">
+                  Formulář lze odeslat až po zveřejnění účinných zásad.
+                </template>
               </span>
             </label>
             <label class="consent-row">
-              <input v-model="photoPublicationConsent" type="checkbox" />
+              <input
+                v-model="photoPublicationConsent"
+                type="checkbox"
+                :disabled="!photoConsentEffective"
+              />
               <span>
                 Souhlasím s případným zveřejněním výsledných fotografií jako
-                ukázky práce. Tento souhlas je nepovinný a lze jej odmítnout.
+                ukázky práce podle
+                <NuxtLink
+                  class="underline"
+                  :to="legalDocuments.photoConsent.path"
+                  >pravidel fotografování</NuxtLink
+                >. Tento souhlas je nepovinný a lze jej odmítnout.
+                <template v-if="!photoConsentEffective">
+                  Čeká na schválené znění.
+                </template>
               </span>
             </label>
           </fieldset>

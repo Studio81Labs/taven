@@ -32,8 +32,16 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
-import { assertBindingQuoteFlowsEnabled } from "../../launch-approval-gates";
+import {
+  assertBindingQuoteFlowsEnabled,
+  assertEffectiveQuoteRequestLegalDocuments,
+} from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
+import {
+  assertEffectiveLegalDocuments,
+  legalApprovalRequired,
+} from "../legal-approvals/legal-approvals.catalog";
+import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
 import {
   operatorNode,
   requireOperatorPermission,
@@ -156,7 +164,15 @@ export class QuotesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly legalApprovals?: LegalApprovalsService,
   ) {}
+
+  private requiredLegalApprovals(): LegalApprovalsService {
+    if (!this.legalApprovals) {
+      throw new Error("Legal approvals service is unavailable");
+    }
+    return this.legalApprovals;
+  }
 
   async createRequest(
     input: CreateQuoteRequestDto,
@@ -197,6 +213,10 @@ export class QuotesService {
           currentCapabilityRequest.clientSubjectHash,
         );
         const observedAt = await databaseNow(transaction);
+        assertEffectiveQuoteRequestLegalDocuments(
+          this.requiredLegalApprovals().evaluateAt(observedAt),
+          request.photoPublicationConsent,
+        );
         const requestToken = capabilityToken(
           currentCapabilityRequest.capabilityKey.key,
           "quote-request",
@@ -1128,6 +1148,19 @@ export class QuotesService {
           return { kind: "expired" };
         }
         const observedAt = acceptance.accepted_at;
+        const approvals = this.requiredLegalApprovals().evaluateAt(observedAt);
+        assertEffectiveLegalDocuments(approvals, [
+          "terms",
+          "claims",
+          "privacy",
+          "prohibitedContent",
+          "retention",
+        ]);
+        if (quote.termsRevision !== approvals.documents.terms.revision) {
+          throw legalApprovalRequired(
+            "Offer terms revision is no longer approved",
+          );
+        }
         await applyAcceptanceTransition(quote, {
           commandKey,
           orderId,

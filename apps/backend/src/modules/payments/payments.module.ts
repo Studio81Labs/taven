@@ -4,6 +4,7 @@ import { AutomaticQuotesModule } from "../automatic-quotes/automatic-quotes.modu
 import { AdminAccessModule } from "../admin-access/admin-access.module";
 import { AuditModule } from "../audit/audit.module";
 import { ResourcesModule } from "../resources/resources.module";
+import { LegalApprovalsModule } from "../legal-approvals/legal-approvals.module";
 import { BalancePaymentDeadlineService } from "./balance-payment-deadline.service";
 import { CheckoutPaymentDeadlineService } from "./checkout-payment-deadline.service";
 import { ComgatePaymentProviderAdapter } from "./comgate-payment-provider.adapter";
@@ -27,6 +28,7 @@ import { SandboxPaymentProviderAdapter } from "./sandbox-payment-provider.adapte
     ResourcesModule,
     AdminAccessModule,
     AuditModule,
+    LegalApprovalsModule,
   ],
   controllers: [PaymentsController, SandboxCheckoutController],
   providers: [

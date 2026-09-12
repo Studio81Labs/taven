@@ -1,3 +1,12 @@
+import { legalDocuments } from "./launch-manifest";
+import { commercialContentApproval } from "./launch-approvals";
+import {
+  hasServerVerifiedLegalDocuments,
+  type LegalAvailability,
+} from "../utils/legal-availability";
+
+export type { CommercialContentStatus } from "./launch-approvals";
+
 export const LEGAL_PLACEHOLDER_BANNER =
   "NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI";
 
@@ -16,10 +25,9 @@ export const publicSite = {
     vatId: "CZ29508291",
   },
   commercial: {
-    automaticQuotePubliclyEnabled: false,
     fromPrice: null,
     standardLeadTime: null,
-    status: "pending-approval" as const,
+    ...commercialContentApproval,
   },
   portfolio: {
     items: [],
@@ -42,7 +50,7 @@ export const publicFooterNavigation = [
   { label: "Kontakt", to: "/kontakt" },
 ] as const;
 
-export const indexablePublicRoutes = [
+const baseIndexablePublicRoutes = [
   "/",
   "/jak-to-funguje",
   "/cenik",
@@ -50,48 +58,22 @@ export const indexablePublicRoutes = [
   "/kontakt",
 ] as const;
 
-export const legalDocuments = {
-  terms: {
-    id: "terms-pending",
-    path: "/vop",
-    title: "Všeobecné obchodní podmínky",
-    summary: "Schválené všeobecné obchodní podmínky zatím nejsou k dispozici.",
-  },
-  claims: {
-    id: "claims-pending",
-    path: "/reklamace",
-    title: "Reklamační řád",
-    summary: "Schválený reklamační řád zatím není k dispozici.",
-  },
-  privacy: {
-    id: "privacy-pending",
-    path: "/ochrana-soukromi",
-    title: "Zásady zpracování osobních údajů",
-    summary:
-      "Schválené zásady zpracování osobních údajů zatím nejsou k dispozici.",
-  },
-  prohibitedContent: {
-    id: "prohibited-content-pending",
-    path: "/zakazany-obsah",
-    title: "Pravidla zakázaného obsahu a manuální kontroly",
-    summary:
-      "Schválená pravidla zakázaného obsahu a manuální kontroly zatím nejsou k dispozici.",
-  },
-  retention: {
-    id: "retention-pending",
-    path: "/uchovani-dat",
-    title: "Pravidla uchování dat a opuštěných položek",
-    summary:
-      "Schválená pravidla uchování dat a opuštěných položek zatím nejsou k dispozici.",
-  },
-  photoConsent: {
-    id: "photo-consent-pending",
-    path: "/fotografie-a-duvernost",
-    title: "Souhlas s fotografováním a důvěrnost zakázky",
-    summary:
-      "Schválená pravidla fotografování a důvěrnosti zatím nejsou k dispozici.",
-  },
-} as const;
+export function indexablePublicRoutes(
+  availability?: LegalAvailability | null,
+): readonly string[] {
+  return [
+    ...baseIndexablePublicRoutes,
+    ...Object.entries(legalDocuments)
+      .filter(([key]) =>
+        hasServerVerifiedLegalDocuments(
+          legalDocuments,
+          [key as keyof typeof legalDocuments],
+          availability,
+        ),
+      )
+      .map(([, document]) => document.path),
+  ];
+}
 
-export type LegalDocument =
-  (typeof legalDocuments)[keyof typeof legalDocuments];
+export { legalDocuments };
+export type { LegalDocument } from "./launch-manifest";

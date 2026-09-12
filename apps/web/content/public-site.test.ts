@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { LEGAL_DRAFT_STATUS, legalDrafts } from "./legal-drafts";
 import {
+  approvedLegalDocument,
+  isEffectiveApprovedLegalDocument,
+} from "./launch-manifest";
+import {
   LEGAL_PLACEHOLDER_BANNER,
   indexablePublicRoutes,
   legalDocuments,
@@ -10,12 +14,90 @@ import {
 } from "./public-site";
 
 describe("public site launch boundaries", () => {
+  it("requires evidence and an effective date for approved legal content", () => {
+    const base = {
+      id: "terms-v1",
+      path: "/vop",
+      title: "VOP",
+      summary: "Schválené znění",
+      sections: [{ title: "Schválený obsah", paragraphs: ["Text"] }],
+    };
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        effectiveAt: "",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        sections: [],
+        effectiveAt: "2026-01-01T00:00:00.000Z",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+    expect(
+      approvedLegalDocument({
+        ...base,
+        effectiveAt: "2026-01-01T00:00:00.000Z",
+        approvalEvidence: "#38",
+      }),
+    ).toMatchObject({ status: "approved", id: "terms-v1" });
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        id: "terms-pending",
+        effectiveAt: "2026-01-01T00:00:00.000Z",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        effectiveAt: "2026-02-30T00:00:00.000Z",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        effectiveAt: "2026-01-01T00:00:00Z",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+  });
+
+  it("does not activate approvals before their effective date", () => {
+    const document = approvedLegalDocument({
+      id: "terms-v2",
+      path: "/vop",
+      title: "VOP",
+      summary: "Schválené znění",
+      sections: [{ title: "Schválený obsah", paragraphs: ["Text"] }],
+      effectiveAt: "2030-01-01T00:00:00.000Z",
+      approvalEvidence: "#38",
+    });
+
+    expect(
+      isEffectiveApprovedLegalDocument(
+        document,
+        Date.parse("2029-12-31T23:59:59.999Z"),
+      ),
+    ).toBe(false);
+    expect(
+      isEffectiveApprovedLegalDocument(
+        document,
+        Date.parse("2030-01-01T00:00:00.000Z"),
+      ),
+    ).toBe(true);
+  });
+
   it("identifies the approval record behind the public content", () => {
     expect(publicSite.contentRevision).toBe("launch-approvals-v0.1");
   });
 
   it("does not invent unapproved commercial values", () => {
-    expect(publicSite.commercial.automaticQuotePubliclyEnabled).toBe(false);
     expect(publicSite.commercial.fromPrice).toBeNull();
     expect(publicSite.commercial.standardLeadTime).toBeNull();
     expect(publicSite.seller.vatId).toBe("CZ29508291");
@@ -61,9 +143,10 @@ describe("public site launch boundaries", () => {
 
     for (const document of Object.values(legalDocuments)) {
       expect(document.id).toMatch(/-pending$/);
-      expect(indexablePublicRoutes).not.toContain(document.path);
-      expect(document).not.toHaveProperty("effectiveDate");
-      expect(document).not.toHaveProperty("draft");
+      expect(document.status).toBe("draft");
+      expect(document.effectiveAt).toBeNull();
+      expect(document.approvalEvidence).toBeNull();
+      expect(indexablePublicRoutes()).not.toContain(document.path);
     }
 
     for (const draft of Object.values(legalDrafts)) {

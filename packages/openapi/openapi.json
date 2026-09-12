@@ -4179,6 +4179,93 @@
         },
         "type": "object"
       },
+      "LegalDocumentAvailabilityDocumentsDto": {
+        "properties": {
+          "claims": {
+            "$ref": "#/components/schemas/LegalDocumentAvailabilityRecordDto"
+          },
+          "photoConsent": {
+            "$ref": "#/components/schemas/LegalDocumentAvailabilityRecordDto"
+          },
+          "privacy": {
+            "$ref": "#/components/schemas/LegalDocumentAvailabilityRecordDto"
+          },
+          "prohibitedContent": {
+            "$ref": "#/components/schemas/LegalDocumentAvailabilityRecordDto"
+          },
+          "retention": {
+            "$ref": "#/components/schemas/LegalDocumentAvailabilityRecordDto"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/LegalDocumentAvailabilityRecordDto"
+          }
+        },
+        "required": [
+          "terms",
+          "claims",
+          "privacy",
+          "prohibitedContent",
+          "retention",
+          "photoConsent"
+        ],
+        "type": "object"
+      },
+      "LegalDocumentAvailabilityDto": {
+        "properties": {
+          "documents": {
+            "$ref": "#/components/schemas/LegalDocumentAvailabilityDocumentsDto"
+          },
+          "evaluatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "policyRevision": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "enum": [
+              1
+            ],
+            "type": "number"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "policyRevision",
+          "evaluatedAt",
+          "documents"
+        ],
+        "type": "object"
+      },
+      "LegalDocumentAvailabilityRecordDto": {
+        "properties": {
+          "effective": {
+            "type": "boolean"
+          },
+          "effectiveAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "approved"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "status",
+          "effectiveAt",
+          "effective"
+        ],
+        "type": "object"
+      },
       "MachineCalibrationPageDto": {
         "properties": {
           "items": {
@@ -13647,6 +13734,31 @@
         ]
       }
     },
+    "/legal-documents/availability": {
+      "get": {
+        "operationId": "LegalApprovalsController_availability",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalDocumentAvailabilityDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "503": {
+            "description": "Legal approvals or trusted database time are unavailable"
+          }
+        },
+        "summary": "Read server-evaluated legal-document availability",
+        "tags": [
+          "legal documents"
+        ]
+      }
+    },
     "/offers/{quoteId}": {
       "get": {
         "operationId": "OffersController_preview",
@@ -13838,6 +13950,9 @@
               }
             },
             "description": ""
+          },
+          "503": {
+            "description": "Legal approvals or trusted database time are unavailable"
           }
         },
         "summary": "List checkout methods offered by the active provider",
@@ -13942,6 +14057,9 @@
           },
           "429": {
             "description": "Anonymous quote-submission limit is exhausted"
+          },
+          "503": {
+            "description": "Effective privacy or optional photo-consent approval is unavailable"
           }
         },
         "summary": "Submit an individual quote request",

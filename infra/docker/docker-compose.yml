@@ -219,6 +219,7 @@ services:
       NUXT_PUBLIC_SITE_URL: ${NUXT_PUBLIC_SITE_URL-http://localhost:3000}
       NUXT_PUBLIC_CUSTOMER_CONTACT_EMAIL: ${NUXT_PUBLIC_CUSTOMER_CONTACT_EMAIL-zakaznici@taven.cz}
       NUXT_PUBLIC_DATA_CONTROLLER_EMAIL: ${NUXT_PUBLIC_DATA_CONTROLLER_EMAIL-legal@taven.cz}
+      NUXT_PUBLIC_AUTOMATIC_QUOTE_ENABLED: ${NUXT_PUBLIC_AUTOMATIC_QUOTE_ENABLED:-false}
     depends_on:
       backend:
         condition: service_healthy

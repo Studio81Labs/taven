@@ -22,6 +22,7 @@ export default defineNuxtConfig({
       siteUrl: "http://localhost:3000",
       customerContactEmail: "zakaznici@taven.cz",
       dataControllerEmail: "legal@taven.cz",
+      automaticQuoteEnabled: false,
     },
   },
   app: {

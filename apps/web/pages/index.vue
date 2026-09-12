@@ -3,6 +3,8 @@ import { publicSite } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
 
+const automaticQuoteEnabled = useAutomaticQuoteEnabled();
+
 usePublicPageMeta({
   path: "/",
   description:
@@ -85,7 +87,7 @@ usePublicPageMeta({
             bezpečný přechod do individuální poptávky.
           </p>
           <NuxtLink
-            v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
+            v-if="automaticQuoteEnabled"
             class="mt-6 inline-flex min-h-11 items-center bg-[#1b44e8] px-5 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
             to="/objednavka"
             no-prefetch

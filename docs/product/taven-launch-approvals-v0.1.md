@@ -117,12 +117,20 @@ block pro acceptance criterion issue #38; není to schválení žádné z návrh
 hodnot. Placeholder ani pracovní návrh právního textu není souhlas s těmito
 hodnotami.
 
-Backend proto používá dva nezávislé, výchozím stavem vypnuté přepínače:
+Backend proto používá tři nezávislé, výchozím stavem vypnuté přepínače:
 `TAVEN_BINDING_QUOTE_FLOWS_ENABLED` pro vytvoření závazné automatické ceny,
 vydání individuální nabídky a její přijetí a
-`TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED` pro založení a dokončení uploadu fotografie.
+`TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED` pro založení a dokončení uploadu fotografie
+a `TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED` pro založení nového platebního pokusu.
 Pouze přesná hodnota `true` tok povolí; chybějící, prázdná nebo jiná hodnota jej
 blokuje. Expirace, odmítnutí nabídek a retenční úklid zůstávají dostupné.
+
+Web používá samostatný výchozím stavem vypnutý přepínač
+`NUXT_PUBLIC_AUTOMATIC_QUOTE_ENABLED`. I přes jeho přesnou hodnotu `true`
+(nebo runtime boolean `true`) zůstává veřejné získávání objednávek vypnuté,
+dokud manifest v repozitáři neobsahuje schválené právní a obchodní vstupy. Tento
+webový přepínač nenahrazuje žádný backendový přepínač ani neautorizuje veřejné
+spuštění.
 
 Studio81 Labs, s.r.o. aktuálně není plátcem DPH. Ve v0 se proto zákazníkovi
 účtuje konečná cena bez vyčíslené DPH; zveřejněné DIČ samo o sobě neznamená

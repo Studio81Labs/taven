@@ -28,6 +28,7 @@ import {
   paymentRestartMode,
   paymentReturnPresentation,
 } from "../../utils/payment-return";
+import { useLegalAvailability } from "../../composables/useLegalAvailability";
 
 type CheckoutPayment = components["schemas"]["CheckoutPaymentDto"];
 type CreateCheckoutPayment = components["schemas"]["CreateCheckoutPaymentDto"];
@@ -40,6 +41,8 @@ const props = defineProps<{
   onRestart: () => void;
 }>();
 const { $api } = useNuxtApp();
+const { availability, refresh: refreshLegalAvailability } =
+  useLegalAvailability();
 const form = ref<HTMLFormElement>();
 const credentials = shallowRef<StoredQuoteSession>();
 const capabilities = shallowRef<PaymentCapabilities>();
@@ -74,13 +77,23 @@ const draft = reactive<CheckoutCustomerDraft>({
 });
 
 const localDocumentIds = {
-  terms: legalDocuments.terms.id,
-  claims: legalDocuments.claims.id,
-  photoConsent: legalDocuments.photoConsent.id,
+  terms: legalDocuments.terms,
+  claims: legalDocuments.claims,
+  privacy: legalDocuments.privacy,
+  prohibitedContent: legalDocuments.prohibitedContent,
+  retention: legalDocuments.retention,
+  photoConsent: legalDocuments.photoConsent,
 };
 const approvedDocuments = computed(() =>
-  approvedCheckoutDocuments(capabilities.value, localDocumentIds),
+  approvedCheckoutDocuments(
+    capabilities.value,
+    localDocumentIds,
+    availability.value,
+  ),
 );
+watch(approvedDocuments, (documents) => {
+  if (!documents?.photoConsentRevision) draft.photoPublicationConsent = false;
+});
 const bindingPrice = computed(() => props.quote.bindingQuote ?? null);
 const selectedDestination = computed(
   () => props.quote.selectedDeliveryDestination ?? null,
@@ -137,6 +150,7 @@ onMounted(async () => {
   command.value = storedCheckout?.command;
   initialized.value = true;
   await loadCapabilities();
+  await refreshLegalAvailability();
   if (command.value?.paymentId) await refreshPayment();
   loading.value = false;
 });
@@ -170,6 +184,7 @@ async function loadCapabilities(): Promise<void> {
 
 async function submitCheckout(): Promise<void> {
   if (!form.value?.reportValidity() || !canSubmit.value) return;
+  await refreshLegalAvailability();
   const session = credentials.value;
   const documents = approvedDocuments.value;
   if (!session || !documents) return;

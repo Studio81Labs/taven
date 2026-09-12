@@ -37,6 +37,8 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
+import { assertEffectiveLegalDocuments } from "../legal-approvals/legal-approvals.catalog";
+import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import type {
   ConfirmedUploadResponseDto,
@@ -91,6 +93,11 @@ const ANONYMOUS_UPLOAD_GLOBAL_MAX_ISSUED = 100;
 const ANONYMOUS_UPLOAD_GLOBAL_MAX_BYTES = 10 * 1024 * 1024 * 1024;
 const ANONYMOUS_UPLOAD_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_UPLOAD_LIMIT_CLEANUP_BATCH = 100;
+const QUOTE_UPLOAD_LEGAL_DOCUMENTS = [
+  "privacy",
+  "prohibitedContent",
+  "retention",
+] as const;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -114,6 +121,7 @@ export class UploadService {
     @Inject(OBJECT_STORAGE_CONFIG)
     private readonly storageConfig: ObjectStorageConfig,
     private readonly audit: AuditService,
+    private readonly legalApprovals: LegalApprovalsService,
   ) {}
 
   async initiateModelUpload(
@@ -224,6 +232,10 @@ export class UploadService {
         throw new UnauthorizedException("Quote-session capability is invalid");
       }
       assertQuotePhotoUploadsEnabled();
+      assertEffectiveLegalDocuments(
+        this.legalApprovals.evaluateAt(scope.observed_at),
+        QUOTE_UPLOAD_LEGAL_DOCUMENTS,
+      );
       const subjectHash = anonymousUploadSubject(
         this.storageConfig.uploadClientHashKey,
         "quote-photo-upload",
@@ -412,6 +424,10 @@ export class UploadService {
           ) {
             throw new GoneException("Quote request no longer accepts photos");
           }
+          assertEffectiveLegalDocuments(
+            this.legalApprovals.evaluateAt(scope.observed_at),
+            QUOTE_UPLOAD_LEGAL_DOCUMENTS,
+          );
         }
       }
 

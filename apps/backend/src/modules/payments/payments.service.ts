@@ -15,8 +15,9 @@ import {
   assertCheckoutClaimPolicyRevisionCurrent,
   assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
-  assertCheckoutPhotoConsentRevisionCurrent,
+  assertEffectiveCheckoutPhotoConsent,
   assertCheckoutTermsRevisionCurrent,
+  assertEffectiveCheckoutLegalDocuments,
   checkoutPaymentLegalDocuments,
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -40,6 +41,7 @@ import {
   ResourceNotFoundError,
 } from "../resources/resource-errors";
 import { ResourceReservationService } from "../resources/resource-reservation.service";
+import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
 import type {
   CreateBalancePaymentDto,
   CreateCheckoutPaymentDto,
@@ -76,10 +78,14 @@ export class PaymentsService {
     @Inject(ResourceReservationService)
     private readonly reservations: ResourceReservationService,
     private readonly audit: AuditService,
+    private readonly legalApprovals?: LegalApprovalsService,
   ) {}
 
   async capabilities(env: NodeJS.ProcessEnv = process.env) {
-    const legalDocuments = checkoutPaymentLegalDocuments(env);
+    const legalDocuments = checkoutPaymentLegalDocuments(
+      env,
+      await this.requiredLegalApprovals().availability(),
+    );
     if (!legalDocuments) {
       return {
         available: false,
@@ -106,6 +112,13 @@ export class PaymentsService {
       methods: [...value.methods],
       legalDocuments,
     };
+  }
+
+  private requiredLegalApprovals(): LegalApprovalsService {
+    if (!this.legalApprovals) {
+      throw new Error("Legal approvals service is unavailable");
+    }
+    return this.legalApprovals;
   }
 
   async createBalancePayment(
@@ -475,20 +488,27 @@ export class PaymentsService {
     );
     if (initialIdempotency.replay) return initialIdempotency.replay;
     assertCheckoutContext(initial, token, initialIdempotency.observedAt);
-    const initialLegalRevisions = assertCheckoutPaymentFlowsEnabled(
+    assertCheckoutPaymentFlowsEnabled(
       initial.order.activePriceBinding!.orderPriceBinding.priceSnapshot
         .priceList.termsRevision,
     );
+    const initialEffectiveLegalRevisions =
+      assertEffectiveCheckoutLegalDocuments(
+        this.requiredLegalApprovals().evaluateAt(initialIdempotency.observedAt),
+      );
     assertCheckoutTermsRevisionCurrent(
       input.termsRevision,
-      initialLegalRevisions.termsRevision,
+      initialEffectiveLegalRevisions.termsRevision,
     );
     assertCheckoutClaimPolicyRevisionCurrent(
       input.claimPolicyRevision,
-      initialLegalRevisions.claimPolicyRevision,
+      initialEffectiveLegalRevisions.claimPolicyRevision,
     );
     if (input.photoPublicationConsent) {
-      assertCheckoutPhotoConsentRevisionCurrent(input.photoConsentRevision!);
+      assertEffectiveCheckoutPhotoConsent(
+        this.requiredLegalApprovals().evaluateAt(initialIdempotency.observedAt),
+        input.photoConsentRevision!,
+      );
     }
     assertCheckoutAcceptanceRevisionsCurrent(
       {
@@ -496,7 +516,7 @@ export class PaymentsService {
         claimPolicyRevision: initial.order.acceptedClaimPolicyRevision,
         claimWindowDays: initial.order.acceptedClaimWindowDays,
       },
-      initialLegalRevisions,
+      initialEffectiveLegalRevisions,
     );
     assertCheckoutEvidenceMatches(initial.order, input);
 
@@ -532,19 +552,25 @@ export class PaymentsService {
       assertCheckoutContext(context, token, observedAt);
       assertDestinationStillCurrent(context, resolvedDestination);
       const binding = context.order.activePriceBinding!.orderPriceBinding;
-      const legalRevisions = assertCheckoutPaymentFlowsEnabled(
+      assertCheckoutPaymentFlowsEnabled(
         binding.priceSnapshot.priceList.termsRevision,
+      );
+      const effectiveLegalRevisions = assertEffectiveCheckoutLegalDocuments(
+        this.requiredLegalApprovals().evaluateAt(observedAt),
       );
       assertCheckoutTermsRevisionCurrent(
         input.termsRevision,
-        legalRevisions.termsRevision,
+        effectiveLegalRevisions.termsRevision,
       );
       assertCheckoutClaimPolicyRevisionCurrent(
         input.claimPolicyRevision,
-        legalRevisions.claimPolicyRevision,
+        effectiveLegalRevisions.claimPolicyRevision,
       );
       if (input.photoPublicationConsent) {
-        assertCheckoutPhotoConsentRevisionCurrent(input.photoConsentRevision!);
+        assertEffectiveCheckoutPhotoConsent(
+          this.requiredLegalApprovals().evaluateAt(observedAt),
+          input.photoConsentRevision!,
+        );
       }
       assertCheckoutAcceptanceRevisionsCurrent(
         {
@@ -552,7 +578,7 @@ export class PaymentsService {
           claimPolicyRevision: context.order.acceptedClaimPolicyRevision,
           claimWindowDays: context.order.acceptedClaimWindowDays,
         },
-        legalRevisions,
+        effectiveLegalRevisions,
       );
       assertCheckoutEvidenceMatches(context.order, input);
       const schedule = binding.priceSnapshot.paymentSchedules.find(
@@ -651,17 +677,19 @@ export class PaymentsService {
           ...(context.order.acceptedTermsRevision
             ? {}
             : {
-                acceptedTermsRevision: legalRevisions.termsRevision,
+                acceptedTermsRevision: effectiveLegalRevisions.termsRevision,
               }),
           ...(context.order.acceptedClaimPolicyRevision
             ? {}
             : {
-                acceptedClaimPolicyRevision: legalRevisions.claimPolicyRevision,
+                acceptedClaimPolicyRevision:
+                  effectiveLegalRevisions.claimPolicyRevision,
               }),
           ...(context.order.acceptedClaimWindowDays
             ? {}
             : {
-                acceptedClaimWindowDays: legalRevisions.claimWindowDays,
+                acceptedClaimWindowDays:
+                  effectiveLegalRevisions.claimWindowDays,
               }),
           ...(context.order.withdrawalExceptionAcknowledgedAt
             ? {}

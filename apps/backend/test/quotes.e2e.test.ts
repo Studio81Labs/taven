@@ -30,6 +30,7 @@ process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
 process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??= uploadClientHashKey;
 process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED ??= "true";
 process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED ??= "true";
+const initialTermsRevision = process.env.TAVEN_TERMS_REVISION;
 
 describe("QuoteRequest and tokenized individual offers", () => {
   let app: NestExpressApplication;
@@ -102,6 +103,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
 
   afterAll(async () => {
     await app?.close();
+    if (initialTermsRevision === undefined) {
+      delete process.env.TAVEN_TERMS_REVISION;
+    } else {
+      process.env.TAVEN_TERMS_REVISION = initialTermsRevision;
+    }
   });
 
   it("fails closed before issuing or accepting a binding offer", async () => {
@@ -143,6 +149,33 @@ describe("QuoteRequest and tokenized individual offers", () => {
       new Date(Date.now() + 60 * 60 * 1_000),
     );
     expect(issued.response.status).toBe(201);
+
+    const configuredTermsRevision = process.env.TAVEN_TERMS_REVISION;
+    process.env.TAVEN_TERMS_REVISION = `${issued.body.termsRevision}-next`;
+    try {
+      const refused = await apiJson(`offers/${issued.body.quoteId}/accept`, {
+        method: "POST",
+        headers: {
+          ...bearer(issued.body.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": key("launch-gate-stale-terms-accept"),
+        },
+        body: JSON.stringify({
+          version: issued.body.version,
+          termsRevision: issued.body.termsRevision,
+        }),
+      });
+      expect(refused.response.status).toBe(503);
+      expect(refused.body).toMatchObject({
+        code: "LAUNCH_APPROVAL_REQUIRED",
+      });
+    } finally {
+      if (configuredTermsRevision === undefined) {
+        delete process.env.TAVEN_TERMS_REVISION;
+      } else {
+        process.env.TAVEN_TERMS_REVISION = configuredTermsRevision;
+      }
+    }
 
     process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = "false";
     try {
@@ -2296,6 +2329,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     },
     idempotencyKey: string,
   ) {
+    process.env.TAVEN_TERMS_REVISION = issued.termsRevision;
     return apiJson<{
       orderId: string;
       publicReference: string;

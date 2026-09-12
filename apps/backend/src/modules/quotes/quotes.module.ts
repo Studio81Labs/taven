@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AdminAccessModule } from "../admin-access/admin-access.module";
 import { AuditModule } from "../audit/audit.module";
 import { StorageModule } from "../storage/storage.module";
+import { LegalApprovalsModule } from "../legal-approvals/legal-approvals.module";
 import {
   OffersController,
   OperatorQuoteRequestsController,
@@ -10,7 +11,12 @@ import {
 import { QuotesService } from "./quotes.service";
 
 @Module({
-  imports: [AdminAccessModule, AuditModule, StorageModule],
+  imports: [
+    AdminAccessModule,
+    AuditModule,
+    StorageModule,
+    LegalApprovalsModule,
+  ],
   controllers: [
     QuoteRequestsController,
     OffersController,

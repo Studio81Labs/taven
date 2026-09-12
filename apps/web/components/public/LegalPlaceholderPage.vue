@@ -2,13 +2,12 @@
 import {
   LEGAL_PLACEHOLDER_BANNER,
   publicSite,
-  type LegalDocument,
 } from "../../content/public-site";
-import type { LegalDraft } from "../../content/legal-drafts";
+import type { LegalDocument } from "../../content/launch-manifest";
 
 defineProps<{
   document: LegalDocument;
-  draft: LegalDraft;
+  effective?: boolean;
   contact?: {
     label: string;
     email: string;
@@ -20,6 +19,7 @@ defineProps<{
 <template>
   <article class="mx-auto max-w-3xl px-5 py-14 sm:px-8 sm:py-20">
     <p
+      v-if="!effective"
       class="border-2 border-[#b4441a] bg-white px-4 py-3 font-mono text-sm font-semibold text-[#8c3213]"
       role="alert"
     >
@@ -35,16 +35,28 @@ defineProps<{
       {{ document.summary }}
     </p>
     <div class="mt-10 border border-[#d9d9d2] bg-white p-6 leading-7">
-      <h2 class="text-xl font-semibold">Tato stránka není právní dokument</h2>
+      <h2 class="text-xl font-semibold">
+        {{ !effective ? "Tato stránka není právní dokument" : "Účinné znění" }}
+      </h2>
       <p class="mt-3 text-[#54554c]">
-        Neobsahuje účinné znění, datum účinnosti ani souhlas, který by bylo
-        možné přijmout. Před veřejným spuštěním ji musí nahradit verzovaný text
-        schválený vlastníkem služby a českým právním poradcem.
+        <template v-if="!effective">
+          Neobsahuje účinné znění, datum účinnosti ani souhlas, který by bylo
+          možné přijmout. Před veřejným spuštěním ji musí nahradit verzovaný
+          text schválený vlastníkem služby a českým právním poradcem.
+        </template>
+        <template v-else>
+          Účinné od {{ document.effectiveAt }}. Zdroj schválení:
+          {{ document.approvalEvidence }}.
+        </template>
       </p>
     </div>
     <section class="mt-10 border-t border-[#d9d9d2] pt-8">
       <h2 class="text-xl font-semibold">
-        Identifikace budoucího provozovatele
+        {{
+          effective
+            ? "Identifikace provozovatele"
+            : "Identifikace budoucího provozovatele"
+        }}
       </h2>
       <p class="mt-3 font-mono leading-7 text-[#54554c]">
         {{ publicSite.seller.legalName }}<br />
@@ -69,20 +81,24 @@ defineProps<{
     >
       <div class="border border-[#d9d9d2] bg-[#efefea] p-5">
         <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-          {{ draft.status }} · {{ draft.sourceDocumentId }}
+          {{ effective ? "SCHVÁLENO" : "NÁVRH" }}
+          ·
+          {{ document.id }}
         </p>
         <h2 id="legal-draft-heading" class="mt-3 text-2xl font-semibold">
-          Pracovní návrh textu
+          {{ !effective ? "Pracovní návrh textu" : "Text dokumentu" }}
         </h2>
         <p class="mt-3 leading-7 text-[#54554c]">
-          Následující text slouží pouze k vývoji a připomínkování. Nemá datum
-          účinnosti, nelze jej přijmout a nesmí být použit při produkční
-          objednávce.
+          {{
+            !effective
+              ? "Následující text slouží pouze k vývoji a připomínkování. Nemá datum účinnosti, nelze jej přijmout a nesmí být použit při produkční objednávce."
+              : "Text se vykresluje jako prostý obsah manifestu; nespouští ani nevkládá neověřený HTML obsah."
+          }}
         </p>
       </div>
 
       <section
-        v-for="section in draft.sections"
+        v-for="section in document.sections"
         :key="section.title"
         class="border-b border-[#d9d9d2] py-8 last:border-b-0"
       >

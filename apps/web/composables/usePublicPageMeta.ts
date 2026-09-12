@@ -1,9 +1,10 @@
 import { publicSite } from "../content/public-site";
 import { canonicalTitle, canonicalUrl } from "../utils/site-meta";
+import type { Ref } from "vue";
 
 interface PublicPageMeta {
   description: string;
-  noindex?: boolean;
+  noindex?: boolean | Readonly<Ref<boolean>>;
   path: string;
   title?: string;
 }
@@ -25,7 +26,9 @@ export function usePublicPageMeta({
     ogTitle: fullTitle,
     ogType: "website",
     ogUrl: url,
-    robots: noindex ? "noindex, nofollow" : "index, follow",
+    robots: computed(() =>
+      unref(noindex) ? "noindex, nofollow" : "index, follow",
+    ),
     twitterCard: "summary",
   });
   useHead({

@@ -1,7 +1,10 @@
-import { publicSite } from "../content/public-site";
+import { useLegalAvailability } from "../composables/useLegalAvailability";
 
-export default defineNuxtRouteMiddleware(() => {
-  if (publicSite.commercial.automaticQuotePubliclyEnabled) return;
+export default defineNuxtRouteMiddleware(async () => {
+  const { refresh } = useLegalAvailability();
+  await refresh();
+
+  if (useAutomaticQuoteEnabled().value) return;
 
   return navigateTo(
     {

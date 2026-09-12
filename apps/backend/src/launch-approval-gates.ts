@@ -1,4 +1,8 @@
 import { ServiceUnavailableException } from "@nestjs/common";
+import {
+  assertEffectiveLegalDocuments,
+  type EvaluatedLegalApprovals,
+} from "./modules/legal-approvals/legal-approvals.catalog";
 
 export const BINDING_QUOTE_FLOWS_ENV =
   "TAVEN_BINDING_QUOTE_FLOWS_ENABLED" as const;
@@ -162,19 +166,89 @@ export function checkoutPaymentLaunchInputsApproved(
 
 export function checkoutPaymentLegalDocuments(
   env: NodeJS.ProcessEnv = process.env,
+  approvals?: EvaluatedLegalApprovals,
 ): Readonly<{
   termsRevision: string;
   claimPolicyRevision: string;
   photoConsentRevision: string | null;
 }> | null {
-  if (!checkoutPaymentLaunchInputsApproved(env)) return null;
+  if (!checkoutPaymentLaunchInputsApproved(env) || !approvals) return null;
+  try {
+    assertEffectiveLegalDocuments(approvals, [
+      "terms",
+      "claims",
+      "privacy",
+      "prohibitedContent",
+      "retention",
+    ]);
+  } catch {
+    return null;
+  }
+  const termsRevision = approvedCheckoutTermsRevision(env);
+  const claimPolicyRevision = approvedCheckoutClaimPolicyRevision(env);
+  if (
+    approvals.documents.terms.revision !== termsRevision ||
+    approvals.documents.claims.revision !== claimPolicyRevision
+  )
+    return null;
   return {
-    termsRevision: approvedCheckoutTermsRevision(env),
-    claimPolicyRevision: approvedCheckoutClaimPolicyRevision(env),
-    photoConsentRevision: approvedCheckoutRevision(
-      env[CHECKOUT_PHOTO_CONSENT_REVISION_ENV],
-    ),
+    termsRevision,
+    claimPolicyRevision,
+    photoConsentRevision:
+      approvals.documents.photoConsent.effective &&
+      approvals.documents.photoConsent.revision ===
+        approvedCheckoutRevision(env[CHECKOUT_PHOTO_CONSENT_REVISION_ENV])
+        ? approvals.documents.photoConsent.revision
+        : null,
   };
+}
+
+export function assertEffectiveCheckoutLegalDocuments(
+  approvals: EvaluatedLegalApprovals,
+  env: NodeJS.ProcessEnv = process.env,
+): Readonly<{
+  termsRevision: string;
+  claimPolicyRevision: string;
+  claimWindowDays: number;
+}> {
+  const documents = checkoutPaymentLegalDocuments(env, approvals);
+  if (!documents) {
+    throw launchApprovalRequired(
+      "Checkout payment flows require effective legal approval metadata",
+    );
+  }
+  return {
+    termsRevision: documents.termsRevision,
+    claimPolicyRevision: documents.claimPolicyRevision,
+    claimWindowDays: approvedCheckoutClaimWindowDays(env),
+  };
+}
+
+export function assertEffectiveQuoteRequestLegalDocuments(
+  approvals: EvaluatedLegalApprovals,
+  photoPublicationConsent: boolean,
+): void {
+  assertEffectiveLegalDocuments(approvals, [
+    "privacy",
+    "prohibitedContent",
+    "retention",
+  ]);
+  if (photoPublicationConsent)
+    assertEffectiveLegalDocuments(approvals, ["photoConsent"]);
+}
+
+export function assertEffectiveCheckoutPhotoConsent(
+  approvals: EvaluatedLegalApprovals,
+  requestedRevision: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  assertEffectiveLegalDocuments(approvals, ["photoConsent"]);
+  assertCheckoutPhotoConsentRevisionCurrent(requestedRevision, env);
+  if (approvals.documents.photoConsent.revision !== requestedRevision) {
+    throw launchApprovalRequired(
+      "Checkout request does not use the effective photo-consent revision",
+    );
+  }
 }
 
 export function assertCheckoutPhotoConsentRevisionCurrent(

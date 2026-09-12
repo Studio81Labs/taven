@@ -1462,6 +1462,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/legal-documents/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read server-evaluated legal-document availability */
+        get: operations["LegalApprovalsController_availability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/offers/{quoteId}": {
         parameters: {
             query?: never;
@@ -2838,6 +2855,30 @@ export interface components {
             omissionReason?: string;
             /** Format: uuid */
             photoAssetId?: string;
+        };
+        LegalDocumentAvailabilityDocumentsDto: {
+            claims: components["schemas"]["LegalDocumentAvailabilityRecordDto"];
+            photoConsent: components["schemas"]["LegalDocumentAvailabilityRecordDto"];
+            privacy: components["schemas"]["LegalDocumentAvailabilityRecordDto"];
+            prohibitedContent: components["schemas"]["LegalDocumentAvailabilityRecordDto"];
+            retention: components["schemas"]["LegalDocumentAvailabilityRecordDto"];
+            terms: components["schemas"]["LegalDocumentAvailabilityRecordDto"];
+        };
+        LegalDocumentAvailabilityDto: {
+            documents: components["schemas"]["LegalDocumentAvailabilityDocumentsDto"];
+            /** Format: date-time */
+            evaluatedAt: string;
+            policyRevision: string;
+            /** @enum {number} */
+            schemaVersion: 1;
+        };
+        LegalDocumentAvailabilityRecordDto: {
+            effective: boolean;
+            /** Format: date-time */
+            effectiveAt: string | null;
+            revision: string;
+            /** @enum {string} */
+            status: "draft" | "approved";
         };
         MachineCalibrationPageDto: {
             items: components["schemas"]["MachineCalibrationReadDto"][];
@@ -6642,6 +6683,32 @@ export interface operations {
             };
         };
     };
+    LegalApprovalsController_availability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalDocumentAvailabilityDto"];
+                };
+            };
+            /** @description Legal approvals or trusted database time are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     OffersController_preview: {
         parameters: {
             query?: never;
@@ -6792,6 +6859,13 @@ export interface operations {
                     "application/json": components["schemas"]["PaymentCapabilitiesDto"];
                 };
             };
+            /** @description Legal approvals or trusted database time are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     PaymentsController_webhook: {
@@ -6871,6 +6945,13 @@ export interface operations {
             };
             /** @description Anonymous quote-submission limit is exhausted */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Effective privacy or optional photo-consent approval is unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
