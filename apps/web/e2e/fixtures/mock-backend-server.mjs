@@ -25,6 +25,8 @@ let testState = {
 const sessions = new Map();
 const payments = new Map();
 const uploads = new Map();
+const quoteRequests = new Map();
+const handoffCapabilities = new Map();
 
 function isUuid(val) {
   return (
@@ -53,6 +55,8 @@ function resetState() {
   sessions.clear();
   payments.clear();
   uploads.clear();
+  quoteRequests.clear();
+  handoffCapabilities.clear();
 }
 
 function sendJson(res, statusCode, body) {
@@ -453,9 +457,9 @@ const server = http.createServer(async (req, res) => {
 
     // --- 3. Storage Upload Model Files ---
     if (pathname === "/storage/uploads/model-files" && method === "POST") {
-      const uploadId = "00000000-0000-4000-8000-000000000010";
-      const assetId = "00000000-0000-4000-8000-000000000011";
-      const accessToken = "token-file-test-001";
+      const uploadId = crypto.randomUUID();
+      const assetId = crypto.randomUUID();
+      const accessToken = generateCapabilityToken();
       const intent = {
         uploadId,
         assetId,
@@ -464,16 +468,46 @@ const server = http.createServer(async (req, res) => {
         requiredHeaders: {},
         expiresAt: "2030-01-01T00:00:00.000Z",
       };
-      uploads.set(uploadId, { ...intent, assetKind: "MODEL_FILE" });
+      uploads.set(uploadId, {
+        ...intent,
+        assetKind: "MODEL_FILE",
+        confirmed: false,
+      });
       sendJson(res, 201, intent);
       return;
     }
 
     // --- 4. Storage Upload Photos (Assisted) ---
     if (pathname === "/storage/uploads/photos" && method === "POST") {
-      const uploadId = "00000000-0000-4000-8000-000000000020";
-      const assetId = "00000000-0000-4000-8000-000000000021";
-      const accessToken = "token-photo-001";
+      const body = await parseJson(req);
+      if (body?.scopeKind !== "QUOTE_REQUEST" || !body?.scopeId) {
+        sendJson(res, 400, {
+          statusCode: 400,
+          message:
+            "scopeKind must be QUOTE_REQUEST and scopeId must be specified",
+        });
+        return;
+      }
+      const quoteRequest = quoteRequests.get(body.scopeId);
+      if (!quoteRequest) {
+        sendJson(res, 404, {
+          statusCode: 404,
+          message: "Quote request was not found",
+        });
+        return;
+      }
+      const authHeader = req.headers.authorization || "";
+      if (authHeader !== `Bearer ${quoteRequest.requestToken}`) {
+        sendJson(res, 401, {
+          statusCode: 401,
+          message: "Capability token is invalid",
+        });
+        return;
+      }
+
+      const uploadId = crypto.randomUUID();
+      const assetId = crypto.randomUUID();
+      const accessToken = generateCapabilityToken();
       const intent = {
         uploadId,
         assetId,
@@ -482,7 +516,11 @@ const server = http.createServer(async (req, res) => {
         requiredHeaders: {},
         expiresAt: "2030-01-01T00:00:00.000Z",
       };
-      uploads.set(uploadId, { ...intent, assetKind: "PHOTO_ASSET" });
+      uploads.set(uploadId, {
+        ...intent,
+        assetKind: "PHOTO_ASSET",
+        confirmed: false,
+      });
       sendJson(res, 201, intent);
       return;
     }
@@ -508,6 +546,7 @@ const server = http.createServer(async (req, res) => {
         });
         return;
       }
+      upload.confirmed = true;
       sendJson(res, 200, {
         uploadId: upload.uploadId,
         assetId: upload.assetId,
@@ -565,10 +604,113 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (subpath === "/handoff-capabilities" && method === "POST") {
+        const idempotencyKey = req.headers["idempotency-key"];
+        if (
+          !idempotencyKey ||
+          typeof idempotencyKey !== "string" ||
+          idempotencyKey.trim().length === 0
+        ) {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "Idempotency-Key header is required",
+          });
+          return;
+        }
+
+        const handoffToken = generateCapabilityToken();
+        const handoffId = crypto.randomUUID();
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        handoffCapabilities.set(handoffToken, {
+          handoffId,
+          sessionId,
+          handoffToken,
+          consumed: false,
+          expiresAt,
+        });
+        sendJson(res, 201, {
+          handoffToken,
+          expiresAt,
+        });
+        return;
+      }
+
       if (subpath === "/model-files" && method === "POST") {
+        const idempotencyKey = req.headers["idempotency-key"];
+        if (
+          !idempotencyKey ||
+          typeof idempotencyKey !== "string" ||
+          idempotencyKey.trim().length === 0
+        ) {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "Idempotency-Key header is required",
+          });
+          return;
+        }
+
         const body = await parseJson(req);
-        if (body.modelFileId && session.modelFiles[0]) {
+        if (!isUuid(body?.modelFileId)) {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "modelFileId must be a valid UUID",
+          });
+          return;
+        }
+        if (!body?.uploadToken || typeof body.uploadToken !== "string") {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "uploadToken is required",
+          });
+          return;
+        }
+
+        let matchingUpload = null;
+        for (const upload of uploads.values()) {
+          if (
+            upload.assetId === body.modelFileId &&
+            upload.assetKind === "MODEL_FILE"
+          ) {
+            matchingUpload = upload;
+            break;
+          }
+        }
+
+        if (!matchingUpload) {
+          sendJson(res, 404, {
+            statusCode: 404,
+            message: "Model file upload was not found",
+          });
+          return;
+        }
+
+        if (!matchingUpload.confirmed) {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "Model file upload has not been confirmed",
+          });
+          return;
+        }
+
+        if (matchingUpload.accessToken !== body.uploadToken) {
+          sendJson(res, 401, {
+            statusCode: 401,
+            message: "Upload capability token is invalid",
+          });
+          return;
+        }
+
+        if (session.modelFiles[0]) {
           session.modelFiles[0].modelFileId = body.modelFileId;
+        } else {
+          session.modelFiles.push({
+            modelFileId: body.modelFileId,
+            format: "STL",
+            discoveredBodyIds: ["body-1"],
+            inspectionStatus: "SUCCEEDED",
+          });
+        }
+        if (session.items[0]) {
           session.items[0].modelFileId = body.modelFileId;
         }
         sendJson(res, 200, session);
@@ -905,7 +1047,26 @@ const server = http.createServer(async (req, res) => {
     ) {
       const body = await parseJson(req);
       testState.lastAssistedQuote = body;
-      sendJson(res, 201, {
+
+      if (body?.automaticQuoteHandoffToken) {
+        const capability = handoffCapabilities.get(
+          body.automaticQuoteHandoffToken,
+        );
+        if (
+          !capability ||
+          capability.consumed ||
+          new Date(capability.expiresAt).getTime() <= Date.now()
+        ) {
+          sendJson(res, 401, {
+            statusCode: 401,
+            message: "Automatic quote handoff capability is invalid",
+          });
+          return;
+        }
+        capability.consumed = true;
+      }
+
+      const request = {
         requestId: crypto.randomUUID(),
         publicReference: "REQ-2026-TEST",
         requestToken: generateCapabilityToken(),
@@ -913,7 +1074,9 @@ const server = http.createServer(async (req, res) => {
         slaDueAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
         referenceNumber: "REQ-2026-TEST",
         createdAt: new Date().toISOString(),
-      });
+      };
+      quoteRequests.set(request.requestId, request);
+      sendJson(res, 201, request);
       return;
     }
 

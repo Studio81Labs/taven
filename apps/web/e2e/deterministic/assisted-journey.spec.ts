@@ -63,12 +63,69 @@ test.describe("Assisted Quote Journey", () => {
     await expect(page.getByText("POPTÁVKA ULOŽENA")).toBeVisible();
   });
 
+  test("handoff capability endpoint requires session bearer and idempotency key", async ({
+    request,
+  }) => {
+    const sessRes = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+    );
+    const session = await sessRes.json();
+
+    // 1. Missing bearer -> 401
+    const noAuth = await request.post(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/handoff-capabilities`,
+      { headers: { "Idempotency-Key": "test-key-01" } },
+    );
+    expect(noAuth.status()).toBe(401);
+
+    // 2. Missing idempotency key -> 400
+    const noKey = await request.post(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/handoff-capabilities`,
+      { headers: { Authorization: `Bearer ${session.sessionToken}` } },
+    );
+    expect(noKey.status()).toBe(400);
+
+    // 3. Valid -> 201 with handoffToken
+    const valid = await request.post(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/handoff-capabilities`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.sessionToken}`,
+          "Idempotency-Key": "test-key-01",
+        },
+      },
+    );
+    expect(valid.status()).toBe(201);
+    const data = await valid.json();
+    expect(data.handoffToken).toBeDefined();
+    expect(typeof data.handoffToken).toBe("string");
+    expect(data.handoffToken.length).toBeGreaterThanOrEqual(40);
+  });
+
   test("blocked model handoff context pre-fills note and links reference", async ({
     page,
     request,
   }) => {
-    const handoffToken = "A".repeat(43);
-    const automaticQuoteSessionId = "11111111-1111-4111-8111-111111111111";
+    // 1. Create a real automatic-quote session
+    const sessRes = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+    );
+    const session = await sessRes.json();
+
+    // 2. Mint a real handoff capability through contract-compatible endpoint
+    const handoffRes = await request.post(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/handoff-capabilities`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.sessionToken}`,
+          "Idempotency-Key": `handoff-key-${session.sessionId}`,
+        },
+      },
+    );
+    expect(handoffRes.status()).toBe(201);
+    const handoff = await handoffRes.json();
+    const handoffToken = handoff.handoffToken;
+    const automaticQuoteSessionId = session.sessionId;
 
     await page.goto("/");
     await page.evaluate(
@@ -145,6 +202,22 @@ test.describe("Assisted Quote Journey", () => {
       window.sessionStorage.getItem("taven:assisted-quote-handoff:v1"),
     );
     expect(storedHandoff).toBeNull();
+
+    // Verify single-use capability consumption: replaying same token fails closed with 401
+    const replayRes = await request.post(
+      "http://127.0.0.1:4175/quote-requests",
+      {
+        data: {
+          automaticQuoteHandoffToken: handoffToken,
+          description: "Replay test",
+          customer: {
+            fullName: "Petr Svoboda",
+            email: "petr.svoboda@example.com",
+          },
+        },
+      },
+    );
+    expect(replayRes.status()).toBe(401);
   });
 
   test("client-side validation prevents submission without mandatory fields", async ({

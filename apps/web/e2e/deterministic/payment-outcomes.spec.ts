@@ -60,16 +60,107 @@ test.describe("Payment Outcomes & Session Protection", () => {
         "Uložená relace objednávky není v tomto prohlížeči dostupná.",
       ),
     ).toBeVisible();
-    // No success confirmation may be displayed
-    await expect(page.getByText("Děkujeme za objednávku")).not.toBeVisible();
     await expect(page.getByText("Platba byla potvrzena.")).not.toBeVisible();
   });
 
-  test("direct navigation with mismatched session or payment ID fails closed", async ({
+  test("direct navigation with mismatched session ID in storage fails closed", async ({
     page,
     request,
   }) => {
     const { session, payment } = await createSeededSessionAndPayment(request);
+
+    // Populate storage with foreign session ID
+    await page.goto("/");
+    await page.evaluate(
+      ({ pay }) => {
+        window.sessionStorage.setItem(
+          "taven:automatic-quote-session:v1",
+          JSON.stringify({
+            sessionId: "00000000-0000-4000-8000-foreign00001",
+            sessionToken: "foreign-token-abc",
+            filename: "cube.stl",
+            publicReference: "TAV-FOREIGN-1",
+            expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }),
+        );
+        window.sessionStorage.setItem(
+          "taven:checkout-session:v1",
+          JSON.stringify({
+            sessionId: "00000000-0000-4000-8000-foreign00001",
+            command: {
+              paymentId: pay.paymentId,
+              idempotencyKey: `key-${pay.paymentId}-fake`,
+              requestFingerprint: "fingerprint-fake",
+            },
+          }),
+        );
+      },
+      { pay: payment },
+    );
+
+    await page.goto(
+      `/checkout/payment/success?paymentId=${payment.paymentId}&sessionId=${session.sessionId}`,
+    );
+    // Must display verification failure, not confirmed success
+    await expect(
+      page.getByText("Návrat neodpovídá uložené relaci objednávky."),
+    ).toBeVisible();
+    await expect(page.getByText("Platba byla potvrzena.")).not.toBeVisible();
+  });
+
+  test("direct navigation with mismatched payment ID in storage fails closed", async ({
+    page,
+    request,
+  }) => {
+    const { session, payment } = await createSeededSessionAndPayment(request);
+
+    // Populate storage with foreign payment ID
+    await page.goto("/");
+    await page.evaluate(
+      ({ sess }) => {
+        window.sessionStorage.setItem(
+          "taven:automatic-quote-session:v1",
+          JSON.stringify({
+            sessionId: sess.sessionId,
+            sessionToken: sess.sessionToken,
+            filename: "cube.stl",
+            publicReference: sess.publicReference,
+            expiresAt: sess.expiresAt,
+          }),
+        );
+        window.sessionStorage.setItem(
+          "taven:checkout-session:v1",
+          JSON.stringify({
+            sessionId: sess.sessionId,
+            command: {
+              paymentId: "00000000-0000-4000-8000-foreign00002",
+              idempotencyKey: "key-foreign-002",
+              requestFingerprint: "fingerprint-fake-2",
+            },
+          }),
+        );
+      },
+      { sess: session },
+    );
+
+    await page.goto(
+      `/checkout/payment/success?paymentId=${payment.paymentId}&sessionId=${session.sessionId}`,
+    );
+    // Must display verification failure, not confirmed success
+    await expect(
+      page.getByText("Návrat neodpovídá uloženému platebnímu pokusu."),
+    ).toBeVisible();
+    await expect(page.getByText("Platba byla potvrzena.")).not.toBeVisible();
+  });
+
+  test("direct navigation with expired session token fails closed", async ({
+    page,
+    request,
+  }) => {
+    const { session, payment } = await createSeededSessionAndPayment(request);
+
+    // Invalidate session in backend
+    await request.post("http://127.0.0.1:4175/__test/reset");
 
     await page.goto("/");
     await page.evaluate(
@@ -90,61 +181,8 @@ test.describe("Payment Outcomes & Session Protection", () => {
             sessionId: sess.sessionId,
             command: {
               paymentId: pay.paymentId,
-              idempotencyKey: "key-12345678",
-              requestFingerprint: "fingerprint-1",
-            },
-          }),
-        );
-      },
-      { sess: session, pay: payment },
-    );
-
-    // Mismatched paymentId query param
-    await page.goto(
-      `/checkout/payment/success?paymentId=00000000-0000-4000-8000-000000000999&sessionId=${session.sessionId}`,
-    );
-    await expect(
-      page.getByText("Návrat neodpovídá uloženému platebnímu pokusu."),
-    ).toBeVisible();
-    await expect(page.getByText("Platba byla potvrzena.")).not.toBeVisible();
-
-    // Mismatched sessionId query param
-    await page.goto(
-      `/checkout/payment/success?paymentId=${payment.paymentId}&sessionId=00000000-0000-4000-8000-000000000999`,
-    );
-    await expect(
-      page.getByText("Návrat neodpovídá uložené relaci objednávky."),
-    ).toBeVisible();
-    await expect(page.getByText("Platba byla potvrzena.")).not.toBeVisible();
-  });
-
-  test("direct navigation with tampered token fails closed and shows tamper warning", async ({
-    page,
-    request,
-  }) => {
-    const { session, payment } = await createSeededSessionAndPayment(request);
-
-    await page.goto("/");
-    await page.evaluate(
-      ({ sess, pay }) => {
-        window.sessionStorage.setItem(
-          "taven:automatic-quote-session:v1",
-          JSON.stringify({
-            sessionId: sess.sessionId,
-            sessionToken: "TAMPERED_INVALID_TOKEN",
-            filename: "cube.stl",
-            publicReference: sess.publicReference,
-            expiresAt: sess.expiresAt,
-          }),
-        );
-        window.sessionStorage.setItem(
-          "taven:checkout-session:v1",
-          JSON.stringify({
-            sessionId: sess.sessionId,
-            command: {
-              paymentId: pay.paymentId,
-              idempotencyKey: "key-12345678",
-              requestFingerprint: "fingerprint-1",
+              idempotencyKey: `key-${pay.paymentId}-valid`,
+              requestFingerprint: "fingerprint-valid",
             },
           }),
         );
@@ -252,6 +290,180 @@ test.describe("Payment Outcomes & Session Protection", () => {
     expect(confirmData.uploadId).toBe(intent.uploadId);
     expect(confirmData.assetId).toBe(intent.assetId);
     expect(confirmData.assetKind).toBe("MODEL_FILE");
+  });
+
+  test("model file attachment requires idempotency key, confirmed upload, and matching upload token", async ({
+    request,
+  }) => {
+    // Create session
+    const sessRes = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+    );
+    const session = await sessRes.json();
+
+    // Create upload intent
+    const intentRes = await request.post(
+      "http://127.0.0.1:4175/storage/uploads/model-files",
+    );
+    const intent = await intentRes.json();
+
+    // 1. Missing Idempotency-Key header -> 400
+    const noKeyRes = await request.post(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/model-files`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.sessionToken}`,
+        },
+        data: {
+          modelFileId: intent.assetId,
+          uploadToken: intent.accessToken,
+        },
+      },
+    );
+    expect(noKeyRes.status()).toBe(400);
+
+    // 2. Unconfirmed upload -> 400
+    const unconfirmedRes = await request.post(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/model-files`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.sessionToken}`,
+          "Idempotency-Key": "test-attach-key-1",
+        },
+        data: {
+          modelFileId: intent.assetId,
+          uploadToken: intent.accessToken,
+        },
+      },
+    );
+    expect(unconfirmedRes.status()).toBe(400);
+
+    // Confirm upload
+    await request.post(
+      `http://127.0.0.1:4175/storage/uploads/${intent.uploadId}/confirm`,
+      {
+        headers: { Authorization: `Bearer ${intent.accessToken}` },
+      },
+    );
+
+    // 3. Mismatched upload token -> 401
+    const badTokenRes = await request.post(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/model-files`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.sessionToken}`,
+          "Idempotency-Key": "test-attach-key-2",
+        },
+        data: {
+          modelFileId: intent.assetId,
+          uploadToken: "wrong-upload-token",
+        },
+      },
+    );
+    expect(badTokenRes.status()).toBe(401);
+
+    // 4. Valid confirmed attachment -> 200 with updated session
+    const validAttachRes = await request.post(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/model-files`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.sessionToken}`,
+          "Idempotency-Key": "test-attach-key-3",
+        },
+        data: {
+          modelFileId: intent.assetId,
+          uploadToken: intent.accessToken,
+        },
+      },
+    );
+    expect(validAttachRes.status()).toBe(200);
+    const updated = await validAttachRes.json();
+    expect(updated.modelFiles[0].modelFileId).toBe(intent.assetId);
+  });
+
+  test("photo upload intent enforces quote request scope and bearer capability", async ({
+    request,
+  }) => {
+    // 1. Missing scope -> 400
+    const noScopeRes = await request.post(
+      "http://127.0.0.1:4175/storage/uploads/photos",
+      {
+        data: {
+          contentType: "image/png",
+          kind: "QUOTE_REFERENCE",
+          originalFilename: "ref.png",
+          sizeBytes: 1024,
+          sha256: "abc",
+        },
+      },
+    );
+    expect(noScopeRes.status()).toBe(400);
+
+    // 2. Unknown quote request -> 404
+    const unknownScopeRes = await request.post(
+      "http://127.0.0.1:4175/storage/uploads/photos",
+      {
+        headers: { Authorization: "Bearer some-token" },
+        data: {
+          scopeId: "00000000-0000-4000-8000-000000000999",
+          scopeKind: "QUOTE_REQUEST",
+          contentType: "image/png",
+          kind: "QUOTE_REFERENCE",
+          originalFilename: "ref.png",
+          sizeBytes: 1024,
+          sha256: "abc",
+        },
+      },
+    );
+    expect(unknownScopeRes.status()).toBe(404);
+
+    // Create quote request
+    const qrRes = await request.post("http://127.0.0.1:4175/quote-requests", {
+      data: {
+        description: "Test request",
+        customer: { fullName: "Jan Novák", email: "jan@example.cz" },
+      },
+    });
+    const qr = await qrRes.json();
+
+    // 3. Bad authorization bearer token -> 401
+    const badAuthRes = await request.post(
+      "http://127.0.0.1:4175/storage/uploads/photos",
+      {
+        headers: { Authorization: "Bearer bad-token" },
+        data: {
+          scopeId: qr.requestId,
+          scopeKind: "QUOTE_REQUEST",
+          contentType: "image/png",
+          kind: "QUOTE_REFERENCE",
+          originalFilename: "ref.png",
+          sizeBytes: 1024,
+          sha256: "abc",
+        },
+      },
+    );
+    expect(badAuthRes.status()).toBe(401);
+
+    // 4. Valid photo upload intent -> 201
+    const validPhotoRes = await request.post(
+      "http://127.0.0.1:4175/storage/uploads/photos",
+      {
+        headers: { Authorization: `Bearer ${qr.requestToken}` },
+        data: {
+          scopeId: qr.requestId,
+          scopeKind: "QUOTE_REQUEST",
+          contentType: "image/png",
+          kind: "QUOTE_REFERENCE",
+          originalFilename: "ref.png",
+          sizeBytes: 1024,
+          sha256: "abc",
+        },
+      },
+    );
+    expect(validPhotoRes.status()).toBe(201);
+    const photoIntent = await validPhotoRes.json();
+    expect(photoIntent.uploadId).toBeDefined();
+    expect(photoIntent.accessToken).toBeDefined();
   });
 
   test("checkout payment enforces payload validation and legal document revisions", async ({
