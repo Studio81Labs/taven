@@ -93,6 +93,11 @@ const ANONYMOUS_UPLOAD_GLOBAL_MAX_ISSUED = 100;
 const ANONYMOUS_UPLOAD_GLOBAL_MAX_BYTES = 10 * 1024 * 1024 * 1024;
 const ANONYMOUS_UPLOAD_GLOBAL_SUBJECT = "global";
 const ANONYMOUS_UPLOAD_LIMIT_CLEANUP_BATCH = 100;
+const QUOTE_UPLOAD_LEGAL_DOCUMENTS = [
+  "privacy",
+  "prohibitedContent",
+  "retention",
+] as const;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -229,7 +234,7 @@ export class UploadService {
       assertQuotePhotoUploadsEnabled();
       assertEffectiveLegalDocuments(
         this.legalApprovals.evaluateAt(scope.observed_at),
-        ["retention"],
+        QUOTE_UPLOAD_LEGAL_DOCUMENTS,
       );
       const subjectHash = anonymousUploadSubject(
         this.storageConfig.uploadClientHashKey,
@@ -421,7 +426,7 @@ export class UploadService {
           }
           assertEffectiveLegalDocuments(
             this.legalApprovals.evaluateAt(scope.observed_at),
-            ["retention"],
+            QUOTE_UPLOAD_LEGAL_DOCUMENTS,
           );
         }
       }
