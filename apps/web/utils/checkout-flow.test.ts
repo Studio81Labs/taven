@@ -34,6 +34,9 @@ function document(id: string, status: "approved" | "draft" = "approved") {
 const local = {
   terms: document("terms-v1"),
   claims: document("claims-v1"),
+  privacy: document("privacy-v1"),
+  prohibitedContent: document("prohibited-v1"),
+  retention: document("retention-v1"),
   photoConsent: document("photos-v1"),
 };
 
@@ -163,6 +166,34 @@ describe("checkout flow", () => {
           },
         },
         availability,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects checkout when any required server approval is unavailable", () => {
+    expect(
+      approvedCheckoutDocuments(
+        {
+          available: true,
+          provider: "sandbox",
+          methods: ["CARD"],
+          legalDocuments: {
+            termsRevision: "terms-v1",
+            claimPolicyRevision: "claims-v1",
+            photoConsentRevision: null,
+          },
+        },
+        local,
+        {
+          ...availability,
+          documents: {
+            ...availability.documents,
+            retention: {
+              ...availability.documents.retention,
+              effective: false,
+            },
+          },
+        },
       ),
     ).toBeNull();
   });

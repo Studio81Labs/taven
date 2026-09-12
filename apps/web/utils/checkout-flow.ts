@@ -1,16 +1,23 @@
 import type { components } from "@taven/openapi-client";
 import type { LegalDocument } from "../content/launch-manifest";
 import {
+  hasServerVerifiedLegalDocuments,
   isServerVerifiedLegalDocument,
   type LegalAvailability,
 } from "./legal-availability";
 
 type PaymentCapabilities = components["schemas"]["PaymentCapabilitiesDto"];
-type CheckoutLegalDocuments = Readonly<{
-  terms: LegalDocument;
-  claims: LegalDocument;
-  photoConsent: LegalDocument;
-}>;
+type CheckoutLegalDocuments = Readonly<
+  Record<
+    | "terms"
+    | "claims"
+    | "privacy"
+    | "prohibitedContent"
+    | "retention"
+    | "photoConsent",
+    LegalDocument
+  >
+>;
 
 export function approvedCheckoutDocuments(
   capabilities: PaymentCapabilities | undefined,
@@ -24,8 +31,11 @@ export function approvedCheckoutDocuments(
     !documents ||
     documents.termsRevision !== local.terms.id ||
     documents.claimPolicyRevision !== local.claims.id ||
-    !isServerVerifiedLegalDocument("terms", local.terms, availability) ||
-    !isServerVerifiedLegalDocument("claims", local.claims, availability)
+    !hasServerVerifiedLegalDocuments(
+      local,
+      ["terms", "claims", "privacy", "prohibitedContent", "retention"],
+      availability,
+    )
   ) {
     return null;
   }

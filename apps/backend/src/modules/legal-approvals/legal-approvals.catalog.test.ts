@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { assertEffectiveQuoteRequestLegalDocuments } from "../../launch-approval-gates";
 import {
   evaluateLegalApprovals,
   legalApprovalCatalog,
@@ -37,6 +38,24 @@ describe("legal approval catalog", () => {
     expect(() =>
       evaluateLegalApprovals(new Date(), approvedCatalog("2030-01-01")),
     ).toThrow("Legal approval catalog is invalid");
+  });
+
+  it("keeps quote requests closed until retention is effective", () => {
+    const catalog = approvedCatalog("2030-01-01T00:00:00.000Z");
+    const approvals = evaluateLegalApprovals(
+      new Date("2030-01-01T00:00:00.000Z"),
+      {
+        ...catalog,
+        documents: {
+          ...catalog.documents,
+          retention: legalApprovalCatalog.documents.retention,
+        },
+      },
+    );
+
+    expect(() =>
+      assertEffectiveQuoteRequestLegalDocuments(approvals, false),
+    ).toThrow("Legal approval metadata is unavailable or not yet effective");
   });
 });
 

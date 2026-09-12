@@ -228,7 +228,7 @@ export function assertEffectiveQuoteRequestLegalDocuments(
   approvals: EvaluatedLegalApprovals,
   photoPublicationConsent: boolean,
 ): void {
-  assertEffectiveLegalDocuments(approvals, ["privacy"]);
+  assertEffectiveLegalDocuments(approvals, ["privacy", "retention"]);
   if (photoPublicationConsent)
     assertEffectiveLegalDocuments(approvals, ["photoConsent"]);
 }

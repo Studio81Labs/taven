@@ -80,6 +80,13 @@ const privacyNoticeEffective = computed(() =>
     availability.value,
   ),
 );
+const retentionPolicyEffective = computed(() =>
+  isServerVerifiedLegalDocument(
+    "retention",
+    legalDocuments.retention,
+    availability.value,
+  ),
+);
 const photoConsentEffective = computed(() =>
   isServerVerifiedLegalDocument(
     "photoConsent",
@@ -104,6 +111,7 @@ const canSubmit = computed(
     contactEmail.value.trim().length > 0 &&
     !selectionError.value &&
     privacyNoticeEffective.value &&
+    retentionPolicyEffective.value &&
     privacyAcknowledged.value,
 );
 const minimumDate = localDateValue(new Date());
