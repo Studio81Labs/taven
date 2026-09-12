@@ -44,14 +44,23 @@ target in rank order, and sorts canonical kind/node/ID identities
 lexicographically within each rank:
 
 0. `IdempotencyRecord` / provider event receipt
-1. `QuoteRequest` / `Order`
-2. `OrderPhase`
-3. `FulfilmentSlot`
-4. `Claim` / `ClaimSlotResolution`
-5. `ShipmentPlan` / `Shipment` / `Job`
-6. `Payment` / active `RefundTransaction`
-7. price snapshots and component-credit allocations
-8. resource estimates, inventory reservations, and capacity reservations
+1. `LegalDocument` (shared for fresh legal reads; exclusive for management)
+2. `QuoteRequest` / `Order`
+3. `OrderPhase`
+4. `FulfilmentSlot`
+5. `Claim` / `ClaimSlotResolution`
+6. `ShipmentPlan` / `Shipment` / `Job`
+7. `Payment` / active `RefundTransaction`
+8. price snapshots and component-credit allocations
+9. resource estimates, inventory reservations, and capacity reservations
+
+The legal-document rank is added by
+[ADR 0020](0020-persist-legal-document-revisions.md) for the database-backed
+legal cutover in #151/#152; the prior implementation has no such locks. Acquire
+all required legal keys in canonical order before business locks, then use the
+command's post-lock database decision instant. Management never locks or
+rewrites accepted orders. Committed replay precedes fresh legal eligibility.
+Do not acquire legal locks from a late helper after higher-ranked targets.
 
 Commands must not acquire a lower-ranked target after a higher-ranked target.
 When a command touches multiple aggregates, it includes all parent and child
