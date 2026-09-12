@@ -113,32 +113,71 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     ).toBeVisible();
   });
 
-  test("backend capacity failure (503) during checkout presents clear error feedback", async ({
+  test("backend capacity failure (503) during checkout presents clear error feedback and allows retry", async ({
     page,
     request,
   }) => {
-    // Seed quote session
-    const sessionId = "session-capacity-001";
+    // 1. Visit homepage and upload model
+    await page.goto("/");
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.getByText("Přetáhni soubor sem").click();
+    const fileChooser = await fileChooserPromise;
+    await fileChooser.setFiles(FIXTURE_PATH);
+
+    // 2. Proceed to configurator
+    const uploadProceedBtn = page.getByRole("button", {
+      name: "Nahrát a pokračovat ke konfiguraci",
+    });
+    await expect(uploadProceedBtn).toBeEnabled();
+    await uploadProceedBtn.click();
+
+    // 3. Select delivery destination and advance to CHECKOUT_READY
+    const verifyDeliveryBtn = page.getByRole("button", {
+      name: "Ověřit dopravu a závaznou cenu",
+    });
+    await expect(verifyDeliveryBtn).toBeVisible();
+    await verifyDeliveryBtn.click();
+
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible();
+
+    // 4. Fill checkout form
+    await page.getByLabel("Jméno kontaktní osoby").fill("Jan Zákazník");
+    await page.getByLabel("E-mail").fill("jan.zakaznik@example.cz");
+    await page.getByLabel("Fakturační jméno nebo název").fill("Jan Zákazník");
+    await page.getByLabel("Ulice a číslo").fill("Hlavní 123");
+    await page.getByLabel("Město").fill("Brno");
+    await page.getByLabel("PSČ").fill("60200");
+
+    await page.getByRole("checkbox", { name: /VOP/i }).check();
+    await page.getByRole("checkbox", { name: /reklamačním řádem/i }).check();
+    await page.getByRole("checkbox", { name: /výjimka/i }).check();
+
+    // 5. Simulate out-of-capacity condition on backend
     await request.post("http://127.0.0.1:4175/__test/state", {
-      data: { capacityAvailable: false },
+      data: { capacityStatus: "out_of_capacity" },
     });
 
-    await page.goto("/");
-    await page.evaluate((sessId) => {
-      window.sessionStorage.setItem(
-        "taven:automatic-quote-session:v1",
-        JSON.stringify({
-          sessionId: sessId,
-          sessionToken: `token-${sessId}`,
-          filename: "cube.stl",
-          publicReference: "TAV-CAP-001",
-          expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
-        }),
-      );
-    }, sessionId);
+    // 6. Submit checkout and assert 503 capacity feedback
+    const payButton = page.getByRole("button", {
+      name: /Objednat a zaplatit/i,
+    });
+    await expect(payButton).toBeEnabled();
+    await payButton.click();
 
-    await page.goto("/objednavka");
-    // Verify configurator or error state handles gracefully
-    await expect(page.locator("body")).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText(
+      "Platba teď není dostupná. Údaje zůstaly uložené a pokus můžete bezpečně zopakovat.",
+    );
+    await expect(payButton).toBeEnabled();
+
+    // 7. Restore capacity and verify payment can be retried successfully
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { capacityStatus: "available" },
+    });
+    await payButton.click();
+    await expect(
+      page.getByRole("heading", { name: "Testovací platební brána" }),
+    ).toBeVisible();
   });
 });

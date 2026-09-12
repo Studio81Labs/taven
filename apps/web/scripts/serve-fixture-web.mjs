@@ -11,9 +11,9 @@ const outputFixtureServer = path.join(
 
 if (
   !existsSync(outputFixtureServer) ||
-  process.env.FORCE_FIXTURE_BUILD === "true"
+  process.env.SKIP_FIXTURE_BUILD !== "true"
 ) {
-  console.log("Fixture server bundle not found, building now...");
+  console.log("Building fixture server bundle to ensure freshness...");
   execFileSync("node", [path.join(webDir, "scripts/build-fixture-web.mjs")], {
     cwd: webDir,
     stdio: "inherit",

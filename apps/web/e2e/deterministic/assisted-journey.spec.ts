@@ -65,31 +65,57 @@ test.describe("Assisted Quote Journey", () => {
 
   test("blocked model handoff context pre-fills note and links reference", async ({
     page,
+    request,
   }) => {
+    const handoffToken = "A".repeat(43);
+    const automaticQuoteSessionId = "11111111-1111-4111-8111-111111111111";
+
     await page.goto("/");
-    await page.evaluate(() => {
-      window.sessionStorage.setItem(
-        "taven:assisted-quote-handoff:v1",
-        JSON.stringify({
-          handoffToken: "token-handoff-xyz",
-          expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
-          filename: "huge-gearbox.stl",
-          reason: "MODEL_TOO_LARGE",
-        }),
-      );
-    });
+    await page.evaluate(
+      ({ token, sessId }) => {
+        window.sessionStorage.setItem(
+          "taven:assisted-quote-handoff:v1",
+          JSON.stringify({
+            automaticQuoteSessionId: sessId,
+            handoffToken: token,
+            expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+            reasons: ["FIT_SENSITIVE"],
+            modelFileIds: ["22222222-2222-4222-8222-222222222222"],
+            itemSelections: [
+              {
+                modelFileId: "22222222-2222-4222-8222-222222222222",
+                ordinal: 0,
+                quantity: 2,
+                material: "PLA",
+                fitSensitive: true,
+                bodyIds: ["body-1"],
+              },
+            ],
+          }),
+        );
+      },
+      { token: handoffToken, sessId: automaticQuoteSessionId },
+    );
 
     await page.goto("/poptavka?source=automatic-quote");
 
-    // Check context banner appears
+    // Check context banner and note specific to FIT_SENSITIVE reason
     await expect(page.getByText("KONTEXT POPTÁVKY")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Přenesli jsme jen bezpečné volby z kalkulace. Výslednou toleranci prosím upřesněte v popisu.",
+      ),
+    ).toBeVisible();
 
-    // Fill remaining required fields
-    await page
-      .getByRole("textbox", { name: /Co potřebujete vyrobit/ })
-      .fill(
-        "Potřebuji individuální nabídku pro velký model převodovky, který překračuje tiskový prostor.",
-      );
+    // Description must be pre-filled from handoff context
+    const descField = page.getByRole("textbox", {
+      name: /Co potřebujete vyrobit/,
+    });
+    await expect(descField).toHaveValue(
+      "Potřebuji individuální nabídku pro lícovaný díl, u kterého je důležitá přesnost rozměrů.",
+    );
+
+    // Fill contact details
     await page.getByLabel("Jméno *").fill("Petr Svoboda");
     await page.getByLabel("E-mail *").fill("petr.svoboda@example.com");
 
@@ -106,6 +132,19 @@ test.describe("Assisted Quote Journey", () => {
     // Verify confirmation
     await expect(page.getByText("POPTÁVKA ULOŽENA")).toBeVisible();
     await expect(page.getByText("Reference REQ-2026-TEST")).toBeVisible();
+
+    // Verify capability token was forwarded to the backend
+    const stateRes = await request.get("http://127.0.0.1:4175/__test/state");
+    const state = await stateRes.json();
+    expect(state.lastAssistedQuote?.automaticQuoteHandoffToken).toBe(
+      handoffToken,
+    );
+
+    // Verify handoff was purged from session storage after success
+    const storedHandoff = await page.evaluate(() =>
+      window.sessionStorage.getItem("taven:assisted-quote-handoff:v1"),
+    );
+    expect(storedHandoff).toBeNull();
   });
 
   test("client-side validation prevents submission without mandatory fields", async ({

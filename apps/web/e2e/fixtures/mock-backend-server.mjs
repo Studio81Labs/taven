@@ -10,6 +10,7 @@ let testState = {
   expressEligible: true,
   paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED" | "CANCELLED"
   recordedObservations: [],
+  lastAssistedQuote: null,
 };
 
 const sessions = new Map();
@@ -22,6 +23,7 @@ function resetState() {
     expressEligible: true,
     paymentOutcome: "CAPTURED",
     recordedObservations: [],
+    lastAssistedQuote: null,
   };
   sessions.clear();
 }
@@ -207,30 +209,65 @@ const server = http.createServer(async (req, res) => {
 
   // --- Mock payment gateway simulator ---
   if (pathname === "/mock-gateway" && method === "GET") {
-    const paymentId = url.searchParams.get("paymentId") || "pay-test-123";
-    const sessionId = url.searchParams.get("sessionId") || "session-test-001";
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!DOCTYPE html>
 <html>
 <head><title>Mock Platební Brána</title></head>
 <body style="font-family: sans-serif; padding: 2rem;">
   <h1>Testovací platební brána</h1>
-  <p>Payment ID: <code>${paymentId}</code></p>
-  <p>Session ID: <code>${sessionId}</code></p>
+  <p>Payment ID: <code id="payment-id-display"></code></p>
+  <p>Session ID: <code id="session-id-display"></code></p>
   <div style="display: flex; gap: 1rem; margin-top: 2rem;">
-    <button id="btn-pay-success" onclick="fetch('http://127.0.0.1:4175/__test/state', {method:'POST', body: JSON.stringify({paymentOutcome:'CAPTURED'})}).then(() => { window.location.href='http://127.0.0.1:4174/checkout/payment/success?paymentId=${paymentId}&sessionId=${sessionId}'; })">
+    <button id="btn-pay-success" type="button">
       Zaplatit (Úspěch - CAPTURED)
     </button>
-    <button id="btn-pay-pending" onclick="fetch('http://127.0.0.1:4175/__test/state', {method:'POST', body: JSON.stringify({paymentOutcome:'PENDING'})}).then(() => { window.location.href='http://127.0.0.1:4174/checkout/payment/pending?paymentId=${paymentId}&sessionId=${sessionId}'; })">
+    <button id="btn-pay-pending" type="button">
       Čeká na zpracování (PENDING)
     </button>
-    <button id="btn-pay-fail" onclick="fetch('http://127.0.0.1:4175/__test/state', {method:'POST', body: JSON.stringify({paymentOutcome:'FAILED'})}).then(() => { window.location.href='http://127.0.0.1:4174/checkout/payment/cancelled?paymentId=${paymentId}&sessionId=${sessionId}'; })">
+    <button id="btn-pay-fail" type="button">
       Zamítnout (FAILED)
     </button>
-    <button id="btn-pay-cancel" onclick="fetch('http://127.0.0.1:4175/__test/state', {method:'POST', body: JSON.stringify({paymentOutcome:'CANCELLED'})}).then(() => { window.location.href='http://127.0.0.1:4174/checkout/payment/cancelled?paymentId=${paymentId}&sessionId=${sessionId}'; })">
+    <button id="btn-pay-cancel" type="button">
       Zrušit platbu
     </button>
   </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const paymentId = params.get("paymentId") || "pay-test-123";
+    const sessionId = params.get("sessionId") || "session-test-001";
+    const paymentEl = document.getElementById("payment-id-display");
+    const sessionEl = document.getElementById("session-id-display");
+    if (paymentEl) paymentEl.textContent = paymentId;
+    if (sessionEl) sessionEl.textContent = sessionId;
+
+    function handleOutcome(outcome, targetPath) {
+      fetch("http://127.0.0.1:4175/__test/state", {
+        method: "POST",
+        body: JSON.stringify({ paymentOutcome: outcome }),
+      }).then(() => {
+        window.location.href =
+          "http://127.0.0.1:4174/checkout/payment/" +
+          targetPath +
+          "?paymentId=" +
+          encodeURIComponent(paymentId) +
+          "&sessionId=" +
+          encodeURIComponent(sessionId);
+      });
+    }
+
+    document.getElementById("btn-pay-success")?.addEventListener("click", () => {
+      handleOutcome("CAPTURED", "success");
+    });
+    document.getElementById("btn-pay-pending")?.addEventListener("click", () => {
+      handleOutcome("PENDING", "pending");
+    });
+    document.getElementById("btn-pay-fail")?.addEventListener("click", () => {
+      handleOutcome("FAILED", "cancelled");
+    });
+    document.getElementById("btn-pay-cancel")?.addEventListener("click", () => {
+      handleOutcome("CANCELLED", "cancelled");
+    });
+  </script>
 </body>
 </html>`);
     return;
@@ -613,6 +650,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (subpath === "/checkout/payments" && method === "POST") {
+      if (testState.capacityStatus === "out_of_capacity") {
+        sendJson(res, 503, {
+          statusCode: 503,
+          message: "Platba teď není dostupná.",
+        });
+        return;
+      }
       const paymentId = `pay-${Date.now()}`;
       const checkoutUrl = `http://127.0.0.1:4175/mock-gateway?paymentId=${paymentId}&sessionId=${sessionId}`;
       sendJson(res, 200, {
@@ -662,6 +706,7 @@ const server = http.createServer(async (req, res) => {
   // --- 7. Assisted Quote Requests ---
   if (pathname === "/quote-requests" && method === "POST") {
     const body = await parseJson(req);
+    testState.lastAssistedQuote = body;
     const requestId = `ast-${Date.now()}`;
     sendJson(res, 200, {
       requestId,
