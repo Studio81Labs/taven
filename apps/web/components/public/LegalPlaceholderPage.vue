@@ -52,7 +52,11 @@ defineProps<{
     </div>
     <section class="mt-10 border-t border-[#d9d9d2] pt-8">
       <h2 class="text-xl font-semibold">
-        Identifikace budoucího provozovatele
+        {{
+          effective
+            ? "Identifikace provozovatele"
+            : "Identifikace budoucího provozovatele"
+        }}
       </h2>
       <p class="mt-3 font-mono leading-7 text-[#54554c]">
         {{ publicSite.seller.legalName }}<br />

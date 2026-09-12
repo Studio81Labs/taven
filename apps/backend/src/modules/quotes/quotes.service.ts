@@ -37,7 +37,10 @@ import {
   assertEffectiveQuoteRequestLegalDocuments,
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
-import { assertEffectiveLegalDocuments } from "../legal-approvals/legal-approvals.catalog";
+import {
+  assertEffectiveLegalDocuments,
+  legalApprovalRequired,
+} from "../legal-approvals/legal-approvals.catalog";
 import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
 import {
   operatorNode,
@@ -1154,7 +1157,7 @@ export class QuotesService {
           "retention",
         ]);
         if (quote.termsRevision !== approvals.documents.terms.revision) {
-          throw new ConflictException(
+          throw legalApprovalRequired(
             "Offer terms revision is no longer approved",
           );
         }
