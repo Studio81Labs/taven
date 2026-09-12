@@ -446,13 +446,14 @@ async function selectPacketaDestination(
   destination: DeliveryDestination,
 ): Promise<boolean> {
   pickerSelectionPending.value = true;
+  const requestedExpress = expressRequested.value;
   try {
     const selected = await props.onSelectDestination(destination);
     if (!selected) return false;
     if (
       isExpressVisible(props.quote) &&
-      expressRequested.value !== props.quote.express.requested &&
-      !(await props.onSetExpress(expressRequested.value))
+      requestedExpress !== props.quote.express.requested &&
+      !(await props.onSetExpress(requestedExpress))
     ) {
       return false;
     }

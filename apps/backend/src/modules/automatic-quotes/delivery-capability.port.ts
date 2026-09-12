@@ -244,14 +244,26 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
       PACKETA_VALIDATION_CONCURRENCY,
       input.parcels.length,
     );
+    const validationAbort = new AbortController();
     await Promise.all(
       Array.from({ length: workerCount }, async (_, workerIndex) => {
-        for (
-          let parcelIndex = workerIndex;
-          parcelIndex < input.parcels.length;
-          parcelIndex += workerCount
-        ) {
-          await this.validateParcel(point, input.parcels[parcelIndex]!);
+        try {
+          for (
+            let parcelIndex = workerIndex;
+            parcelIndex < input.parcels.length;
+            parcelIndex += workerCount
+          ) {
+            if (validationAbort.signal.aborted) return;
+            await this.validateParcel(
+              point,
+              input.parcels[parcelIndex]!,
+              validationAbort.signal,
+            );
+          }
+        } catch (error) {
+          if (validationAbort.signal.aborted) return;
+          validationAbort.abort();
+          throw error;
         }
       }),
     );
@@ -267,9 +279,12 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
   private async validateParcel(
     point: PacketaPoint,
     parcel: DeliveryValidationParcel,
+    parentSignal?: AbortSignal,
   ): Promise<void> {
     assertParcel(parcel);
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    parentSignal?.addEventListener("abort", abort, { once: true });
     const timeout = setTimeout(
       () => controller.abort(),
       PACKETA_REQUEST_TIMEOUT_MS,
@@ -323,6 +338,7 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
       throw new ServiceUnavailableException("Delivery provider is unavailable");
     } finally {
       clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", abort);
     }
   }
 
