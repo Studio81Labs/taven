@@ -1,5 +1,8 @@
 import type { components } from "@taven/openapi-client";
-import type { LegalAvailability } from "../utils/legal-availability";
+import {
+  isLegalAvailability,
+  type LegalAvailability,
+} from "../utils/legal-availability";
 
 type AvailabilityResponse =
   components["schemas"]["LegalDocumentAvailabilityDto"];
@@ -23,7 +26,9 @@ export function useLegalAvailability() {
           setTimeout(() => reject(new Error("timeout")), 1_000),
         ),
       ]);
-      const value = response.data as AvailabilityResponse | undefined;
+      const value = isLegalAvailability(response.data)
+        ? (response.data as AvailabilityResponse)
+        : null;
       if (generation === refreshGeneration) availability.value = value ?? null;
       return generation === refreshGeneration ? availability.value : null;
     } catch {
