@@ -1,23 +1,31 @@
 <script setup lang="ts">
 import { legalDocuments } from "../content/public-site";
-import { isEffectiveApprovedLegalDocument } from "../content/launch-manifest";
+import { isServerVerifiedLegalDocument } from "../utils/legal-availability";
+import { useLegalAvailability } from "../composables/useLegalAvailability";
 
 definePageMeta({ layout: "public" });
 
 const document = legalDocuments.privacy;
 const contacts = usePublicContacts();
+const { availability, refresh } = useLegalAvailability();
+if (import.meta.server) await refresh();
+else onMounted(() => void refresh());
+const effective = computed(() =>
+  isServerVerifiedLegalDocument("privacy", document, availability.value),
+);
 
 usePublicPageMeta({
   path: document.path,
   title: document.title,
   description: document.summary,
-  noindex: !isEffectiveApprovedLegalDocument(document),
+  noindex: computed(() => !effective.value),
 });
 </script>
 
 <template>
   <PublicLegalPlaceholderPage
     :document="document"
+    :effective="effective"
     :contact="{
       label: 'Kontakt správce osobních údajů',
       email: contacts.dataController.email,

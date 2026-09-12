@@ -24,8 +24,8 @@ export function approvedCheckoutDocuments(
     !documents ||
     documents.termsRevision !== local.terms.id ||
     documents.claimPolicyRevision !== local.claims.id ||
-    !isServerVerifiedLegalDocument(local.terms, availability) ||
-    !isServerVerifiedLegalDocument(local.claims, availability)
+    !isServerVerifiedLegalDocument("terms", local.terms, availability) ||
+    !isServerVerifiedLegalDocument("claims", local.claims, availability)
   ) {
     return null;
   }
@@ -34,7 +34,11 @@ export function approvedCheckoutDocuments(
     claimPolicyRevision: documents.claimPolicyRevision,
     photoConsentRevision:
       documents.photoConsentRevision === local.photoConsent.id &&
-      isServerVerifiedLegalDocument(local.photoConsent, availability)
+      isServerVerifiedLegalDocument(
+        "photoConsent",
+        local.photoConsent,
+        availability,
+      )
         ? documents.photoConsentRevision
         : null,
   } as const;

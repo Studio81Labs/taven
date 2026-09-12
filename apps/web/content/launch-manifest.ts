@@ -51,7 +51,14 @@ export function approvedLegalDocument(
     !input.id.trim() ||
     NON_PRODUCTION_REVISION.test(input.id) ||
     effectiveInstantTimestamp(input.effectiveAt) === null ||
-    !input.approvalEvidence.trim()
+    !input.approvalEvidence.trim() ||
+    !input.sections.some(
+      (section) =>
+        section.title.trim() &&
+        ((section.paragraphs?.some((paragraph) => paragraph.trim()) ?? false) ||
+          (section.items?.some((item) => item.trim()) ?? false) ||
+          Boolean(section.note?.trim())),
+    )
   ) {
     throw new TypeError(
       "Approved legal documents require an ID, effective date, and approval evidence",

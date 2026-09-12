@@ -20,12 +20,20 @@ describe("public site launch boundaries", () => {
       path: "/vop",
       title: "VOP",
       summary: "Schválené znění",
-      sections: [],
+      sections: [{ title: "Schválený obsah", paragraphs: ["Text"] }],
     };
     expect(() =>
       approvedLegalDocument({
         ...base,
         effectiveAt: "",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        sections: [],
+        effectiveAt: "2026-01-01T00:00:00.000Z",
         approvalEvidence: "#38",
       }),
     ).toThrow("require an ID");
@@ -66,7 +74,7 @@ describe("public site launch boundaries", () => {
       path: "/vop",
       title: "VOP",
       summary: "Schválené znění",
-      sections: [],
+      sections: [{ title: "Schválený obsah", paragraphs: ["Text"] }],
       effectiveAt: "2030-01-01T00:00:00.000Z",
       approvalEvidence: "#38",
     });

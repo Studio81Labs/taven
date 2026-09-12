@@ -21,13 +21,12 @@ export type LegalAvailability = Readonly<{
 }>;
 
 export function isServerVerifiedLegalDocument(
+  key: LegalDocumentKey,
   local: LegalDocument,
   availability: LegalAvailability | null | undefined,
 ): boolean {
   if (!availability || local.status !== "approved") return false;
-  const record = Object.values(availability.documents).find(
-    (candidate) => candidate.revision === local.id,
-  );
+  const record = availability.documents[key];
   return Boolean(
     record &&
     record.status === "approved" &&
@@ -42,6 +41,6 @@ export function hasServerVerifiedLegalDocuments(
   availability: LegalAvailability | null | undefined,
 ): boolean {
   return keys.every((key) =>
-    isServerVerifiedLegalDocument(documents[key], availability),
+    isServerVerifiedLegalDocument(key, documents[key], availability),
   );
 }

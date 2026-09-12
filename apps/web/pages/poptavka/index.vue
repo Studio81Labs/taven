@@ -74,10 +74,15 @@ const photoFieldsLocked = computed(
   () => submitted.value && !attachmentsEditable.value,
 );
 const privacyNoticeEffective = computed(() =>
-  isServerVerifiedLegalDocument(legalDocuments.privacy, availability.value),
+  isServerVerifiedLegalDocument(
+    "privacy",
+    legalDocuments.privacy,
+    availability.value,
+  ),
 );
 const photoConsentEffective = computed(() =>
   isServerVerifiedLegalDocument(
+    "photoConsent",
     legalDocuments.photoConsent,
     availability.value,
   ),
