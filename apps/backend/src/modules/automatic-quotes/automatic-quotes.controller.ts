@@ -12,6 +12,7 @@ import {
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
+  ApiBadRequestResponse,
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
@@ -276,6 +277,16 @@ export class AutomaticQuotesController {
   @ApiOperation({ summary: "Select a provider-verified order destination" })
   @ApiBody({ type: SelectAutomaticQuoteDestinationDto })
   @ApiOkResponse({ type: AutomaticQuoteSessionDto })
+  @ApiBadRequestResponse({
+    description: "Destination is invalid, unavailable, or incompatible",
+  })
+  @ApiConflictResponse({
+    description:
+      "Configuration changed, destination is frozen, or idempotency input changed",
+  })
+  @ApiServiceUnavailableResponse({
+    description: "Carrier metadata or validation is temporarily unavailable",
+  })
   selectDestination(
     @Param("sessionId") sessionId: string,
     @Body() body: SelectAutomaticQuoteDestinationDto,

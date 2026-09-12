@@ -385,6 +385,51 @@
         ],
         "type": "object"
       },
+      "AutomaticQuoteDeliverySelectorDto": {
+        "properties": {
+          "allowedEndpointTypes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "mode": {
+            "enum": [
+              "CONFIGURED",
+              "PACKETA"
+            ],
+            "type": "string"
+          },
+          "widget": {
+            "$ref": "#/components/schemas/AutomaticQuoteDeliverySelectorWidgetDto"
+          }
+        },
+        "required": [
+          "mode",
+          "available",
+          "allowedEndpointTypes"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteDeliverySelectorWidgetDto": {
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "options": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "accountId",
+          "options"
+        ],
+        "type": "object"
+      },
       "AutomaticQuoteEstimateAssumptionsDto": {
         "properties": {
           "delivery": {
@@ -992,6 +1037,9 @@
             },
             "type": "array"
           },
+          "deliverySelector": {
+            "$ref": "#/components/schemas/AutomaticQuoteDeliverySelectorDto"
+          },
           "expiresAt": {
             "format": "date-time",
             "type": "string"
@@ -1129,6 +1177,9 @@
               "$ref": "#/components/schemas/AutomaticQuoteDeliveryOptionDto"
             },
             "type": "array"
+          },
+          "deliverySelector": {
+            "$ref": "#/components/schemas/AutomaticQuoteDeliverySelectorDto"
           },
           "expiresAt": {
             "format": "date-time",
@@ -13092,6 +13143,15 @@
               }
             },
             "description": ""
+          },
+          "400": {
+            "description": "Destination is invalid, unavailable, or incompatible"
+          },
+          "409": {
+            "description": "Configuration changed, destination is frozen, or idempotency input changed"
+          },
+          "503": {
+            "description": "Carrier metadata or validation is temporarily unavailable"
           }
         },
         "security": [

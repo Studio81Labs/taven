@@ -1116,8 +1116,14 @@ describe("checkout payment capture protocol", () => {
     })
       .overrideProvider(DELIVERY_CAPABILITY)
       .useValue({
-        list: async () => [],
-        resolve: async () => destination,
+        selectionPolicy: () => ({
+          mode: "CONFIGURED",
+          available: true,
+          allowedEndpointTypes: ["pickup_point"],
+        }),
+        configuredOptions: () => [],
+        validateSelection: async () => destination,
+        readCommittedCapability: () => destination,
       })
       .overrideProvider(PAYMENT_PROVIDER)
       .useValue(sandbox)
@@ -1304,8 +1310,14 @@ describe("checkout payment capture protocol", () => {
     })
       .overrideProvider(DELIVERY_CAPABILITY)
       .useValue({
-        list: async () => [],
-        resolve: async () => destination,
+        selectionPolicy: () => ({
+          mode: "CONFIGURED",
+          available: true,
+          allowedEndpointTypes: ["pickup_point"],
+        }),
+        configuredOptions: () => [],
+        validateSelection: async () => destination,
+        readCommittedCapability: () => destination,
       })
       .overrideProvider(PAYMENT_PROVIDER)
       .useValue(sandbox)
@@ -2122,8 +2134,14 @@ describe("checkout payment capture protocol", () => {
       })
         .overrideProvider(DELIVERY_CAPABILITY)
         .useValue({
-          list: async () => [],
-          resolve: async (input: {
+          selectionPolicy: () => ({
+            mode: "CONFIGURED",
+            available: true,
+            allowedEndpointTypes: ["pickup_point"],
+          }),
+          configuredOptions: () => [],
+          validateSelection: async () => destination,
+          readCommittedCapability: (input: {
             providerEndpointId: string;
             endpointType: string;
           }) => {
