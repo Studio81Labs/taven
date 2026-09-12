@@ -2,6 +2,7 @@
 import { publicNavigation, publicSite } from "../../content/public-site";
 
 const route = useRoute();
+const automaticQuoteEnabled = useAutomaticQuoteEnabled();
 </script>
 
 <template>
@@ -31,7 +32,7 @@ const route = useRoute();
           </li>
           <li>
             <NuxtLink
-              v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
+              v-if="automaticQuoteEnabled"
               class="inline-flex min-h-11 items-center bg-[#1b44e8] px-4 font-semibold text-white hover:bg-[#1536b8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
               to="/objednavka"
               no-prefetch

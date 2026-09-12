@@ -4,6 +4,7 @@ import { publicSite } from "../content/public-site";
 definePageMeta({ layout: "public" });
 
 const route = useRoute();
+const automaticQuoteEnabled = useAutomaticQuoteEnabled();
 const redirectedFromAutomaticQuote = computed(
   () => route.query.stav === "ceka-na-schvaleni-cen",
 );
@@ -76,7 +77,7 @@ usePublicPageMeta({
     </aside>
 
     <NuxtLink
-      v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
+      v-if="automaticQuoteEnabled"
       class="mt-8 inline-flex min-h-12 items-center bg-[#1b44e8] px-6 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
       to="/objednavka"
       no-prefetch

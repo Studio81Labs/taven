@@ -1,7 +1,5 @@
-import { publicSite } from "../content/public-site";
-
 export default defineNuxtRouteMiddleware(() => {
-  if (publicSite.commercial.automaticQuotePubliclyEnabled) return;
+  if (useAutomaticQuoteEnabled().value) return;
 
   return navigateTo(
     {

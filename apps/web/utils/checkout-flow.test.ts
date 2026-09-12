@@ -6,10 +6,34 @@ import {
   paymentReturnMatchesHandoff,
 } from "./checkout-flow";
 
+function document(id: string, status: "approved" | "draft" = "approved") {
+  const base = {
+    id,
+    path: `/${id}`,
+    title: id,
+    summary: id,
+    sections: [],
+  } as const;
+  if (status === "draft") {
+    return {
+      ...base,
+      status,
+      effectiveAt: null,
+      approvalEvidence: null,
+    } as const;
+  }
+  return {
+    ...base,
+    status,
+    effectiveAt: "2026-01-01",
+    approvalEvidence: "#38",
+  } as const;
+}
+
 const local = {
-  terms: "terms-v1",
-  claims: "claims-v1",
-  photoConsent: "photos-v1",
+  terms: document("terms-v1"),
+  claims: document("claims-v1"),
+  photoConsent: document("photos-v1"),
 };
 
 describe("checkout flow", () => {
@@ -42,7 +66,7 @@ describe("checkout flow", () => {
             photoConsentRevision: null,
           },
         },
-        { ...local, terms: "terms-pending" },
+        { ...local, terms: document("terms-pending", "draft") },
       ),
     ).toBeNull();
   });

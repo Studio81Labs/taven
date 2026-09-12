@@ -74,9 +74,9 @@ const draft = reactive<CheckoutCustomerDraft>({
 });
 
 const localDocumentIds = {
-  terms: legalDocuments.terms.id,
-  claims: legalDocuments.claims.id,
-  photoConsent: legalDocuments.photoConsent.id,
+  terms: legalDocuments.terms,
+  claims: legalDocuments.claims,
+  photoConsent: legalDocuments.photoConsent,
 };
 const approvedDocuments = computed(() =>
   approvedCheckoutDocuments(capabilities.value, localDocumentIds),

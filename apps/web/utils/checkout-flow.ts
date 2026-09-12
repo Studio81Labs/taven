@@ -1,25 +1,26 @@
 import type { components } from "@taven/openapi-client";
+import type { LegalDocument } from "../content/launch-manifest";
 
 type PaymentCapabilities = components["schemas"]["PaymentCapabilitiesDto"];
-type LegalDocumentIds = Readonly<{
-  terms: string;
-  claims: string;
-  photoConsent: string;
+type CheckoutLegalDocuments = Readonly<{
+  terms: LegalDocument;
+  claims: LegalDocument;
+  photoConsent: LegalDocument;
 }>;
 
 export function approvedCheckoutDocuments(
   capabilities: PaymentCapabilities | undefined,
-  local: LegalDocumentIds,
+  local: CheckoutLegalDocuments,
 ) {
   const documents = capabilities?.legalDocuments;
   if (
     !capabilities?.available ||
     capabilities.methods.length === 0 ||
     !documents ||
-    documents.termsRevision !== local.terms ||
-    documents.claimPolicyRevision !== local.claims ||
-    isDraftRevision(local.terms) ||
-    isDraftRevision(local.claims)
+    documents.termsRevision !== local.terms.id ||
+    documents.claimPolicyRevision !== local.claims.id ||
+    local.terms.status !== "approved" ||
+    local.claims.status !== "approved"
   ) {
     return null;
   }
@@ -27,8 +28,8 @@ export function approvedCheckoutDocuments(
     termsRevision: documents.termsRevision,
     claimPolicyRevision: documents.claimPolicyRevision,
     photoConsentRevision:
-      documents.photoConsentRevision === local.photoConsent &&
-      !isDraftRevision(local.photoConsent)
+      documents.photoConsentRevision === local.photoConsent.id &&
+      local.photoConsent.status === "approved"
         ? documents.photoConsentRevision
         : null,
   } as const;
@@ -64,8 +65,4 @@ export function paymentReturnMatchesHandoff(
   requestedPaymentId: string,
 ): boolean {
   return Boolean(expectedPaymentId && expectedPaymentId === requestedPaymentId);
-}
-
-function isDraftRevision(value: string): boolean {
-  return /(?:^|[-_.\s])(draft|pending)(?:$|[-_.\s])/i.test(value);
 }

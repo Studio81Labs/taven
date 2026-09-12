@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
-import { publicSite } from "../../content/public-site";
+import { legalDocuments } from "../../content/public-site";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -26,6 +26,7 @@ usePublicPageMeta({
 });
 
 const route = useRoute();
+const automaticQuoteEnabled = useAutomaticQuoteEnabled();
 const source = normalizeAssistedQuoteSource(route.query.source);
 const initialPrefill = assistedQuotePrefill(source);
 const handoffContext = shallowRef<AssistedQuoteHandoffContext>();
@@ -243,7 +244,7 @@ function isPositiveDimension(value: number | ""): value is number {
               Reference {{ created.publicReference }}
             </p>
             <NuxtLink
-              v-if="publicSite.commercial.automaticQuotePubliclyEnabled"
+              v-if="automaticQuoteEnabled"
               class="secondary-button"
               to="/objednavka"
             >
@@ -407,15 +408,31 @@ function isPositiveDimension(value: number | ""): value is number {
               <input v-model="privacyAcknowledged" required type="checkbox" />
               <span>
                 Beru na vědomí, že kontaktní údaje a podklady použijeme k
-                posouzení poptávky a komunikaci o nabídce. Fotografie dostanou
-                při nahrání vlastní termín smazání. *
+                posouzení poptávky a komunikaci o nabídce podle
+                <NuxtLink class="underline" :to="legalDocuments.privacy.path"
+                  >zásad zpracování osobních údajů</NuxtLink
+                >. Fotografie dostanou při nahrání vlastní termín smazání. *
               </span>
             </label>
             <label class="consent-row">
-              <input v-model="photoPublicationConsent" type="checkbox" />
+              <input
+                v-model="photoPublicationConsent"
+                type="checkbox"
+                :disabled="legalDocuments.photoConsent.status !== 'approved'"
+              />
               <span>
                 Souhlasím s případným zveřejněním výsledných fotografií jako
-                ukázky práce. Tento souhlas je nepovinný a lze jej odmítnout.
+                ukázky práce podle
+                <NuxtLink
+                  class="underline"
+                  :to="legalDocuments.photoConsent.path"
+                  >pravidel fotografování</NuxtLink
+                >. Tento souhlas je nepovinný a lze jej odmítnout.
+                <template
+                  v-if="legalDocuments.photoConsent.status !== 'approved'"
+                >
+                  Čeká na schválené znění.
+                </template>
               </span>
             </label>
           </fieldset>

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { publicSite } from "../../content/public-site";
 import { formatFileSize } from "../../utils/model-file";
 
 const {
@@ -31,6 +30,7 @@ const {
 });
 
 const fileInput = ref<HTMLInputElement>();
+const automaticQuoteEnabled = useAutomaticQuoteEnabled();
 const isDragging = ref(false);
 const isBusy = computed(
   () => phase.value === "preparing" || phase.value === "uploading",
@@ -261,14 +261,12 @@ function currency(value: number, code: string): string {
       <div class="mt-7 flex flex-wrap items-center gap-5">
         <button
           class="inline-flex min-h-12 items-center bg-[#1b44e8] px-6 font-semibold text-white hover:bg-[#1536b8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16] disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="
-            !canUpload || !publicSite.commercial.automaticQuotePubliclyEnabled
-          "
+          :disabled="!canUpload || !automaticQuoteEnabled"
           type="button"
           @click="startUpload"
         >
           {{
-            publicSite.commercial.automaticQuotePubliclyEnabled
+            automaticQuoteEnabled
               ? "Nahrát a pokračovat ke konfiguraci"
               : "Kalkulace čeká na schválení"
           }}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LEGAL_DRAFT_STATUS, legalDrafts } from "./legal-drafts";
+import { approvedLegalDocument } from "./launch-manifest";
 import {
   LEGAL_PLACEHOLDER_BANNER,
   indexablePublicRoutes,
@@ -10,12 +11,35 @@ import {
 } from "./public-site";
 
 describe("public site launch boundaries", () => {
+  it("requires evidence and an effective date for approved legal content", () => {
+    const base = {
+      id: "terms-v1",
+      path: "/vop",
+      title: "VOP",
+      summary: "Schválené znění",
+      sections: [],
+    };
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        effectiveAt: "",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+    expect(
+      approvedLegalDocument({
+        ...base,
+        effectiveAt: "2026-01-01",
+        approvalEvidence: "#38",
+      }),
+    ).toMatchObject({ status: "approved", id: "terms-v1" });
+  });
+
   it("identifies the approval record behind the public content", () => {
     expect(publicSite.contentRevision).toBe("launch-approvals-v0.1");
   });
 
   it("does not invent unapproved commercial values", () => {
-    expect(publicSite.commercial.automaticQuotePubliclyEnabled).toBe(false);
     expect(publicSite.commercial.fromPrice).toBeNull();
     expect(publicSite.commercial.standardLeadTime).toBeNull();
     expect(publicSite.seller.vatId).toBe("CZ29508291");
@@ -61,9 +85,10 @@ describe("public site launch boundaries", () => {
 
     for (const document of Object.values(legalDocuments)) {
       expect(document.id).toMatch(/-pending$/);
+      expect(document.status).toBe("draft");
+      expect(document.effectiveAt).toBeNull();
+      expect(document.approvalEvidence).toBeNull();
       expect(indexablePublicRoutes).not.toContain(document.path);
-      expect(document).not.toHaveProperty("effectiveDate");
-      expect(document).not.toHaveProperty("draft");
     }
 
     for (const draft of Object.values(legalDrafts)) {

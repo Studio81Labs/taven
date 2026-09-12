@@ -9,12 +9,14 @@ rendered without an API dependency.
 The public landing and static pages use basic Tailwind utilities. The final
 visual design is intentionally deferred. Approved identity, seller details,
 navigation, legal placeholders, and unset launch values live in
-`content/public-site.ts`; owner-supplied non-effective legal draft text lives in
-`content/legal-drafts.ts`. Approved public contacts use Nuxt runtime
+`content/public-site.ts`; the typed draft/approved legal manifest lives in
+`content/launch-manifest.ts`; owner-supplied non-effective legal draft text lives
+in `content/legal-drafts.ts`. Approved public contacts use Nuxt runtime
 configuration so deployments can change them without rebuilding the image:
 
 - `NUXT_PUBLIC_CUSTOMER_CONTACT_EMAIL` defaults to `zakaznici@taven.cz`;
 - `NUXT_PUBLIC_DATA_CONTROLLER_EMAIL` defaults to `legal@taven.cz`.
+- `NUXT_PUBLIC_AUTOMATIC_QUOTE_ENABLED` defaults to `false`.
 
 Both values must be valid email addresses. Taven intentionally publishes no
 customer phone number and uses electronic contact channels.
@@ -32,7 +34,12 @@ Until launch approvals are complete:
 
 The automatic checkout renders only the backend's binding price and selected
 delivery endpoint. It remains disabled until the API exposes the same approved
-terms and claim-policy revisions as `content/public-site.ts`. Recoverable
+terms and claim-policy revisions as the typed manifest. The acquisition gate
+requires both those approved manifest inputs and runtime boolean `true` (or the
+exact environment override string `true`); an environment value alone cannot
+publish a draft build. It is separate from the backend's binding-quote,
+photo-upload, and checkout-payment gates.
+Recoverable
 contact and billing input plus the exact idempotency/payment handoff are kept in
 the current tab's session storage; card data is never collected by Taven.
 
