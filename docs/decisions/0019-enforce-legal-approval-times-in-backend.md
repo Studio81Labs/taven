@@ -4,6 +4,13 @@
 
 Accepted (2026-09-12, [#150](https://github.com/Studio81Labs/taven/issues/150)).
 
+Ownership, storage and deployment-based revision selection are superseded by
+[ADR 0020](0020-persist-legal-document-revisions.md), implemented through
+[#151](https://github.com/Studio81Labs/taven/issues/151) and
+[#152](https://github.com/Studio81Labs/taven/issues/152). This document describes
+the shipped PR #149 baseline. Trusted server time, fail-closed new acceptance
+and preservation of accepted settlement/replay remain binding requirements.
+
 ## Context
 
 The public web manifest renders repository-owned legal text, but a browser or
