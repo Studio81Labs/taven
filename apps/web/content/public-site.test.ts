@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { LEGAL_DRAFT_STATUS, legalDrafts } from "./legal-drafts";
 import { approvedLegalDocument } from "./launch-manifest";
+import { isEffectiveApprovedLegalDocument } from "./launch-approvals";
 import {
   LEGAL_PLACEHOLDER_BANNER,
   indexablePublicRoutes,
@@ -33,6 +34,33 @@ describe("public site launch boundaries", () => {
         approvalEvidence: "#38",
       }),
     ).toMatchObject({ status: "approved", id: "terms-v1" });
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        id: "terms-pending",
+        effectiveAt: "2026-01-01",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+  });
+
+  it("does not activate approvals before their effective date", () => {
+    const document = approvedLegalDocument({
+      id: "terms-v2",
+      path: "/vop",
+      title: "VOP",
+      summary: "Schválené znění",
+      sections: [],
+      effectiveAt: "2030-01-01",
+      approvalEvidence: "#38",
+    });
+
+    expect(
+      isEffectiveApprovedLegalDocument(document, Date.parse("2029-12-31")),
+    ).toBe(false);
+    expect(
+      isEffectiveApprovedLegalDocument(document, Date.parse("2030-01-01")),
+    ).toBe(true);
   });
 
   it("identifies the approval record behind the public content", () => {

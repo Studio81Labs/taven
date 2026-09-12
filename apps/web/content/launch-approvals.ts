@@ -36,12 +36,15 @@ export type ApprovedLegalDocumentApproval = LegalDocumentApprovalBase &
 export type LegalDocumentApproval =
   DraftLegalDocumentApproval | ApprovedLegalDocumentApproval;
 
+const NON_PRODUCTION_REVISION = /(?:^|[-_.\s])(draft|pending)(?:$|[-_.\s])/i;
+
 export function approvedLegalDocumentApproval(
   input: LegalDocumentApprovalBase &
     Readonly<{ effectiveAt: string; approvalEvidence: string }>,
 ): ApprovedLegalDocumentApproval {
   if (
     !input.id.trim() ||
+    NON_PRODUCTION_REVISION.test(input.id) ||
     !input.effectiveAt.trim() ||
     !Number.isFinite(Date.parse(input.effectiveAt)) ||
     !input.approvalEvidence.trim()
@@ -51,6 +54,15 @@ export function approvedLegalDocumentApproval(
     );
   }
   return { ...input, status: "approved" };
+}
+
+export function isEffectiveApprovedLegalDocument(
+  document: LegalDocumentApproval,
+  now = Date.now(),
+): document is ApprovedLegalDocumentApproval {
+  return (
+    document.status === "approved" && Date.parse(document.effectiveAt) <= now
+  );
 }
 
 const documentMetadata = {

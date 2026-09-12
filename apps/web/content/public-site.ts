@@ -1,5 +1,8 @@
 import { legalDocuments } from "./launch-manifest";
-import { commercialContentApproval } from "./launch-approvals";
+import {
+  commercialContentApproval,
+  isEffectiveApprovedLegalDocument,
+} from "./launch-approvals";
 
 export type { CommercialContentStatus } from "./launch-approvals";
 
@@ -57,7 +60,7 @@ const baseIndexablePublicRoutes = [
 export const indexablePublicRoutes = [
   ...baseIndexablePublicRoutes,
   ...Object.values(legalDocuments)
-    .filter((document) => document.status === "approved")
+    .filter((document) => isEffectiveApprovedLegalDocument(document))
     .map((document) => document.path),
 ] as const;
 

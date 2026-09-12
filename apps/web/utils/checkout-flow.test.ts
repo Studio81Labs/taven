@@ -89,6 +89,32 @@ describe("checkout flow", () => {
     });
   });
 
+  it("rejects approved terms before their effective date", () => {
+    expect(
+      approvedCheckoutDocuments(
+        {
+          available: true,
+          provider: "sandbox",
+          methods: ["CARD"],
+          legalDocuments: {
+            termsRevision: "terms-v1",
+            claimPolicyRevision: "claims-v1",
+            photoConsentRevision: null,
+          },
+        },
+        {
+          ...local,
+          terms: {
+            ...local.terms,
+            status: "approved",
+            effectiveAt: "2999-01-01",
+            approvalEvidence: "#38",
+          },
+        },
+      ),
+    ).toBeNull();
+  });
+
   it("maps recoverable API failures and creates an exact payment status URL", () => {
     for (const status of [409, 503]) {
       expect(checkoutErrorMessage(status)).toContain("zůstal");

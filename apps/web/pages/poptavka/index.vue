@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
 import { legalDocuments } from "../../content/public-site";
+import { isEffectiveApprovedLegalDocument } from "../../content/launch-approvals";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -418,7 +419,9 @@ function isPositiveDimension(value: number | ""): value is number {
               <input
                 v-model="photoPublicationConsent"
                 type="checkbox"
-                :disabled="legalDocuments.photoConsent.status !== 'approved'"
+                :disabled="
+                  !isEffectiveApprovedLegalDocument(legalDocuments.photoConsent)
+                "
               />
               <span>
                 Souhlasím s případným zveřejněním výsledných fotografií jako
@@ -429,7 +432,11 @@ function isPositiveDimension(value: number | ""): value is number {
                   >pravidel fotografování</NuxtLink
                 >. Tento souhlas je nepovinný a lze jej odmítnout.
                 <template
-                  v-if="legalDocuments.photoConsent.status !== 'approved'"
+                  v-if="
+                    !isEffectiveApprovedLegalDocument(
+                      legalDocuments.photoConsent,
+                    )
+                  "
                 >
                   Čeká na schválené znění.
                 </template>

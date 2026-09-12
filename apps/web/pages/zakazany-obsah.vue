@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { legalDocuments } from "../content/public-site";
+import { isEffectiveApprovedLegalDocument } from "../content/launch-approvals";
 
 definePageMeta({ layout: "public" });
 
@@ -10,7 +11,7 @@ usePublicPageMeta({
   path: document.path,
   title: document.title,
   description: document.summary,
-  noindex: document.status === "draft",
+  noindex: !isEffectiveApprovedLegalDocument(document),
 });
 </script>
 

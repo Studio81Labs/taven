@@ -3,6 +3,7 @@ import {
   LEGAL_PLACEHOLDER_BANNER,
   publicSite,
 } from "../../content/public-site";
+import { isEffectiveApprovedLegalDocument } from "../../content/launch-approvals";
 import type { LegalDocument } from "../../content/launch-manifest";
 
 defineProps<{
@@ -18,7 +19,7 @@ defineProps<{
 <template>
   <article class="mx-auto max-w-3xl px-5 py-14 sm:px-8 sm:py-20">
     <p
-      v-if="document.status === 'draft'"
+      v-if="!isEffectiveApprovedLegalDocument(document)"
       class="border-2 border-[#b4441a] bg-white px-4 py-3 font-mono text-sm font-semibold text-[#8c3213]"
       role="alert"
     >
@@ -36,13 +37,13 @@ defineProps<{
     <div class="mt-10 border border-[#d9d9d2] bg-white p-6 leading-7">
       <h2 class="text-xl font-semibold">
         {{
-          document.status === "draft"
+          !isEffectiveApprovedLegalDocument(document)
             ? "Tato stránka není právní dokument"
             : "Účinné znění"
         }}
       </h2>
       <p class="mt-3 text-[#54554c]">
-        <template v-if="document.status === 'draft'">
+        <template v-if="!isEffectiveApprovedLegalDocument(document)">
           Neobsahuje účinné znění, datum účinnosti ani souhlas, který by bylo
           možné přijmout. Před veřejným spuštěním ji musí nahradit verzovaný
           text schválený vlastníkem služby a českým právním poradcem.
@@ -80,19 +81,22 @@ defineProps<{
     >
       <div class="border border-[#d9d9d2] bg-[#efefea] p-5">
         <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-          {{ document.status === "draft" ? "NÁVRH" : "SCHVÁLENO" }} ·
+          {{
+            isEffectiveApprovedLegalDocument(document) ? "SCHVÁLENO" : "NÁVRH"
+          }}
+          ·
           {{ document.id }}
         </p>
         <h2 id="legal-draft-heading" class="mt-3 text-2xl font-semibold">
           {{
-            document.status === "draft"
+            !isEffectiveApprovedLegalDocument(document)
               ? "Pracovní návrh textu"
               : "Text dokumentu"
           }}
         </h2>
         <p class="mt-3 leading-7 text-[#54554c]">
           {{
-            document.status === "draft"
+            !isEffectiveApprovedLegalDocument(document)
               ? "Následující text slouží pouze k vývoji a připomínkování. Nemá datum účinnosti, nelze jej přijmout a nesmí být použit při produkční objednávce."
               : "Text se vykresluje jako prostý obsah manifestu; nespouští ani nevkládá neověřený HTML obsah."
           }}
