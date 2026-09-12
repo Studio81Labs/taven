@@ -59,6 +59,7 @@ describe("payment capabilities", () => {
       {} as never,
       {} as never,
       {} as never,
+      legalApprovals() as never,
     );
 
     await expect(service.capabilities({})).resolves.toEqual({
@@ -124,6 +125,7 @@ describe("payment capabilities", () => {
       {} as never,
       {} as never,
       {} as never,
+      legalApprovals() as never,
     );
 
     await expect(
@@ -154,6 +156,7 @@ describe("payment capabilities", () => {
       {} as never,
       {} as never,
       {} as never,
+      legalApprovals() as never,
     );
 
     await expect(
@@ -169,6 +172,35 @@ describe("payment capabilities", () => {
     });
   });
 });
+
+function legalApprovals() {
+  const documents = Object.fromEntries(
+    [
+      ["terms", "terms-v1-approved"],
+      ["claims", "claims-v1-approved"],
+      ["privacy", "privacy-v1-approved"],
+      ["prohibitedContent", "prohibited-content-v1-approved"],
+      ["retention", "retention-v1-approved"],
+      ["photoConsent", "photos-v1-approved"],
+    ].map(([key, revision]) => [
+      key,
+      {
+        revision,
+        status: "approved" as const,
+        effectiveAt: "2026-01-01T00:00:00.000Z",
+        effective: true,
+      },
+    ]),
+  );
+  return {
+    availability: vi.fn().mockResolvedValue({
+      schemaVersion: 1,
+      policyRevision: "test",
+      evaluatedAt: "2026-01-01T00:00:00.000Z",
+      documents,
+    }),
+  };
+}
 
 describe("provider event verification time", () => {
   it("uses database time when the provider has no occurrence timestamp", async () => {

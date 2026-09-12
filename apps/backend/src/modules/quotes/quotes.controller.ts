@@ -88,6 +88,10 @@ export class QuoteRequestsController {
   @ApiTooManyRequestsResponse({
     description: "Anonymous quote-submission limit is exhausted",
   })
+  @ApiServiceUnavailableResponse({
+    description:
+      "Effective privacy or optional photo-consent approval is unavailable",
+  })
   create(
     @Body() body: CreateQuoteRequestDto,
     @Ip() clientAddress: string,

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
 import { legalDocuments } from "../../content/public-site";
-import { isEffectiveApprovedLegalDocument } from "../../content/launch-manifest";
+import { isServerVerifiedLegalDocument } from "../../utils/legal-availability";
+import { useLegalAvailability } from "../../composables/useLegalAvailability";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -28,6 +29,9 @@ usePublicPageMeta({
 
 const route = useRoute();
 const automaticQuoteEnabled = useAutomaticQuoteEnabled();
+const { availability, refresh: refreshLegalAvailability } =
+  useLegalAvailability();
+onMounted(() => void refreshLegalAvailability());
 const source = normalizeAssistedQuoteSource(route.query.source);
 const initialPrefill = assistedQuotePrefill(source);
 const handoffContext = shallowRef<AssistedQuoteHandoffContext>();
@@ -70,8 +74,20 @@ const photoFieldsLocked = computed(
   () => submitted.value && !attachmentsEditable.value,
 );
 const privacyNoticeEffective = computed(() =>
-  isEffectiveApprovedLegalDocument(legalDocuments.privacy),
+  isServerVerifiedLegalDocument(legalDocuments.privacy, availability.value),
 );
+const photoConsentEffective = computed(() =>
+  isServerVerifiedLegalDocument(
+    legalDocuments.photoConsent,
+    availability.value,
+  ),
+);
+watch(privacyNoticeEffective, (effective) => {
+  if (!effective) privacyAcknowledged.value = false;
+});
+watch(photoConsentEffective, (effective) => {
+  if (!effective) photoPublicationConsent.value = false;
+});
 const hasDimensions = computed(() =>
   [widthMm.value, depthMm.value, heightMm.value].some(isPositiveDimension),
 );
@@ -152,6 +168,7 @@ function removePhoto(index: number): void {
 }
 
 async function submitRequest(): Promise<void> {
+  await refreshLegalAvailability();
   if (!canSubmit.value) return;
   selectionError.value = undefined;
   const measurements: Record<string, unknown> = {};
@@ -432,9 +449,7 @@ function isPositiveDimension(value: number | ""): value is number {
               <input
                 v-model="photoPublicationConsent"
                 type="checkbox"
-                :disabled="
-                  !isEffectiveApprovedLegalDocument(legalDocuments.photoConsent)
-                "
+                :disabled="!photoConsentEffective"
               />
               <span>
                 Souhlasím s případným zveřejněním výsledných fotografií jako
@@ -444,13 +459,7 @@ function isPositiveDimension(value: number | ""): value is number {
                   :to="legalDocuments.photoConsent.path"
                   >pravidel fotografování</NuxtLink
                 >. Tento souhlas je nepovinný a lze jej odmítnout.
-                <template
-                  v-if="
-                    !isEffectiveApprovedLegalDocument(
-                      legalDocuments.photoConsent,
-                    )
-                  "
-                >
+                <template v-if="!photoConsentEffective">
                   Čeká na schválené znění.
                 </template>
               </span>

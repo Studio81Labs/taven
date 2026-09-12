@@ -1,8 +1,9 @@
 import type { components } from "@taven/openapi-client";
+import type { LegalDocument } from "../content/launch-manifest";
 import {
-  isEffectiveApprovedLegalDocument,
-  type LegalDocument,
-} from "../content/launch-manifest";
+  isServerVerifiedLegalDocument,
+  type LegalAvailability,
+} from "./legal-availability";
 
 type PaymentCapabilities = components["schemas"]["PaymentCapabilitiesDto"];
 type CheckoutLegalDocuments = Readonly<{
@@ -14,6 +15,7 @@ type CheckoutLegalDocuments = Readonly<{
 export function approvedCheckoutDocuments(
   capabilities: PaymentCapabilities | undefined,
   local: CheckoutLegalDocuments,
+  availability: LegalAvailability | null | undefined,
 ) {
   const documents = capabilities?.legalDocuments;
   if (
@@ -22,8 +24,8 @@ export function approvedCheckoutDocuments(
     !documents ||
     documents.termsRevision !== local.terms.id ||
     documents.claimPolicyRevision !== local.claims.id ||
-    !isEffectiveApprovedLegalDocument(local.terms) ||
-    !isEffectiveApprovedLegalDocument(local.claims)
+    !isServerVerifiedLegalDocument(local.terms, availability) ||
+    !isServerVerifiedLegalDocument(local.claims, availability)
   ) {
     return null;
   }
@@ -32,7 +34,7 @@ export function approvedCheckoutDocuments(
     claimPolicyRevision: documents.claimPolicyRevision,
     photoConsentRevision:
       documents.photoConsentRevision === local.photoConsent.id &&
-      isEffectiveApprovedLegalDocument(local.photoConsent)
+      isServerVerifiedLegalDocument(local.photoConsent, availability)
         ? documents.photoConsentRevision
         : null,
   } as const;

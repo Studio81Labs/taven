@@ -13,6 +13,7 @@ import { QuotesModule } from "./modules/quotes/quotes.module";
 import { SlicingModule } from "./modules/slicing/slicing.module";
 import { StorageModule } from "./modules/storage/storage.module";
 import { ResourcesModule } from "./modules/resources/resources.module";
+import { LegalApprovalsModule } from "./modules/legal-approvals/legal-approvals.module";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { ResourcesModule } from "./modules/resources/resources.module";
     SlicingModule,
     PricingModule,
     ResourcesModule,
+    LegalApprovalsModule,
     StorageModule,
     PaymentsModule,
     AdminAccessModule,

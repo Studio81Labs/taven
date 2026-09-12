@@ -33,15 +33,14 @@ export type ApprovedLegalDocument = LegalDocumentBase &
 export type LegalDocument = DraftLegalDocument | ApprovedLegalDocument;
 
 const NON_PRODUCTION_REVISION = /(?:^|[-_.\s])(draft|pending)(?:$|[-_.\s])/i;
-const CANONICAL_EFFECTIVE_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const CANONICAL_EFFECTIVE_INSTANT =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
-function effectiveDateTimestamp(value: string): number | null {
-  if (!CANONICAL_EFFECTIVE_DATE.test(value)) return null;
-  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+function effectiveInstantTimestamp(value: string): number | null {
+  if (!CANONICAL_EFFECTIVE_INSTANT.test(value)) return null;
+  const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return null;
-  return new Date(timestamp).toISOString().slice(0, 10) === value
-    ? timestamp
-    : null;
+  return new Date(timestamp).toISOString() === value ? timestamp : null;
 }
 
 export function approvedLegalDocument(
@@ -51,7 +50,7 @@ export function approvedLegalDocument(
   if (
     !input.id.trim() ||
     NON_PRODUCTION_REVISION.test(input.id) ||
-    effectiveDateTimestamp(input.effectiveAt) === null ||
+    effectiveInstantTimestamp(input.effectiveAt) === null ||
     !input.approvalEvidence.trim()
   ) {
     throw new TypeError(
@@ -67,11 +66,11 @@ export type LegalDocumentApprovalState =
 
 export function isEffectiveApprovedLegalDocument(
   document: LegalDocumentApprovalState,
-  now = Date.now(),
+  now?: number,
 ): boolean {
   if (document.status !== "approved") return false;
-  const timestamp = effectiveDateTimestamp(document.effectiveAt);
-  return timestamp !== null && timestamp <= now;
+  const timestamp = effectiveInstantTimestamp(document.effectiveAt);
+  return timestamp !== null && typeof now === "number" && timestamp <= now;
 }
 
 const documentMetadata = {

@@ -5,6 +5,7 @@ import {
   paymentStatusPath,
   paymentReturnMatchesHandoff,
 } from "./checkout-flow";
+import type { LegalAvailability } from "./legal-availability";
 
 function document(id: string, status: "approved" | "draft" = "approved") {
   const base = {
@@ -25,7 +26,7 @@ function document(id: string, status: "approved" | "draft" = "approved") {
   return {
     ...base,
     status,
-    effectiveAt: "2026-01-01",
+    effectiveAt: "2026-01-01T00:00:00.000Z",
     approvalEvidence: "#38",
   } as const;
 }
@@ -36,9 +37,55 @@ const local = {
   photoConsent: document("photos-v1"),
 };
 
+const availability: LegalAvailability = {
+  schemaVersion: 1,
+  policyRevision: "test",
+  evaluatedAt: "2026-01-01T00:00:00.000Z",
+  documents: {
+    terms: {
+      revision: "terms-v1",
+      status: "approved",
+      effectiveAt: "2026-01-01T00:00:00.000Z",
+      effective: true,
+    },
+    claims: {
+      revision: "claims-v1",
+      status: "approved",
+      effectiveAt: "2026-01-01T00:00:00.000Z",
+      effective: true,
+    },
+    privacy: {
+      revision: "privacy-v1",
+      status: "approved",
+      effectiveAt: "2026-01-01T00:00:00.000Z",
+      effective: true,
+    },
+    prohibitedContent: {
+      revision: "prohibited-v1",
+      status: "approved",
+      effectiveAt: "2026-01-01T00:00:00.000Z",
+      effective: true,
+    },
+    retention: {
+      revision: "retention-v1",
+      status: "approved",
+      effectiveAt: "2026-01-01T00:00:00.000Z",
+      effective: true,
+    },
+    photoConsent: {
+      revision: "photos-v1",
+      status: "approved",
+      effectiveAt: "2026-01-01T00:00:00.000Z",
+      effective: true,
+    },
+  },
+};
+
 describe("checkout flow", () => {
   it("keeps checkout disabled for unavailable, mismatched, or draft documents", () => {
-    expect(approvedCheckoutDocuments(undefined, local)).toBeNull();
+    expect(
+      approvedCheckoutDocuments(undefined, local, availability),
+    ).toBeNull();
     expect(
       approvedCheckoutDocuments(
         {
@@ -52,6 +99,7 @@ describe("checkout flow", () => {
           },
         },
         local,
+        availability,
       ),
     ).toBeNull();
     expect(
@@ -67,6 +115,7 @@ describe("checkout flow", () => {
           },
         },
         { ...local, terms: document("terms-pending", "draft") },
+        availability,
       ),
     ).toBeNull();
   });
@@ -82,7 +131,9 @@ describe("checkout flow", () => {
         photoConsentRevision: "photo-consent-pending",
       },
     };
-    expect(approvedCheckoutDocuments(capabilities, local)).toEqual({
+    expect(
+      approvedCheckoutDocuments(capabilities, local, availability),
+    ).toEqual({
       termsRevision: "terms-v1",
       claimPolicyRevision: "claims-v1",
       photoConsentRevision: null,
@@ -107,10 +158,11 @@ describe("checkout flow", () => {
           terms: {
             ...local.terms,
             status: "approved",
-            effectiveAt: "2999-01-01",
+            effectiveAt: "2999-01-01T00:00:00.000Z",
             approvalEvidence: "#38",
           },
         },
+        availability,
       ),
     ).toBeNull();
   });

@@ -3,17 +3,21 @@ import {
   hasEffectiveAutomaticQuoteDocuments,
   isAutomaticQuoteEnabled,
 } from "./automatic-quote-launch";
+import type { LegalAvailability } from "./legal-availability";
+import type { LegalDocument } from "../content/launch-manifest";
 
 describe("automatic quote launch gate", () => {
-  const approvedDocument = (id: string) => ({
-    id,
-    path: `/${id}`,
-    title: id,
-    summary: id,
-    status: "approved" as const,
-    effectiveAt: "2026-01-01",
-    approvalEvidence: "#38",
-  });
+  const approvedDocument = (id: string) =>
+    ({
+      id,
+      path: `/${id}`,
+      title: id,
+      summary: id,
+      sections: [],
+      status: "approved" as const,
+      effectiveAt: "2026-01-01T00:00:00.000Z",
+      approvalEvidence: "#38",
+    }) satisfies LegalDocument;
 
   it("requires every blocking document to be effective", () => {
     const documents = {
@@ -24,16 +28,35 @@ describe("automatic quote launch gate", () => {
       retention: approvedDocument("retention-v1"),
     };
 
-    expect(hasEffectiveAutomaticQuoteDocuments(documents)).toBe(true);
+    const availability: LegalAvailability = {
+      schemaVersion: 1,
+      policyRevision: "test",
+      evaluatedAt: "2026-01-01T00:00:00.000Z",
+      documents: {
+        terms: record("terms-v1"),
+        claims: record("claims-v1"),
+        privacy: record("privacy-v1"),
+        prohibitedContent: record("prohibited-content-v1"),
+        retention: record("retention-v1"),
+        photoConsent: record("photos-v1"),
+      },
+    };
+    expect(hasEffectiveAutomaticQuoteDocuments(documents, availability)).toBe(
+      true,
+    );
     expect(
-      hasEffectiveAutomaticQuoteDocuments({
-        ...documents,
-        privacy: {
-          ...documents.privacy,
-          status: "draft" as const,
-          effectiveAt: null,
+      hasEffectiveAutomaticQuoteDocuments(
+        {
+          ...documents,
+          privacy: {
+            ...documents.privacy,
+            status: "draft" as const,
+            effectiveAt: null,
+            approvalEvidence: null,
+          },
         },
-      }),
+        availability,
+      ),
     ).toBe(false);
   });
 
@@ -67,3 +90,12 @@ describe("automatic quote launch gate", () => {
     ).toBe(false);
   });
 });
+
+function record(revision: string) {
+  return {
+    revision,
+    status: "approved" as const,
+    effectiveAt: "2026-01-01T00:00:00.000Z",
+    effective: true,
+  };
+}

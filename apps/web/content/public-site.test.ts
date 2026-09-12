@@ -32,7 +32,7 @@ describe("public site launch boundaries", () => {
     expect(
       approvedLegalDocument({
         ...base,
-        effectiveAt: "2026-01-01",
+        effectiveAt: "2026-01-01T00:00:00.000Z",
         approvalEvidence: "#38",
       }),
     ).toMatchObject({ status: "approved", id: "terms-v1" });
@@ -40,21 +40,21 @@ describe("public site launch boundaries", () => {
       approvedLegalDocument({
         ...base,
         id: "terms-pending",
-        effectiveAt: "2026-01-01",
+        effectiveAt: "2026-01-01T00:00:00.000Z",
         approvalEvidence: "#38",
       }),
     ).toThrow("require an ID");
     expect(() =>
       approvedLegalDocument({
         ...base,
-        effectiveAt: "2026-02-30",
+        effectiveAt: "2026-02-30T00:00:00.000Z",
         approvalEvidence: "#38",
       }),
     ).toThrow("require an ID");
     expect(() =>
       approvedLegalDocument({
         ...base,
-        effectiveAt: "01/02/2026",
+        effectiveAt: "2026-01-01T00:00:00Z",
         approvalEvidence: "#38",
       }),
     ).toThrow("require an ID");
@@ -67,15 +67,21 @@ describe("public site launch boundaries", () => {
       title: "VOP",
       summary: "Schválené znění",
       sections: [],
-      effectiveAt: "2030-01-01",
+      effectiveAt: "2030-01-01T00:00:00.000Z",
       approvalEvidence: "#38",
     });
 
     expect(
-      isEffectiveApprovedLegalDocument(document, Date.parse("2029-12-31")),
+      isEffectiveApprovedLegalDocument(
+        document,
+        Date.parse("2029-12-31T23:59:59.999Z"),
+      ),
     ).toBe(false);
     expect(
-      isEffectiveApprovedLegalDocument(document, Date.parse("2030-01-01")),
+      isEffectiveApprovedLegalDocument(
+        document,
+        Date.parse("2030-01-01T00:00:00.000Z"),
+      ),
     ).toBe(true);
   });
 
