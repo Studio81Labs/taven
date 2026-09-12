@@ -1,8 +1,9 @@
-import { Injectable, ServiceUnavailableException } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
   activeLegalApprovalCatalog,
   evaluateLegalApprovals,
+  legalApprovalRequired,
   type EvaluatedLegalApprovals,
   type LegalApprovalCatalog,
 } from "./legal-approvals.catalog";
@@ -22,10 +23,7 @@ export class LegalApprovalsService {
     try {
       return evaluateLegalApprovals(observedAt, catalog);
     } catch {
-      throw new ServiceUnavailableException({
-        code: "LAUNCH_APPROVAL_REQUIRED",
-        message: "Legal approval metadata is unavailable",
-      });
+      throw legalApprovalRequired("Legal approval metadata is unavailable");
     }
   }
 }
@@ -33,14 +31,16 @@ export class LegalApprovalsService {
 async function databaseNow(
   client: Pick<PrismaService, "$queryRaw">,
 ): Promise<Date> {
-  const rows = await client.$queryRaw<Array<{ observed_at: Date }>>`
-    SELECT clock_timestamp() AS observed_at
-  `;
+  let rows: Array<{ observed_at: Date }>;
+  try {
+    rows = await client.$queryRaw<Array<{ observed_at: Date }>>`
+      SELECT clock_timestamp() AS observed_at
+    `;
+  } catch {
+    throw legalApprovalRequired("Legal approval time is unavailable");
+  }
   const observedAt = rows[0]?.observed_at;
   if (!observedAt)
-    throw new ServiceUnavailableException({
-      code: "LAUNCH_APPROVAL_REQUIRED",
-      message: "Legal approval time is unavailable",
-    });
+    throw legalApprovalRequired("Legal approval time is unavailable");
   return observedAt;
 }
