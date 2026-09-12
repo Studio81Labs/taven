@@ -43,9 +43,10 @@ async function openPicker(): Promise<void> {
   if (props.disabled || loading.value || selecting.value) return;
   errorMessage.value = undefined;
   loading.value = true;
+  const generation = ++selectionGeneration;
   try {
     const widget = await loadWidget();
-    const generation = ++selectionGeneration;
+    if (generation !== selectionGeneration) return;
     widget.pick(
       props.accountId,
       (point) => {
@@ -66,10 +67,12 @@ async function openPicker(): Promise<void> {
       props.options,
     );
   } catch {
-    errorMessage.value =
-      "Výběr výdejního místa se nepodařilo načíst. Zkuste to prosím znovu nebo požádejte o individuální nabídku.";
+    if (generation === selectionGeneration) {
+      errorMessage.value =
+        "Výběr výdejního místa se nepodařilo načíst. Zkuste to prosím znovu nebo požádejte o individuální nabídku.";
+    }
   } finally {
-    loading.value = false;
+    if (generation === selectionGeneration) loading.value = false;
   }
 }
 
