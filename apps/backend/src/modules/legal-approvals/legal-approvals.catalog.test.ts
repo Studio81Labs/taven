@@ -57,6 +57,24 @@ describe("legal approval catalog", () => {
       assertEffectiveQuoteRequestLegalDocuments(approvals, false),
     ).toThrow("Legal approval metadata is unavailable or not yet effective");
   });
+
+  it("keeps quote requests closed until prohibited-content rules are effective", () => {
+    const catalog = approvedCatalog("2030-01-01T00:00:00.000Z");
+    const approvals = evaluateLegalApprovals(
+      new Date("2030-01-01T00:00:00.000Z"),
+      {
+        ...catalog,
+        documents: {
+          ...catalog.documents,
+          prohibitedContent: legalApprovalCatalog.documents.prohibitedContent,
+        },
+      },
+    );
+
+    expect(() =>
+      assertEffectiveQuoteRequestLegalDocuments(approvals, false),
+    ).toThrow("Legal approval metadata is unavailable or not yet effective");
+  });
 });
 
 function approvedCatalog(effectiveAt: string): LegalApprovalCatalog {

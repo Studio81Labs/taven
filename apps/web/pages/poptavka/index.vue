@@ -87,6 +87,13 @@ const retentionPolicyEffective = computed(() =>
     availability.value,
   ),
 );
+const prohibitedContentPolicyEffective = computed(() =>
+  isServerVerifiedLegalDocument(
+    "prohibitedContent",
+    legalDocuments.prohibitedContent,
+    availability.value,
+  ),
+);
 const photoConsentEffective = computed(() =>
   isServerVerifiedLegalDocument(
     "photoConsent",
@@ -112,6 +119,7 @@ const canSubmit = computed(
     !selectionError.value &&
     privacyNoticeEffective.value &&
     retentionPolicyEffective.value &&
+    prohibitedContentPolicyEffective.value &&
     privacyAcknowledged.value,
 );
 const minimumDate = localDateValue(new Date());

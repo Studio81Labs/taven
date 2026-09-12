@@ -24,7 +24,7 @@ export function useLegalAvailability() {
         ),
       ]);
       const value = response.data as AvailabilityResponse | undefined;
-      if (generation === refreshGeneration && value) availability.value = value;
+      if (generation === refreshGeneration) availability.value = value ?? null;
       return generation === refreshGeneration ? availability.value : null;
     } catch {
       if (generation === refreshGeneration) availability.value = null;
