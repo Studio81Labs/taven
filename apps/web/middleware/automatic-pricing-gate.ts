@@ -1,4 +1,9 @@
-export default defineNuxtRouteMiddleware(() => {
+import { useLegalAvailability } from "../composables/useLegalAvailability";
+
+export default defineNuxtRouteMiddleware(async () => {
+  const { refresh } = useLegalAvailability();
+  await refresh();
+
   if (useAutomaticQuoteEnabled().value) return;
 
   return navigateTo(

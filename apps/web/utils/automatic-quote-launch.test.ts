@@ -60,6 +60,33 @@ describe("automatic quote launch gate", () => {
     ).toBe(false);
   });
 
+  it("requires the server-approved revision to match the rendered document", () => {
+    const documents = {
+      terms: approvedDocument("terms-v1"),
+      claims: approvedDocument("claims-v1"),
+      privacy: approvedDocument("privacy-v1"),
+      prohibitedContent: approvedDocument("prohibited-content-v1"),
+      retention: approvedDocument("retention-v1"),
+    };
+    const availability: LegalAvailability = {
+      schemaVersion: 1,
+      policyRevision: "test",
+      evaluatedAt: "2026-01-01T00:00:00.000Z",
+      documents: {
+        terms: record("terms-v2"),
+        claims: record("claims-v1"),
+        privacy: record("privacy-v1"),
+        prohibitedContent: record("prohibited-content-v1"),
+        retention: record("retention-v1"),
+        photoConsent: record("photos-v1"),
+      },
+    };
+
+    expect(hasEffectiveAutomaticQuoteDocuments(documents, availability)).toBe(
+      false,
+    );
+  });
+
   it("requires an explicit runtime true and approved manifest inputs", () => {
     const approved = {
       hasApprovedAcquisitionDocuments: true,

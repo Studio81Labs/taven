@@ -29,6 +29,7 @@ export function isServerVerifiedLegalDocument(
   const record = availability.documents[key];
   return Boolean(
     record &&
+    record.revision === local.id &&
     record.status === "approved" &&
     record.effective &&
     record.effectiveAt === local.effectiveAt,
