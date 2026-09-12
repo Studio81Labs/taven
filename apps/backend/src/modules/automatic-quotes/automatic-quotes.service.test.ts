@@ -174,6 +174,41 @@ describe("AutomaticQuotesService", () => {
     ).resolves.toEqual({ configurationRevision: { increment: 1 } });
   });
 
+  it("uses the database clock for a completed destination replay", async () => {
+    const databaseNow = new Date("2020-01-01T00:00:00.000Z");
+    const prisma = {
+      $queryRaw: vi.fn().mockResolvedValue([{ observed_at: databaseNow }]),
+      idempotencyRecord: {
+        findFirst: vi.fn().mockResolvedValue({
+          expiresAt: new Date("2020-01-01T00:00:01.000Z"),
+          requestFingerprint: "fingerprint",
+          status: "COMPLETED",
+          responseBody: {},
+        }),
+      },
+    };
+    const service = new AutomaticQuotesService(
+      prisma as unknown as PrismaService,
+      null as never,
+      null as never,
+      null as never,
+      null as never,
+    );
+    const completedDestinationReplay = service as unknown as {
+      completedDestinationReplay: (
+        idempotencyKey: string,
+        fingerprint: string,
+      ) => Promise<boolean>;
+    };
+
+    await expect(
+      completedDestinationReplay.completedDestinationReplay(
+        "idempotency-key",
+        "fingerprint",
+      ),
+    ).resolves.toBe(true);
+  });
+
   it.each(["P2002", "23505"])(
     "retries a handoff issuance uniqueness race (%s)",
     async (code) => {

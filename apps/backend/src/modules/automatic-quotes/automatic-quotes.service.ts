@@ -4704,6 +4704,7 @@ export class AutomaticQuotesService {
     idempotencyKey: string,
     fingerprint: string,
   ): Promise<boolean> {
+    const observedAt = await databaseNow(this.prisma);
     const existing = await this.prisma.idempotencyRecord.findFirst({
       where: {
         namespace: "automatic-quote.select-destination",
@@ -4711,7 +4712,9 @@ export class AutomaticQuotesService {
       },
       orderBy: { generation: "desc" },
     });
-    if (!existing || existing.expiresAt.getTime() <= Date.now()) return false;
+    if (!existing || existing.expiresAt.getTime() <= observedAt.getTime()) {
+      return false;
+    }
     if (existing.requestFingerprint !== fingerprint) {
       throw new ConflictException(
         "Idempotency key was already used with different input",
