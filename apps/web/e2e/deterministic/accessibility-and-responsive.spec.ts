@@ -100,17 +100,25 @@ test.describe("Accessibility and Responsive Viewports", () => {
     await page.goto("/poptavka");
     await page.waitForLoadState("networkidle");
 
-    // Press Tab multiple times to ensure focus moves through interactive elements
-    await page.keyboard.press("Tab");
-    const activeElementTag1 = await page.evaluate(
-      () => document.activeElement?.tagName,
-    );
-    expect(activeElementTag1).toBeTruthy();
+    const descriptionField = page.getByRole("textbox", {
+      name: /Co potřebujete vyrobit/,
+    });
+    await descriptionField.focus();
+    await expect(descriptionField).toBeFocused();
 
+    // Press Tab to navigate to the purpose textarea
     await page.keyboard.press("Tab");
-    const activeElementTag2 = await page.evaluate(
-      () => document.activeElement?.tagName,
-    );
-    expect(activeElementTag2).toBeTruthy();
+    const purposeField = page.getByRole("textbox", { name: "Účel dílu" });
+    await expect(purposeField).toBeFocused();
+
+    // Press Tab to navigate to width dimension input
+    await page.keyboard.press("Tab");
+    const widthField = page.getByLabel("Šířka X (mm)");
+    await expect(widthField).toBeFocused();
+
+    // Press Tab to navigate to depth dimension input
+    await page.keyboard.press("Tab");
+    const depthField = page.getByLabel("Hloubka Y (mm)");
+    await expect(depthField).toBeFocused();
   });
 });

@@ -169,6 +169,20 @@ test.describe("Payment Outcomes & Session Protection", () => {
     await expect(
       page.getByRole("button", { name: "Načíst aktuální stav" }),
     ).toBeVisible();
+
+    // Transition backend payment status to CAPTURED
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { paymentOutcome: "CAPTURED" },
+    });
+
+    // Verify automatic polling picks up the transition without user clicking refresh
+    await expect(
+      page.getByRole("heading", { name: "Platba byla potvrzena.", level: 1 }),
+    ).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText("PLATBA PŘIJATA")).toBeVisible();
+    await expect(
+      page.getByText("Objednávku jsme přijali a připravujeme ji k výrobě."),
+    ).toBeVisible();
   });
 
   test("failed or cancelled payment provides clear feedback and restart option", async ({
