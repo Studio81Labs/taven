@@ -44,6 +44,20 @@ describe("public site launch boundaries", () => {
         approvalEvidence: "#38",
       }),
     ).toThrow("require an ID");
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        effectiveAt: "2026-02-30",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
+    expect(() =>
+      approvedLegalDocument({
+        ...base,
+        effectiveAt: "01/02/2026",
+        approvalEvidence: "#38",
+      }),
+    ).toThrow("require an ID");
   });
 
   it("does not activate approvals before their effective date", () => {
