@@ -8,7 +8,7 @@ let testState = {
   legalEvaluatedAt: null, // custom ISO string or null for current UTC
   capacityStatus: "available", // "available" | "out_of_capacity"
   expressEligible: true,
-  paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED" | "CANCELLED"
+  paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED"
   recordedObservations: [],
   lastAssistedQuote: null,
 };
@@ -265,7 +265,7 @@ const server = http.createServer(async (req, res) => {
       handleOutcome("FAILED", "cancelled");
     });
     document.getElementById("btn-pay-cancel")?.addEventListener("click", () => {
-      handleOutcome("CANCELLED", "cancelled");
+      handleOutcome("FAILED", "cancelled");
     });
   </script>
 </body>

@@ -50,6 +50,15 @@ test.describe("Payment Outcomes & Session Protection", () => {
       );
     });
 
+    // Mismatched session ID
+    await page.goto(
+      "/checkout/payment/success?paymentId=pay-real-123&sessionId=session-wrong-999",
+    );
+    await expect(
+      page.getByText("Návrat neodpovídá uložené relaci objednávky."),
+    ).toBeVisible();
+    await expect(page.getByText("Platba byla potvrzena.")).not.toBeVisible();
+
     // Mismatched payment ID
     await page.goto(
       "/checkout/payment/success?paymentId=pay-wrong-999&sessionId=session-real-123",
