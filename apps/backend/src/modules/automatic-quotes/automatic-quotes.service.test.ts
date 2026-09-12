@@ -157,6 +157,23 @@ describe("AutomaticQuotesService", () => {
     });
   });
 
+  it("retains a legacy configured Packeta destination after parcel changes", async () => {
+    const findUniqueOrThrow = vi.fn().mockResolvedValue({
+      selectedDeliveryDestination: {
+        capabilitySnapshot: { provider: "packeta" },
+      },
+    });
+
+    await expect(
+      parcelConfigurationChange(
+        {
+          automaticQuoteDraft: { findUniqueOrThrow },
+        } as never,
+        "order-id",
+      ),
+    ).resolves.toEqual({ configurationRevision: { increment: 1 } });
+  });
+
   it.each(["P2002", "23505"])(
     "retries a handoff issuance uniqueness race (%s)",
     async (code) => {

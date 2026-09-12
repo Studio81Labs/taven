@@ -12,6 +12,7 @@ const PACKETA_FEED_REFRESH_MS = 60 * 60 * 1_000;
 const PACKETA_FEED_RETRY_DELAY_MS = 60_000;
 const PACKETA_REQUEST_TIMEOUT_MS = 5_000;
 const PACKETA_RESPONSE_LIMIT_BYTES = 10 * 1_024 * 1_024;
+const PACKETA_VALIDATION_CONCURRENCY = 4;
 
 export type ResolvedDeliveryCapability = Readonly<{
   providerEndpointId: string;
@@ -239,8 +240,21 @@ export class PacketaDeliveryCapabilityAdapter implements DeliveryCapabilityPort 
       );
     }
     const point = await this.pointForSelection(input);
-    for (const parcel of input.parcels)
-      await this.validateParcel(point, parcel);
+    const workerCount = Math.min(
+      PACKETA_VALIDATION_CONCURRENCY,
+      input.parcels.length,
+    );
+    await Promise.all(
+      Array.from({ length: workerCount }, async (_, workerIndex) => {
+        for (
+          let parcelIndex = workerIndex;
+          parcelIndex < input.parcels.length;
+          parcelIndex += workerCount
+        ) {
+          await this.validateParcel(point, input.parcels[parcelIndex]!);
+        }
+      }),
+    );
     return packetaResolved(point);
   }
 
@@ -488,7 +502,7 @@ function parsePacketaPoint(
 ): PacketaPoint | undefined {
   const record = jsonRecord(value);
   if (!record) return undefined;
-  const id = text(record.id);
+  const id = pointId(record.id);
   const name = text(record.name);
   const street = text(record.street);
   const city = text(record.city);
@@ -763,6 +777,11 @@ function nonBlankText(value: unknown): value is string {
 
 function text(value: unknown): string | undefined {
   return nonBlankText(value) ? value.trim() : undefined;
+}
+
+function pointId(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return text(value);
 }
 
 function positiveNumber(value: unknown): number | undefined {

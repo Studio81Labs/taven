@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ConfiguredDeliveryCapabilityAdapter,
   PacketaDeliveryCapabilityAdapter,
@@ -195,6 +195,56 @@ describe("PacketaDeliveryCapabilityAdapter", () => {
         parcels: [testParcel],
       }),
     ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("normalizes finite numeric v5 feed IDs", async () => {
+    const adapter = new PacketaDeliveryCapabilityAdapter(
+      { accountId: "public-widget-key", widgetOptions: {} },
+      (async (url) => {
+        if (String(url).includes("/branch.json"))
+          return Response.json([{ ...packetaPickupPoint, id: 1234 }]);
+        if (String(url).includes("/box.json")) return Response.json([]);
+        return Response.json({ isValid: true });
+      }) as typeof fetch,
+    );
+
+    await expect(
+      adapter.prepareSelection({
+        providerEndpointId: "1234",
+        endpointType: "pickup_point",
+      }),
+    ).resolves.toMatchObject({ providerEndpointId: "1234" });
+  });
+
+  it("bounds concurrent Packeta parcel validations", async () => {
+    let active = 0;
+    let peak = 0;
+    const releases: Array<() => void> = [];
+    const adapter = new PacketaDeliveryCapabilityAdapter(
+      { accountId: "public-widget-key", widgetOptions: {} },
+      (async (url) => {
+        if (String(url).includes("/branch.json"))
+          return Response.json([packetaPickupPoint]);
+        if (String(url).includes("/box.json")) return Response.json([]);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        active -= 1;
+        return Response.json({ isValid: true });
+      }) as typeof fetch,
+    );
+    const validation = adapter.validateSelection({
+      providerEndpointId: "pickup-1",
+      endpointType: "pickup_point",
+      parcels: Array.from({ length: 5 }, () => testParcel),
+    });
+
+    await vi.waitFor(() => expect(releases).toHaveLength(4));
+    expect(peak).toBe(4);
+    releases.splice(0).forEach((release) => release());
+    await vi.waitFor(() => expect(releases).toHaveLength(1));
+    releases.shift()!();
+    await expect(validation).resolves.toBeDefined();
   });
 
   it.each([401, 429])(

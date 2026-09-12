@@ -238,10 +238,12 @@ export async function parcelConfigurationChange(
       selectedDeliveryDestination: { select: { capabilitySnapshot: true } },
     },
   });
+  const capability = asRecord(
+    draft.selectedDeliveryDestination?.capabilitySnapshot,
+  );
   return {
     configurationRevision: { increment: 1 },
-    ...(asRecord(draft.selectedDeliveryDestination?.capabilitySnapshot)
-      ?.provider === "packeta"
+    ...(capability?.provider === "packeta" && capability.version === 1
       ? { selectedDeliveryDestinationId: null }
       : {}),
   };
