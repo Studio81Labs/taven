@@ -13,7 +13,7 @@
     "typecheck": "nuxt typecheck",
     "test": "vitest run --exclude 'e2e/**'",
     "test:e2e": "playwright test",
-    "test:e2e:integration": "playwright test --project=integration",
+    "test:e2e:integration": "INTEGRATION_TEST=true playwright test --project=integration",
     "test:lighthouse": "pnpm build && node scripts/lighthouse.mjs",
     "test:watch": "vitest --exclude 'e2e/**'"
   },

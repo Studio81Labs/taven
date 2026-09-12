@@ -19,10 +19,12 @@ let testState = {
   paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED"
   recordedObservations: [],
   lastAssistedQuote: null,
+  lastCheckoutPayload: null,
 };
 
 const sessions = new Map();
 const payments = new Map();
+const uploads = new Map();
 
 function isUuid(val) {
   return (
@@ -46,9 +48,11 @@ function resetState() {
     paymentOutcome: "CAPTURED",
     recordedObservations: [],
     lastAssistedQuote: null,
+    lastCheckoutPayload: null,
   };
   sessions.clear();
   payments.clear();
+  uploads.clear();
 }
 
 function sendJson(res, statusCode, body) {
@@ -449,27 +453,37 @@ const server = http.createServer(async (req, res) => {
 
     // --- 3. Storage Upload Model Files ---
     if (pathname === "/storage/uploads/model-files" && method === "POST") {
-      sendJson(res, 201, {
-        uploadId: "00000000-0000-4000-8000-000000000010",
-        assetId: "00000000-0000-4000-8000-000000000011",
-        accessToken: "token-file-test-001",
+      const uploadId = "00000000-0000-4000-8000-000000000010";
+      const assetId = "00000000-0000-4000-8000-000000000011";
+      const accessToken = "token-file-test-001";
+      const intent = {
+        uploadId,
+        assetId,
+        accessToken,
         uploadUrl: `http://127.0.0.1:${PORT}/mock-upload`,
         requiredHeaders: {},
         expiresAt: "2030-01-01T00:00:00.000Z",
-      });
+      };
+      uploads.set(uploadId, { ...intent, assetKind: "MODEL_FILE" });
+      sendJson(res, 201, intent);
       return;
     }
 
     // --- 4. Storage Upload Photos (Assisted) ---
     if (pathname === "/storage/uploads/photos" && method === "POST") {
-      sendJson(res, 201, {
-        uploadId: "00000000-0000-4000-8000-000000000020",
-        assetId: "00000000-0000-4000-8000-000000000021",
-        accessToken: "token-photo-001",
+      const uploadId = "00000000-0000-4000-8000-000000000020";
+      const assetId = "00000000-0000-4000-8000-000000000021";
+      const accessToken = "token-photo-001";
+      const intent = {
+        uploadId,
+        assetId,
+        accessToken,
         uploadUrl: `http://127.0.0.1:${PORT}/mock-upload`,
         requiredHeaders: {},
         expiresAt: "2030-01-01T00:00:00.000Z",
-      });
+      };
+      uploads.set(uploadId, { ...intent, assetKind: "PHOTO_ASSET" });
+      sendJson(res, 201, intent);
       return;
     }
 
@@ -477,9 +491,29 @@ const server = http.createServer(async (req, res) => {
       /^\/storage\/uploads\/([^/]+)\/confirm$/,
     );
     if (uploadConfirmMatch && method === "POST") {
+      const uploadId = uploadConfirmMatch[1];
+      const upload = uploads.get(uploadId);
+      if (!upload) {
+        sendJson(res, 404, {
+          statusCode: 404,
+          message: "Upload intent was not found",
+        });
+        return;
+      }
+      const authHeader = req.headers.authorization || "";
+      if (authHeader !== `Bearer ${upload.accessToken}`) {
+        sendJson(res, 401, {
+          statusCode: 401,
+          message: "Capability token is invalid",
+        });
+        return;
+      }
       sendJson(res, 200, {
-        assetId: "00000000-0000-4000-8000-000000000021",
-        status: "CONFIRMED",
+        uploadId: upload.uploadId,
+        assetId: upload.assetId,
+        assetKind: upload.assetKind,
+        uploadedAt: new Date().toISOString(),
+        deleteAfter: new Date(Date.now() + 86400 * 1000).toISOString(),
       });
       return;
     }
@@ -532,6 +566,11 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (subpath === "/model-files" && method === "POST") {
+        const body = await parseJson(req);
+        if (body.modelFileId && session.modelFiles[0]) {
+          session.modelFiles[0].modelFileId = body.modelFileId;
+          session.items[0].modelFileId = body.modelFileId;
+        }
         sendJson(res, 200, session);
         return;
       }
@@ -738,6 +777,55 @@ const server = http.createServer(async (req, res) => {
           });
           return;
         }
+
+        const body = await parseJson(req);
+        testState.lastCheckoutPayload = body;
+
+        const idempotencyKey = req.headers["idempotency-key"];
+        if (!idempotencyKey) {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "Idempotency-Key header is required",
+          });
+          return;
+        }
+
+        // Validate CreateCheckoutPaymentDto
+        const isValid =
+          body &&
+          typeof body.email === "string" &&
+          body.email.includes("@") &&
+          typeof body.fullName === "string" &&
+          body.fullName.trim().length > 0 &&
+          body.billing &&
+          typeof body.billing.name === "string" &&
+          body.billing.name.trim().length > 0 &&
+          typeof body.billing.addressLine1 === "string" &&
+          body.billing.addressLine1.trim().length > 0 &&
+          typeof body.billing.city === "string" &&
+          body.billing.city.trim().length > 0 &&
+          typeof body.billing.postalCode === "string" &&
+          body.billing.postalCode.trim().length > 0 &&
+          typeof body.billing.countryCode === "string" &&
+          body.billing.countryCode.length === 2 &&
+          (body.method === "CARD" || body.method === "BANK_TRANSFER") &&
+          body.acceptTerms === true &&
+          body.acceptClaimPolicy === true &&
+          body.acknowledgeWithdrawalException === true &&
+          typeof body.photoPublicationConsent === "boolean" &&
+          body.termsRevision === "terms-test-v1" &&
+          body.claimPolicyRevision === "claims-test-v1" &&
+          (!body.photoPublicationConsent ||
+            body.photoConsentRevision === "photo-consent-test-v1");
+
+        if (!isValid) {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "Invalid CreateCheckoutPaymentDto payload",
+          });
+          return;
+        }
+
         const paymentId = crypto.randomUUID();
         const checkoutUrl = `http://127.0.0.1:${PORT}/mock-gateway?paymentId=${paymentId}&sessionId=${sessionId}`;
         const payment = {
@@ -746,7 +834,7 @@ const server = http.createServer(async (req, res) => {
           amountMinor: session.bindingQuote?.totalMinor || 43900,
           currency: "CZK",
           status: "CREATED",
-          method: "CARD",
+          method: body.method || "CARD",
           provider: "sandbox",
           checkoutUrl,
           expiresAt: new Date(Date.now() + 1800 * 1000).toISOString(),
