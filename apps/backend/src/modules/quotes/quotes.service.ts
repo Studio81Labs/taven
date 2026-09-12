@@ -1153,10 +1153,7 @@ export class QuotesService {
           "prohibitedContent",
           "retention",
         ]);
-        if (
-          process.env.NODE_ENV !== "test" &&
-          quote.termsRevision !== approvals.documents.terms.revision
-        ) {
+        if (quote.termsRevision !== approvals.documents.terms.revision) {
           throw new ConflictException(
             "Offer terms revision is no longer approved",
           );

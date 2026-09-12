@@ -30,6 +30,7 @@ process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
 process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??= uploadClientHashKey;
 process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED ??= "true";
 process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED ??= "true";
+const initialTermsRevision = process.env.TAVEN_TERMS_REVISION;
 
 describe("QuoteRequest and tokenized individual offers", () => {
   let app: NestExpressApplication;
@@ -102,6 +103,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
 
   afterAll(async () => {
     await app?.close();
+    if (initialTermsRevision === undefined) {
+      delete process.env.TAVEN_TERMS_REVISION;
+    } else {
+      process.env.TAVEN_TERMS_REVISION = initialTermsRevision;
+    }
   });
 
   it("fails closed before issuing or accepting a binding offer", async () => {
@@ -2296,6 +2302,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     },
     idempotencyKey: string,
   ) {
+    process.env.TAVEN_TERMS_REVISION = issued.termsRevision;
     return apiJson<{
       orderId: string;
       publicReference: string;

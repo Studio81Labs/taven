@@ -14,10 +14,13 @@ export function useLegalAvailability() {
     () => null,
   );
   const pending = useState("legal-document-availability-pending", () => false);
-  let refreshGeneration = 0;
+  const refreshGeneration = useState(
+    "legal-document-availability-refresh-generation",
+    () => 0,
+  );
 
   async function refresh(): Promise<LegalAvailability | null> {
-    const generation = ++refreshGeneration;
+    const generation = ++refreshGeneration.value;
     pending.value = true;
     try {
       const response = await Promise.race([
@@ -29,13 +32,14 @@ export function useLegalAvailability() {
       const value = isLegalAvailability(response.data)
         ? (response.data as AvailabilityResponse)
         : null;
-      if (generation === refreshGeneration) availability.value = value ?? null;
-      return generation === refreshGeneration ? availability.value : null;
+      if (generation === refreshGeneration.value)
+        availability.value = value ?? null;
+      return generation === refreshGeneration.value ? availability.value : null;
     } catch {
-      if (generation === refreshGeneration) availability.value = null;
+      if (generation === refreshGeneration.value) availability.value = null;
       return null;
     } finally {
-      if (generation === refreshGeneration) pending.value = false;
+      if (generation === refreshGeneration.value) pending.value = false;
     }
   }
 
