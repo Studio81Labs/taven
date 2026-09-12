@@ -6859,6 +6859,13 @@ export interface operations {
                     "application/json": components["schemas"]["PaymentCapabilitiesDto"];
                 };
             };
+            /** @description Legal approvals or trusted database time are unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     PaymentsController_webhook: {

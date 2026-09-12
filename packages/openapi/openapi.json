@@ -13950,6 +13950,9 @@
               }
             },
             "description": ""
+          },
+          "503": {
+            "description": "Legal approvals or trusted database time are unavailable"
           }
         },
         "summary": "List checkout methods offered by the active provider",

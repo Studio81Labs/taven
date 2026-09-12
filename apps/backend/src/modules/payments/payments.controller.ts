@@ -64,6 +64,9 @@ export class PaymentsController {
     summary: "List checkout methods offered by the active provider",
   })
   @ApiOkResponse({ type: PaymentCapabilitiesDto })
+  @ApiServiceUnavailableResponse({
+    description: "Legal approvals or trusted database time are unavailable",
+  })
   capabilities(): Promise<PaymentCapabilitiesDto> {
     return this.payments.capabilities();
   }
