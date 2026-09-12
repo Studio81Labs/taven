@@ -677,17 +677,19 @@ export class PaymentsService {
           ...(context.order.acceptedTermsRevision
             ? {}
             : {
-                acceptedTermsRevision: legalRevisions.termsRevision,
+                acceptedTermsRevision: effectiveLegalRevisions.termsRevision,
               }),
           ...(context.order.acceptedClaimPolicyRevision
             ? {}
             : {
-                acceptedClaimPolicyRevision: legalRevisions.claimPolicyRevision,
+                acceptedClaimPolicyRevision:
+                  effectiveLegalRevisions.claimPolicyRevision,
               }),
           ...(context.order.acceptedClaimWindowDays
             ? {}
             : {
-                acceptedClaimWindowDays: legalRevisions.claimWindowDays,
+                acceptedClaimWindowDays:
+                  effectiveLegalRevisions.claimWindowDays,
               }),
           ...(context.order.withdrawalExceptionAcknowledgedAt
             ? {}
