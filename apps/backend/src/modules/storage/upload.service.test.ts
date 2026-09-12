@@ -236,6 +236,7 @@ describe("UploadService confirmation response", () => {
       storage,
       config,
       {} as never,
+      approvedLegalApprovals() as never,
     );
 
     await expect(
@@ -286,6 +287,7 @@ describe("UploadService confirmation response", () => {
       storageWith({}),
       config,
       {} as never,
+      approvedLegalApprovals() as never,
     );
 
     await expect(
@@ -338,7 +340,13 @@ function serviceWithSigner(
   };
   const storage = storageWith({ createUploadUrl });
   return {
-    service: new UploadService(prisma as never, storage, config, {} as never),
+    service: new UploadService(
+      prisma as never,
+      storage,
+      config,
+      {} as never,
+      approvedLegalApprovals() as never,
+    ),
     create,
     updateMany,
   };
@@ -371,6 +379,7 @@ function downloadService(
       storageWith({ createDownloadUrl }),
       config,
       {} as never,
+      approvedLegalApprovals() as never,
     ),
     modelFileId,
     authorization: `Bearer ${token}`,
@@ -398,6 +407,14 @@ function storageWith(overrides: Partial<ObjectStorage>): ObjectStorage {
     deleteObjects: async () => undefined,
     listObjects: async () => ({ objects: [], isTruncated: false }),
     ...overrides,
+  };
+}
+
+function approvedLegalApprovals() {
+  return {
+    evaluateAt: vi.fn(() => ({
+      documents: { retention: { effective: true } },
+    })),
   };
 }
 

@@ -37,6 +37,8 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
+import { assertEffectiveLegalDocuments } from "../legal-approvals/legal-approvals.catalog";
+import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import type {
   ConfirmedUploadResponseDto,
@@ -114,6 +116,7 @@ export class UploadService {
     @Inject(OBJECT_STORAGE_CONFIG)
     private readonly storageConfig: ObjectStorageConfig,
     private readonly audit: AuditService,
+    private readonly legalApprovals: LegalApprovalsService,
   ) {}
 
   async initiateModelUpload(
@@ -224,6 +227,10 @@ export class UploadService {
         throw new UnauthorizedException("Quote-session capability is invalid");
       }
       assertQuotePhotoUploadsEnabled();
+      assertEffectiveLegalDocuments(
+        this.legalApprovals.evaluateAt(scope.observed_at),
+        ["retention"],
+      );
       const subjectHash = anonymousUploadSubject(
         this.storageConfig.uploadClientHashKey,
         "quote-photo-upload",
@@ -412,6 +419,10 @@ export class UploadService {
           ) {
             throw new GoneException("Quote request no longer accepts photos");
           }
+          assertEffectiveLegalDocuments(
+            this.legalApprovals.evaluateAt(scope.observed_at),
+            ["retention"],
+          );
         }
       }
 
