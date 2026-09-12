@@ -41,3 +41,7 @@ jobs:
       - run: pnpm web:typecheck
       - run: pnpm web:test
       - run: pnpm web:build
+      - name: Install Playwright browsers
+        run: pnpm -C apps/web exec playwright install chromium --with-deps
+      - name: Run browser integration tests
+        run: pnpm web:test:e2e

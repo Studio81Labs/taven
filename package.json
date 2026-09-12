@@ -53,6 +53,8 @@
     "web:lint": "pnpm -C apps/web lint",
     "web:typecheck": "pnpm -C apps/web typecheck",
     "web:test": "pnpm -C apps/web test",
+    "web:test:e2e": "pnpm -C apps/web test:e2e",
+    "web:test:e2e:integration": "pnpm -C apps/web test:e2e:integration",
     "web:lighthouse": "pnpm -C apps/web test:lighthouse",
     "admin:dev": "pnpm -C apps/admin dev",
     "admin:build": "pnpm -C apps/admin build",
