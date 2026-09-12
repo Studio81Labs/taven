@@ -44,11 +44,13 @@ export default defineConfig({
     {
       command: "node e2e/fixtures/mock-backend-server.mjs",
       port: 4175,
+      timeout: 120_000,
       reuseExistingServer: !process.env.CI,
     },
     {
       command: "node scripts/serve-fixture-web.mjs",
       port: 4174,
+      timeout: 120_000,
       reuseExistingServer: !process.env.CI,
       env: {
         PORT: "4174",

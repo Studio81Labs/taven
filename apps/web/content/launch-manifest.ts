@@ -8,12 +8,14 @@ export type LegalDocumentKey =
   | "retention"
   | "photoConsent";
 
+export type LegalDocumentSection = LegalDraftSection;
+
 type LegalDocumentBase = Readonly<{
   id: string;
   path: string;
   title: string;
   summary: string;
-  sections: readonly LegalDraftSection[];
+  sections: readonly LegalDocumentSection[];
 }>;
 
 export type DraftLegalDocument = LegalDocumentBase &

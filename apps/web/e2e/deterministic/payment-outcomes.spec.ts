@@ -1,5 +1,26 @@
 import { test, expect } from "@playwright/test";
 
+async function createSeededSessionAndPayment(request: any) {
+  const sessRes = await request.post(
+    "http://127.0.0.1:4175/automatic-quote-sessions",
+  );
+  const session = await sessRes.json();
+  await request.post(
+    `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/prepare`,
+    {
+      headers: { Authorization: `Bearer ${session.sessionToken}` },
+    },
+  );
+  const payRes = await request.post(
+    `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/checkout/payments`,
+    {
+      headers: { Authorization: `Bearer ${session.sessionToken}` },
+    },
+  );
+  const payment = await payRes.json();
+  return { session, payment };
+}
+
 test.describe("Payment Outcomes & Session Protection", () => {
   test.beforeEach(async ({ request }) => {
     await request.post("http://127.0.0.1:4175/__test/reset");
@@ -9,7 +30,7 @@ test.describe("Payment Outcomes & Session Protection", () => {
     page,
   }) => {
     await page.goto(
-      "/checkout/payment/success?paymentId=pay-fake-123&sessionId=session-fake-123",
+      "/checkout/payment/success?paymentId=00000000-0000-4000-8000-000000000123&sessionId=00000000-0000-4000-8000-000000000456",
     );
     // Error must be displayed
     await expect(
@@ -30,8 +51,8 @@ test.describe("Payment Outcomes & Session Protection", () => {
       window.sessionStorage.setItem(
         "taven:automatic-quote-session:v1",
         JSON.stringify({
-          sessionId: "session-real-123",
-          sessionToken: "token-real-123",
+          sessionId: "00000000-0000-4000-8000-000000000123",
+          sessionToken: "Abcdef1234567890_-Abcdef1234567890_-Abcdef1",
           filename: "cube.stl",
           publicReference: "TAV-REAL-123",
           expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
@@ -40,9 +61,9 @@ test.describe("Payment Outcomes & Session Protection", () => {
       window.sessionStorage.setItem(
         "taven:checkout-session:v1",
         JSON.stringify({
-          sessionId: "session-real-123",
+          sessionId: "00000000-0000-4000-8000-000000000123",
           command: {
-            paymentId: "pay-real-123",
+            paymentId: "00000000-0000-4000-8000-000000000456",
             idempotencyKey: "key-real-12345",
             requestFingerprint: "fingerprint-real",
           },
@@ -52,7 +73,7 @@ test.describe("Payment Outcomes & Session Protection", () => {
 
     // Mismatched session ID
     await page.goto(
-      "/checkout/payment/success?paymentId=pay-real-123&sessionId=session-wrong-999",
+      "/checkout/payment/success?paymentId=00000000-0000-4000-8000-000000000456&sessionId=00000000-0000-4000-8000-000000000999",
     );
     await expect(
       page.getByText("Návrat neodpovídá uložené relaci objednávky."),
@@ -61,12 +82,61 @@ test.describe("Payment Outcomes & Session Protection", () => {
 
     // Mismatched payment ID
     await page.goto(
-      "/checkout/payment/success?paymentId=pay-wrong-999&sessionId=session-real-123",
+      "/checkout/payment/success?paymentId=00000000-0000-4000-8000-000000000888&sessionId=00000000-0000-4000-8000-000000000123",
     );
     await expect(
       page.getByText("Návrat neodpovídá uloženému platebnímu pokusu."),
     ).toBeVisible();
     await expect(page.getByText("Platba byla potvrzena.")).not.toBeVisible();
+  });
+
+  test("capability enforcement rejects missing or invalid bearer token", async ({
+    request,
+  }) => {
+    const res = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+    );
+    const session = await res.json();
+
+    const noAuth = await request.get(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}`,
+    );
+    expect(noAuth.status()).toBe(401);
+
+    const badAuth = await request.get(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}`,
+      { headers: { Authorization: "Bearer wrong-token-123" } },
+    );
+    expect(badAuth.status()).toBe(401);
+
+    const goodAuth = await request.get(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}`,
+      { headers: { Authorization: `Bearer ${session.sessionToken}` } },
+    );
+    expect(goodAuth.status()).toBe(200);
+  });
+
+  test("backend rejects non-UUID or unknown payment IDs and fails closed", async ({
+    request,
+  }) => {
+    const res = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+    );
+    const session = await res.json();
+
+    // Non-UUID payment rejected with 400
+    const nonUuidRes = await request.get(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/checkout/payment?paymentId=not-a-uuid`,
+      { headers: { Authorization: `Bearer ${session.sessionToken}` } },
+    );
+    expect(nonUuidRes.status()).toBe(400);
+
+    // Unknown UUID payment rejected with 404
+    const unknownRes = await request.get(
+      `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/checkout/payment?paymentId=00000000-0000-4000-8000-000000000999`,
+      { headers: { Authorization: `Bearer ${session.sessionToken}` } },
+    );
+    expect(unknownRes.status()).toBe(404);
   });
 
   test("captured payment displays order reference and confirmed receipt", async ({
@@ -77,39 +147,38 @@ test.describe("Payment Outcomes & Session Protection", () => {
       data: { paymentOutcome: "CAPTURED" },
     });
 
-    const sessionId = "session-captured-001";
-    const paymentId = "pay-captured-001";
+    const { session, payment } = await createSeededSessionAndPayment(request);
 
     await page.goto("/");
     await page.evaluate(
-      ({ sessId, payId }) => {
+      ({ sess, pay }) => {
         window.sessionStorage.setItem(
           "taven:automatic-quote-session:v1",
           JSON.stringify({
-            sessionId: sessId,
-            sessionToken: `token-${sessId}`,
+            sessionId: sess.sessionId,
+            sessionToken: sess.sessionToken,
             filename: "cube.stl",
-            publicReference: "TAV-2026-TEST",
-            expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+            publicReference: sess.publicReference,
+            expiresAt: sess.expiresAt,
           }),
         );
         window.sessionStorage.setItem(
           "taven:checkout-session:v1",
           JSON.stringify({
-            sessionId: sessId,
+            sessionId: sess.sessionId,
             command: {
-              paymentId: payId,
-              idempotencyKey: `key-${payId}-valid`,
+              paymentId: pay.paymentId,
+              idempotencyKey: `key-${pay.paymentId}-valid`,
               requestFingerprint: "fingerprint-captured",
             },
           }),
         );
       },
-      { sessId: sessionId, payId: paymentId },
+      { sess: session, pay: payment },
     );
 
     await page.goto(
-      `/checkout/payment/success?paymentId=${paymentId}&sessionId=${sessionId}`,
+      `/checkout/payment/success?paymentId=${payment.paymentId}&sessionId=${session.sessionId}`,
     );
 
     // Verify confirmed payment presentation
@@ -130,39 +199,38 @@ test.describe("Payment Outcomes & Session Protection", () => {
       data: { paymentOutcome: "PENDING" },
     });
 
-    const sessionId = "session-pending-001";
-    const paymentId = "pay-pending-001";
+    const { session, payment } = await createSeededSessionAndPayment(request);
 
     await page.goto("/");
     await page.evaluate(
-      ({ sessId, payId }) => {
+      ({ sess, pay }) => {
         window.sessionStorage.setItem(
           "taven:automatic-quote-session:v1",
           JSON.stringify({
-            sessionId: sessId,
-            sessionToken: `token-${sessId}`,
+            sessionId: sess.sessionId,
+            sessionToken: sess.sessionToken,
             filename: "cube.stl",
-            publicReference: "TAV-2026-TEST",
-            expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+            publicReference: sess.publicReference,
+            expiresAt: sess.expiresAt,
           }),
         );
         window.sessionStorage.setItem(
           "taven:checkout-session:v1",
           JSON.stringify({
-            sessionId: sessId,
+            sessionId: sess.sessionId,
             command: {
-              paymentId: payId,
-              idempotencyKey: `key-${payId}-valid`,
+              paymentId: pay.paymentId,
+              idempotencyKey: `key-${pay.paymentId}-valid`,
               requestFingerprint: "fingerprint-pending",
             },
           }),
         );
       },
-      { sessId: sessionId, payId: paymentId },
+      { sess: session, pay: payment },
     );
 
     await page.goto(
-      `/checkout/payment/pending?paymentId=${paymentId}&sessionId=${sessionId}`,
+      `/checkout/payment/pending?paymentId=${payment.paymentId}&sessionId=${session.sessionId}`,
     );
 
     // Verify pending presentation
@@ -202,39 +270,38 @@ test.describe("Payment Outcomes & Session Protection", () => {
       data: { paymentOutcome: "FAILED" },
     });
 
-    const sessionId = "session-failed-001";
-    const paymentId = "pay-failed-001";
+    const { session, payment } = await createSeededSessionAndPayment(request);
 
     await page.goto("/");
     await page.evaluate(
-      ({ sessId, payId }) => {
+      ({ sess, pay }) => {
         window.sessionStorage.setItem(
           "taven:automatic-quote-session:v1",
           JSON.stringify({
-            sessionId: sessId,
-            sessionToken: `token-${sessId}`,
+            sessionId: sess.sessionId,
+            sessionToken: sess.sessionToken,
             filename: "cube.stl",
-            publicReference: "TAV-2026-TEST",
-            expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+            publicReference: sess.publicReference,
+            expiresAt: sess.expiresAt,
           }),
         );
         window.sessionStorage.setItem(
           "taven:checkout-session:v1",
           JSON.stringify({
-            sessionId: sessId,
+            sessionId: sess.sessionId,
             command: {
-              paymentId: payId,
-              idempotencyKey: `key-${payId}-valid`,
+              paymentId: pay.paymentId,
+              idempotencyKey: `key-${pay.paymentId}-valid`,
               requestFingerprint: "fingerprint-failed",
             },
           }),
         );
       },
-      { sessId: sessionId, payId: paymentId },
+      { sess: session, pay: payment },
     );
 
     await page.goto(
-      `/checkout/payment/cancelled?paymentId=${paymentId}&sessionId=${sessionId}`,
+      `/checkout/payment/cancelled?paymentId=${payment.paymentId}&sessionId=${session.sessionId}`,
     );
 
     // Should indicate failure and offer retry

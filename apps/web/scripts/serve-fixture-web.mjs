@@ -52,6 +52,10 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
   server.kill("SIGTERM");
 });
-server.on("exit", (code) => {
+server.on("error", (err) => {
+  console.error("Fixture web server child process error:", err);
+});
+server.on("exit", (code, signal) => {
+  console.log(`Fixture web server exited with code ${code}, signal ${signal}`);
   process.exit(code ?? 0);
 });

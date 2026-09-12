@@ -39,22 +39,26 @@ test.describe("Accessibility and Responsive Viewports", () => {
 
   test("accessibility scan on /objednavka configurator finds zero critical or serious violations", async ({
     page,
+    request,
   }) => {
-    // Seed quote session in sessionStorage
-    const sessionId = "session-a11y-001";
+    // Seed quote session in sessionStorage via backend session
+    const res = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+    );
+    const session = await res.json();
     await page.goto("/");
-    await page.evaluate((sessId) => {
+    await page.evaluate((sess) => {
       window.sessionStorage.setItem(
         "taven:automatic-quote-session:v1",
         JSON.stringify({
-          sessionId: sessId,
-          sessionToken: `token-${sessId}`,
+          sessionId: sess.sessionId,
+          sessionToken: sess.sessionToken,
           filename: "cube.stl",
-          publicReference: "TAV-A11Y-001",
-          expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+          publicReference: sess.publicReference,
+          expiresAt: sess.expiresAt,
         }),
       );
-    }, sessionId);
+    }, session);
 
     await page.goto("/objednavka");
     await page.waitForLoadState("networkidle");
