@@ -1,6 +1,8 @@
 import type { components } from "@taven/openapi-client";
-import type { LegalDocument } from "../content/launch-manifest";
-import { isEffectiveApprovedLegalDocument } from "../content/launch-approvals";
+import {
+  isEffectiveApprovedLegalDocument,
+  type LegalDocument,
+} from "../content/launch-manifest";
 
 type PaymentCapabilities = components["schemas"]["PaymentCapabilitiesDto"];
 type CheckoutLegalDocuments = Readonly<{

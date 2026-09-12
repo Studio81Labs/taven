@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { LEGAL_DRAFT_STATUS, legalDrafts } from "./legal-drafts";
-import { approvedLegalDocument } from "./launch-manifest";
-import { isEffectiveApprovedLegalDocument } from "./launch-approvals";
+import {
+  approvedLegalDocument,
+  isEffectiveApprovedLegalDocument,
+} from "./launch-manifest";
 import {
   LEGAL_PLACEHOLDER_BANNER,
   indexablePublicRoutes,
@@ -116,7 +118,7 @@ describe("public site launch boundaries", () => {
       expect(document.status).toBe("draft");
       expect(document.effectiveAt).toBeNull();
       expect(document.approvalEvidence).toBeNull();
-      expect(indexablePublicRoutes).not.toContain(document.path);
+      expect(indexablePublicRoutes()).not.toContain(document.path);
     }
 
     for (const draft of Object.values(legalDrafts)) {

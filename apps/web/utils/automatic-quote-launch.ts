@@ -1,11 +1,11 @@
 import {
   isEffectiveApprovedLegalDocument,
-  type LegalDocumentApproval,
+  type LegalDocumentApprovalState,
   type LegalDocumentKey,
-} from "../content/launch-approvals";
+} from "../content/launch-manifest";
 
 type AutomaticQuoteLegalDocuments = Pick<
-  Readonly<Record<LegalDocumentKey, LegalDocumentApproval>>,
+  Readonly<Record<LegalDocumentKey, LegalDocumentApprovalState>>,
   "terms" | "claims" | "privacy" | "prohibitedContent" | "retention"
 >;
 

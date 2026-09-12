@@ -5,7 +5,7 @@ export default defineEventHandler((event) => {
   const config = useRuntimeConfig(event);
   setResponseHeader(event, "content-type", "application/xml; charset=utf-8");
 
-  const urls = indexablePublicRoutes
+  const urls = indexablePublicRoutes()
     .map(
       (path) =>
         `  <url><loc>${canonicalUrl(config.public.siteUrl, path)}</loc></url>`,

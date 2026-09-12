@@ -1,40 +1,115 @@
 import { legalDrafts, type LegalDraftSection } from "./legal-drafts";
-import {
-  approvedLegalDocumentApproval,
-  legalDocumentApprovals,
-  type ApprovedLegalDocumentApproval,
-  type DraftLegalDocumentApproval,
-  type LegalDocumentApprovalBase,
-  type LegalDocumentKey,
-} from "./launch-approvals";
 
-type LegalDocumentSections = Readonly<{
+export type LegalDocumentKey =
+  | "terms"
+  | "claims"
+  | "privacy"
+  | "prohibitedContent"
+  | "retention"
+  | "photoConsent";
+
+type LegalDocumentBase = Readonly<{
+  id: string;
+  path: string;
+  title: string;
+  summary: string;
   sections: readonly LegalDraftSection[];
 }>;
 
-type LegalDocumentBase = LegalDocumentApprovalBase & LegalDocumentSections;
+export type DraftLegalDocument = LegalDocumentBase &
+  Readonly<{
+    status: "draft";
+    effectiveAt: null;
+    approvalEvidence: null;
+  }>;
 
-export type DraftLegalDocument = DraftLegalDocumentApproval &
-  LegalDocumentSections;
-export type ApprovedLegalDocument = ApprovedLegalDocumentApproval &
-  LegalDocumentSections;
+export type ApprovedLegalDocument = LegalDocumentBase &
+  Readonly<{
+    status: "approved";
+    effectiveAt: string;
+    approvalEvidence: string;
+  }>;
+
 export type LegalDocument = DraftLegalDocument | ApprovedLegalDocument;
-export type { LegalDocumentKey } from "./launch-approvals";
+
+const NON_PRODUCTION_REVISION = /(?:^|[-_.\s])(draft|pending)(?:$|[-_.\s])/i;
 
 export function approvedLegalDocument(
   input: LegalDocumentBase &
     Readonly<{ effectiveAt: string; approvalEvidence: string }>,
 ): ApprovedLegalDocument {
-  return {
-    ...approvedLegalDocumentApproval(input),
-    sections: input.sections,
-  };
+  if (
+    !input.id.trim() ||
+    NON_PRODUCTION_REVISION.test(input.id) ||
+    !input.effectiveAt.trim() ||
+    !Number.isFinite(Date.parse(input.effectiveAt)) ||
+    !input.approvalEvidence.trim()
+  ) {
+    throw new TypeError(
+      "Approved legal documents require an ID, effective date, and approval evidence",
+    );
+  }
+  return { ...input, status: "approved" };
 }
 
-function document(key: LegalDocumentKey): LegalDocument {
+export type LegalDocumentApprovalState =
+  | Pick<DraftLegalDocument, "status" | "effectiveAt">
+  | Pick<ApprovedLegalDocument, "status" | "effectiveAt">;
+
+export function isEffectiveApprovedLegalDocument(
+  document: LegalDocumentApprovalState,
+  now = Date.now(),
+): boolean {
+  if (document.status !== "approved") return false;
+  return Date.parse(document.effectiveAt) <= now;
+}
+
+const documentMetadata = {
+  terms: {
+    path: "/vop",
+    title: "Všeobecné obchodní podmínky",
+    summary: "Schválené všeobecné obchodní podmínky zatím nejsou k dispozici.",
+  },
+  claims: {
+    path: "/reklamace",
+    title: "Reklamační řád",
+    summary: "Schválený reklamační řád zatím není k dispozici.",
+  },
+  privacy: {
+    path: "/ochrana-soukromi",
+    title: "Zásady zpracování osobních údajů",
+    summary:
+      "Schválené zásady zpracování osobních údajů zatím nejsou k dispozici.",
+  },
+  prohibitedContent: {
+    path: "/zakazany-obsah",
+    title: "Pravidla zakázaného obsahu a manuální kontroly",
+    summary:
+      "Schválená pravidla zakázaného obsahu a manuální kontroly zatím nejsou k dispozici.",
+  },
+  retention: {
+    path: "/uchovani-dat",
+    title: "Pravidla uchování dat a opuštěných položek",
+    summary:
+      "Schválená pravidla uchování dat a opuštěných položek zatím nejsou k dispozici.",
+  },
+  photoConsent: {
+    path: "/fotografie-a-duvernost",
+    title: "Souhlas s fotografováním a důvěrnost zakázky",
+    summary:
+      "Schválená pravidla fotografování a důvěrnosti zatím nejsou k dispozici.",
+  },
+} as const;
+
+function draftDocument(key: LegalDocumentKey): DraftLegalDocument {
+  const draft = legalDrafts[key];
   return {
-    ...legalDocumentApprovals[key],
-    sections: legalDrafts[key].sections,
+    ...documentMetadata[key],
+    id: draft.sourceDocumentId,
+    status: "draft",
+    effectiveAt: null,
+    approvalEvidence: null,
+    sections: draft.sections,
   };
 }
 
@@ -42,16 +117,10 @@ function document(key: LegalDocumentKey): LegalDocument {
 // Keep every production manifest entry explicitly non-effective until it does.
 export const legalDocuments: Readonly<Record<LegalDocumentKey, LegalDocument>> =
   {
-    terms: document("terms"),
-    claims: document("claims"),
-    privacy: document("privacy"),
-    prohibitedContent: document("prohibitedContent"),
-    retention: document("retention"),
-    photoConsent: document("photoConsent"),
+    terms: draftDocument("terms"),
+    claims: draftDocument("claims"),
+    privacy: draftDocument("privacy"),
+    prohibitedContent: draftDocument("prohibitedContent"),
+    retention: draftDocument("retention"),
+    photoConsent: draftDocument("photoConsent"),
   };
-
-export function isApprovedLegalDocument(
-  document: LegalDocument,
-): document is ApprovedLegalDocument {
-  return document.status === "approved";
-}

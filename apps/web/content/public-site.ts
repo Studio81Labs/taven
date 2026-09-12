@@ -1,8 +1,8 @@
-import { legalDocuments } from "./launch-manifest";
 import {
-  commercialContentApproval,
   isEffectiveApprovedLegalDocument,
-} from "./launch-approvals";
+  legalDocuments,
+} from "./launch-manifest";
+import { commercialContentApproval } from "./launch-approvals";
 
 export type { CommercialContentStatus } from "./launch-approvals";
 
@@ -57,12 +57,14 @@ const baseIndexablePublicRoutes = [
   "/kontakt",
 ] as const;
 
-export const indexablePublicRoutes = [
-  ...baseIndexablePublicRoutes,
-  ...Object.values(legalDocuments)
-    .filter((document) => isEffectiveApprovedLegalDocument(document))
-    .map((document) => document.path),
-] as const;
+export function indexablePublicRoutes(now = Date.now()): readonly string[] {
+  return [
+    ...baseIndexablePublicRoutes,
+    ...Object.values(legalDocuments)
+      .filter((document) => isEffectiveApprovedLegalDocument(document, now))
+      .map((document) => document.path),
+  ];
+}
 
 export { legalDocuments };
 export type { LegalDocument } from "./launch-manifest";

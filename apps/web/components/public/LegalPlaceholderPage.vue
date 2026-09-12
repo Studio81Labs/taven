@@ -3,8 +3,10 @@ import {
   LEGAL_PLACEHOLDER_BANNER,
   publicSite,
 } from "../../content/public-site";
-import { isEffectiveApprovedLegalDocument } from "../../content/launch-approvals";
-import type { LegalDocument } from "../../content/launch-manifest";
+import {
+  isEffectiveApprovedLegalDocument,
+  type LegalDocument,
+} from "../../content/launch-manifest";
 
 defineProps<{
   document: LegalDocument;

@@ -1,7 +1,5 @@
-import {
-  commercialContentApproval,
-  legalDocumentApprovals,
-} from "../content/launch-approvals";
+import { commercialContentApproval } from "../content/launch-approvals";
+import { legalDocuments } from "../content/launch-manifest";
 import {
   hasEffectiveAutomaticQuoteDocuments,
   isAutomaticQuoteEnabled,
@@ -12,9 +10,8 @@ export function useAutomaticQuoteEnabled() {
   return computed(() =>
     isAutomaticQuoteEnabled({
       runtimeEnabled: config.public.automaticQuoteEnabled,
-      hasApprovedAcquisitionDocuments: hasEffectiveAutomaticQuoteDocuments(
-        legalDocumentApprovals,
-      ),
+      hasApprovedAcquisitionDocuments:
+        hasEffectiveAutomaticQuoteDocuments(legalDocuments),
       hasApprovedCommercialContent:
         commercialContentApproval.status === "approved",
     }),

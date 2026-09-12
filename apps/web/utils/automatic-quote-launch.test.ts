@@ -32,7 +32,6 @@ describe("automatic quote launch gate", () => {
           ...documents.privacy,
           status: "draft" as const,
           effectiveAt: null,
-          approvalEvidence: null,
         },
       }),
     ).toBe(false);

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
 import { legalDocuments } from "../../content/public-site";
-import { isEffectiveApprovedLegalDocument } from "../../content/launch-approvals";
+import { isEffectiveApprovedLegalDocument } from "../../content/launch-manifest";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -69,6 +69,9 @@ const requestFieldsLocked = computed(() => submitted.value);
 const photoFieldsLocked = computed(
   () => submitted.value && !attachmentsEditable.value,
 );
+const privacyNoticeEffective = computed(() =>
+  isEffectiveApprovedLegalDocument(legalDocuments.privacy),
+);
 const hasDimensions = computed(() =>
   [widthMm.value, depthMm.value, heightMm.value].some(isPositiveDimension),
 );
@@ -79,6 +82,7 @@ const canSubmit = computed(
     contactName.value.trim().length > 0 &&
     contactEmail.value.trim().length > 0 &&
     !selectionError.value &&
+    privacyNoticeEffective.value &&
     privacyAcknowledged.value,
 );
 const minimumDate = localDateValue(new Date());
@@ -148,6 +152,7 @@ function removePhoto(index: number): void {
 }
 
 async function submitRequest(): Promise<void> {
+  if (!canSubmit.value) return;
   selectionError.value = undefined;
   const measurements: Record<string, unknown> = {};
   if (isPositiveDimension(widthMm.value)) measurements.widthMm = widthMm.value;
@@ -406,13 +411,21 @@ function isPositiveDimension(value: number | ""): value is number {
           <fieldset class="privacy-fieldset" :disabled="requestFieldsLocked">
             <legend>Soukromí</legend>
             <label class="consent-row">
-              <input v-model="privacyAcknowledged" required type="checkbox" />
+              <input
+                v-model="privacyAcknowledged"
+                required
+                type="checkbox"
+                :disabled="!privacyNoticeEffective"
+              />
               <span>
                 Beru na vědomí, že kontaktní údaje a podklady použijeme k
                 posouzení poptávky a komunikaci o nabídce podle
                 <NuxtLink class="underline" :to="legalDocuments.privacy.path"
                   >zásad zpracování osobních údajů</NuxtLink
                 >. Fotografie dostanou při nahrání vlastní termín smazání. *
+                <template v-if="!privacyNoticeEffective">
+                  Formulář lze odeslat až po zveřejnění účinných zásad.
+                </template>
               </span>
             </label>
             <label class="consent-row">

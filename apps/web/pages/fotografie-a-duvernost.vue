@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { legalDocuments } from "../content/public-site";
-import { isEffectiveApprovedLegalDocument } from "../content/launch-approvals";
+import { isEffectiveApprovedLegalDocument } from "../content/launch-manifest";
 
 definePageMeta({ layout: "public" });
 
