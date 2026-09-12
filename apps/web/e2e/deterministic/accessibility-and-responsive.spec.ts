@@ -44,6 +44,9 @@ test.describe("Accessibility and Responsive Viewports", () => {
     // Seed quote session in sessionStorage via backend session
     const res = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": "sess-key-a11y" },
+      },
     );
     const session = await res.json();
     await page.goto("/");

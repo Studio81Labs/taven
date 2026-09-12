@@ -7,6 +7,7 @@ test.describe("Assisted Quote Journey", () => {
 
   test("direct entrance, form completion with photo, and successful submission", async ({
     page,
+    request,
   }) => {
     await page.goto("/poptavka");
 
@@ -61,6 +62,18 @@ test.describe("Assisted Quote Journey", () => {
     ).toBeVisible();
     await expect(page.getByText("Reference REQ-2026-TEST")).toBeVisible();
     await expect(page.getByText("POPTÁVKA ULOŽENA")).toBeVisible();
+
+    // Verify recorded quote request in mock backend adheres to contract
+    const stateRes = await request.get("http://127.0.0.1:4175/__test/state");
+    const testState = await stateRes.json();
+    expect(testState.lastAssistedQuote).toBeDefined();
+    expect(testState.lastAssistedQuote.contact.name).toBe("Jan Novák");
+    expect(testState.lastAssistedQuote.contact.email).toBe(
+      "jan.novak@example.com",
+    );
+    expect(
+      testState.lastAssistedQuote.description.length,
+    ).toBeGreaterThanOrEqual(10);
   });
 
   test("handoff capability endpoint requires session bearer and idempotency key", async ({
@@ -68,6 +81,9 @@ test.describe("Assisted Quote Journey", () => {
   }) => {
     const sessRes = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": "sess-key-handoff-spec" },
+      },
     );
     const session = await sessRes.json();
 
@@ -109,6 +125,9 @@ test.describe("Assisted Quote Journey", () => {
     // 1. Create a real automatic-quote session
     const sessRes = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": "sess-key-blocked-handoff-spec" },
+      },
     );
     const session = await sessRes.json();
 
@@ -207,11 +226,12 @@ test.describe("Assisted Quote Journey", () => {
     const replayRes = await request.post(
       "http://127.0.0.1:4175/quote-requests",
       {
+        headers: { "Idempotency-Key": `key-qr-replay-${Date.now()}` },
         data: {
           automaticQuoteHandoffToken: handoffToken,
-          description: "Replay test",
-          customer: {
-            fullName: "Petr Svoboda",
+          description: "Replay test description long enough",
+          contact: {
+            name: "Petr Svoboda",
             email: "petr.svoboda@example.com",
           },
         },
@@ -236,5 +256,93 @@ test.describe("Assisted Quote Journey", () => {
       .getByRole("textbox", { name: /Co potřebujete vyrobit/ })
       .fill("Pouze krátký popis bez kontaktu.");
     await expect(submitButton).toBeDisabled();
+  });
+  test("quote request creation requires idempotency key, valid contact, min 10-char description, and detects conflicts", async ({
+    request,
+  }) => {
+    const validContact = {
+      name: "Petr Svoboda",
+      email: "petr.svoboda@example.cz",
+    };
+
+    // 1. Missing Idempotency-Key -> 400
+    const noKeyRes = await request.post(
+      "http://127.0.0.1:4175/quote-requests",
+      {
+        data: {
+          description: "Valid description longer than 10 chars",
+          contact: validContact,
+        },
+      },
+    );
+    expect(noKeyRes.status()).toBe(400);
+
+    // 2. Too short description (<10 chars) -> 400
+    const shortDescRes = await request.post(
+      "http://127.0.0.1:4175/quote-requests",
+      {
+        headers: { "Idempotency-Key": `key-short-${Date.now()}` },
+        data: {
+          description: "Short",
+          contact: validContact,
+        },
+      },
+    );
+    expect(shortDescRes.status()).toBe(400);
+
+    // 3. Missing contact name or email -> 400
+    const badContactRes = await request.post(
+      "http://127.0.0.1:4175/quote-requests",
+      {
+        headers: { "Idempotency-Key": `key-badcontact-${Date.now()}` },
+        data: {
+          description: "Valid description longer than 10 chars",
+          contact: { name: "", email: "not-an-email" },
+        },
+      },
+    );
+    expect(badContactRes.status()).toBe(400);
+
+    // 4. Valid creation -> 201
+    const key = `key-valid-${Date.now()}`;
+    const validPayload = {
+      description: "Valid description longer than 10 chars",
+      contact: validContact,
+    };
+    const validRes = await request.post(
+      "http://127.0.0.1:4175/quote-requests",
+      {
+        headers: { "Idempotency-Key": key },
+        data: validPayload,
+      },
+    );
+    expect(validRes.status()).toBe(201);
+    const created = await validRes.json();
+    expect(created.requestId).toBeDefined();
+
+    // 5. Replay same key and payload -> 201 with identical requestId
+    const replayRes = await request.post(
+      "http://127.0.0.1:4175/quote-requests",
+      {
+        headers: { "Idempotency-Key": key },
+        data: validPayload,
+      },
+    );
+    expect(replayRes.status()).toBe(201);
+    const replayed = await replayRes.json();
+    expect(replayed.requestId).toBe(created.requestId);
+
+    // 6. Same key with changed payload -> 409
+    const conflictRes = await request.post(
+      "http://127.0.0.1:4175/quote-requests",
+      {
+        headers: { "Idempotency-Key": key },
+        data: {
+          description: "Different description longer than 10 chars",
+          contact: validContact,
+        },
+      },
+    );
+    expect(conflictRes.status()).toBe(409);
   });
 });

@@ -27,6 +27,8 @@ const payments = new Map();
 const uploads = new Map();
 const quoteRequests = new Map();
 const handoffCapabilities = new Map();
+const quoteSessionIdempotency = new Map();
+const quoteRequestIdempotency = new Map();
 
 function isUuid(val) {
   return (
@@ -57,6 +59,8 @@ function resetState() {
   uploads.clear();
   quoteRequests.clear();
   handoffCapabilities.clear();
+  quoteSessionIdempotency.clear();
+  quoteRequestIdempotency.clear();
 }
 
 function sendJson(res, statusCode, body) {
@@ -559,8 +563,39 @@ const server = http.createServer(async (req, res) => {
 
     // --- 5. Quote Sessions ---
     if (pathname === "/automatic-quote-sessions" && method === "POST") {
+      const idempotencyKey = req.headers["idempotency-key"];
+      if (
+        !idempotencyKey ||
+        typeof idempotencyKey !== "string" ||
+        idempotencyKey.trim().length === 0
+      ) {
+        sendJson(res, 400, {
+          statusCode: 400,
+          message: "Idempotency-Key header is required",
+        });
+        return;
+      }
+
+      const body = await parseJson(req);
+      const fingerprint = JSON.stringify(body || {});
+
+      const existing = quoteSessionIdempotency.get(idempotencyKey);
+      if (existing) {
+        if (existing.fingerprint === fingerprint) {
+          sendJson(res, 200, existing.session);
+          return;
+        } else {
+          sendJson(res, 409, {
+            statusCode: 409,
+            message: "Idempotency input changed",
+          });
+          return;
+        }
+      }
+
       const session = createDefaultSession();
       sessions.set(session.sessionId, session);
+      quoteSessionIdempotency.set(idempotencyKey, { fingerprint, session });
       sendJson(res, 200, session);
       return;
     }
@@ -1045,8 +1080,64 @@ const server = http.createServer(async (req, res) => {
       (pathname === "/quote-requests" || pathname === "/assisted-quotes") &&
       method === "POST"
     ) {
+      const idempotencyKey = req.headers["idempotency-key"];
+      if (
+        !idempotencyKey ||
+        typeof idempotencyKey !== "string" ||
+        idempotencyKey.trim().length === 0
+      ) {
+        sendJson(res, 400, {
+          statusCode: 400,
+          message: "Idempotency-Key header is required",
+        });
+        return;
+      }
+
       const body = await parseJson(req);
       testState.lastAssistedQuote = body;
+
+      const hasValidDescription =
+        typeof body?.description === "string" &&
+        body.description.trim().length >= 10;
+      const hasValidContact =
+        body?.contact &&
+        typeof body.contact.name === "string" &&
+        body.contact.name.trim().length > 0 &&
+        typeof body.contact.email === "string" &&
+        body.contact.email.includes("@");
+
+      if (!hasValidDescription || !hasValidContact) {
+        sendJson(res, 400, {
+          statusCode: 400,
+          message: "Invalid CreateQuoteRequestDto payload",
+        });
+        return;
+      }
+
+      const fingerprint = JSON.stringify({
+        description: body.description,
+        purpose: body.purpose,
+        contact: body.contact,
+        requestedDate: body.requestedDate,
+        measurements: body.measurements,
+        photoPublicationConsent: body.photoPublicationConsent,
+        automaticQuoteHandoffToken: body.automaticQuoteHandoffToken,
+        attribution: body.attribution,
+      });
+
+      const existing = quoteRequestIdempotency.get(idempotencyKey);
+      if (existing) {
+        if (existing.fingerprint === fingerprint) {
+          sendJson(res, 201, existing.request);
+          return;
+        } else {
+          sendJson(res, 409, {
+            statusCode: 409,
+            message: "Idempotency input changed",
+          });
+          return;
+        }
+      }
 
       if (body?.automaticQuoteHandoffToken) {
         const capability = handoffCapabilities.get(
@@ -1076,6 +1167,7 @@ const server = http.createServer(async (req, res) => {
         createdAt: new Date().toISOString(),
       };
       quoteRequests.set(request.requestId, request);
+      quoteRequestIdempotency.set(idempotencyKey, { fingerprint, request });
       sendJson(res, 201, request);
       return;
     }

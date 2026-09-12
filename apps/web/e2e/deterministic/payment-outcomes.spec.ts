@@ -3,6 +3,9 @@ import { test, expect } from "@playwright/test";
 async function createSeededSessionAndPayment(request: any) {
   const sessRes = await request.post(
     "http://127.0.0.1:4175/automatic-quote-sessions",
+    {
+      headers: { "Idempotency-Key": `sess-seed-${crypto.randomUUID()}` },
+    },
   );
   const session = await sessRes.json();
   await request.post(
@@ -205,6 +208,9 @@ test.describe("Payment Outcomes & Session Protection", () => {
   }) => {
     const res = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": `sess-auth-${crypto.randomUUID()}` },
+      },
     );
     const session = await res.json();
 
@@ -231,6 +237,9 @@ test.describe("Payment Outcomes & Session Protection", () => {
   }) => {
     const res = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": `sess-payid-${crypto.randomUUID()}` },
+      },
     );
     const session = await res.json();
 
@@ -298,6 +307,9 @@ test.describe("Payment Outcomes & Session Protection", () => {
     // Create session
     const sessRes = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": `sess-model-${crypto.randomUUID()}` },
+      },
     );
     const session = await sessRes.json();
 
@@ -419,11 +431,13 @@ test.describe("Payment Outcomes & Session Protection", () => {
 
     // Create quote request
     const qrRes = await request.post("http://127.0.0.1:4175/quote-requests", {
+      headers: { "Idempotency-Key": `key-photo-qr-${Date.now()}` },
       data: {
-        description: "Test request",
-        customer: { fullName: "Jan Novák", email: "jan@example.cz" },
+        description: "Test request with long description",
+        contact: { name: "Jan Novák", email: "jan@example.cz" },
       },
     });
+    expect(qrRes.status()).toBe(201);
     const qr = await qrRes.json();
 
     // 3. Bad authorization bearer token -> 401
@@ -750,5 +764,49 @@ test.describe("Payment Outcomes & Session Protection", () => {
     await expect(
       page.getByRole("link", { name: "Zpět ke kalkulaci" }),
     ).toBeVisible();
+  });
+  test("automatic-quote session creation requires idempotency key and rejects conflicting payloads", async ({
+    request,
+  }) => {
+    // 1. Missing Idempotency-Key -> 400
+    const noKeyRes = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+    );
+    expect(noKeyRes.status()).toBe(400);
+
+    // 2. Initial creation with Idempotency-Key -> 200
+    const key = `sess-idem-${crypto.randomUUID()}`;
+    const createRes = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": key },
+        data: { attribution: { source: "web-upload" } },
+      },
+    );
+    expect(createRes.status()).toBe(200);
+    const session = await createRes.json();
+    expect(session.sessionId).toBeDefined();
+
+    // 3. Replay same key and payload -> 200 with matching session
+    const replayRes = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": key },
+        data: { attribution: { source: "web-upload" } },
+      },
+    );
+    expect(replayRes.status()).toBe(200);
+    const replayed = await replayRes.json();
+    expect(replayed.sessionId).toBe(session.sessionId);
+
+    // 4. Replay same key with conflicting payload -> 409
+    const conflictRes = await request.post(
+      "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: { "Idempotency-Key": key },
+        data: { attribution: { source: "different-source" } },
+      },
+    );
+    expect(conflictRes.status()).toBe(409);
   });
 });
