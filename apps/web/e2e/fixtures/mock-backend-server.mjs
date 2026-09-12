@@ -602,7 +602,7 @@ const server = http.createServer(async (req, res) => {
       const existing = quoteSessionIdempotency.get(idempotencyKey);
       if (existing) {
         if (existing.fingerprint === fingerprint) {
-          sendJson(res, 200, existing.session);
+          sendJson(res, 201, existing.session);
           return;
         } else {
           sendJson(res, 409, {
@@ -616,7 +616,7 @@ const server = http.createServer(async (req, res) => {
       const session = createDefaultSession();
       sessions.set(session.sessionId, session);
       quoteSessionIdempotency.set(idempotencyKey, { fingerprint, session });
-      sendJson(res, 200, session);
+      sendJson(res, 201, session);
       return;
     }
 

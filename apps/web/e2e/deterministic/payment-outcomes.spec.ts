@@ -506,7 +506,13 @@ test.describe("Payment Outcomes & Session Protection", () => {
   }) => {
     const sessRes = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
+      {
+        headers: {
+          "Idempotency-Key": `sess-checkout-val-${crypto.randomUUID()}`,
+        },
+      },
     );
+    expect(sessRes.status()).toBe(201);
     const session = await sessRes.json();
     await request.post(
       `http://127.0.0.1:4175/automatic-quote-sessions/${session.sessionId}/prepare`,
@@ -795,7 +801,7 @@ test.describe("Payment Outcomes & Session Protection", () => {
     );
     expect(noKeyRes.status()).toBe(400);
 
-    // 2. Initial creation with Idempotency-Key -> 200
+    // 2. Initial creation with Idempotency-Key -> 201
     const key = `sess-idem-${crypto.randomUUID()}`;
     const createRes = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
@@ -804,11 +810,11 @@ test.describe("Payment Outcomes & Session Protection", () => {
         data: { attribution: { source: "web-upload" } },
       },
     );
-    expect(createRes.status()).toBe(200);
+    expect(createRes.status()).toBe(201);
     const session = await createRes.json();
     expect(session.sessionId).toBeDefined();
 
-    // 3. Replay same key and payload -> 200 with matching session
+    // 3. Replay same key and payload -> 201 with matching session
     const replayRes = await request.post(
       "http://127.0.0.1:4175/automatic-quote-sessions",
       {
@@ -816,7 +822,7 @@ test.describe("Payment Outcomes & Session Protection", () => {
         data: { attribution: { source: "web-upload" } },
       },
     );
-    expect(replayRes.status()).toBe(200);
+    expect(replayRes.status()).toBe(201);
     const replayed = await replayRes.json();
     expect(replayed.sessionId).toBe(session.sessionId);
 
