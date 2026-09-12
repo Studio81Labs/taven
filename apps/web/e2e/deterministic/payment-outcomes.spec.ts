@@ -287,7 +287,22 @@ test.describe("Payment Outcomes & Session Protection", () => {
     );
     expect(notFoundRes.status()).toBe(404);
 
-    // 3. Valid confirmation -> 200 with matching assetId
+    // 3. Confirm before transfer completes -> 409
+    const preTransferRes = await request.post(
+      `http://127.0.0.1:4175/storage/uploads/${intent.uploadId}/confirm`,
+      {
+        headers: { Authorization: `Bearer ${intent.accessToken}` },
+      },
+    );
+    expect(preTransferRes.status()).toBe(409);
+
+    // Perform PUT transfer
+    const putRes = await request.put(intent.uploadUrl, {
+      data: Buffer.from("stl content"),
+    });
+    expect(putRes.status()).toBe(200);
+
+    // 4. Valid confirmation -> 200 with matching assetId
     const confirmRes = await request.post(
       `http://127.0.0.1:4175/storage/uploads/${intent.uploadId}/confirm`,
       {
@@ -350,13 +365,19 @@ test.describe("Payment Outcomes & Session Protection", () => {
     );
     expect(unconfirmedRes.status()).toBe(400);
 
-    // Confirm upload
-    await request.post(
+    // Transfer and confirm upload
+    const putRes = await request.put(intent.uploadUrl, {
+      data: Buffer.from("test-model-content"),
+    });
+    expect(putRes.status()).toBe(200);
+
+    const confirmRes = await request.post(
       `http://127.0.0.1:4175/storage/uploads/${intent.uploadId}/confirm`,
       {
         headers: { Authorization: `Bearer ${intent.accessToken}` },
       },
     );
+    expect(confirmRes.status()).toBe(200);
 
     // 3. Mismatched upload token -> 401
     const badTokenRes = await request.post(

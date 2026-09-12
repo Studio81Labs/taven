@@ -313,10 +313,22 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- S3 Presigned Upload Mock ---
+    const mockUploadMatch = pathname.match(/^\/mock-upload\/([^/]+)$/);
+    const mockUploadId = mockUploadMatch
+      ? mockUploadMatch[1]
+      : url.searchParams.get("uploadId");
     if (
-      pathname === "/mock-upload" &&
+      (mockUploadMatch || pathname === "/mock-upload") &&
       (method === "PUT" || method === "POST")
     ) {
+      const chunks = [];
+      for await (const chunk of req) {
+        chunks.push(chunk);
+      }
+      if (mockUploadId && uploads.has(mockUploadId)) {
+        const upload = uploads.get(mockUploadId);
+        upload.transferred = true;
+      }
       res.writeHead(200, {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "*",
@@ -468,7 +480,7 @@ const server = http.createServer(async (req, res) => {
         uploadId,
         assetId,
         accessToken,
-        uploadUrl: `http://127.0.0.1:${PORT}/mock-upload`,
+        uploadUrl: `http://127.0.0.1:${PORT}/mock-upload/${uploadId}`,
         requiredHeaders: {},
         expiresAt: "2030-01-01T00:00:00.000Z",
       };
@@ -516,7 +528,7 @@ const server = http.createServer(async (req, res) => {
         uploadId,
         assetId,
         accessToken,
-        uploadUrl: `http://127.0.0.1:${PORT}/mock-upload`,
+        uploadUrl: `http://127.0.0.1:${PORT}/mock-upload/${uploadId}`,
         requiredHeaders: {},
         expiresAt: "2030-01-01T00:00:00.000Z",
       };
@@ -547,6 +559,14 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 401, {
           statusCode: 401,
           message: "Capability token is invalid",
+        });
+        return;
+      }
+      if (!upload.transferred) {
+        sendJson(res, 409, {
+          statusCode: 409,
+          code: "INVALID_SIGNATURE",
+          message: "Upload object transfer has not been completed",
         });
         return;
       }
