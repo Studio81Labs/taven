@@ -39,6 +39,7 @@ export class LegalDocumentsController {
     @Param("revisionCode") revisionCode: string,
     @Res({ passthrough: true }) response: ResponseLike,
   ): Promise<PublicLegalRevisionDto> {
+    response.setHeader("Cache-Control", "no-store");
     const revision = await this.legalDocs.getPublicRevision(key, revisionCode);
     response.setHeader("Cache-Control", "public, max-age=3600, immutable");
     response.setHeader("ETag", `"${revision.contentHash}"`);

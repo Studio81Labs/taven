@@ -72,6 +72,18 @@ function scalarQueryValue(name: string, value: unknown): string | undefined {
   return value;
 }
 
+function positiveIntegerQueryValue(name: string, value?: string): number {
+  if (value === undefined) return 25;
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return parsed;
+}
+
 @ApiTags("legal documents admin")
 @ApiSecurity("operatorSession")
 @UseGuards(OperatorAccessGuard)
@@ -130,10 +142,11 @@ export class LegalDocumentsAdminController {
       "publicationLimit",
       publicationLimit,
     );
-    const parsedLimit = scalarLimit ? Number.parseInt(scalarLimit, 10) : 25;
-    const parsedPubLimit = scalarPubLimit
-      ? Number.parseInt(scalarPubLimit, 10)
-      : 25;
+    const parsedLimit = positiveIntegerQueryValue("limit", scalarLimit);
+    const parsedPubLimit = positiveIntegerQueryValue(
+      "publicationLimit",
+      scalarPubLimit,
+    );
     return await this.legalDocs.getDocumentByKey(
       operator,
       scalarKey,
@@ -167,7 +180,7 @@ export class LegalDocumentsAdminController {
     const scalarKey = scalarQueryValue("key", key) ?? key;
     const scalarCursor = scalarQueryValue("cursor", cursor);
     const scalarLimit = scalarQueryValue("limit", limit);
-    const parsedLimit = scalarLimit ? Number.parseInt(scalarLimit, 10) : 25;
+    const parsedLimit = positiveIntegerQueryValue("limit", scalarLimit);
     return await this.legalDocs.listPublications(
       operator,
       scalarKey,
@@ -211,7 +224,7 @@ export class LegalDocumentsAdminController {
     );
     const scalarCursor = scalarQueryValue("cursor", cursor);
     const scalarLimit = scalarQueryValue("limit", limit);
-    const parsedLimit = scalarLimit ? Number.parseInt(scalarLimit, 10) : 25;
+    const parsedLimit = positiveIntegerQueryValue("limit", scalarLimit);
 
     const doc = await this.legalDocs.getDocumentByKey(
       operator,

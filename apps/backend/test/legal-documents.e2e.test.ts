@@ -349,6 +349,34 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(noTzApproveRes.status).toBe(400);
 
+    // Approval recomputes canonical content under the document lock rather
+    // than trusting a stale hash introduced by direct SQL/import work.
+    await prisma.$executeRaw`
+      UPDATE legal_document_revisions
+      SET content_hash = ${"0".repeat(64)}
+      WHERE id = ${createdDraft.id}::uuid
+    `;
+    const staleHashApproveRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/revisions/${createdDraft.id}/approve`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedEditVersion: updatedDraft.editVersion,
+          expectedContentHash: "0".repeat(64),
+          revisionCode: "terms-2026-09-e2e-v1",
+          effectiveAt: "2026-09-01T00:00:00.000Z",
+          approvalEvidence: "Právní posouzení č. 2026/09/LP-01",
+          reasonCode: "LEGAL_APPROVED",
+          reason: "Schválení nového znění podmínek vedením",
+        }),
+      },
+    );
+    expect(staleHashApproveRes.status).toBe(409);
+
     // Approve draft revision with correct expectedEditVersion
     const approveRes = await fetch(
       new URL(
@@ -433,6 +461,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       new URL("/legal-documents/terms/revisions/terms-2026-09-e2e-v1", baseUrl),
     );
     expect(beforePubRes.status).toBe(404);
+    expect(beforePubRes.headers.get("cache-control")).toBe("no-store");
 
     // 3. Publish approved revision immediately
     const pubRes = await fetch(
@@ -756,6 +785,21 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(repeatedPubLimitRes.status).toBe(400);
 
+    // Pagination values must be complete positive integers, not parseInt
+    // prefixes that could silently alter the requested page.
+    for (const path of [
+      "/admin/legal-documents/terms?limit=1junk",
+      "/admin/legal-documents/terms?publicationLimit=1junk",
+      "/admin/legal-documents/terms?cursor=1junk",
+      "/admin/legal-documents/terms/publications?limit=1junk",
+      "/admin/legal-documents/terms/audit-events?limit=1junk",
+    ]) {
+      const response = await fetch(new URL(path, baseUrl), {
+        headers: { Cookie: adminCookie },
+      });
+      expect(response.status).toBe(400);
+    }
+
     // 10. Database trigger/check constraint rejects invalid cancellation state on insert
     const invalidDraft = await prisma.legalDocumentRevision.create({
       data: {
@@ -855,7 +899,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         data: {
           documentId: privacyDoc.id,
           revisionId: decisionTimeDraft.id,
-          startsAt: new Date(Date.now() - 3600000),
+          startsAt: new Date(Date.now() - 1000),
           publishedBy: adminOperatorId,
           reason: "Invalid starts_at before decision time",
         },

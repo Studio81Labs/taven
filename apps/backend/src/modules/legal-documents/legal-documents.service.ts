@@ -394,7 +394,10 @@ export class LegalDocumentsService {
 
     let cursorSequence: number | undefined;
     if (cursor !== undefined) {
-      cursorSequence = Number.parseInt(cursor, 10);
+      if (!/^[1-9]\d*$/.test(cursor)) {
+        throw new BadRequestException("Revision cursor is invalid");
+      }
+      cursorSequence = Number(cursor);
       if (!Number.isSafeInteger(cursorSequence) || cursorSequence < 1) {
         throw new BadRequestException("Revision cursor is invalid");
       }
@@ -770,7 +773,7 @@ export class LegalDocumentsService {
       async (tx, commandKey) => {
         const doc = await this.lockDocumentByKey(tx, key);
 
-        const revision = await tx.legalDocumentRevision.findUnique({
+        let revision = await tx.legalDocumentRevision.findUnique({
           where: { id: validRevisionId },
         });
         if (!revision || revision.documentId !== doc.id) {
@@ -782,7 +785,32 @@ export class LegalDocumentsService {
         if (revision.editVersion !== expectedEditVersion) {
           throw new ConflictException("Draft edit version mismatch");
         }
-        if (revision.contentHash !== expectedContentHash) {
+        const title = requireString(revision.title, "Draft title", {
+          maxLength: 255,
+        });
+        const summary = requireString(revision.summary, "Draft summary");
+        const sections = normalizeLegalSections(revision.sections);
+        assertContentSize({ title, summary, sections });
+        const contentHash = computeLegalRevisionContentHash({
+          contentVersion: 1,
+          title,
+          summary,
+          sections,
+        });
+
+        if (revision.contentHash !== contentHash) {
+          revision = await tx.legalDocumentRevision.update({
+            where: { id: revision.id },
+            data: {
+              title,
+              summary,
+              sections: sections as unknown as Prisma.InputJsonValue,
+              contentHash,
+            },
+          });
+        }
+
+        if (contentHash !== expectedContentHash) {
           throw new ConflictException("Revision content hash mismatch");
         }
         if (
@@ -913,6 +941,7 @@ export class LegalDocumentsService {
         }
 
         const decisionNow = await databaseNow(tx);
+        await setLegalPublicationDecisionTime(tx, decisionNow);
 
         if (parsedStartsAt && parsedStartsAt < decisionNow) {
           throw new BadRequestException(
@@ -1393,6 +1422,19 @@ async function databaseNow(
   const observedAt = rows[0]?.now;
   if (!observedAt) throw new Error("Database clock is unavailable");
   return observedAt;
+}
+
+async function setLegalPublicationDecisionTime(
+  transaction: Pick<Transaction, "$executeRaw">,
+  decisionAt: Date,
+): Promise<void> {
+  await transaction.$executeRaw`
+    SELECT set_config(
+      'taven.legal_publication_decision_at',
+      ${decisionAt.toISOString()},
+      true
+    )
+  `;
 }
 
 function toPublicationSummary(pub: {
