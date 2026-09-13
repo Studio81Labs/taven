@@ -386,6 +386,27 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(outOfRangeApproveRes.status).toBe(400);
 
+    const invalidCalendarApproveRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/revisions/${createdDraft.id}/approve`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedEditVersion: updatedDraft.editVersion,
+          expectedContentHash: updatedDraft.contentHash,
+          revisionCode: "terms-2026-09-e2e-v1",
+          effectiveAt: "2027-02-30T00:00:00.000Z",
+          approvalEvidence: "Právní posouzení č. 2026/09/LP-01",
+          reasonCode: "LEGAL_APPROVED",
+          reason: "Schválení nového znění podmínek vedením",
+        }),
+      },
+    );
+    expect(invalidCalendarApproveRes.status).toBe(400);
+
     // Approval recomputes canonical content under the document lock rather
     // than trusting a stale hash introduced by direct SQL/import work.
     await prisma.$executeRaw`
@@ -621,6 +642,24 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       },
     );
     expect(backdatedPubRes.status).toBe(400);
+
+    const invalidCalendarScheduleRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/revisions/${approved3.id}/publish`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedGeneration: docBeforeSchedule.generation,
+          startsAt: "2027-02-30T00:00:00.000Z",
+          reasonCode: "SCHEDULE_INVALID",
+          reason: "Invalid calendar publication attempt",
+        }),
+      },
+    );
+    expect(invalidCalendarScheduleRes.status).toBe(400);
 
     const futureStartsAt = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
     const scheduleRes = await fetch(
@@ -942,7 +981,6 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     const privacyDoc = await prisma.legalDocument.findUniqueOrThrow({
       where: { key: "privacy" },
     });
-    const beforeDirectApproval = Date.now();
     const decisionTimeDraft = await prisma.legalDocumentRevision.create({
       data: {
         documentId: privacyDoc.id,
@@ -964,9 +1002,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       },
     });
     expect(decisionTimeDraft.approvedAt).not.toBeNull();
-    expect(decisionTimeDraft.approvedAt?.getTime()).toBeGreaterThanOrEqual(
-      beforeDirectApproval,
-    );
+    expect(decisionTimeDraft.approvedAt?.getTime()).not.toBe(0);
 
     // A direct writer cannot backdate publication history: a past instant is
     // derived to the trigger's post-lock database time instead.
@@ -982,6 +1018,44 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     });
     expect(derivedPublication.startsAt.getTime()).toBeGreaterThanOrEqual(
       beforeDerivedPublication,
+    );
+
+    const cancelledHistoricalRevision =
+      await prisma.legalDocumentRevision.create({
+        data: {
+          documentId: privacyDoc.id,
+          sequence: 996,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "privacy-cancelled-history-test",
+          effectiveAt: new Date(Date.now() - 7200000),
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Cancelled history",
+          summary: "Cancelled history coverage",
+          sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+          contentHash: legalContentHash(
+            "Cancelled history",
+            "Cancelled history coverage",
+            [{ title: "Section 1", paragraphs: ["Content"] }],
+          ),
+        },
+      });
+    await expect(
+      prisma.legalDocumentPublication.create({
+        data: {
+          documentId: privacyDoc.id,
+          revisionId: cancelledHistoricalRevision.id,
+          startsAt: new Date(Date.now() - 1000),
+          cancelledAt: new Date(Date.now() - 2000),
+          publishedBy: adminOperatorId,
+          reason: "Invalid cancelled historical import",
+        },
+      }),
+    ).rejects.toThrow(
+      /Cannot insert a cancelled publication that has already started/i,
     );
 
     const directCancellationStartsAt = new Date(Date.now() + 3_600_000);

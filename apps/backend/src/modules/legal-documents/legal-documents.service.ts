@@ -37,6 +37,8 @@ type Transaction = Prisma.TransactionClient;
 export const MAX_LEGAL_PAYLOAD_BYTES = 256 * 1024;
 export const REVISION_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
 const POSTGRES_MIN_TIMESTAMP_YEAR = -4712;
+const RFC3339_DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
 
 function requireString(
   val: unknown,
@@ -69,6 +71,34 @@ function requireSafeInteger(val: unknown, fieldName: string, min = 1): number {
     );
   }
   return val;
+}
+
+function parseLegalRfc3339Instant(value: string, fieldName: string): Date {
+  const match = RFC3339_DATE_TIME_PATTERN.exec(value);
+  if (!match) {
+    throw new BadRequestException(
+      `${fieldName} must be a valid RFC 3339 date-time`,
+    );
+  }
+  const result = new Date(value);
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+  if (
+    Number.isNaN(result.getTime()) ||
+    calendar.getUTCFullYear() !== Number(match[1]) ||
+    calendar.getUTCMonth() !== Number(match[2]) - 1 ||
+    calendar.getUTCDate() !== Number(match[3]) ||
+    result.getUTCFullYear() < POSTGRES_MIN_TIMESTAMP_YEAR
+  ) {
+    throw new BadRequestException(
+      `${fieldName} must be a valid RFC 3339 date-time`,
+    );
+  }
+  return result;
 }
 
 const UUID_REGEX =
@@ -768,18 +798,10 @@ export class LegalDocumentsService {
       { pattern: /^[0-9a-f]{64}$/ },
     );
     const effectiveAtStr = requireString(dto?.effectiveAt, "Effective date");
-    if (!/(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(effectiveAtStr)) {
-      throw new BadRequestException(
-        "Effective date must include an explicit timezone offset (e.g. 'Z' or '+02:00')",
-      );
-    }
-    const effectiveAtDate = new Date(effectiveAtStr);
-    if (
-      Number.isNaN(effectiveAtDate.getTime()) ||
-      effectiveAtDate.getUTCFullYear() < POSTGRES_MIN_TIMESTAMP_YEAR
-    ) {
-      throw new BadRequestException("Effective date is invalid");
-    }
+    const effectiveAtDate = parseLegalRfc3339Instant(
+      effectiveAtStr,
+      "Effective date",
+    );
     const approvalEvidence = requireString(
       dto?.approvalEvidence,
       "Approval evidence",
@@ -927,15 +949,10 @@ export class LegalDocumentsService {
     let parsedStartsAt: Date | undefined;
     if (dto?.startsAt !== undefined && dto?.startsAt !== null) {
       const startsAtStr = requireString(dto.startsAt, "Publication startsAt");
-      if (!/(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(startsAtStr)) {
-        throw new BadRequestException(
-          "Publication startsAt must include an explicit timezone offset (e.g. 'Z' or '+02:00')",
-        );
-      }
-      parsedStartsAt = new Date(startsAtStr);
-      if (Number.isNaN(parsedStartsAt.getTime())) {
-        throw new BadRequestException("Publication startsAt is invalid");
-      }
+      parsedStartsAt = parseLegalRfc3339Instant(
+        startsAtStr,
+        "Publication startsAt",
+      );
     }
 
     return await this.executeWithIdempotency(

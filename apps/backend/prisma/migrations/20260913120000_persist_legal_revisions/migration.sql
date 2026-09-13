@@ -471,6 +471,10 @@ BEGIN
             RAISE EXCEPTION 'Revision % must have an effective_at before publication', NEW."revision_id";
         END IF;
 
+        IF NEW."cancelled_at" IS NOT NULL AND NEW."starts_at" <= v_post_lock_now THEN
+            RAISE EXCEPTION 'Cannot insert a cancelled publication that has already started';
+        END IF;
+
         IF NEW."starts_at" <= v_post_lock_now THEN
             v_requested_starts_at := NEW."starts_at";
             NEW."starts_at" := GREATEST(v_rev_effective_at, v_post_lock_now);
