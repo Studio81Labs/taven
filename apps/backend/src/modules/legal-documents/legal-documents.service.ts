@@ -372,136 +372,144 @@ export class LegalDocumentsService {
     publicationLimit = 25,
   ): Promise<LegalDocumentDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
-    const doc = await this.prisma.legalDocument.findUnique({
-      where: { key },
-    });
+    return await this.prisma.$transaction(
+      async (tx) => {
+        const doc = await tx.legalDocument.findUnique({
+          where: { key },
+        });
 
-    if (!doc) {
-      throw new NotFoundException(`Legal document '${key}' was not found`);
-    }
+        if (!doc) {
+          throw new NotFoundException(`Legal document '${key}' was not found`);
+        }
 
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-      throw new BadRequestException("Revision limit is invalid");
-    }
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+          throw new BadRequestException("Revision limit is invalid");
+        }
 
-    if (
-      !Number.isSafeInteger(publicationLimit) ||
-      publicationLimit < 1 ||
-      publicationLimit > 100
-    ) {
-      throw new BadRequestException("Publication limit is invalid");
-    }
+        if (
+          !Number.isSafeInteger(publicationLimit) ||
+          publicationLimit < 1 ||
+          publicationLimit > 100
+        ) {
+          throw new BadRequestException("Publication limit is invalid");
+        }
 
-    let cursorSequence: number | undefined;
-    if (cursor !== undefined) {
-      if (!/^[1-9]\d*$/.test(cursor)) {
-        throw new BadRequestException("Revision cursor is invalid");
-      }
-      cursorSequence = Number(cursor);
-      if (!Number.isSafeInteger(cursorSequence) || cursorSequence < 1) {
-        throw new BadRequestException("Revision cursor is invalid");
-      }
-    }
+        let cursorSequence: number | undefined;
+        if (cursor !== undefined) {
+          if (!/^[1-9]\d*$/.test(cursor)) {
+            throw new BadRequestException("Revision cursor is invalid");
+          }
+          cursorSequence = Number(cursor);
+          if (!Number.isSafeInteger(cursorSequence) || cursorSequence < 1) {
+            throw new BadRequestException("Revision cursor is invalid");
+          }
+        }
 
-    const pubKeyset =
-      publicationCursor !== undefined
-        ? parsePublicationCursor(publicationCursor)
-        : undefined;
+        const pubKeyset =
+          publicationCursor !== undefined
+            ? parsePublicationCursor(publicationCursor)
+            : undefined;
 
-    const [revisions, pubRows, now] = await Promise.all([
-      this.prisma.legalDocumentRevision.findMany({
-        where: {
-          documentId: doc.id,
-          ...(cursorSequence !== undefined
-            ? { sequence: { lt: cursorSequence } }
+        const [revisions, pubRows, now] = await Promise.all([
+          tx.legalDocumentRevision.findMany({
+            where: {
+              documentId: doc.id,
+              ...(cursorSequence !== undefined
+                ? { sequence: { lt: cursorSequence } }
+                : {}),
+            },
+            orderBy: { sequence: "desc" },
+            take: limit + 1,
+          }),
+          tx.legalDocumentPublication.findMany({
+            where: {
+              documentId: doc.id,
+              ...(pubKeyset
+                ? {
+                    OR: [
+                      { startsAt: { lt: pubKeyset.startsAt } },
+                      {
+                        startsAt: pubKeyset.startsAt,
+                        id: { lt: pubKeyset.id },
+                      },
+                    ],
+                  }
+                : {}),
+            },
+            orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+            take: publicationLimit + 1,
+            include: { revision: true },
+          }),
+          databaseNow(tx),
+        ]);
+
+        const page = revisions.slice(0, limit);
+        const last = page.at(-1);
+        const nextCursor =
+          revisions.length > limit && last ? String(last.sequence) : undefined;
+
+        const pubPage = pubRows.slice(0, publicationLimit);
+        const lastPub = pubPage.at(-1);
+        const publicationsNextCursor =
+          pubRows.length > publicationLimit && lastPub
+            ? encodePublicationCursor(lastPub)
+            : undefined;
+
+        const [activePub, pendingPub, draftCount, latestDraft] =
+          await Promise.all([
+            tx.legalDocumentPublication.findFirst({
+              where: {
+                documentId: doc.id,
+                cancelledAt: null,
+                startsAt: { lte: now },
+                OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+              },
+              orderBy: { startsAt: "desc" },
+              include: { revision: true },
+            }),
+            tx.legalDocumentPublication.findFirst({
+              where: {
+                documentId: doc.id,
+                cancelledAt: null,
+                startsAt: { gt: now },
+              },
+              orderBy: { startsAt: "asc" },
+              include: { revision: true },
+            }),
+            tx.legalDocumentRevision.count({
+              where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
+            }),
+            tx.legalDocumentRevision.findFirst({
+              where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
+              orderBy: { sequence: "desc" },
+            }),
+          ]);
+
+        return {
+          id: doc.id,
+          key: doc.key,
+          documentId: doc.documentId,
+          generation: doc.generation,
+          ...(activePub
+            ? { activePublication: toPublicationSummary(activePub) }
             : {}),
-        },
-        orderBy: { sequence: "desc" },
-        take: limit + 1,
-      }),
-      this.prisma.legalDocumentPublication.findMany({
-        where: {
-          documentId: doc.id,
-          ...(pubKeyset
-            ? {
-                OR: [
-                  { startsAt: { lt: pubKeyset.startsAt } },
-                  {
-                    startsAt: pubKeyset.startsAt,
-                    id: { lt: pubKeyset.id },
-                  },
-                ],
-              }
+          ...(pendingPub
+            ? { pendingPublication: toPublicationSummary(pendingPub) }
             : {}),
-        },
-        orderBy: [{ startsAt: "desc" }, { id: "desc" }],
-        take: publicationLimit + 1,
-        include: { revision: true },
-      }),
-      databaseNow(this.prisma),
-    ]);
-
-    const page = revisions.slice(0, limit);
-    const last = page.at(-1);
-    const nextCursor =
-      revisions.length > limit && last ? String(last.sequence) : undefined;
-
-    const pubPage = pubRows.slice(0, publicationLimit);
-    const lastPub = pubPage.at(-1);
-    const publicationsNextCursor =
-      pubRows.length > publicationLimit && lastPub
-        ? encodePublicationCursor(lastPub)
-        : undefined;
-
-    const [activePub, pendingPub, draftCount, latestDraft] = await Promise.all([
-      this.prisma.legalDocumentPublication.findFirst({
-        where: {
-          documentId: doc.id,
-          cancelledAt: null,
-          startsAt: { lte: now },
-          OR: [{ endsAt: null }, { endsAt: { gt: now } }],
-        },
-        orderBy: { startsAt: "desc" },
-        include: { revision: true },
-      }),
-      this.prisma.legalDocumentPublication.findFirst({
-        where: {
-          documentId: doc.id,
-          cancelledAt: null,
-          startsAt: { gt: now },
-        },
-        orderBy: { startsAt: "asc" },
-        include: { revision: true },
-      }),
-      this.prisma.legalDocumentRevision.count({
-        where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
-      }),
-      this.prisma.legalDocumentRevision.findFirst({
-        where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
-        orderBy: { sequence: "desc" },
-      }),
-    ]);
-
-    return {
-      id: doc.id,
-      key: doc.key,
-      documentId: doc.documentId,
-      generation: doc.generation,
-      ...(activePub
-        ? { activePublication: toPublicationSummary(activePub) }
-        : {}),
-      ...(pendingPub
-        ? { pendingPublication: toPublicationSummary(pendingPub) }
-        : {}),
-      draftRevisionsCount: draftCount,
-      ...(latestDraft ? { latestDraft: toRevisionSummary(latestDraft) } : {}),
-      revisions: page.map(toRevisionDetail),
-      publications: pubPage.map(toPublicationSummary),
-      ...(nextCursor ? { nextCursor } : {}),
-      ...(publicationsNextCursor ? { publicationsNextCursor } : {}),
-      createdAt: doc.createdAt.toISOString(),
-      updatedAt: doc.updatedAt.toISOString(),
-    };
+          draftRevisionsCount: draftCount,
+          ...(latestDraft
+            ? { latestDraft: toRevisionSummary(latestDraft) }
+            : {}),
+          revisions: page.map(toRevisionDetail),
+          publications: pubPage.map(toPublicationSummary),
+          ...(nextCursor ? { nextCursor } : {}),
+          ...(publicationsNextCursor ? { publicationsNextCursor } : {}),
+          createdAt: doc.createdAt.toISOString(),
+          updatedAt: doc.updatedAt.toISOString(),
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
 
   async listPublications(
@@ -941,7 +949,6 @@ export class LegalDocumentsService {
         }
 
         const decisionNow = await databaseNow(tx);
-        await setLegalPublicationDecisionTime(tx, decisionNow);
 
         if (parsedStartsAt && parsedStartsAt < decisionNow) {
           throw new BadRequestException(
@@ -1003,7 +1010,7 @@ export class LegalDocumentsService {
           },
         });
 
-        if (activePub) {
+        if (activePub && effectiveStartsAt > decisionNow) {
           const targetEndsAt =
             effectiveStartsAt <= decisionNow ? decisionNow : effectiveStartsAt;
           if (activePub.startsAt >= targetEndsAt) {
@@ -1110,11 +1117,29 @@ export class LegalDocumentsService {
           );
         }
 
-        const updated = await tx.legalDocumentPublication.update({
-          where: { id: pub.id },
-          data: { cancelledAt: decisionNow },
-          include: { revision: true },
-        });
+        let updated;
+        try {
+          updated = await tx.legalDocumentPublication.update({
+            where: { id: pub.id },
+            data: { cancelledAt: decisionNow },
+            include: { revision: true },
+          });
+        } catch (error) {
+          if (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2039"
+          ) {
+            throw new ConflictException(
+              "Cannot cancel a publication that has already started",
+            );
+          }
+          throw error;
+        }
+        if (!updated.cancelledAt) {
+          throw new ConflictException(
+            "Publication cancellation did not persist",
+          );
+        }
 
         // Restore predecessor publication if its endsAt was chained to this publication
         const predecessor = await tx.legalDocumentPublication.findFirst({
@@ -1141,7 +1166,7 @@ export class LegalDocumentsService {
           eventType: "legal_document.publication_cancelled",
           reasonCode,
           reason,
-          createdAt: decisionNow,
+          createdAt: updated.cancelledAt,
           idempotencyKey: commandKey,
           payload: {
             operation: "publication_cancelled",
@@ -1422,19 +1447,6 @@ async function databaseNow(
   const observedAt = rows[0]?.now;
   if (!observedAt) throw new Error("Database clock is unavailable");
   return observedAt;
-}
-
-async function setLegalPublicationDecisionTime(
-  transaction: Pick<Transaction, "$executeRaw">,
-  decisionAt: Date,
-): Promise<void> {
-  await transaction.$executeRaw`
-    SELECT set_config(
-      'taven.legal_publication_decision_at',
-      ${decisionAt.toISOString()},
-      true
-    )
-  `;
 }
 
 function toPublicationSummary(pub: {

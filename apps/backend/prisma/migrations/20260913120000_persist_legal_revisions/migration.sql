@@ -45,6 +45,62 @@ BEFORE UPDATE OR DELETE ON "legal_documents"
 FOR EACH ROW
 EXECUTE FUNCTION legal_documents_integrity_fn();
 
+CREATE OR REPLACE FUNCTION legal_document_sections_are_valid(value jsonb)
+RETURNS boolean AS $$
+DECLARE
+    section jsonb;
+    entry jsonb;
+    field_name text;
+    has_content boolean;
+BEGIN
+    IF jsonb_typeof(value) <> 'array' THEN
+        RETURN false;
+    END IF;
+
+    IF jsonb_array_length(value) = 0 THEN
+        RETURN false;
+    END IF;
+
+    FOR section IN SELECT * FROM jsonb_array_elements(value) LOOP
+        IF jsonb_typeof(section) <> 'object'
+           OR length(btrim(coalesce(section->>'title', ''))) = 0
+           OR length(btrim(section->>'title')) > 255 THEN
+            RETURN false;
+        END IF;
+
+        has_content := false;
+        FOREACH field_name IN ARRAY ARRAY['paragraphs', 'items'] LOOP
+            IF section ? field_name THEN
+                IF jsonb_typeof(section->field_name) <> 'array' THEN
+                    RETURN false;
+                END IF;
+                FOR entry IN SELECT * FROM jsonb_array_elements(section->field_name) LOOP
+                    IF jsonb_typeof(entry) <> 'string' THEN
+                        RETURN false;
+                    END IF;
+                    has_content := has_content OR length(btrim(entry #>> '{}')) > 0;
+                END LOOP;
+            END IF;
+        END LOOP;
+
+        IF section ? 'note' THEN
+            IF jsonb_typeof(section->'note') NOT IN ('string', 'null') THEN
+                RETURN false;
+            END IF;
+            has_content := has_content OR (
+                jsonb_typeof(section->'note') = 'string'
+                AND length(btrim(section->>'note')) > 0
+            );
+        END IF;
+
+        IF NOT has_content THEN
+            RETURN false;
+        END IF;
+    END LOOP;
+    RETURN true;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
 CREATE TABLE "legal_document_revisions" (
     "id" uuid NOT NULL DEFAULT gen_random_uuid(),
     "document_id" uuid NOT NULL,
@@ -76,13 +132,12 @@ CREATE TABLE "legal_document_revisions" (
             "status" = 'APPROVED'
             AND "revision_code" IS NOT NULL
             AND "effective_at" IS NOT NULL
-            AND "approval_evidence" IS NOT NULL
+            AND length(btrim("approval_evidence")) BETWEEN 1 AND 5000
             AND "approved_by" IS NOT NULL
             AND "approved_at" IS NOT NULL
             AND length(trim("title")) > 0
             AND length(trim("summary")) > 0
-            AND jsonb_typeof("sections") = 'array'
-            AND jsonb_array_length("sections") > 0
+            AND legal_document_sections_are_valid("sections")
         )
     ),
     CONSTRAINT "legal_document_revisions_content_hash_check" CHECK ("content_hash" ~ '^[0-9a-f]{64}$')
@@ -266,7 +321,6 @@ DECLARE
     v_rev_doc_id uuid;
     v_rev_status "legal_revision_status";
     v_rev_effective_at timestamptz;
-    v_decision_at text;
     v_post_lock_now timestamptz;
 BEGIN
     IF TG_OP = 'DELETE' THEN
@@ -274,12 +328,7 @@ BEGIN
     END IF;
 
     PERFORM 1 FROM "legal_documents" WHERE "id" = NEW."document_id" FOR UPDATE;
-    v_decision_at := current_setting('taven.legal_publication_decision_at', true);
-    IF v_decision_at IS NULL OR v_decision_at = '' THEN
-        v_post_lock_now := clock_timestamp();
-    ELSE
-        v_post_lock_now := v_decision_at::timestamptz;
-    END IF;
+    v_post_lock_now := clock_timestamp();
 
     IF TG_OP = 'INSERT' THEN
         SELECT "document_id", "status", "effective_at" INTO v_rev_doc_id, v_rev_status, v_rev_effective_at
@@ -298,12 +347,28 @@ BEGIN
             RAISE EXCEPTION 'Revision % must be APPROVED before publication', NEW."revision_id";
         END IF;
 
-        IF v_rev_effective_at IS NULL OR NEW."starts_at" < v_rev_effective_at THEN
-            RAISE EXCEPTION 'Publication starts_at % cannot precede revision effective_at %', NEW."starts_at", v_rev_effective_at;
+        IF v_rev_effective_at IS NULL THEN
+            RAISE EXCEPTION 'Revision % must have an effective_at before publication', NEW."revision_id";
         END IF;
 
-        IF NEW."starts_at" < v_post_lock_now THEN
-            RAISE EXCEPTION 'Publication starts_at % cannot precede database decision time', NEW."starts_at";
+        IF NEW."starts_at" <= v_post_lock_now THEN
+            NEW."starts_at" := GREATEST(v_rev_effective_at, v_post_lock_now);
+            UPDATE "legal_document_publications"
+            SET "ends_at" = NEW."starts_at"
+            WHERE "id" = (
+                SELECT "id"
+                FROM "legal_document_publications"
+                WHERE "document_id" = NEW."document_id"
+                  AND "cancelled_at" IS NULL
+                  AND "starts_at" <= v_post_lock_now
+                  AND ("ends_at" IS NULL OR "ends_at" > v_post_lock_now)
+                ORDER BY "starts_at" DESC
+                LIMIT 1
+            );
+        END IF;
+
+        IF NEW."starts_at" < v_rev_effective_at THEN
+            RAISE EXCEPTION 'Publication starts_at % cannot precede revision effective_at %', NEW."starts_at", v_rev_effective_at;
         END IF;
 
         IF EXISTS (

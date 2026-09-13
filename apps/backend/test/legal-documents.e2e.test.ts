@@ -692,6 +692,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         item.eventType === "legal_document.publication_cancelled",
     );
     expect(cancelAudit).toBeDefined();
+    expect(cancelAudit.createdAt).toBe(cancelled.cancelledAt);
     expect(
       (cancelAudit.payload as { previousPublicationId?: string })
         .previousPublicationId,
@@ -893,18 +894,21 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       },
     });
 
-    // Database trigger rejects publication starts_at preceding database decision time
-    await expect(
-      prisma.legalDocumentPublication.create({
-        data: {
-          documentId: privacyDoc.id,
-          revisionId: decisionTimeDraft.id,
-          startsAt: new Date(Date.now() - 1000),
-          publishedBy: adminOperatorId,
-          reason: "Invalid starts_at before decision time",
-        },
-      }),
-    ).rejects.toThrow(/cannot precede database decision time/i);
+    // A direct writer cannot backdate publication history: a past instant is
+    // derived to the trigger's post-lock database time instead.
+    const beforeDerivedPublication = Date.now();
+    const derivedPublication = await prisma.legalDocumentPublication.create({
+      data: {
+        documentId: privacyDoc.id,
+        revisionId: decisionTimeDraft.id,
+        startsAt: new Date(Date.now() - 1000),
+        publishedBy: adminOperatorId,
+        reason: "Past direct publication is derived to database time",
+      },
+    });
+    expect(derivedPublication.startsAt.getTime()).toBeGreaterThanOrEqual(
+      beforeDerivedPublication,
+    );
 
     // Database trigger rejects cancelling a publication that has already started
     await expect(
@@ -973,6 +977,49 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           summary: "Summary",
           sections: [],
           contentHash: "2".repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+
+    // Direct imports cannot mark malformed content or blank approval evidence
+    // as an approved revision.
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 996,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-invalid-section-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: [{}],
+          contentHash: "3".repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 995,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-blank-evidence-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "   ",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+          contentHash: "4".repeat(64),
         },
       }),
     ).rejects.toThrow();
