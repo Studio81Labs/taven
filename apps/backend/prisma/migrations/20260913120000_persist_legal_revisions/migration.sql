@@ -265,7 +265,10 @@ CREATE TABLE "legal_document_publications" (
     CONSTRAINT "legal_document_publications_document_id_fkey" FOREIGN KEY ("document_id") REFERENCES "legal_documents"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_document_publications_revision_id_fkey" FOREIGN KEY ("revision_id") REFERENCES "legal_document_revisions"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_document_publications_published_by_fkey" FOREIGN KEY ("published_by") REFERENCES "operator_identities"("id") ON DELETE RESTRICT,
-    CONSTRAINT "legal_document_publications_interval_check" CHECK ("ends_at" IS NULL OR "ends_at" > "starts_at"),
+    CONSTRAINT "legal_document_publications_interval_check" CHECK (
+        isfinite("starts_at")
+        AND ("ends_at" IS NULL OR "ends_at" > "starts_at")
+    ),
     CONSTRAINT "legal_document_publications_cancellation_check" CHECK ("cancelled_at" IS NULL OR "cancelled_at" < "starts_at"),
     CONSTRAINT "legal_document_publications_reason_check" CHECK (
         length("reason") <= 1000
@@ -330,6 +333,19 @@ ALTER TABLE "audit_events"
             AND "refund_transaction_id" IS NULL
             AND "reason" IS NOT NULL
             AND "reason_code" IS NOT NULL
+        )
+    );
+
+ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_reason_check";
+ALTER TABLE "audit_events"
+    ADD CONSTRAINT "audit_events_reason_check" CHECK (
+        ("reason" IS NULL AND "reason_code" IS NULL)
+        OR (
+            "reason" IS NOT NULL
+            AND length(btrim("reason")) BETWEEN 1 AND 1000
+            AND "reason" !~ '^[[:space:]]*$'
+            AND "reason_code" IS NOT NULL
+            AND "reason_code" ~ '^[A-Z][A-Z0-9_]{0,99}$'
         )
     );
 

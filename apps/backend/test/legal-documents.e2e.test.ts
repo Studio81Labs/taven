@@ -1327,6 +1327,30 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         )
       `),
     ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_publications (
+          document_id, revision_id, starts_at, published_by, reason
+        ) VALUES (
+          '${termsDoc.id}'::uuid, '${futureEffectiveDraft.id}'::uuid,
+          'infinity'::timestamptz, '${adminOperatorId}'::uuid, 'Infinite publication start'
+        )
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO audit_events (
+          id, event_type, actor_kind, actor_id, operator_identity_id,
+          legal_document_id, schema_version, reason_code, reason, payload
+        ) VALUES (
+          gen_random_uuid(), 'legal_document.direct_import', 'OPERATOR'::audit_actor_kind,
+          '${adminOperatorId}'::uuid, '${adminOperatorId}'::uuid,
+          '${termsDoc.id}'::uuid, 3, 'DIRECT_IMPORT', E'\\n', '{}'::jsonb
+        )
+      `),
+    ).rejects.toThrow();
     const nullNoteSections = [
       { title: "Section 1", paragraphs: ["Content"], note: null },
     ] as unknown as Parameters<
