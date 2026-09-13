@@ -91,29 +91,94 @@ export class LegalDocumentsService {
     operator: OperatorContext,
   ): Promise<LegalDocumentSummaryDto[]> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
-    const [docs, now] = await Promise.all([
-      this.prisma.legalDocument.findMany({
-        orderBy: { key: "asc" },
-        include: {
-          publications: {
-            where: { cancelledAt: null },
-            orderBy: { startsAt: "desc" },
-            include: { revision: true },
+    const now = await databaseNow(this.prisma);
+    const docs = await this.prisma.legalDocument.findMany({
+      orderBy: { key: "asc" },
+      include: {
+        publications: {
+          where: {
+            cancelledAt: null,
+            OR: [{ endsAt: null }, { endsAt: { gt: now } }],
           },
-          revisions: {
-            orderBy: { sequence: "desc" },
+          orderBy: { startsAt: "desc" },
+          include: {
+            revision: {
+              select: {
+                id: true,
+                documentId: true,
+                sequence: true,
+                editVersion: true,
+                status: true,
+                contentVersion: true,
+                title: true,
+                summary: true,
+                contentHash: true,
+                revisionCode: true,
+                effectiveAt: true,
+                approvalEvidence: true,
+                approvedBy: true,
+                approvedAt: true,
+                createdAt: true,
+                updatedAt: true,
+              },
+            },
           },
         },
+      },
+    });
+
+    const docIds = docs.map((d) => d.id);
+    const [draftCounts, latestDrafts] = await Promise.all([
+      this.prisma.legalDocumentRevision.groupBy({
+        by: ["documentId"],
+        where: {
+          documentId: { in: docIds },
+          status: LegalRevisionStatus.DRAFT,
+        },
+        _count: { _all: true },
       }),
-      databaseNow(this.prisma),
+      this.prisma.legalDocumentRevision.findMany({
+        where: {
+          documentId: { in: docIds },
+          status: LegalRevisionStatus.DRAFT,
+        },
+        distinct: ["documentId"],
+        orderBy: [{ sequence: "desc" }],
+        select: {
+          id: true,
+          documentId: true,
+          sequence: true,
+          editVersion: true,
+          status: true,
+          contentVersion: true,
+          title: true,
+          summary: true,
+          contentHash: true,
+          revisionCode: true,
+          effectiveAt: true,
+          approvalEvidence: true,
+          approvedBy: true,
+          approvedAt: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
     ]);
+
+    const draftCountMap = new Map<string, number>(
+      draftCounts.map((c) => [c.documentId, c._count._all]),
+    );
+    const latestDraftMap = new Map<string, (typeof latestDrafts)[0]>(
+      latestDrafts.map((d) => [d.documentId, d]),
+    );
+
     return docs.map((doc) => {
       const activePub = doc.publications.find(
         (p) => p.startsAt <= now && (p.endsAt === null || p.endsAt > now),
       );
       const pendingPub = doc.publications.find((p) => p.startsAt > now);
-      const drafts = doc.revisions.filter((r) => r.status === "DRAFT");
-      const latestDraft = drafts[0];
+      const draftRevisionsCount = draftCountMap.get(doc.id) ?? 0;
+      const latestDraft = latestDraftMap.get(doc.id);
 
       return {
         id: doc.id,
@@ -126,7 +191,7 @@ export class LegalDocumentsService {
         ...(pendingPub
           ? { pendingPublication: toPublicationSummary(pendingPub) }
           : {}),
-        draftRevisionsCount: drafts.length,
+        draftRevisionsCount,
         ...(latestDraft ? { latestDraft: toRevisionSummary(latestDraft) } : {}),
         createdAt: doc.createdAt.toISOString(),
         updatedAt: doc.updatedAt.toISOString(),
@@ -145,8 +210,8 @@ export class LegalDocumentsService {
       where: { key },
       include: {
         publications: {
-          where: { cancelledAt: null },
           orderBy: { startsAt: "desc" },
+          take: 50,
           include: { revision: true },
         },
       },
@@ -186,9 +251,14 @@ export class LegalDocumentsService {
 
     const now = await databaseNow(this.prisma);
     const activePub = doc.publications.find(
-      (p) => p.startsAt <= now && (p.endsAt === null || p.endsAt > now),
+      (p) =>
+        p.cancelledAt === null &&
+        p.startsAt <= now &&
+        (p.endsAt === null || p.endsAt > now),
     );
-    const pendingPub = doc.publications.find((p) => p.startsAt > now);
+    const pendingPub = doc.publications.find(
+      (p) => p.cancelledAt === null && p.startsAt > now,
+    );
     const [draftCount, latestDraft] = await Promise.all([
       this.prisma.legalDocumentRevision.count({
         where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
@@ -213,6 +283,7 @@ export class LegalDocumentsService {
       draftRevisionsCount: draftCount,
       ...(latestDraft ? { latestDraft: toRevisionSummary(latestDraft) } : {}),
       revisions: page.map(toRevisionDetail),
+      publications: doc.publications.map(toPublicationSummary),
       ...(nextCursor ? { nextCursor } : {}),
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),

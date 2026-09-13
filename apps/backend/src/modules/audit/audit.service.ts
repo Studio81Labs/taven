@@ -17,6 +17,11 @@ import type {
 } from "./audit.dto";
 
 type Transaction = Prisma.TransactionClient;
+export type LegalAuditFilters = Readonly<{
+  eventType?: string;
+  operatorIdentityId?: string;
+}>;
+
 type AuditFilters = Readonly<{
   eventType?: string;
   nodeId?: string;
@@ -150,6 +155,7 @@ export class AuditService {
   async listLegalDocumentAuditEvents(
     operator: OperatorContext,
     legalDocumentId: string,
+    filters?: LegalAuditFilters,
     cursor?: string,
     limit = 25,
   ): Promise<AuditEventPageDto> {
@@ -159,12 +165,19 @@ export class AuditService {
       throw new BadRequestException("Audit limit is invalid");
     }
     const docId = canonicalUuid(legalDocumentId);
-    const filterHash = digest({ legalDocumentId: docId });
+    const normalizedFilters = normalizeLegalAuditFilters(filters);
+    const filterHash = digest({ legalDocumentId: docId, ...normalizedFilters });
     const keyset =
       cursor !== undefined ? parseCursor(cursor, filterHash) : undefined;
     const where: Prisma.AuditEventWhereInput = {
       legalDocumentId: docId,
       schemaVersion: 3,
+      ...(normalizedFilters.eventType
+        ? { eventType: normalizedFilters.eventType }
+        : {}),
+      ...(normalizedFilters.operatorIdentityId
+        ? { operatorIdentityId: normalizedFilters.operatorIdentityId }
+        : {}),
       ...(keyset
         ? {
             OR: [
@@ -535,4 +548,16 @@ function canonicalUuid(value: string): string {
     throw new BadRequestException("Audit UUID is invalid");
   }
   return value.toLowerCase();
+}
+
+function normalizeLegalAuditFilters(filters?: LegalAuditFilters): AuditFilters {
+  if (!filters) return {};
+  return {
+    ...(filters.eventType?.trim()
+      ? { eventType: filters.eventType.trim() }
+      : {}),
+    ...(filters.operatorIdentityId?.trim()
+      ? { operatorIdentityId: canonicalUuid(filters.operatorIdentityId.trim()) }
+      : {}),
+  };
 }

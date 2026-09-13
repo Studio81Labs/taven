@@ -3095,6 +3095,7 @@ export interface components {
             latestDraft?: components["schemas"]["LegalRevisionSummaryDto"];
             nextCursor?: string;
             pendingPublication?: components["schemas"]["LegalPublicationSummaryDto"];
+            publications: components["schemas"]["LegalPublicationSummaryDto"][];
             revisions: components["schemas"]["LegalRevisionDetailDto"][];
             /** Format: date-time */
             updatedAt: string;
@@ -4937,6 +4938,8 @@ export interface operations {
             query?: {
                 limit?: number;
                 cursor?: string;
+                operatorIdentityId?: string;
+                eventType?: string;
             };
             header?: never;
             path: {

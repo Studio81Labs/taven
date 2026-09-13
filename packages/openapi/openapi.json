@@ -4424,6 +4424,12 @@
           "pendingPublication": {
             "$ref": "#/components/schemas/LegalPublicationSummaryDto"
           },
+          "publications": {
+            "items": {
+              "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+            },
+            "type": "array"
+          },
           "revisions": {
             "items": {
               "$ref": "#/components/schemas/LegalRevisionDetailDto"
@@ -4443,7 +4449,8 @@
           "draftRevisionsCount",
           "createdAt",
           "updatedAt",
-          "revisions"
+          "revisions",
+          "publications"
         ],
         "type": "object"
       },
@@ -9822,6 +9829,22 @@
           {
             "in": "query",
             "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "operatorIdentityId",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "eventType",
             "required": false,
             "schema": {
               "type": "string"

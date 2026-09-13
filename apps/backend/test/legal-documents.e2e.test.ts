@@ -583,7 +583,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     const cancelled = await cancelRes.json();
     expect(cancelled.cancelledAt).toBeDefined();
 
-    // Verify active publication endsAt was restored to undefined/null
+    // Verify active publication endsAt was restored to undefined/null and publications history contains cancelled publication
     const docAfterCancel = await (
       await fetch(new URL("/admin/legal-documents/terms", baseUrl), {
         headers: { Cookie: adminCookie },
@@ -591,8 +591,15 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     ).json();
     expect(docAfterCancel.pendingPublication).toBeUndefined();
     expect(docAfterCancel.activePublication.endsAt).toBeUndefined();
+    expect(Array.isArray(docAfterCancel.publications)).toBe(true);
+    expect(docAfterCancel.publications.length).toBeGreaterThan(0);
+    const foundCancelled = docAfterCancel.publications.find(
+      (p: { id: string; cancelledAt?: string }) => p.id === scheduledPub.id,
+    );
+    expect(foundCancelled).toBeDefined();
+    expect(foundCancelled.cancelledAt).toBeDefined();
 
-    // 9. Verify legal audit events endpoint
+    // 9. Verify legal audit events endpoint and filters
     const auditRes = await fetch(
       new URL("/admin/legal-documents/terms/audit-events", baseUrl),
       {
@@ -609,6 +616,22 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       const payload = item.payload as { contentHash?: string };
       expect(payload.contentHash).toBeDefined();
       expect(payload.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    }
+
+    const filteredAuditRes = await fetch(
+      new URL(
+        "/admin/legal-documents/terms/audit-events?eventType=legal_document.draft_created",
+        baseUrl,
+      ),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(filteredAuditRes.status).toBe(200);
+    const filteredAuditPage = await filteredAuditRes.json();
+    expect(filteredAuditPage.items.length).toBeGreaterThan(0);
+    for (const item of filteredAuditPage.items) {
+      expect(item.eventType).toBe("legal_document.draft_created");
     }
 
     // 10. Database trigger/check constraint rejects invalid cancellation state on insert

@@ -113,6 +113,8 @@ export class LegalDocumentsAdminController {
     description: "Legal document identifier key",
   })
   @ApiOkResponse({ type: AuditEventPageDto })
+  @ApiQuery({ name: "eventType", required: false, type: String })
+  @ApiQuery({ name: "operatorIdentityId", required: false, type: String })
   @ApiQuery({ name: "cursor", required: false, type: String })
   @ApiQuery({ name: "limit", required: false, type: Number })
   @ApiNotFoundResponse()
@@ -121,6 +123,8 @@ export class LegalDocumentsAdminController {
   async auditEvents(
     @Param("key") key: string,
     @CurrentOperator() operator: OperatorContext,
+    @Query("eventType") eventType?: string,
+    @Query("operatorIdentityId") operatorIdentityId?: string,
     @Query("cursor") cursor?: string,
     @Query("limit") limit?: string,
   ): Promise<AuditEventPageDto> {
@@ -134,6 +138,10 @@ export class LegalDocumentsAdminController {
     return await this.audit.listLegalDocumentAuditEvents(
       operator,
       doc.id,
+      {
+        ...(eventType ? { eventType } : {}),
+        ...(operatorIdentityId ? { operatorIdentityId } : {}),
+      },
       cursor,
       parsedLimit,
     );
