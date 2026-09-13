@@ -552,6 +552,18 @@ function canonicalUuid(value: string): string {
 
 function normalizeLegalAuditFilters(filters?: LegalAuditFilters): AuditFilters {
   if (!filters) return {};
+  if (
+    filters.eventType !== undefined &&
+    typeof filters.eventType !== "string"
+  ) {
+    throw new BadRequestException("eventType is invalid");
+  }
+  if (
+    filters.operatorIdentityId !== undefined &&
+    typeof filters.operatorIdentityId !== "string"
+  ) {
+    throw new BadRequestException("operatorIdentityId is invalid");
+  }
   return {
     ...(filters.eventType?.trim()
       ? { eventType: filters.eventType.trim() }

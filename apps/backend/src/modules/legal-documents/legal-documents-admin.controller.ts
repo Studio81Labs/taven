@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -42,12 +43,21 @@ import {
   CreateLegalDraftDto,
   LegalDocumentDetailDto,
   LegalDocumentSummaryDto,
+  LegalPublicationPageDto,
   LegalPublicationSummaryDto,
   LegalRevisionDetailDto,
   PublishLegalRevisionDto,
   UpdateLegalDraftDto,
 } from "./legal-documents.dto";
 import { LegalDocumentsService } from "./legal-documents.service";
+
+function scalarQueryValue(name: string, value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return value;
+}
 
 @ApiTags("legal documents admin")
 @ApiSecurity("operatorSession")
@@ -83,20 +93,72 @@ export class LegalDocumentsAdminController {
   @ApiOkResponse({ type: LegalDocumentDetailDto })
   @ApiQuery({ name: "cursor", required: false, type: String })
   @ApiQuery({ name: "limit", required: false, type: Number })
+  @ApiQuery({ name: "publicationCursor", required: false, type: String })
+  @ApiQuery({ name: "publicationLimit", required: false, type: Number })
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
   async detail(
     @CurrentOperator() operator: OperatorContext,
     @Param("key") key: string,
-    @Query("cursor") cursor?: string,
-    @Query("limit") limit?: string,
+    @Query("cursor") cursor?: unknown,
+    @Query("limit") limit?: unknown,
+    @Query("publicationCursor") publicationCursor?: unknown,
+    @Query("publicationLimit") publicationLimit?: unknown,
   ): Promise<LegalDocumentDetailDto> {
-    const parsedLimit = limit ? Number.parseInt(limit, 10) : 25;
+    const scalarKey = scalarQueryValue("key", key) ?? key;
+    const scalarCursor = scalarQueryValue("cursor", cursor);
+    const scalarLimit = scalarQueryValue("limit", limit);
+    const scalarPubCursor = scalarQueryValue(
+      "publicationCursor",
+      publicationCursor,
+    );
+    const scalarPubLimit = scalarQueryValue(
+      "publicationLimit",
+      publicationLimit,
+    );
+    const parsedLimit = scalarLimit ? Number.parseInt(scalarLimit, 10) : 25;
+    const parsedPubLimit = scalarPubLimit
+      ? Number.parseInt(scalarPubLimit, 10)
+      : 25;
     return await this.legalDocs.getDocumentByKey(
       operator,
-      key,
-      cursor,
+      scalarKey,
+      scalarCursor,
+      parsedLimit,
+      scalarPubCursor,
+      parsedPubLimit,
+    );
+  }
+
+  @Get(":key/publications")
+  @ApiOperation({ summary: "List publication history for a legal document" })
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_READ)
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
+  @ApiOkResponse({ type: LegalPublicationPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String })
+  @ApiQuery({ name: "limit", required: false, type: Number })
+  @ApiNotFoundResponse()
+  @ApiUnauthorizedResponse()
+  @ApiForbiddenResponse()
+  async publications(
+    @Param("key") key: string,
+    @CurrentOperator() operator: OperatorContext,
+    @Query("cursor") cursor?: unknown,
+    @Query("limit") limit?: unknown,
+  ): Promise<LegalPublicationPageDto> {
+    const scalarKey = scalarQueryValue("key", key) ?? key;
+    const scalarCursor = scalarQueryValue("cursor", cursor);
+    const scalarLimit = scalarQueryValue("limit", limit);
+    const parsedLimit = scalarLimit ? Number.parseInt(scalarLimit, 10) : 25;
+    return await this.legalDocs.listPublications(
+      operator,
+      scalarKey,
+      scalarCursor,
       parsedLimit,
     );
   }
@@ -123,26 +185,37 @@ export class LegalDocumentsAdminController {
   async auditEvents(
     @Param("key") key: string,
     @CurrentOperator() operator: OperatorContext,
-    @Query("eventType") eventType?: string,
-    @Query("operatorIdentityId") operatorIdentityId?: string,
-    @Query("cursor") cursor?: string,
-    @Query("limit") limit?: string,
+    @Query("eventType") eventType?: unknown,
+    @Query("operatorIdentityId") operatorIdentityId?: unknown,
+    @Query("cursor") cursor?: unknown,
+    @Query("limit") limit?: unknown,
   ): Promise<AuditEventPageDto> {
+    const scalarKey = scalarQueryValue("key", key) ?? key;
+    const scalarEventType = scalarQueryValue("eventType", eventType);
+    const scalarOperatorId = scalarQueryValue(
+      "operatorIdentityId",
+      operatorIdentityId,
+    );
+    const scalarCursor = scalarQueryValue("cursor", cursor);
+    const scalarLimit = scalarQueryValue("limit", limit);
+    const parsedLimit = scalarLimit ? Number.parseInt(scalarLimit, 10) : 25;
+
     const doc = await this.legalDocs.getDocumentByKey(
       operator,
-      key,
+      scalarKey,
+      undefined,
+      1,
       undefined,
       1,
     );
-    const parsedLimit = limit ? Number.parseInt(limit, 10) : 25;
     return await this.audit.listLegalDocumentAuditEvents(
       operator,
       doc.id,
       {
-        ...(eventType ? { eventType } : {}),
-        ...(operatorIdentityId ? { operatorIdentityId } : {}),
+        ...(scalarEventType ? { eventType: scalarEventType } : {}),
+        ...(scalarOperatorId ? { operatorIdentityId: scalarOperatorId } : {}),
       },
-      cursor,
+      scalarCursor,
       parsedLimit,
     );
   }

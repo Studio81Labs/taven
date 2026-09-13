@@ -35,11 +35,14 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     await prisma.$executeRawUnsafe(`
       ALTER TABLE legal_document_publications DISABLE TRIGGER ALL;
       ALTER TABLE legal_document_revisions DISABLE TRIGGER ALL;
+      ALTER TABLE audit_events DISABLE TRIGGER ALL;
       DELETE FROM legal_document_publications;
       DELETE FROM legal_document_revisions WHERE sequence > 1;
+      DELETE FROM audit_events WHERE legal_document_id IS NOT NULL;
       UPDATE legal_documents SET generation = 1;
       ALTER TABLE legal_document_publications ENABLE TRIGGER ALL;
       ALTER TABLE legal_document_revisions ENABLE TRIGGER ALL;
+      ALTER TABLE audit_events ENABLE TRIGGER ALL;
     `);
   }
 
@@ -634,6 +637,78 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       expect(item.eventType).toBe("legal_document.draft_created");
     }
 
+    // Dedicated publication history endpoint and pagination
+    const pubListRes = await fetch(
+      new URL("/admin/legal-documents/terms/publications?limit=1", baseUrl),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(pubListRes.status).toBe(200);
+    const pubListPage = await pubListRes.json();
+    expect(pubListPage.items.length).toBe(1);
+    expect(pubListPage.nextCursor).toBeDefined();
+
+    const nextPubListRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/publications?limit=1&cursor=${encodeURIComponent(pubListPage.nextCursor)}`,
+        baseUrl,
+      ),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(nextPubListRes.status).toBe(200);
+    const nextPubListPage = await nextPubListRes.json();
+    expect(nextPubListPage.items.length).toBe(1);
+    expect(nextPubListPage.items[0].id).not.toBe(pubListPage.items[0].id);
+
+    // Detail publications pagination
+    const detailPubRes = await fetch(
+      new URL("/admin/legal-documents/terms?publicationLimit=1", baseUrl),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(detailPubRes.status).toBe(200);
+    const detailPubDoc = await detailPubRes.json();
+    expect(detailPubDoc.publications.length).toBe(1);
+    expect(detailPubDoc.publicationsNextCursor).toBeDefined();
+
+    // Query validation rejects repeated query params (Express array)
+    const repeatedQueryRes = await fetch(
+      new URL(
+        "/admin/legal-documents/terms/audit-events?operatorIdentityId=a&operatorIdentityId=b",
+        baseUrl,
+      ),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(repeatedQueryRes.status).toBe(400);
+
+    const repeatedEventQueryRes = await fetch(
+      new URL(
+        "/admin/legal-documents/terms/audit-events?eventType=a&eventType=b",
+        baseUrl,
+      ),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(repeatedEventQueryRes.status).toBe(400);
+
+    const repeatedPubLimitRes = await fetch(
+      new URL(
+        "/admin/legal-documents/terms/publications?limit=1&limit=2",
+        baseUrl,
+      ),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(repeatedPubLimitRes.status).toBe(400);
+
     // 10. Database trigger/check constraint rejects invalid cancellation state on insert
     const invalidDraft = await prisma.legalDocumentRevision.create({
       data: {
@@ -701,5 +776,40 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     await expect(
       app.get(LegalDocumentsService).getDocumentByKey(noReadOperator, "terms"),
     ).rejects.toThrow(ForbiddenException);
+    await expect(
+      app.get(LegalDocumentsService).listPublications(noReadOperator, "terms"),
+    ).rejects.toThrow(ForbiddenException);
+
+    // Database trigger rejects publication with starts_at < revision effective_at
+    const futureEffectiveDate = new Date(Date.now() + 7200000);
+    const futureEffectiveDraft = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: termsDoc.id,
+        sequence: 998,
+        editVersion: 1,
+        status: "APPROVED",
+        revisionCode: "terms-future-effective-test",
+        effectiveAt: futureEffectiveDate,
+        approvalEvidence: "evidence",
+        approvedBy: adminOperatorId,
+        approvedAt: new Date(),
+        contentVersion: 1,
+        title: "Title",
+        summary: "Summary",
+        sections: [],
+        contentHash: "1".repeat(64),
+      },
+    });
+    await expect(
+      prisma.legalDocumentPublication.create({
+        data: {
+          documentId: termsDoc.id,
+          revisionId: futureEffectiveDraft.id,
+          startsAt: new Date(futureEffectiveDate.getTime() - 3600000),
+          publishedBy: adminOperatorId,
+          reason: "Invalid starts_at before effective_at",
+        },
+      }),
+    ).rejects.toThrow();
   });
 });

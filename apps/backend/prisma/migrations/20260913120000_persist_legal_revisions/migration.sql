@@ -201,6 +201,7 @@ RETURNS TRIGGER AS $$
 DECLARE
     v_rev_doc_id uuid;
     v_rev_status "legal_revision_status";
+    v_rev_effective_at timestamptz;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Publication history is append-only and cannot be deleted';
@@ -209,7 +210,7 @@ BEGIN
     PERFORM 1 FROM "legal_documents" WHERE "id" = NEW."document_id" FOR UPDATE;
 
     IF TG_OP = 'INSERT' THEN
-        SELECT "document_id", "status" INTO v_rev_doc_id, v_rev_status
+        SELECT "document_id", "status", "effective_at" INTO v_rev_doc_id, v_rev_status, v_rev_effective_at
         FROM "legal_document_revisions"
         WHERE "id" = NEW."revision_id";
 
@@ -223,6 +224,10 @@ BEGIN
 
         IF v_rev_status <> 'APPROVED' THEN
             RAISE EXCEPTION 'Revision % must be APPROVED before publication', NEW."revision_id";
+        END IF;
+
+        IF v_rev_effective_at IS NULL OR NEW."starts_at" < v_rev_effective_at THEN
+            RAISE EXCEPTION 'Publication starts_at % cannot precede revision effective_at %', NEW."starts_at", v_rev_effective_at;
         END IF;
 
         IF EXISTS (

@@ -23,6 +23,7 @@ import type {
   LegalDocumentDetailDto,
   LegalDocumentSectionDto,
   LegalDocumentSummaryDto,
+  LegalPublicationPageDto,
   LegalPublicationSummaryDto,
   LegalRevisionDetailDto,
   LegalRevisionSummaryDto,
@@ -78,6 +79,43 @@ function requireUuid(val: unknown, fieldName: string): string {
     throw new BadRequestException(`${fieldName} must be a valid UUID`);
   }
   return str.toLowerCase();
+}
+
+interface PublicationCursorPayload {
+  startsAt: string;
+  id: string;
+}
+
+function parsePublicationCursor(cursor: string): {
+  startsAt: Date;
+  id: string;
+} {
+  try {
+    const raw = Buffer.from(cursor, "base64url").toString("utf8");
+    const parsed = JSON.parse(raw) as PublicationCursorPayload;
+    if (
+      !parsed ||
+      typeof parsed.startsAt !== "string" ||
+      typeof parsed.id !== "string" ||
+      !UUID_REGEX.test(parsed.id)
+    ) {
+      throw new Error();
+    }
+    const d = new Date(parsed.startsAt);
+    if (Number.isNaN(d.getTime())) throw new Error();
+    return { startsAt: d, id: parsed.id };
+  } catch {
+    throw new BadRequestException("Publication cursor is invalid");
+  }
+}
+
+function encodePublicationCursor(item: { startsAt: Date; id: string }): string {
+  return Buffer.from(
+    JSON.stringify({
+      startsAt: item.startsAt.toISOString(),
+      id: item.id,
+    }),
+  ).toString("base64url");
 }
 
 @Injectable()
@@ -204,17 +242,12 @@ export class LegalDocumentsService {
     key: string,
     cursor?: string,
     limit = 25,
+    publicationCursor?: string,
+    publicationLimit = 25,
   ): Promise<LegalDocumentDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
     const doc = await this.prisma.legalDocument.findUnique({
       where: { key },
-      include: {
-        publications: {
-          orderBy: { startsAt: "desc" },
-          take: 50,
-          include: { revision: true },
-        },
-      },
     });
 
     if (!doc) {
@@ -225,6 +258,14 @@ export class LegalDocumentsService {
       throw new BadRequestException("Revision limit is invalid");
     }
 
+    if (
+      !Number.isSafeInteger(publicationLimit) ||
+      publicationLimit < 1 ||
+      publicationLimit > 100
+    ) {
+      throw new BadRequestException("Publication limit is invalid");
+    }
+
     let cursorSequence: number | undefined;
     if (cursor !== undefined) {
       cursorSequence = Number.parseInt(cursor, 10);
@@ -233,33 +274,76 @@ export class LegalDocumentsService {
       }
     }
 
-    const revisions = await this.prisma.legalDocumentRevision.findMany({
-      where: {
-        documentId: doc.id,
-        ...(cursorSequence !== undefined
-          ? { sequence: { lt: cursorSequence } }
-          : {}),
-      },
-      orderBy: { sequence: "desc" },
-      take: limit + 1,
-    });
+    const pubKeyset =
+      publicationCursor !== undefined
+        ? parsePublicationCursor(publicationCursor)
+        : undefined;
+
+    const [revisions, pubRows, now] = await Promise.all([
+      this.prisma.legalDocumentRevision.findMany({
+        where: {
+          documentId: doc.id,
+          ...(cursorSequence !== undefined
+            ? { sequence: { lt: cursorSequence } }
+            : {}),
+        },
+        orderBy: { sequence: "desc" },
+        take: limit + 1,
+      }),
+      this.prisma.legalDocumentPublication.findMany({
+        where: {
+          documentId: doc.id,
+          ...(pubKeyset
+            ? {
+                OR: [
+                  { startsAt: { lt: pubKeyset.startsAt } },
+                  {
+                    startsAt: pubKeyset.startsAt,
+                    id: { lt: pubKeyset.id },
+                  },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+        take: publicationLimit + 1,
+        include: { revision: true },
+      }),
+      databaseNow(this.prisma),
+    ]);
 
     const page = revisions.slice(0, limit);
     const last = page.at(-1);
     const nextCursor =
       revisions.length > limit && last ? String(last.sequence) : undefined;
 
-    const now = await databaseNow(this.prisma);
-    const activePub = doc.publications.find(
-      (p) =>
-        p.cancelledAt === null &&
-        p.startsAt <= now &&
-        (p.endsAt === null || p.endsAt > now),
-    );
-    const pendingPub = doc.publications.find(
-      (p) => p.cancelledAt === null && p.startsAt > now,
-    );
-    const [draftCount, latestDraft] = await Promise.all([
+    const pubPage = pubRows.slice(0, publicationLimit);
+    const lastPub = pubPage.at(-1);
+    const publicationsNextCursor =
+      pubRows.length > publicationLimit && lastPub
+        ? encodePublicationCursor(lastPub)
+        : undefined;
+
+    const [activePub, pendingPub, draftCount, latestDraft] = await Promise.all([
+      this.prisma.legalDocumentPublication.findFirst({
+        where: {
+          documentId: doc.id,
+          cancelledAt: null,
+          startsAt: { lte: now },
+          OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+        },
+        orderBy: { startsAt: "desc" },
+        include: { revision: true },
+      }),
+      this.prisma.legalDocumentPublication.findFirst({
+        where: {
+          documentId: doc.id,
+          cancelledAt: null,
+          startsAt: { gt: now },
+        },
+        orderBy: { startsAt: "asc" },
+        include: { revision: true },
+      }),
       this.prisma.legalDocumentRevision.count({
         where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
       }),
@@ -283,10 +367,61 @@ export class LegalDocumentsService {
       draftRevisionsCount: draftCount,
       ...(latestDraft ? { latestDraft: toRevisionSummary(latestDraft) } : {}),
       revisions: page.map(toRevisionDetail),
-      publications: doc.publications.map(toPublicationSummary),
+      publications: pubPage.map(toPublicationSummary),
       ...(nextCursor ? { nextCursor } : {}),
+      ...(publicationsNextCursor ? { publicationsNextCursor } : {}),
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
+    };
+  }
+
+  async listPublications(
+    operator: OperatorContext,
+    key: string,
+    cursor?: string,
+    limit = 25,
+  ): Promise<LegalPublicationPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
+    const doc = await this.prisma.legalDocument.findUnique({
+      where: { key },
+    });
+    if (!doc) {
+      throw new NotFoundException(`Legal document '${key}' was not found`);
+    }
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new BadRequestException("Publication limit is invalid");
+    }
+    const pubKeyset =
+      cursor !== undefined ? parsePublicationCursor(cursor) : undefined;
+    const pubRows = await this.prisma.legalDocumentPublication.findMany({
+      where: {
+        documentId: doc.id,
+        ...(pubKeyset
+          ? {
+              OR: [
+                { startsAt: { lt: pubKeyset.startsAt } },
+                {
+                  startsAt: pubKeyset.startsAt,
+                  id: { lt: pubKeyset.id },
+                },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      include: { revision: true },
+    });
+    const page = pubRows.slice(0, limit);
+    const last = page.at(-1);
+    const nextCursor =
+      pubRows.length > limit && last
+        ? encodePublicationCursor(last)
+        : undefined;
+
+    return {
+      items: page.map(toPublicationSummary),
+      ...(nextCursor ? { nextCursor } : {}),
     };
   }
 

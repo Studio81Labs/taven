@@ -4430,6 +4430,9 @@
             },
             "type": "array"
           },
+          "publicationsNextCursor": {
+            "type": "string"
+          },
           "revisions": {
             "items": {
               "$ref": "#/components/schemas/LegalRevisionDetailDto"
@@ -4524,6 +4527,23 @@
           "draftRevisionsCount",
           "createdAt",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "LegalPublicationPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -9758,6 +9778,22 @@
         "parameters": [
           {
             "in": "query",
+            "name": "publicationLimit",
+            "required": false,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "publicationCursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -9887,6 +9923,68 @@
           }
         ],
         "summary": "Read audit events for a legal document",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}/publications": {
+      "get": {
+        "operationId": "LegalDocumentsAdminController_publications",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalPublicationPageDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List publication history for a legal document",
         "tags": [
           "legal documents admin"
         ]

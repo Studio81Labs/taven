@@ -235,6 +235,17 @@ export class LegalDocumentDetailDto extends LegalDocumentSummaryDto {
 
   @ApiPropertyOptional({ type: String })
   nextCursor?: string;
+
+  @ApiPropertyOptional({ type: String })
+  publicationsNextCursor?: string;
+}
+
+export class LegalPublicationPageDto {
+  @ApiProperty({ type: [LegalPublicationSummaryDto] })
+  items!: LegalPublicationSummaryDto[];
+
+  @ApiPropertyOptional({ type: String })
+  nextCursor?: string;
 }
 
 export class PublicLegalRevisionDto {

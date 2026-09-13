@@ -432,6 +432,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/legal-documents/{key}/publications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List publication history for a legal document */
+        get: operations["LegalDocumentsAdminController_publications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/legal-documents/{key}/publications/{publicationId}/archive": {
         parameters: {
             query?: never;
@@ -3096,6 +3113,7 @@ export interface components {
             nextCursor?: string;
             pendingPublication?: components["schemas"]["LegalPublicationSummaryDto"];
             publications: components["schemas"]["LegalPublicationSummaryDto"][];
+            publicationsNextCursor?: string;
             revisions: components["schemas"]["LegalRevisionDetailDto"][];
             /** Format: date-time */
             updatedAt: string;
@@ -3120,6 +3138,10 @@ export interface components {
             pendingPublication?: components["schemas"]["LegalPublicationSummaryDto"];
             /** Format: date-time */
             updatedAt: string;
+        };
+        LegalPublicationPageDto: {
+            items: components["schemas"]["LegalPublicationSummaryDto"][];
+            nextCursor?: string;
         };
         LegalPublicationSummaryDto: {
             /** Format: date-time */
@@ -4893,6 +4915,8 @@ export interface operations {
     LegalDocumentsAdminController_detail: {
         parameters: {
             query?: {
+                publicationLimit?: number;
+                publicationCursor?: string;
                 limit?: number;
                 cursor?: string;
             };
@@ -4956,6 +4980,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditEventPageDto"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_publications: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalPublicationPageDto"];
                 };
             };
             401: {
