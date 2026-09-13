@@ -561,10 +561,10 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       prisma.legalDocumentPublication.create({
         data: {
           documentId: termsDoc.id,
-          revisionId: rev1.id,
+          revisionId: approvedRev.id,
           startsAt: invalidFuture,
           cancelledAt: invalidFuture,
-          publishedBy: operator.id,
+          publishedBy: adminOperatorId,
           reason: "Invalid cancellation on insert",
         },
       }),
