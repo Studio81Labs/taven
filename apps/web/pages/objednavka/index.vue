@@ -245,7 +245,7 @@ function inspectionLabel(status: string | undefined): string {
       <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
         <PublicBrandMark />
       </NuxtLink>
-      <nav aria-label="Průběh objednávky" class="process-nav">
+      <nav aria-label="Průběh objednávky" class="process-nav" tabindex="0">
         <ol>
           <li :aria-current="activeProcessStep === 1 ? 'step' : undefined">
             <span>01</span> SOUBOR
@@ -298,6 +298,7 @@ function inspectionLabel(status: string | undefined): string {
             <input
               ref="fileInput"
               accept=".stl,.3mf,model/stl,model/3mf"
+              aria-label="Vybrat model STL nebo 3MF"
               class="visually-hidden"
               type="file"
               @change="onFileChange"
@@ -476,6 +477,7 @@ function inspectionLabel(status: string | undefined): string {
             <input
               ref="additionalFileInput"
               accept=".stl,.3mf,model/stl,model/3mf"
+              aria-label="Vybrat další model k nahrání"
               class="visually-hidden"
               type="file"
               @change="onAdditionalFileChange"
