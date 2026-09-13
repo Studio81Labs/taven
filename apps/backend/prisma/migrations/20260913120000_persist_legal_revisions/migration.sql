@@ -521,7 +521,7 @@ BEGIN
         IF OLD."ends_at" IS NOT NULL
            AND NEW."ends_at" IS DISTINCT FROM OLD."ends_at"
            AND pg_trigger_depth() = 1 THEN
-            RAISE EXCEPTION 'Publication ends_at is immutable and cannot be modified';
+            NEW."ends_at" := v_post_lock_now;
         END IF;
 
         IF OLD."ends_at" IS NULL
