@@ -655,7 +655,7 @@ export class LegalDocumentsService {
       }
 
       const pub = await tx.legalDocumentPublication.findUnique({
-        where: { id: publicationId },
+        where: { id: validPublicationId },
         include: { revision: true },
       });
       if (!pub || pub.documentId !== doc.id) {
@@ -747,7 +747,7 @@ export class LegalDocumentsService {
       }
 
       const pub = await tx.legalDocumentPublication.findUnique({
-        where: { id: publicationId },
+        where: { id: validPublicationId },
         include: { revision: true },
       });
       if (!pub || pub.documentId !== doc.id) {
