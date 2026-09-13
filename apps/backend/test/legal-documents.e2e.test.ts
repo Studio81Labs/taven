@@ -1423,6 +1423,14 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         )
       `),
     ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        UPDATE legal_documents
+        SET created_at = '280000-01-01'::timestamptz
+        WHERE id = '${termsDoc.id}'::uuid
+      `),
+    ).rejects.toThrow();
     const nullNoteSections = [
       { title: "Section 1", paragraphs: ["Content"], note: null },
     ] as unknown as Parameters<

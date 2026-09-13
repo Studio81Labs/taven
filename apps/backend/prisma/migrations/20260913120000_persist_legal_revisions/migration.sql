@@ -14,7 +14,15 @@ CREATE TABLE "legal_documents" (
     CONSTRAINT "legal_documents_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "legal_documents_key_key" UNIQUE ("key"),
     CONSTRAINT "legal_documents_document_id_key" UNIQUE ("document_id"),
-    CONSTRAINT "legal_documents_generation_check" CHECK ("generation" >= 1)
+    CONSTRAINT "legal_documents_generation_check" CHECK ("generation" >= 1),
+    CONSTRAINT "legal_documents_timestamp_range_check" CHECK (
+        isfinite("created_at")
+        AND "created_at" >= '0001-01-01 00:00:00+00'::timestamptz
+        AND "created_at" < '10000-01-01 00:00:00+00'::timestamptz
+        AND isfinite("updated_at")
+        AND "updated_at" >= '0001-01-01 00:00:00+00'::timestamptz
+        AND "updated_at" < '10000-01-01 00:00:00+00'::timestamptz
+    )
 );
 
 -- Triggers for legal_documents integrity and monotonicity
@@ -369,6 +377,12 @@ ALTER TABLE "audit_events"
             AND "reason_code" IS NOT NULL
         )
     );
+
+-- Earlier audit constraints treated newlines as non-whitespace. Clear these
+-- semantically empty legacy reason pairs before validating the stricter rule.
+UPDATE "audit_events"
+SET "reason" = NULL, "reason_code" = NULL
+WHERE "reason" IS NOT NULL AND "reason" ~ '^[[:space:]]*$';
 
 ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_reason_check";
 ALTER TABLE "audit_events"
