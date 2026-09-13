@@ -534,6 +534,29 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(docWhilePending.pendingPublication).toBeDefined();
     expect(docWhilePending.activePublication.endsAt).toBe(futureStartsAt);
 
+    // 7b. Reject archival at or before start boundary with 409 Conflict
+    const archivePendingRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/publications/${scheduledPub.id}/archive`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: {
+          Cookie: adminCookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": adminCsrfToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          expectedGeneration: docWhilePending.generation,
+          reasonCode: "ARCHIVE_TEST",
+          reason: "Archive test on pending future publication",
+        }),
+      },
+    );
+    expect(archivePendingRes.status).toBe(409);
+
     // 8. Cancel pending scheduled publication
     const cancelRes = await fetch(
       new URL(
@@ -588,12 +611,30 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     }
 
     // 10. Database trigger/check constraint rejects invalid cancellation state on insert
+    const invalidDraft = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: termsDoc.id,
+        sequence: 999,
+        editVersion: 1,
+        status: "APPROVED",
+        revisionCode: "terms-cancellation-test",
+        effectiveAt: new Date(),
+        approvalEvidence: "evidence",
+        approvedBy: adminOperatorId,
+        approvedAt: new Date(),
+        contentVersion: 1,
+        title: "Title",
+        summary: "Summary",
+        sections: [],
+        contentHash: "0".repeat(64),
+      },
+    });
     const invalidFuture = new Date(Date.now() + 3600000);
     await expect(
       prisma.legalDocumentPublication.create({
         data: {
           documentId: termsDoc.id,
-          revisionId: approvedRev.id,
+          revisionId: invalidDraft.id,
           startsAt: invalidFuture,
           cancelledAt: invalidFuture,
           publishedBy: adminOperatorId,
@@ -620,42 +661,5 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         payload: { test: true },
       }),
     ).rejects.toThrow(ForbiddenException);
-
-    // 12. Reject archival at or before start boundary with 409 Conflict
-    const futurePub = await prisma.legalDocumentPublication.create({
-      data: {
-        documentId: termsDoc.id,
-        revisionId: approvedRev.id,
-        startsAt: new Date(Date.now() + 600000),
-        publishedBy: adminOperatorId,
-        reason: "Future pub for archive test",
-      },
-    });
-    const termsDocForArchive = await (
-      await fetch(new URL("/admin/legal-documents/terms", baseUrl), {
-        headers: { Cookie: adminCookie },
-      })
-    ).json();
-    const archiveFutureRes = await fetch(
-      new URL(
-        `/admin/legal-documents/terms/publications/${futurePub.id}/archive`,
-        baseUrl,
-      ),
-      {
-        method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          expectedGeneration: termsDocForArchive.generation,
-          reasonCode: "ARCHIVE_TEST",
-          reason: "Archive test on future publication",
-        }),
-      },
-    );
-    expect(archiveFutureRes.status).toBe(409);
   });
 });
