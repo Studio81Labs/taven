@@ -304,7 +304,10 @@ function toSummary(
     ...(row.correlationId ? { correlationId: row.correlationId } : {}),
     ...(row.reasonCode ? { reasonCode: row.reasonCode } : {}),
     ...(row.reason ? { reason: row.reason } : {}),
-    payload: redactPayload(row.payload),
+    payload: redactPayload(
+      row.payload,
+      row.schemaVersion === 3 && row.legalDocumentId !== null,
+    ),
   };
 }
 
@@ -378,23 +381,29 @@ function operationalOrderScope(
 
 function redactPayload(
   value: Prisma.JsonValue,
+  includeLegalFields: boolean,
 ): Record<string, AuditPayloadValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const result: Record<string, AuditPayloadValue> = {};
-  for (const key of [
+  const allowedFields = [
     "operation",
     "status",
     "outcome",
     "version",
     "photoAssetId",
     "deltaMilligrams",
-    "documentId",
-    "revisionId",
-    "previousRevisionId",
-    "publicationId",
-    "previousPublicationId",
-    "contentHash",
-  ] as const) {
+    ...(includeLegalFields
+      ? [
+          "documentId",
+          "revisionId",
+          "previousRevisionId",
+          "publicationId",
+          "previousPublicationId",
+          "contentHash",
+        ]
+      : []),
+  ] as const;
+  for (const key of allowedFields) {
     const field = value[key];
     if (
       typeof field === "boolean" ||

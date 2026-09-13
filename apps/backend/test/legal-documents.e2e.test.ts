@@ -1389,6 +1389,20 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO legal_document_publications (
+          document_id, revision_id, starts_at, published_by, reason,
+          created_at, updated_at
+        ) VALUES (
+          '${termsDoc.id}'::uuid, '${futureEffectiveDraft.id}'::uuid,
+          '2099-01-01'::timestamptz, '${adminOperatorId}'::uuid,
+          'Out-of-range publication metadata',
+          '280000-01-01'::timestamptz, '280000-01-01'::timestamptz
+        )
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_publications (
           document_id, revision_id, starts_at, published_by, reason
         ) VALUES (
           '${termsDoc.id}'::uuid, '${futureEffectiveDraft.id}'::uuid,

@@ -277,9 +277,33 @@ CREATE TABLE "legal_document_publications" (
         isfinite("starts_at")
         AND "starts_at" >= '0001-01-01 00:00:00+00'::timestamptz
         AND "starts_at" < '10000-01-01 00:00:00+00'::timestamptz
-        AND ("ends_at" IS NULL OR "ends_at" > "starts_at")
+        AND (
+            "ends_at" IS NULL
+            OR (
+                isfinite("ends_at")
+                AND "ends_at" >= '0001-01-01 00:00:00+00'::timestamptz
+                AND "ends_at" < '10000-01-01 00:00:00+00'::timestamptz
+                AND "ends_at" > "starts_at"
+            )
+        )
     ),
-    CONSTRAINT "legal_document_publications_cancellation_check" CHECK ("cancelled_at" IS NULL OR "cancelled_at" < "starts_at"),
+    CONSTRAINT "legal_document_publications_cancellation_check" CHECK (
+        "cancelled_at" IS NULL
+        OR (
+            isfinite("cancelled_at")
+            AND "cancelled_at" >= '0001-01-01 00:00:00+00'::timestamptz
+            AND "cancelled_at" < '10000-01-01 00:00:00+00'::timestamptz
+            AND "cancelled_at" < "starts_at"
+        )
+    ),
+    CONSTRAINT "legal_document_publications_timestamp_range_check" CHECK (
+        isfinite("created_at")
+        AND "created_at" >= '0001-01-01 00:00:00+00'::timestamptz
+        AND "created_at" < '10000-01-01 00:00:00+00'::timestamptz
+        AND isfinite("updated_at")
+        AND "updated_at" >= '0001-01-01 00:00:00+00'::timestamptz
+        AND "updated_at" < '10000-01-01 00:00:00+00'::timestamptz
+    ),
     CONSTRAINT "legal_document_publications_reason_check" CHECK (
         length("reason") <= 1000
         AND "reason" !~ '^[[:space:]]*$'

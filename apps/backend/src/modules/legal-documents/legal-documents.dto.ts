@@ -75,7 +75,7 @@ export class ApproveLegalRevisionDto {
   })
   effectiveAt!: string;
 
-  @ApiProperty({ type: String })
+  @ApiProperty({ type: String, maxLength: 5000 })
   approvalEvidence!: string;
 
   @ApiProperty({ type: String, maxLength: 100 })

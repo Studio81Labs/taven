@@ -124,6 +124,37 @@ describe("AuditService legacy projection", () => {
     });
   });
 
+  it("does not project legal-only fields from operational audit payloads", async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: eventId,
+        eventType: "quote_request.updated",
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        operatorIdentityId: operator.operatorId,
+        nodeId,
+        schemaVersion: 2,
+        orderId: null,
+        paymentId: null,
+        refundTransactionId: null,
+        quoteRequestId: orderId,
+        quoteId: null,
+        correlationId: null,
+        reasonCode: null,
+        reason: null,
+        payload: {
+          operation: "quote_update",
+          contentHash: "sensitive-legacy-hash",
+          revisionId: "sensitive-legacy-revision",
+        },
+      },
+    ]);
+    const service = new AuditService({ auditEvent: { findMany } } as never);
+
+    const page = await service.list(operator, {});
+
+    expect(page.items[0]?.payload).toEqual({ operation: "quote_update" });
+  });
+
   it("rejects malformed operator reason pairs before writing an audit event", async () => {
     const create = vi.fn();
     const service = new AuditService({} as never);

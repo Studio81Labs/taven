@@ -142,6 +142,7 @@
       "ApproveLegalRevisionDto": {
         "properties": {
           "approvalEvidence": {
+            "maxLength": 5000,
             "type": "string"
           },
           "effectiveAt": {
