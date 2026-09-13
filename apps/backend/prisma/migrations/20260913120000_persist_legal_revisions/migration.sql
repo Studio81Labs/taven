@@ -224,8 +224,8 @@ CREATE TABLE "legal_document_revisions" (
             AND "approval_evidence" !~ '^[[:space:]]*$'
             AND "approved_by" IS NOT NULL
             AND "approved_at" IS NOT NULL
-            AND length(trim("title")) > 0
-            AND length(trim("summary")) > 0
+            AND "title" !~ '^[[:space:]]*$'
+            AND "summary" !~ '^[[:space:]]*$'
             AND legal_document_sections_are_valid("sections")
             AND legal_document_content_fits_size_limit("title", "summary", "sections")
             AND "content_hash" = legal_document_revision_content_hash("content_version", "title", "summary", "sections")
@@ -502,6 +502,9 @@ BEGIN
         END IF;
 
         IF OLD."cancelled_at" IS NULL AND NEW."cancelled_at" IS NOT NULL THEN
+            IF NEW."ends_at" IS DISTINCT FROM OLD."ends_at" THEN
+                RAISE EXCEPTION 'Cannot modify ends_at while cancelling a publication';
+            END IF;
             IF v_post_lock_now >= NEW."starts_at" THEN
                 RAISE EXCEPTION 'Cannot cancel a publication that has already started';
             END IF;

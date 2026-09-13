@@ -1131,6 +1131,15 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         },
       }),
     ).rejects.toThrow(/already has a pending publication/i);
+    await expect(
+      prisma.legalDocumentPublication.update({
+        where: { id: directCancellationPublication.id },
+        data: {
+          cancelledAt: new Date(),
+          endsAt: directCancellationStartsAt,
+        },
+      }),
+    ).rejects.toThrow(/Cannot modify ends_at while cancelling a publication/i);
     await prisma.legalDocumentPublication.update({
       where: { id: directCancellationPublication.id },
       data: { cancelledAt: new Date() },
@@ -1187,6 +1196,50 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           startsAt: new Date(futureEffectiveDate.getTime() - 3600000),
           publishedBy: adminOperatorId,
           reason: "Invalid starts_at before effective_at",
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 989,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-whitespace-title-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "\n",
+          summary: "Summary",
+          sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+          contentHash: legalContentHash("\n", "Summary", [
+            { title: "Section 1", paragraphs: ["Content"] },
+          ]),
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 988,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-whitespace-summary-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "\n",
+          sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+          contentHash: legalContentHash("Title", "\n", [
+            { title: "Section 1", paragraphs: ["Content"] },
+          ]),
         },
       }),
     ).rejects.toThrow();
