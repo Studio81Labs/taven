@@ -220,7 +220,8 @@ CREATE TABLE "legal_document_revisions" (
             AND "content_version" = 1
             AND "effective_at" IS NOT NULL
             AND "approval_evidence" IS NOT NULL
-            AND length(btrim("approval_evidence")) BETWEEN 1 AND 5000
+            AND length("approval_evidence") <= 5000
+            AND "approval_evidence" !~ '^[[:space:]]*$'
             AND "approved_by" IS NOT NULL
             AND "approved_at" IS NOT NULL
             AND length(trim("title")) > 0
@@ -407,20 +408,6 @@ FOR EACH ROW
 EXECUTE FUNCTION legal_document_revisions_immutability_fn();
 
 -- Triggers for legal_document_publications integrity
-CREATE OR REPLACE FUNCTION legal_document_publication_operation_now()
-RETURNS timestamptz AS $$
-DECLARE
-    v_now timestamptz := clock_timestamp()::timestamptz(3);
-BEGIN
-    PERFORM set_config(
-        'taven.legal_document_publication_operation_now',
-        v_now::text,
-        true
-    );
-    RETURN v_now;
-END;
-$$ LANGUAGE plpgsql VOLATILE;
-
 CREATE OR REPLACE FUNCTION legal_document_publications_integrity_fn()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -429,8 +416,6 @@ DECLARE
     v_rev_effective_at timestamptz;
     v_post_lock_now timestamptz;
     v_requested_starts_at timestamptz;
-    v_operation_now timestamptz;
-    v_operation_now_setting text;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Publication history is append-only and cannot be deleted';
@@ -438,18 +423,6 @@ BEGIN
 
     PERFORM 1 FROM "legal_documents" WHERE "id" = NEW."document_id" FOR UPDATE;
     v_post_lock_now := clock_timestamp();
-    v_operation_now_setting := current_setting(
-        'taven.legal_document_publication_operation_now',
-        true
-    );
-    IF v_operation_now_setting IS NOT NULL AND v_operation_now_setting <> '' THEN
-        BEGIN
-            v_operation_now := v_operation_now_setting::timestamptz;
-        EXCEPTION WHEN invalid_datetime_format THEN
-            RAISE EXCEPTION 'Invalid legal publication operation timestamp';
-        END;
-    END IF;
-
     IF TG_OP = 'INSERT' THEN
         SELECT "document_id", "status", "effective_at" INTO v_rev_doc_id, v_rev_status, v_rev_effective_at
         FROM "legal_document_revisions"
@@ -471,18 +444,13 @@ BEGIN
             RAISE EXCEPTION 'Revision % must have an effective_at before publication', NEW."revision_id";
         END IF;
 
-        IF NEW."cancelled_at" IS NOT NULL AND NEW."starts_at" <= v_post_lock_now THEN
-            RAISE EXCEPTION 'Cannot insert a cancelled publication that has already started';
+        IF NEW."cancelled_at" IS NOT NULL THEN
+            RAISE EXCEPTION 'Publication cannot be inserted cancelled';
         END IF;
 
         IF NEW."starts_at" <= v_post_lock_now THEN
             v_requested_starts_at := NEW."starts_at";
             NEW."starts_at" := GREATEST(v_rev_effective_at, v_post_lock_now);
-            PERFORM set_config(
-                'taven.legal_document_publication_operation_now',
-                NEW."starts_at"::text,
-                true
-            );
             UPDATE "legal_document_publications"
             SET "ends_at" = NEW."starts_at"
             WHERE "id" = (
@@ -522,15 +490,6 @@ BEGIN
             RAISE EXCEPTION 'Document % already has a pending publication', NEW."document_id";
         END IF;
 
-        IF NEW."cancelled_at" IS NOT NULL THEN
-            IF NEW."cancelled_at" >= NEW."starts_at" THEN
-                RAISE EXCEPTION 'Cancellation must be strictly before starts_at';
-            END IF;
-            IF NEW."cancelled_at" > v_post_lock_now THEN
-                RAISE EXCEPTION 'Cancellation cannot be in the future';
-            END IF;
-        END IF;
-
         RETURN NEW;
     END IF;
 
@@ -561,8 +520,8 @@ BEGIN
         IF OLD."ends_at" IS NULL
            AND NEW."ends_at" IS NOT NULL
            AND NEW."ends_at" <= v_post_lock_now
-           AND NEW."ends_at" IS DISTINCT FROM v_operation_now THEN
-            RAISE EXCEPTION 'Publication ends_at cannot be assigned in the past';
+           AND pg_trigger_depth() = 1 THEN
+            NEW."ends_at" := v_post_lock_now;
         END IF;
 
         IF NEW."id" IS DISTINCT FROM OLD."id"

@@ -426,7 +426,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           expectedEditVersion: updatedDraft.editVersion,
           expectedContentHash: "0".repeat(64),
           revisionCode: "terms-2026-09-e2e-v1",
-          effectiveAt: "2026-09-01T00:00:00.000Z",
+          effectiveAt: "2026-09-13T00:30:00+02:00",
           approvalEvidence: "Právní posouzení č. 2026/09/LP-01",
           reasonCode: "LEGAL_APPROVED",
           reason: "Schválení nového znění podmínek vedením",
@@ -448,7 +448,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           expectedEditVersion: updatedDraft.editVersion,
           expectedContentHash: updatedDraft.contentHash,
           revisionCode: "terms-2026-09-e2e-v1",
-          effectiveAt: "2026-09-01T00:00:00.000Z",
+          effectiveAt: "2026-09-13T00:30:00+02:00",
           approvalEvidence: "Právní posouzení č. 2026/09/LP-01",
           reasonCode: "LEGAL_APPROVED",
           reason: "Schválení nového znění podmínek vedením",
@@ -459,6 +459,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     const approved = await approveRes.json();
     expect(approved.status).toBe("APPROVED");
     expect(approved.revisionCode).toBe("terms-2026-09-e2e-v1");
+    expect(approved.effectiveAt).toBe("2026-09-12T22:30:00.000Z");
     expect(approved.approvalEvidence).toBe("Právní posouzení č. 2026/09/LP-01");
 
     // 6. Verify immutability via API
@@ -933,12 +934,12 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           documentId: termsDoc.id,
           revisionId: invalidDraft.id,
           startsAt: invalidFuture,
-          cancelledAt: invalidFuture,
+          cancelledAt: new Date(),
           publishedBy: adminOperatorId,
           reason: "Invalid cancellation on insert",
         },
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/Publication cannot be inserted cancelled/i);
 
     // 11. AuditService.recordLegalOperator requires legal:write permission
     const readOnlyOperator: OperatorContext = {
@@ -1054,9 +1055,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           reason: "Invalid cancelled historical import",
         },
       }),
-    ).rejects.toThrow(
-      /Cannot insert a cancelled publication that has already started/i,
-    );
+    ).rejects.toThrow(/Publication cannot be inserted cancelled/i);
 
     const directCancellationStartsAt = new Date(Date.now() + 3_600_000);
     const directCancellationRevision =
@@ -1359,7 +1358,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           status: "APPROVED",
           revisionCode: "terms-blank-evidence-test",
           effectiveAt: futureEffectiveDate,
-          approvalEvidence: "   ",
+          approvalEvidence: "\n\t",
           approvedBy: adminOperatorId,
           approvedAt: new Date(),
           contentVersion: 1,

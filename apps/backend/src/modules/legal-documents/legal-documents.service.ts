@@ -981,7 +981,7 @@ export class LegalDocumentsService {
           throw new ConflictException("Approved revision missing effectiveAt");
         }
 
-        const decisionNow = await legalPublicationOperationNow(tx);
+        const decisionNow = await databaseNow(tx);
 
         if (parsedStartsAt && parsedStartsAt < decisionNow) {
           throw new BadRequestException(
@@ -1260,7 +1260,7 @@ export class LegalDocumentsService {
           throw new ConflictException("Publication is cancelled");
         }
 
-        const decisionNow = await legalPublicationOperationNow(tx);
+        const decisionNow = await databaseNow(tx);
         if (
           pub.startsAt >= decisionNow ||
           (pub.endsAt !== null && pub.endsAt <= decisionNow)
@@ -1284,7 +1284,7 @@ export class LegalDocumentsService {
           eventType: "legal_document.publication_archived",
           reasonCode,
           reason,
-          createdAt: decisionNow,
+          createdAt: updated.endsAt ?? decisionNow,
           idempotencyKey: commandKey,
           payload: {
             operation: "publication_archived",
@@ -1472,17 +1472,6 @@ async function databaseNow(
 ): Promise<Date> {
   const rows = await transaction.$queryRaw<Array<{ now: Date }>>`
     SELECT clock_timestamp() AS now
-  `;
-  const observedAt = rows[0]?.now;
-  if (!observedAt) throw new Error("Database clock is unavailable");
-  return observedAt;
-}
-
-async function legalPublicationOperationNow(
-  transaction: Pick<Transaction, "$queryRaw">,
-): Promise<Date> {
-  const rows = await transaction.$queryRaw<Array<{ now: Date }>>`
-    SELECT legal_document_publication_operation_now() AS now
   `;
   const observedAt = rows[0]?.now;
   if (!observedAt) throw new Error("Database clock is unavailable");
