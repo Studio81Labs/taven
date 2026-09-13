@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -23,6 +24,7 @@ type AuditFilters = Readonly<{
   orderId?: string;
   paymentId?: string;
   quoteRequestId?: string;
+  legalDocumentId?: string;
 }>;
 
 const UUID_PATTERN =
@@ -94,6 +96,100 @@ export class AuditService {
     });
   }
 
+  async recordLegalOperator(
+    transaction: Transaction,
+    operator: OperatorContext,
+    input: Readonly<{
+      legalDocumentId: string;
+      eventType: string;
+      reasonCode: string;
+      reason: string;
+      payload: Prisma.InputJsonObject;
+      correlationId?: string;
+      idempotencyKey?: string;
+      createdAt?: Date;
+    }>,
+  ): Promise<void> {
+    const legalDocumentId = canonicalUuid(input.legalDocumentId);
+    const reason = input.reason.trim();
+    const reasonCode = input.reasonCode.trim();
+    if (!reason) {
+      throw new BadRequestException("Audit reason is invalid");
+    }
+    if (codePointLength(reason) > 1_000) {
+      throw new BadRequestException("Audit reason is too long");
+    }
+    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
+      throw new BadRequestException("Audit reason code is invalid");
+    }
+    const createdAt = input.createdAt ?? (await databaseNow(transaction));
+    await transaction.auditEvent.create({
+      data: {
+        eventType: input.eventType,
+        actorKind: AuditActorKind.OPERATOR,
+        actorId: operator.operatorId,
+        operatorIdentityId: operator.operatorId,
+        legalDocumentId,
+        nodeId: null,
+        schemaVersion: 3,
+        reasonCode,
+        reason,
+        orderId: null,
+        paymentId: null,
+        quoteRequestId: null,
+        quoteId: null,
+        correlationId: input.correlationId ?? null,
+        idempotencyKey: input.idempotencyKey ?? null,
+        payload: input.payload,
+        createdAt,
+      },
+    });
+  }
+
+  async listLegalDocumentAuditEvents(
+    operator: OperatorContext,
+    legalDocumentId: string,
+    cursor?: string,
+    limit = 25,
+  ): Promise<AuditEventPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.AUDIT_READ);
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new BadRequestException("Audit limit is invalid");
+    }
+    const docId = canonicalUuid(legalDocumentId);
+    const filterHash = digest({ legalDocumentId: docId });
+    const keyset =
+      cursor !== undefined ? parseCursor(cursor, filterHash) : undefined;
+    const where: Prisma.AuditEventWhereInput = {
+      legalDocumentId: docId,
+      schemaVersion: 3,
+      ...(keyset
+        ? {
+            OR: [
+              { createdAt: { lt: keyset.createdAt } },
+              { createdAt: keyset.createdAt, id: { lt: keyset.id } },
+            ],
+          }
+        : {}),
+    };
+    const rows = await this.prisma.auditEvent.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+    });
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    const nextCursor =
+      rows.length > limit && last
+        ? encodeCursor({ createdAt: last.createdAt, id: last.id, filterHash })
+        : undefined;
+    return {
+      items: page.map(toSummary),
+      ...(nextCursor ? { nextCursor } : {}),
+    };
+  }
+
   async list(
     operator: OperatorContext,
     filters: AuditFilters,
@@ -101,6 +197,9 @@ export class AuditService {
     limit = 25,
   ): Promise<AuditEventPageDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.AUDIT_READ);
+    if (operator.nodeIds.length !== 1) {
+      throw new ForbiddenException("Operator node scope is unavailable");
+    }
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw new BadRequestException("Audit limit is invalid");
     }
@@ -178,6 +277,7 @@ function toSummary(
     ...(row.operatorIdentityId
       ? { operatorIdentityId: row.operatorIdentityId }
       : {}),
+    ...(row.legalDocumentId ? { legalDocumentId: row.legalDocumentId } : {}),
     ...(row.schemaVersion === 1 ? { legacy: true } : {}),
     ...(row.nodeId ? { nodeId: row.nodeId } : {}),
     ...(row.orderId ? { orderId: row.orderId } : {}),
@@ -274,6 +374,12 @@ function redactPayload(
     "version",
     "photoAssetId",
     "deltaMilligrams",
+    "documentId",
+    "revisionId",
+    "previousRevisionId",
+    "publicationId",
+    "previousPublicationId",
+    "contentHash",
   ] as const) {
     const field = value[key];
     if (

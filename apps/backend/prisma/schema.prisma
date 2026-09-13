@@ -996,6 +996,8 @@ model OperatorIdentity {
   securityEvents        SecurityEvent[]
   auditEvents           AuditEvent[]
   handlingSessions      HandlingSession[]
+  approvedLegalRevisions LegalDocumentRevision[]
+  publishedLegalDocuments LegalDocumentPublication[]
 
   @@map("operator_identities")
 }
@@ -3058,6 +3060,7 @@ model AuditEvent {
   actorId             String?        @map("actor_id") @db.Uuid
   operatorIdentityId  String?        @map("operator_identity_id") @db.Uuid
   nodeId              String?        @map("node_id") @db.Uuid
+  legalDocumentId     String?        @map("legal_document_id") @db.Uuid
   schemaVersion       Int            @default(1) @map("schema_version")
   reasonCode          String?        @map("reason_code") @db.VarChar(100)
   reason              String?        @db.Text
@@ -3073,6 +3076,7 @@ model AuditEvent {
   refundTransaction RefundTransaction? @relation(fields: [refundTransactionId], references: [id], onDelete: Restrict)
   operatorIdentity  OperatorIdentity?  @relation(fields: [operatorIdentityId], references: [id], onDelete: Restrict)
   node              Node?              @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+  legalDocument     LegalDocument?     @relation(fields: [legalDocumentId], references: [id], onDelete: Restrict)
 
   @@index([quoteRequestId, createdAt])
   @@index([quoteId, createdAt])
@@ -3082,5 +3086,78 @@ model AuditEvent {
   @@index([operatorIdentityId, createdAt, id])
   @@index([eventType, createdAt, id])
   @@index([nodeId, createdAt, id])
+  @@index([legalDocumentId, createdAt, id])
   @@map("audit_events")
+}
+
+enum LegalRevisionStatus {
+  DRAFT
+  APPROVED
+
+  @@map("legal_revision_status")
+}
+
+model LegalDocument {
+  id         String   @id @default(uuid()) @db.Uuid
+  key        String   @unique @db.VarChar(50)
+  documentId String   @unique @map("document_id") @db.VarChar(100)
+  generation Int      @default(1)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  revisions    LegalDocumentRevision[]
+  publications LegalDocumentPublication[]
+  auditEvents  AuditEvent[]
+
+  @@map("legal_documents")
+}
+
+model LegalDocumentRevision {
+  id               String              @id @default(uuid()) @db.Uuid
+  documentId       String              @map("document_id") @db.Uuid
+  sequence         Int
+  editVersion      Int                 @default(1) @map("edit_version")
+  status           LegalRevisionStatus @default(DRAFT)
+  contentVersion   Int                 @default(1) @map("content_version")
+  title            String              @db.VarChar(255)
+  summary          String              @db.Text
+  sections         Json                @db.JsonB
+  contentHash      String              @map("content_hash") @db.VarChar(64)
+  revisionCode     String?             @unique @map("revision_code") @db.VarChar(100)
+  effectiveAt      DateTime?           @map("effective_at") @db.Timestamptz(3)
+  approvalEvidence String?             @map("approval_evidence") @db.Text
+  approvedBy       String?             @map("approved_by") @db.Uuid
+  approvedAt       DateTime?           @map("approved_at") @db.Timestamptz(3)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  document         LegalDocument              @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  approver         OperatorIdentity?          @relation(fields: [approvedBy], references: [id], onDelete: Restrict)
+  publications     LegalDocumentPublication[]
+
+  @@unique([documentId, sequence])
+  @@index([documentId, status])
+  @@index([documentId, createdAt])
+  @@map("legal_document_revisions")
+}
+
+model LegalDocumentPublication {
+  id          String    @id @default(uuid()) @db.Uuid
+  documentId  String    @map("document_id") @db.Uuid
+  revisionId  String    @map("revision_id") @db.Uuid
+  startsAt    DateTime  @map("starts_at") @db.Timestamptz(3)
+  endsAt      DateTime? @map("ends_at") @db.Timestamptz(3)
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  publishedBy String    @map("published_by") @db.Uuid
+  reason      String    @db.Text
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  document  LegalDocument         @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  revision  LegalDocumentRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  publisher OperatorIdentity      @relation(fields: [publishedBy], references: [id], onDelete: Restrict)
+
+  @@index([documentId, startsAt])
+  @@index([revisionId])
+  @@map("legal_document_publications")
 }

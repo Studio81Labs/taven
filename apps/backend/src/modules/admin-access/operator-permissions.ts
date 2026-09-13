@@ -9,6 +9,8 @@ export const OPERATOR_PERMISSIONS = {
   AUDIT_READ: "audit:read",
   METRICS_READ: "metrics:read",
   CATALOG_WRITE: "catalog:write",
+  LEGAL_READ: "legal:read",
+  LEGAL_WRITE: "legal:write",
 } as const;
 
 export type OperatorPermission =

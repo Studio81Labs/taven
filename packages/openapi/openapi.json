@@ -139,6 +139,63 @@
         ],
         "type": "object"
       },
+      "ApproveLegalRevisionDto": {
+        "properties": {
+          "approvalEvidence": {
+            "type": "string"
+          },
+          "effectiveAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expectedContentHash": {
+            "description": "Expected SHA-256 content hash",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "revisionCode": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedContentHash",
+          "revisionCode",
+          "effectiveAt",
+          "approvalEvidence",
+          "reasonCode",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ArchiveLegalPublicationDto": {
+        "properties": {
+          "expectedGeneration": {
+            "type": "number"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedGeneration",
+          "reasonCode",
+          "reason"
+        ],
+        "type": "object"
+      },
       "AssistedSlaMetricsDto": {
         "properties": {
           "definition": {
@@ -276,6 +333,10 @@
           },
           "legacy": {
             "type": "boolean"
+          },
+          "legalDocumentId": {
+            "format": "uuid",
+            "type": "string"
           },
           "nodeId": {
             "format": "uuid",
@@ -1393,6 +1454,27 @@
         ],
         "type": "object"
       },
+      "CancelLegalPublicationDto": {
+        "properties": {
+          "expectedGeneration": {
+            "type": "number"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedGeneration",
+          "reasonCode",
+          "reason"
+        ],
+        "type": "object"
+      },
       "CancelOrderDto": {
         "properties": {
           "printingConsumptions": {
@@ -2192,6 +2274,43 @@
           "priceMinorUnitsDenominator",
           "currency",
           "remainingMilligrams"
+        ],
+        "type": "object"
+      },
+      "CreateLegalDraftDto": {
+        "properties": {
+          "expectedGeneration": {
+            "type": "number"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/LegalDocumentSectionDto"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedGeneration",
+          "title",
+          "summary",
+          "sections",
+          "reasonCode",
+          "reason"
         ],
         "type": "object"
       },
@@ -4263,6 +4382,334 @@
           "status",
           "effectiveAt",
           "effective"
+        ],
+        "type": "object"
+      },
+      "LegalDocumentDetailDto": {
+        "properties": {
+          "activePublication": {
+            "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "documentId": {
+            "type": "string"
+          },
+          "draftRevisionsCount": {
+            "type": "number"
+          },
+          "generation": {
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "latestDraft": {
+            "$ref": "#/components/schemas/LegalRevisionSummaryDto"
+          },
+          "nextCursor": {
+            "type": "string"
+          },
+          "pendingPublication": {
+            "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/LegalRevisionDetailDto"
+            },
+            "type": "array"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "documentId",
+          "generation",
+          "draftRevisionsCount",
+          "createdAt",
+          "updatedAt",
+          "revisions"
+        ],
+        "type": "object"
+      },
+      "LegalDocumentSectionDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "note": {
+            "type": "string"
+          },
+          "paragraphs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "LegalDocumentSummaryDto": {
+        "properties": {
+          "activePublication": {
+            "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "documentId": {
+            "type": "string"
+          },
+          "draftRevisionsCount": {
+            "type": "number"
+          },
+          "generation": {
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "latestDraft": {
+            "$ref": "#/components/schemas/LegalRevisionSummaryDto"
+          },
+          "pendingPublication": {
+            "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "documentId",
+          "generation",
+          "draftRevisionsCount",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "LegalPublicationSummaryDto": {
+        "properties": {
+          "cancelledAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "endsAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "publishedBy": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revisionCode": {
+            "type": "string"
+          },
+          "revisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "startsAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "revisionId",
+          "startsAt",
+          "publishedBy",
+          "reason",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "LegalRevisionDetailDto": {
+        "properties": {
+          "approvalEvidence": {
+            "type": "string"
+          },
+          "approvedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "approvedBy": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "contentHash": {
+            "type": "string"
+          },
+          "contentVersion": {
+            "type": "number"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "editVersion": {
+            "type": "number"
+          },
+          "effectiveAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revisionCode": {
+            "type": "string"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/LegalDocumentSectionDto"
+            },
+            "type": "array"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "APPROVED"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "editVersion",
+          "status",
+          "contentVersion",
+          "title",
+          "summary",
+          "contentHash",
+          "createdAt",
+          "updatedAt",
+          "sections"
+        ],
+        "type": "object"
+      },
+      "LegalRevisionSummaryDto": {
+        "properties": {
+          "approvalEvidence": {
+            "type": "string"
+          },
+          "approvedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "approvedBy": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "contentHash": {
+            "type": "string"
+          },
+          "contentVersion": {
+            "type": "number"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "editVersion": {
+            "type": "number"
+          },
+          "effectiveAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revisionCode": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "status": {
+            "enum": [
+              "DRAFT",
+              "APPROVED"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "editVersion",
+          "status",
+          "contentVersion",
+          "title",
+          "summary",
+          "contentHash",
+          "createdAt",
+          "updatedAt"
         ],
         "type": "object"
       },
@@ -6674,6 +7121,78 @@
         ],
         "type": "object"
       },
+      "PublicLegalRevisionDto": {
+        "properties": {
+          "contentHash": {
+            "type": "string"
+          },
+          "contentVersion": {
+            "type": "number"
+          },
+          "documentId": {
+            "type": "string"
+          },
+          "effectiveAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "revisionCode": {
+            "type": "string"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/LegalDocumentSectionDto"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "documentId",
+          "key",
+          "revisionCode",
+          "contentVersion",
+          "contentHash",
+          "title",
+          "summary",
+          "sections",
+          "effectiveAt"
+        ],
+        "type": "object"
+      },
+      "PublishLegalRevisionDto": {
+        "properties": {
+          "expectedGeneration": {
+            "type": "number"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "startsAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedGeneration",
+          "reasonCode",
+          "reason"
+        ],
+        "type": "object"
+      },
       "QueueMetricsDto": {
         "properties": {
           "definition": {
@@ -7594,6 +8113,43 @@
           "capturedCash",
           "succeededRefunds",
           "netReceipts"
+        ],
+        "type": "object"
+      },
+      "UpdateLegalDraftDto": {
+        "properties": {
+          "expectedEditVersion": {
+            "type": "number"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "type": "string"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/LegalDocumentSectionDto"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 255,
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedEditVersion",
+          "title",
+          "summary",
+          "sections",
+          "reasonCode",
+          "reason"
         ],
         "type": "object"
       },
@@ -9145,6 +9701,649 @@
         "summary": "List node-scoped production jobs",
         "tags": [
           "operator reads"
+        ]
+      }
+    },
+    "/admin/legal-documents": {
+      "get": {
+        "operationId": "LegalDocumentsAdminController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LegalDocumentSummaryDto"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List all managed legal documents",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}": {
+      "get": {
+        "operationId": "LegalDocumentsAdminController_detail",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalDocumentDetailDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Get legal document details and revisions",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}/audit-events": {
+      "get": {
+        "operationId": "LegalDocumentsAdminController_auditEvents",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventPageDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read audit events for a legal document",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}/publications/{publicationId}/archive": {
+      "post": {
+        "operationId": "LegalDocumentsAdminController_archivePublication",
+        "parameters": [
+          {
+            "description": "Publication UUID",
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveLegalPublicationDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Archive an active publication without replacement",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}/publications/{publicationId}/cancel": {
+      "post": {
+        "operationId": "LegalDocumentsAdminController_cancelPublication",
+        "parameters": [
+          {
+            "description": "Publication UUID",
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelLegalPublicationDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Cancel a pending scheduled publication",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}/revisions": {
+      "post": {
+        "operationId": "LegalDocumentsAdminController_createDraft",
+        "parameters": [
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLegalDraftDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalRevisionDetailDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Create a new draft revision for a legal document",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}/revisions/{revisionId}": {
+      "put": {
+        "operationId": "LegalDocumentsAdminController_updateDraft",
+        "parameters": [
+          {
+            "description": "Draft revision UUID",
+            "in": "path",
+            "name": "revisionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLegalDraftDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalRevisionDetailDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Update an existing draft revision",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}/revisions/{revisionId}/approve": {
+      "post": {
+        "operationId": "LegalDocumentsAdminController_approveRevision",
+        "parameters": [
+          {
+            "description": "Draft revision UUID",
+            "in": "path",
+            "name": "revisionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveLegalRevisionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalRevisionDetailDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Approve a draft revision",
+        "tags": [
+          "legal documents admin"
+        ]
+      }
+    },
+    "/admin/legal-documents/{key}/revisions/{revisionId}/publish": {
+      "post": {
+        "operationId": "LegalDocumentsAdminController_publishRevision",
+        "parameters": [
+          {
+            "description": "Approved revision UUID",
+            "in": "path",
+            "name": "revisionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishLegalRevisionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalPublicationSummaryDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": ""
+          },
+          "401": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Publish an approved legal revision",
+        "tags": [
+          "legal documents admin"
         ]
       }
     },
@@ -13731,6 +14930,50 @@
         "summary": "Report API process health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/legal-documents/{key}/revisions/{revisionCode}": {
+      "get": {
+        "operationId": "LegalDocumentsController_getRevision",
+        "parameters": [
+          {
+            "description": "Immutable revision code",
+            "in": "path",
+            "name": "revisionCode",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicLegalRevisionDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "summary": "Public exact-version reader for published legal document revisions",
+        "tags": [
+          "legal documents"
         ]
       }
     },

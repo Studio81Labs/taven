@@ -26,6 +26,7 @@ import {
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
 import { readAdminAccessConfig } from "./admin-access.config";
+import { AllowNodeFreeAdmin } from "./allow-node-free-admin.decorator";
 import { OperatorAccessGuard } from "./operator-access.guard";
 import { OPERATOR_CSRF_HEADER } from "./operator-auth.openapi";
 import {
@@ -169,6 +170,7 @@ export class OperatorAuthController {
 
   @Get("session")
   @UseGuards(OperatorAccessGuard)
+  @AllowNodeFreeAdmin()
   @ApiSecurity("operatorSession")
   @ApiOperation({
     summary: "Read the current authenticated operator session and CSRF token",
@@ -182,6 +184,7 @@ export class OperatorAuthController {
   @Delete("session")
   @HttpCode(204)
   @UseGuards(OperatorAccessGuard)
+  @AllowNodeFreeAdmin()
   @ApiSecurity("operatorSession")
   @ApiOperation({ summary: "Revoke the current operator session" })
   @ApiUnauthorizedResponse()

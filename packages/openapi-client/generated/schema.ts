@@ -381,6 +381,159 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/legal-documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List all managed legal documents */
+        get: operations["LegalDocumentsAdminController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/legal-documents/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get legal document details and revisions */
+        get: operations["LegalDocumentsAdminController_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/legal-documents/{key}/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read audit events for a legal document */
+        get: operations["LegalDocumentsAdminController_auditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/legal-documents/{key}/publications/{publicationId}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Archive an active publication without replacement */
+        post: operations["LegalDocumentsAdminController_archivePublication"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/legal-documents/{key}/publications/{publicationId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a pending scheduled publication */
+        post: operations["LegalDocumentsAdminController_cancelPublication"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/legal-documents/{key}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a new draft revision for a legal document */
+        post: operations["LegalDocumentsAdminController_createDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/legal-documents/{key}/revisions/{revisionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update an existing draft revision */
+        put: operations["LegalDocumentsAdminController_updateDraft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/legal-documents/{key}/revisions/{revisionId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a draft revision */
+        post: operations["LegalDocumentsAdminController_approveRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/legal-documents/{key}/revisions/{revisionId}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish an approved legal revision */
+        post: operations["LegalDocumentsAdminController_publishRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/metrics": {
         parameters: {
             query?: never;
@@ -1462,6 +1615,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/legal-documents/{key}/revisions/{revisionCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public exact-version reader for published legal document revisions */
+        get: operations["LegalDocumentsController_getRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/legal-documents/availability": {
         parameters: {
             query?: never;
@@ -1737,6 +1907,21 @@ export interface components {
             claimPolicyRevision: string;
             claimWindowDays: number;
         };
+        ApproveLegalRevisionDto: {
+            approvalEvidence: string;
+            /** Format: date-time */
+            effectiveAt: string;
+            /** @description Expected SHA-256 content hash */
+            expectedContentHash: string;
+            reason: string;
+            reasonCode: string;
+            revisionCode: string;
+        };
+        ArchiveLegalPublicationDto: {
+            expectedGeneration: number;
+            reason: string;
+            reasonCode: string;
+        };
         AssistedSlaMetricsDto: {
             definition: string;
             pendingOverdue: number;
@@ -1777,6 +1962,8 @@ export interface components {
             /** Format: uuid */
             id: string;
             legacy?: boolean;
+            /** Format: uuid */
+            legalDocumentId?: string;
             /** Format: uuid */
             nodeId?: string;
             /** Format: uuid */
@@ -2051,6 +2238,11 @@ export interface components {
             /** Format: uuid */
             jobId: string;
         };
+        CancelLegalPublicationDto: {
+            expectedGeneration: number;
+            reason: string;
+            reasonCode: string;
+        };
         CancelOrderDto: {
             /** @description Exact material consumption for every Job that is actively printing */
             printingConsumptions?: components["schemas"]["CancellationPrintingConsumptionDto"][];
@@ -2255,6 +2447,14 @@ export interface components {
             remainingMilligrams: string;
             sku: string;
             vendor: string;
+        };
+        CreateLegalDraftDto: {
+            expectedGeneration: number;
+            reason: string;
+            reasonCode: string;
+            sections: components["schemas"]["LegalDocumentSectionDto"][];
+            summary: string;
+            title: string;
         };
         CreateMachineCalibrationDto: {
             elephantFootCompensationMicrometers: number;
@@ -2879,6 +3079,111 @@ export interface components {
             revision: string;
             /** @enum {string} */
             status: "draft" | "approved";
+        };
+        LegalDocumentDetailDto: {
+            activePublication?: components["schemas"]["LegalPublicationSummaryDto"];
+            /** Format: date-time */
+            createdAt: string;
+            documentId: string;
+            draftRevisionsCount: number;
+            generation: number;
+            /** Format: uuid */
+            id: string;
+            key: string;
+            latestDraft?: components["schemas"]["LegalRevisionSummaryDto"];
+            nextCursor?: string;
+            pendingPublication?: components["schemas"]["LegalPublicationSummaryDto"];
+            revisions: components["schemas"]["LegalRevisionDetailDto"][];
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        LegalDocumentSectionDto: {
+            items?: string[];
+            note?: string;
+            paragraphs?: string[];
+            title: string;
+        };
+        LegalDocumentSummaryDto: {
+            activePublication?: components["schemas"]["LegalPublicationSummaryDto"];
+            /** Format: date-time */
+            createdAt: string;
+            documentId: string;
+            draftRevisionsCount: number;
+            generation: number;
+            /** Format: uuid */
+            id: string;
+            key: string;
+            latestDraft?: components["schemas"]["LegalRevisionSummaryDto"];
+            pendingPublication?: components["schemas"]["LegalPublicationSummaryDto"];
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        LegalPublicationSummaryDto: {
+            /** Format: date-time */
+            cancelledAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            endsAt?: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            publishedBy: string;
+            reason: string;
+            revisionCode?: string;
+            /** Format: uuid */
+            revisionId: string;
+            /** Format: date-time */
+            startsAt: string;
+        };
+        LegalRevisionDetailDto: {
+            approvalEvidence?: string;
+            /** Format: date-time */
+            approvedAt?: string;
+            /** Format: uuid */
+            approvedBy?: string;
+            contentHash: string;
+            contentVersion: number;
+            /** Format: date-time */
+            createdAt: string;
+            editVersion: number;
+            /** Format: date-time */
+            effectiveAt?: string;
+            /** Format: uuid */
+            id: string;
+            revisionCode?: string;
+            sections: components["schemas"]["LegalDocumentSectionDto"][];
+            sequence: number;
+            /** @enum {string} */
+            status: "DRAFT" | "APPROVED";
+            summary: string;
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        LegalRevisionSummaryDto: {
+            approvalEvidence?: string;
+            /** Format: date-time */
+            approvedAt?: string;
+            /** Format: uuid */
+            approvedBy?: string;
+            contentHash: string;
+            contentVersion: number;
+            /** Format: date-time */
+            createdAt: string;
+            editVersion: number;
+            /** Format: date-time */
+            effectiveAt?: string;
+            /** Format: uuid */
+            id: string;
+            revisionCode?: string;
+            sequence: number;
+            /** @enum {string} */
+            status: "DRAFT" | "APPROVED";
+            summary: string;
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
         MachineCalibrationPageDto: {
             items: components["schemas"]["MachineCalibrationReadDto"][];
@@ -3518,6 +3823,25 @@ export interface components {
             quality: string;
             supportsEnabled: boolean;
         };
+        PublicLegalRevisionDto: {
+            contentHash: string;
+            contentVersion: number;
+            documentId: string;
+            /** Format: date-time */
+            effectiveAt: string;
+            key: string;
+            revisionCode: string;
+            sections: components["schemas"]["LegalDocumentSectionDto"][];
+            summary: string;
+            title: string;
+        };
+        PublishLegalRevisionDto: {
+            expectedGeneration: number;
+            reason: string;
+            reasonCode: string;
+            /** Format: date-time */
+            startsAt?: string;
+        };
         QueueMetricsDto: {
             definition: string;
             machineCount: number;
@@ -3758,6 +4082,14 @@ export interface components {
             /** @enum {string} */
             scope?: "PLATFORM";
             succeededRefunds: components["schemas"]["MetricMoneyDto"];
+        };
+        UpdateLegalDraftDto: {
+            expectedEditVersion: number;
+            reason: string;
+            reasonCode: string;
+            sections: components["schemas"]["LegalDocumentSectionDto"][];
+            summary: string;
+            title: string;
         };
         UploadIntentResponseDto: {
             /** @description One-time capability used to confirm and later read this upload. It is returned only when the intent is created. */
@@ -4521,6 +4853,487 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["OperatorJobPageDto"];
                 };
+            };
+        };
+    };
+    LegalDocumentsAdminController_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalDocumentSummaryDto"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_detail: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalDocumentDetailDto"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_auditEvents: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventPageDto"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_archivePublication: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                /** @description Publication UUID */
+                publicationId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArchiveLegalPublicationDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalPublicationSummaryDto"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_cancelPublication: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                /** @description Publication UUID */
+                publicationId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelLegalPublicationDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalPublicationSummaryDto"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_createDraft: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLegalDraftDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalRevisionDetailDto"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_updateDraft: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                /** @description Draft revision UUID */
+                revisionId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLegalDraftDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalRevisionDetailDto"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_approveRevision: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                /** @description Draft revision UUID */
+                revisionId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveLegalRevisionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalRevisionDetailDto"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    LegalDocumentsAdminController_publishRevision: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                /** @description Approved revision UUID */
+                revisionId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishLegalRevisionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LegalPublicationSummaryDto"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -6680,6 +7493,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HealthResponseDto"];
                 };
+            };
+        };
+    };
+    LegalDocumentsController_getRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Immutable revision code */
+                revisionCode: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicLegalRevisionDto"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
