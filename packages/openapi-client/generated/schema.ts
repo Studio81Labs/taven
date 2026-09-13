@@ -1926,7 +1926,10 @@ export interface components {
         };
         ApproveLegalRevisionDto: {
             approvalEvidence: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description RFC 3339 instant with at most millisecond precision
+             */
             effectiveAt: string;
             /** @description Expected SHA-256 content hash */
             expectedContentHash: string;
@@ -3864,7 +3867,10 @@ export interface components {
             expectedGeneration: number;
             reason: string;
             reasonCode: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description RFC 3339 instant with at most millisecond precision
+             */
             startsAt?: string;
         };
         QueueMetricsDto: {
