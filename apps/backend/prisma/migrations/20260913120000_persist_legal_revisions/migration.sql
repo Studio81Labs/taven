@@ -88,13 +88,11 @@ BEGIN
         END LOOP;
 
         IF section ? 'note' THEN
-            IF jsonb_typeof(section->'note') <> 'string' THEN
+            IF jsonb_typeof(section->'note') <> 'string'
+               OR section->>'note' ~ '^[[:space:]]*$' THEN
                 RETURN false;
             END IF;
-            has_content := has_content OR (
-                jsonb_typeof(section->'note') = 'string'
-                AND section->>'note' !~ '^[[:space:]]*$'
-            );
+            has_content := true;
         END IF;
 
         IF NOT has_content THEN
@@ -521,12 +519,19 @@ BEGIN
         IF OLD."ends_at" IS NOT NULL
            AND NEW."ends_at" IS DISTINCT FROM OLD."ends_at"
            AND pg_trigger_depth() = 1 THEN
+            IF OLD."starts_at" > v_post_lock_now
+               OR OLD."ends_at" <= v_post_lock_now THEN
+                RAISE EXCEPTION 'Can only archive a currently active publication';
+            END IF;
             NEW."ends_at" := v_post_lock_now;
         END IF;
 
         IF OLD."ends_at" IS NULL
            AND NEW."ends_at" IS NOT NULL
            AND pg_trigger_depth() = 1 THEN
+            IF OLD."starts_at" > v_post_lock_now THEN
+                RAISE EXCEPTION 'Can only archive a currently active publication';
+            END IF;
             NEW."ends_at" := v_post_lock_now;
         END IF;
 

@@ -1217,6 +1217,31 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         },
       }),
     ).rejects.toThrow();
+    const blankNoteSections = [
+      { title: "Section 1", paragraphs: ["Content"], note: "\n\t" },
+    ] as Parameters<typeof computeLegalRevisionContentHash>[0]["sections"];
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 9911,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-blank-note-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: [
+            { title: "Section 1", paragraphs: ["Content"], note: "\n\t" },
+          ],
+          contentHash: legalContentHash("Title", "Summary", blankNoteSections),
+        },
+      }),
+    ).rejects.toThrow();
     await expect(
       prisma.legalDocumentRevision.create({
         data: {
@@ -1425,6 +1450,11 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         `UPDATE legal_document_publications SET reason = 'modified reason' WHERE id = '${pub.id}'`,
       ),
     ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        `UPDATE legal_document_publications SET ends_at = clock_timestamp() WHERE id = '${pub.id}'`,
+      ),
+    ).rejects.toThrow(/currently active publication/i);
     await expect(
       prisma.$executeRawUnsafe(
         `UPDATE legal_document_publications SET id = gen_random_uuid() WHERE id = '${pub.id}'`,
