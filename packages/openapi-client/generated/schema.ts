@@ -5049,6 +5049,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
@@ -5110,6 +5112,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
@@ -5171,6 +5175,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
@@ -5230,6 +5236,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
@@ -5291,6 +5299,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
@@ -5352,6 +5362,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };

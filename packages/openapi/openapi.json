@@ -10013,6 +10013,17 @@
             }
           },
           {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
             "name": "x-csrf-token",
@@ -10095,6 +10106,17 @@
             }
           },
           {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
             "name": "x-csrf-token",
@@ -10164,6 +10186,17 @@
             "name": "key",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
               "type": "string"
             }
           },
@@ -10250,6 +10283,17 @@
             }
           },
           {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
             "name": "x-csrf-token",
@@ -10332,6 +10376,17 @@
             }
           },
           {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
             "name": "x-csrf-token",
@@ -10410,6 +10465,17 @@
             "name": "key",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
               "type": "string"
             }
           },

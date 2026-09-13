@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { LegalRevisionStatus, Prisma } from "@prisma/client";
+import { IdempotencyStatus, LegalRevisionStatus, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { OperatorContext } from "../admin-access/operator-context";
@@ -118,6 +118,50 @@ function encodePublicationCursor(item: { startsAt: Date; id: string }): string {
   ).toString("base64url");
 }
 
+function requireIdempotencyKey(value?: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new BadRequestException("Idempotency-Key header is required");
+  }
+  const trimmed = value.trim();
+  if (trimmed.length < 8 || trimmed.length > 255) {
+    throw new BadRequestException(
+      "Idempotency-Key must contain between 8 and 255 characters",
+    );
+  }
+  return trimmed;
+}
+
+function canonicalInput(value: unknown): CanonicalJson {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new BadRequestException("Idempotency input must be finite JSON");
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(canonicalInput);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, v]) => v !== undefined)
+        .map(([key, entry]) => [key, canonicalInput(entry)]),
+    );
+  }
+  throw new BadRequestException("Idempotency input must be JSON");
+}
+
+function fingerprintFor(input: unknown): string {
+  return createHash("sha256")
+    .update(canonicalJson(canonicalInput(input)))
+    .digest("hex");
+}
+
 @Injectable()
 export class LegalDocumentsService {
   constructor(
@@ -147,6 +191,64 @@ export class LegalDocumentsService {
       throw new NotFoundException(`Legal document '${key}' was not found`);
     }
     return doc;
+  }
+
+  private async executeWithIdempotency<T>(
+    namespace: string,
+    idempotencyKeyInput: string,
+    input: unknown,
+    execute: (tx: Prisma.TransactionClient, commandKey: string) => Promise<T>,
+  ): Promise<T> {
+    const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
+    const fingerprint = fingerprintFor(input);
+
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${namespace + ":" + idempotencyKey}, 0))::text`;
+
+      const now = await databaseNow(tx);
+      const existing = await tx.idempotencyRecord.findFirst({
+        where: { namespace, idempotencyKey },
+        orderBy: { generation: "desc" },
+      });
+
+      if (existing && existing.expiresAt > now) {
+        if (existing.requestFingerprint !== fingerprint) {
+          throw new ConflictException(
+            "Idempotency key was already used with different input",
+          );
+        }
+        if (
+          existing.status !== IdempotencyStatus.COMPLETED ||
+          !existing.responseBody
+        ) {
+          throw new ConflictException("Idempotent command is incomplete");
+        }
+        return existing.responseBody as unknown as T;
+      }
+
+      const record = await tx.idempotencyRecord.create({
+        data: {
+          namespace,
+          idempotencyKey,
+          generation: (existing?.generation ?? 0) + 1,
+          requestFingerprint: fingerprint,
+          expiresAt: new Date(now.getTime() + 30 * 86_400_000),
+        },
+      });
+
+      const result = await execute(tx, idempotencyKey);
+
+      await tx.idempotencyRecord.update({
+        where: { id: record.id },
+        data: {
+          status: IdempotencyStatus.COMPLETED,
+          responseStatusCode: 200,
+          responseBody: result as unknown as Prisma.InputJsonObject,
+        },
+      });
+
+      return result;
+    });
   }
 
   async listDocuments(
@@ -453,6 +555,7 @@ export class LegalDocumentsService {
     operator: OperatorContext,
     key: string,
     dto: CreateLegalDraftDto,
+    idempotencyKey: string,
   ): Promise<LegalRevisionDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
@@ -476,55 +579,61 @@ export class LegalDocumentsService {
       sections,
     });
 
-    return await this.prisma.$transaction(async (tx) => {
-      const doc = await this.lockDocumentByKey(tx, key);
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      { action: "createDraft", key, dto },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
 
-      if (doc.generation !== expectedGeneration) {
-        throw new ConflictException("Document generation mismatch");
-      }
+        if (doc.generation !== expectedGeneration) {
+          throw new ConflictException("Document generation mismatch");
+        }
 
-      const latestSeq = await tx.legalDocumentRevision.aggregate({
-        where: { documentId: doc.id },
-        _max: { sequence: true },
-      });
-      const nextSequence = (latestSeq._max.sequence ?? 0) + 1;
+        const latestSeq = await tx.legalDocumentRevision.aggregate({
+          where: { documentId: doc.id },
+          _max: { sequence: true },
+        });
+        const nextSequence = (latestSeq._max.sequence ?? 0) + 1;
 
-      const revision = await tx.legalDocumentRevision.create({
-        data: {
-          documentId: doc.id,
-          sequence: nextSequence,
-          editVersion: 1,
-          status: LegalRevisionStatus.DRAFT,
-          contentVersion: 1,
-          title,
-          summary,
-          sections: sections as unknown as Prisma.InputJsonValue,
-          contentHash,
-        },
-      });
+        const revision = await tx.legalDocumentRevision.create({
+          data: {
+            documentId: doc.id,
+            sequence: nextSequence,
+            editVersion: 1,
+            status: LegalRevisionStatus.DRAFT,
+            contentVersion: 1,
+            title,
+            summary,
+            sections: sections as unknown as Prisma.InputJsonValue,
+            contentHash,
+          },
+        });
 
-      await tx.legalDocument.update({
-        where: { id: doc.id },
-        data: { generation: { increment: 1 } },
-      });
+        await tx.legalDocument.update({
+          where: { id: doc.id },
+          data: { generation: { increment: 1 } },
+        });
 
-      const decisionNow = await databaseNow(tx);
-      await this.audit.recordLegalOperator(tx, operator, {
-        legalDocumentId: doc.id,
-        eventType: "legal_document.draft_created",
-        reasonCode,
-        reason,
-        createdAt: decisionNow,
-        payload: {
-          operation: "draft_created",
-          documentId: doc.id,
-          revisionId: revision.id,
-          contentHash: revision.contentHash,
-        },
-      });
+        const decisionNow = await databaseNow(tx);
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          eventType: "legal_document.draft_created",
+          reasonCode,
+          reason,
+          createdAt: decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "draft_created",
+            documentId: doc.id,
+            revisionId: revision.id,
+            contentHash: revision.contentHash,
+          },
+        });
 
-      return toRevisionDetail(revision);
-    });
+        return toRevisionDetail(revision);
+      },
+    );
   }
 
   async updateDraft(
@@ -532,6 +641,7 @@ export class LegalDocumentsService {
     key: string,
     revisionId: string,
     dto: UpdateLegalDraftDto,
+    idempotencyKey: string,
   ): Promise<LegalRevisionDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
@@ -556,50 +666,56 @@ export class LegalDocumentsService {
       sections,
     });
 
-    return await this.prisma.$transaction(async (tx) => {
-      const doc = await this.lockDocumentByKey(tx, key);
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      { action: "updateDraft", key, revisionId: validRevisionId, dto },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
 
-      const revision = await tx.legalDocumentRevision.findUnique({
-        where: { id: validRevisionId },
-      });
-      if (!revision || revision.documentId !== doc.id) {
-        throw new NotFoundException("Revision was not found");
-      }
-      if (revision.status !== LegalRevisionStatus.DRAFT) {
-        throw new ConflictException("Cannot edit an approved revision");
-      }
-      if (revision.editVersion !== expectedEditVersion) {
-        throw new ConflictException("Draft edit version mismatch");
-      }
+        const revision = await tx.legalDocumentRevision.findUnique({
+          where: { id: validRevisionId },
+        });
+        if (!revision || revision.documentId !== doc.id) {
+          throw new NotFoundException("Revision was not found");
+        }
+        if (revision.status !== LegalRevisionStatus.DRAFT) {
+          throw new ConflictException("Cannot edit an approved revision");
+        }
+        if (revision.editVersion !== expectedEditVersion) {
+          throw new ConflictException("Draft edit version mismatch");
+        }
 
-      const updated = await tx.legalDocumentRevision.update({
-        where: { id: revision.id },
-        data: {
-          title,
-          summary,
-          sections: sections as unknown as Prisma.InputJsonValue,
-          contentHash,
-          editVersion: { increment: 1 },
-        },
-      });
+        const updated = await tx.legalDocumentRevision.update({
+          where: { id: revision.id },
+          data: {
+            title,
+            summary,
+            sections: sections as unknown as Prisma.InputJsonValue,
+            contentHash,
+            editVersion: { increment: 1 },
+          },
+        });
 
-      const decisionNow = await databaseNow(tx);
-      await this.audit.recordLegalOperator(tx, operator, {
-        legalDocumentId: doc.id,
-        eventType: "legal_document.draft_updated",
-        reasonCode,
-        reason,
-        createdAt: decisionNow,
-        payload: {
-          operation: "draft_updated",
-          documentId: doc.id,
-          revisionId: updated.id,
-          contentHash: updated.contentHash,
-        },
-      });
+        const decisionNow = await databaseNow(tx);
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          eventType: "legal_document.draft_updated",
+          reasonCode,
+          reason,
+          createdAt: decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "draft_updated",
+            documentId: doc.id,
+            revisionId: updated.id,
+            contentHash: updated.contentHash,
+          },
+        });
 
-      return toRevisionDetail(updated);
-    });
+        return toRevisionDetail(updated);
+      },
+    );
   }
 
   async approveRevision(
@@ -607,6 +723,7 @@ export class LegalDocumentsService {
     key: string,
     revisionId: string,
     dto: ApproveLegalRevisionDto,
+    idempotencyKey: string,
   ): Promise<LegalRevisionDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
@@ -646,86 +763,92 @@ export class LegalDocumentsService {
       pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
     });
 
-    return await this.prisma.$transaction(async (tx) => {
-      const doc = await this.lockDocumentByKey(tx, key);
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      { action: "approveRevision", key, revisionId: validRevisionId, dto },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
 
-      const revision = await tx.legalDocumentRevision.findUnique({
-        where: { id: validRevisionId },
-      });
-      if (!revision || revision.documentId !== doc.id) {
-        throw new NotFoundException("Revision was not found");
-      }
-      if (revision.status !== LegalRevisionStatus.DRAFT) {
-        throw new ConflictException("Revision is already approved");
-      }
-      if (revision.editVersion !== expectedEditVersion) {
-        throw new ConflictException("Draft edit version mismatch");
-      }
-      if (revision.contentHash !== expectedContentHash) {
-        throw new ConflictException("Revision content hash mismatch");
-      }
-      if (
-        !revision.title.trim() ||
-        !revision.summary.trim() ||
-        !Array.isArray(revision.sections) ||
-        revision.sections.length === 0
-      ) {
-        throw new BadRequestException(
-          "Approved revision must have non-empty title, summary, and sections",
-        );
-      }
+        const revision = await tx.legalDocumentRevision.findUnique({
+          where: { id: validRevisionId },
+        });
+        if (!revision || revision.documentId !== doc.id) {
+          throw new NotFoundException("Revision was not found");
+        }
+        if (revision.status !== LegalRevisionStatus.DRAFT) {
+          throw new ConflictException("Revision is already approved");
+        }
+        if (revision.editVersion !== expectedEditVersion) {
+          throw new ConflictException("Draft edit version mismatch");
+        }
+        if (revision.contentHash !== expectedContentHash) {
+          throw new ConflictException("Revision content hash mismatch");
+        }
+        if (
+          !revision.title.trim() ||
+          !revision.summary.trim() ||
+          !Array.isArray(revision.sections) ||
+          revision.sections.length === 0
+        ) {
+          throw new BadRequestException(
+            "Approved revision must have non-empty title, summary, and sections",
+          );
+        }
 
-      const existingCode = await tx.legalDocumentRevision.findUnique({
-        where: { revisionCode },
-      });
-      if (existingCode && existingCode.id !== revision.id) {
-        throw new ConflictException("Revision code is already in use");
-      }
+        const existingCode = await tx.legalDocumentRevision.findUnique({
+          where: { revisionCode },
+        });
+        if (existingCode && existingCode.id !== revision.id) {
+          throw new ConflictException("Revision code is already in use");
+        }
 
-      const now = await databaseNow(tx);
-      let approved;
-      try {
-        approved = await tx.legalDocumentRevision.update({
-          where: { id: revision.id },
-          data: {
-            status: LegalRevisionStatus.APPROVED,
-            revisionCode,
-            effectiveAt: effectiveAtDate,
-            approvalEvidence,
-            approvedBy: operator.operatorId,
-            approvedAt: now,
+        const now = await databaseNow(tx);
+        let approved;
+        try {
+          approved = await tx.legalDocumentRevision.update({
+            where: { id: revision.id },
+            data: {
+              status: LegalRevisionStatus.APPROVED,
+              revisionCode,
+              effectiveAt: effectiveAtDate,
+              approvalEvidence,
+              approvedBy: operator.operatorId,
+              approvedAt: now,
+            },
+          });
+        } catch (error) {
+          if (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2002"
+          ) {
+            throw new ConflictException("Revision code is already in use");
+          }
+          const dbCode = (error as { code?: string })?.code;
+          if (dbCode === "23505") {
+            throw new ConflictException("Revision code is already in use");
+          }
+          throw error;
+        }
+
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          eventType: "legal_document.revision_approved",
+          reasonCode,
+          reason,
+          createdAt: now,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "revision_approved",
+            documentId: doc.id,
+            revisionId: approved.id,
+            contentHash: approved.contentHash,
           },
         });
-      } catch (error) {
-        if (
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === "P2002"
-        ) {
-          throw new ConflictException("Revision code is already in use");
-        }
-        const dbCode = (error as { code?: string })?.code;
-        if (dbCode === "23505") {
-          throw new ConflictException("Revision code is already in use");
-        }
-        throw error;
-      }
 
-      await this.audit.recordLegalOperator(tx, operator, {
-        legalDocumentId: doc.id,
-        eventType: "legal_document.revision_approved",
-        reasonCode,
-        reason,
-        createdAt: now,
-        payload: {
-          operation: "revision_approved",
-          documentId: doc.id,
-          revisionId: approved.id,
-          contentHash: approved.contentHash,
-        },
-      });
-
-      return toRevisionDetail(approved);
-    });
+        return toRevisionDetail(approved);
+      },
+    );
   }
 
   async publishRevision(
@@ -733,6 +856,7 @@ export class LegalDocumentsService {
     key: string,
     revisionId: string,
     dto: PublishLegalRevisionDto,
+    idempotencyKey: string,
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
@@ -762,128 +886,144 @@ export class LegalDocumentsService {
       }
     }
 
-    return await this.prisma.$transaction(async (tx) => {
-      const doc = await this.lockDocumentByKey(tx, key);
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      { action: "publishRevision", key, revisionId: validRevisionId, dto },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
 
-      if (doc.generation !== expectedGeneration) {
-        throw new ConflictException("Document generation mismatch");
-      }
+        if (doc.generation !== expectedGeneration) {
+          throw new ConflictException("Document generation mismatch");
+        }
 
-      const revision = await tx.legalDocumentRevision.findUnique({
-        where: { id: validRevisionId },
-      });
-      if (!revision || revision.documentId !== doc.id) {
-        throw new NotFoundException("Revision was not found");
-      }
-      if (revision.status !== LegalRevisionStatus.APPROVED) {
-        throw new ConflictException("Only approved revisions can be published");
-      }
-      if (!revision.effectiveAt) {
-        throw new ConflictException("Approved revision missing effectiveAt");
-      }
-
-      const decisionNow = await databaseNow(tx);
-
-      // Check if a pending scheduled publication already exists
-      const pending = await tx.legalDocumentPublication.findFirst({
-        where: {
-          documentId: doc.id,
-          cancelledAt: null,
-          startsAt: { gt: decisionNow },
-        },
-      });
-      if (pending) {
-        throw new ConflictException(
-          "A scheduled publication is already pending for this document; cancel it first",
-        );
-      }
-
-      // Check if this revision has ever had an uncancelled or already started publication
-      const prior = await tx.legalDocumentPublication.findFirst({
-        where: {
-          revisionId: revision.id,
-          OR: [
-            { cancelledAt: null },
-            {
-              cancelledAt: { gte: tx.legalDocumentPublication.fields.startsAt },
-            },
-          ],
-        },
-      });
-      if (prior) {
-        throw new ConflictException(
-          "Revision has already been published and cannot be republished",
-        );
-      }
-
-      // Compute startsAt: max(revision.effectiveAt, startsAtProvided || decisionNow)
-      const baseStartsAt = parsedStartsAt ?? decisionNow;
-      let effectiveStartsAt =
-        revision.effectiveAt > baseStartsAt
-          ? revision.effectiveAt
-          : baseStartsAt;
-      if (effectiveStartsAt < decisionNow) {
-        effectiveStartsAt = decisionNow;
-      }
-
-      // Query active publication
-      const activePub = await tx.legalDocumentPublication.findFirst({
-        where: {
-          documentId: doc.id,
-          cancelledAt: null,
-          startsAt: { lte: decisionNow },
-          OR: [{ endsAt: null }, { endsAt: { gt: decisionNow } }],
-        },
-      });
-
-      if (activePub) {
-        const targetEndsAt =
-          effectiveStartsAt <= decisionNow ? decisionNow : effectiveStartsAt;
-        if (activePub.startsAt >= targetEndsAt) {
+        const revision = await tx.legalDocumentRevision.findUnique({
+          where: { id: validRevisionId },
+        });
+        if (!revision || revision.documentId !== doc.id) {
+          throw new NotFoundException("Revision was not found");
+        }
+        if (revision.status !== LegalRevisionStatus.APPROVED) {
           throw new ConflictException(
-            "Active publication cannot end at or before its start time",
+            "Only approved revisions can be published",
           );
         }
-        await tx.legalDocumentPublication.update({
-          where: { id: activePub.id },
-          data: { endsAt: targetEndsAt },
+        if (!revision.effectiveAt) {
+          throw new ConflictException("Approved revision missing effectiveAt");
+        }
+
+        const decisionNow = await databaseNow(tx);
+
+        if (parsedStartsAt && parsedStartsAt < decisionNow) {
+          throw new BadRequestException(
+            "Publication startsAt cannot precede decision time",
+          );
+        }
+
+        // Check if a pending scheduled publication already exists
+        const pending = await tx.legalDocumentPublication.findFirst({
+          where: {
+            documentId: doc.id,
+            cancelledAt: null,
+            startsAt: { gt: decisionNow },
+          },
         });
-      }
+        if (pending) {
+          throw new ConflictException(
+            "A scheduled publication is already pending for this document; cancel it first",
+          );
+        }
 
-      const publication = await tx.legalDocumentPublication.create({
-        data: {
-          documentId: doc.id,
-          revisionId: revision.id,
-          startsAt: effectiveStartsAt,
-          publishedBy: operator.operatorId,
+        // Check if this revision has ever had an uncancelled or already started publication
+        const prior = await tx.legalDocumentPublication.findFirst({
+          where: {
+            revisionId: revision.id,
+            OR: [
+              { cancelledAt: null },
+              {
+                cancelledAt: {
+                  gte: tx.legalDocumentPublication.fields.startsAt,
+                },
+              },
+            ],
+          },
+        });
+        if (prior) {
+          throw new ConflictException(
+            "Revision has already been published and cannot be republished",
+          );
+        }
+
+        // Compute startsAt: max(revision.effectiveAt, startsAtProvided || decisionNow)
+        const baseStartsAt = parsedStartsAt ?? decisionNow;
+        let effectiveStartsAt =
+          revision.effectiveAt > baseStartsAt
+            ? revision.effectiveAt
+            : baseStartsAt;
+        if (effectiveStartsAt < decisionNow) {
+          effectiveStartsAt = decisionNow;
+        }
+
+        // Query active publication
+        const activePub = await tx.legalDocumentPublication.findFirst({
+          where: {
+            documentId: doc.id,
+            cancelledAt: null,
+            startsAt: { lte: decisionNow },
+            OR: [{ endsAt: null }, { endsAt: { gt: decisionNow } }],
+          },
+        });
+
+        if (activePub) {
+          const targetEndsAt =
+            effectiveStartsAt <= decisionNow ? decisionNow : effectiveStartsAt;
+          if (activePub.startsAt >= targetEndsAt) {
+            throw new ConflictException(
+              "Active publication cannot end at or before its start time",
+            );
+          }
+          await tx.legalDocumentPublication.update({
+            where: { id: activePub.id },
+            data: { endsAt: targetEndsAt },
+          });
+        }
+
+        const publication = await tx.legalDocumentPublication.create({
+          data: {
+            documentId: doc.id,
+            revisionId: revision.id,
+            startsAt: effectiveStartsAt,
+            publishedBy: operator.operatorId,
+            reason,
+          },
+          include: { revision: true },
+        });
+
+        await tx.legalDocument.update({
+          where: { id: doc.id },
+          data: { generation: { increment: 1 } },
+        });
+
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          eventType: "legal_document.published",
+          reasonCode,
           reason,
-        },
-        include: { revision: true },
-      });
+          createdAt: decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "published",
+            documentId: doc.id,
+            revisionId: revision.id,
+            publicationId: publication.id,
+            contentHash: revision.contentHash,
+            ...(activePub ? { previousPublicationId: activePub.id } : {}),
+          },
+        });
 
-      await tx.legalDocument.update({
-        where: { id: doc.id },
-        data: { generation: { increment: 1 } },
-      });
-
-      await this.audit.recordLegalOperator(tx, operator, {
-        legalDocumentId: doc.id,
-        eventType: "legal_document.published",
-        reasonCode,
-        reason,
-        createdAt: decisionNow,
-        payload: {
-          operation: "published",
-          documentId: doc.id,
-          revisionId: revision.id,
-          publicationId: publication.id,
-          contentHash: revision.contentHash,
-          ...(activePub ? { previousPublicationId: activePub.id } : {}),
-        },
-      });
-
-      return toPublicationSummary(publication);
-    });
+        return toPublicationSummary(publication);
+      },
+    );
   }
 
   async cancelPublication(
@@ -891,6 +1031,7 @@ export class LegalDocumentsService {
     key: string,
     publicationId: string,
     dto: CancelLegalPublicationDto,
+    idempotencyKey: string,
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
@@ -906,75 +1047,86 @@ export class LegalDocumentsService {
       pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
     });
 
-    return await this.prisma.$transaction(async (tx) => {
-      const doc = await this.lockDocumentByKey(tx, key);
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      {
+        action: "cancelPublication",
+        key,
+        publicationId: validPublicationId,
+        dto,
+      },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
 
-      if (doc.generation !== expectedGeneration) {
-        throw new ConflictException("Document generation mismatch");
-      }
+        if (doc.generation !== expectedGeneration) {
+          throw new ConflictException("Document generation mismatch");
+        }
 
-      const pub = await tx.legalDocumentPublication.findUnique({
-        where: { id: validPublicationId },
-        include: { revision: true },
-      });
-      if (!pub || pub.documentId !== doc.id) {
-        throw new NotFoundException("Publication was not found");
-      }
-      if (pub.cancelledAt !== null) {
-        throw new ConflictException("Publication is already cancelled");
-      }
-
-      const decisionNow = await databaseNow(tx);
-      if (decisionNow >= pub.startsAt) {
-        throw new ConflictException(
-          "Cannot cancel a publication that has already started",
-        );
-      }
-
-      const updated = await tx.legalDocumentPublication.update({
-        where: { id: pub.id },
-        data: { cancelledAt: decisionNow },
-        include: { revision: true },
-      });
-
-      // Restore predecessor publication if its endsAt was chained to this publication
-      const predecessor = await tx.legalDocumentPublication.findFirst({
-        where: {
-          documentId: doc.id,
-          cancelledAt: null,
-          endsAt: pub.startsAt,
-        },
-      });
-      if (predecessor) {
-        await tx.legalDocumentPublication.update({
-          where: { id: predecessor.id },
-          data: { endsAt: null },
+        const pub = await tx.legalDocumentPublication.findUnique({
+          where: { id: validPublicationId },
+          include: { revision: true },
         });
-      }
+        if (!pub || pub.documentId !== doc.id) {
+          throw new NotFoundException("Publication was not found");
+        }
+        if (pub.cancelledAt !== null) {
+          throw new ConflictException("Publication is already cancelled");
+        }
 
-      await tx.legalDocument.update({
-        where: { id: doc.id },
-        data: { generation: { increment: 1 } },
-      });
+        const decisionNow = await databaseNow(tx);
+        if (decisionNow >= pub.startsAt) {
+          throw new ConflictException(
+            "Cannot cancel a publication that has already started",
+          );
+        }
 
-      await this.audit.recordLegalOperator(tx, operator, {
-        legalDocumentId: doc.id,
-        eventType: "legal_document.publication_cancelled",
-        reasonCode,
-        reason,
-        createdAt: decisionNow,
-        payload: {
-          operation: "publication_cancelled",
-          documentId: doc.id,
-          publicationId: updated.id,
-          revisionId: pub.revisionId,
-          contentHash: pub.revision.contentHash,
-          ...(predecessor ? { previousPublicationId: predecessor.id } : {}),
-        },
-      });
+        const updated = await tx.legalDocumentPublication.update({
+          where: { id: pub.id },
+          data: { cancelledAt: decisionNow },
+          include: { revision: true },
+        });
 
-      return toPublicationSummary(updated);
-    });
+        // Restore predecessor publication if its endsAt was chained to this publication
+        const predecessor = await tx.legalDocumentPublication.findFirst({
+          where: {
+            documentId: doc.id,
+            cancelledAt: null,
+            endsAt: pub.startsAt,
+          },
+        });
+        if (predecessor) {
+          await tx.legalDocumentPublication.update({
+            where: { id: predecessor.id },
+            data: { endsAt: null },
+          });
+        }
+
+        await tx.legalDocument.update({
+          where: { id: doc.id },
+          data: { generation: { increment: 1 } },
+        });
+
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          eventType: "legal_document.publication_cancelled",
+          reasonCode,
+          reason,
+          createdAt: decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "publication_cancelled",
+            documentId: doc.id,
+            publicationId: updated.id,
+            revisionId: pub.revisionId,
+            contentHash: pub.revision.contentHash,
+            ...(predecessor ? { previousPublicationId: predecessor.id } : {}),
+          },
+        });
+
+        return toPublicationSummary(updated);
+      },
+    );
   }
 
   async archivePublication(
@@ -982,6 +1134,7 @@ export class LegalDocumentsService {
     key: string,
     publicationId: string,
     dto: ArchiveLegalPublicationDto,
+    idempotencyKey: string,
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
@@ -997,62 +1150,72 @@ export class LegalDocumentsService {
       pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
     });
 
-    return await this.prisma.$transaction(async (tx) => {
-      const doc = await this.lockDocumentByKey(tx, key);
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      {
+        action: "archivePublication",
+        key,
+        publicationId: validPublicationId,
+        dto,
+      },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
 
-      if (doc.generation !== expectedGeneration) {
-        throw new ConflictException("Document generation mismatch");
-      }
+        if (doc.generation !== expectedGeneration) {
+          throw new ConflictException("Document generation mismatch");
+        }
 
-      const pub = await tx.legalDocumentPublication.findUnique({
-        where: { id: validPublicationId },
-        include: { revision: true },
-      });
-      if (!pub || pub.documentId !== doc.id) {
-        throw new NotFoundException("Publication was not found");
-      }
-      if (pub.cancelledAt !== null) {
-        throw new ConflictException("Publication is cancelled");
-      }
+        const pub = await tx.legalDocumentPublication.findUnique({
+          where: { id: validPublicationId },
+          include: { revision: true },
+        });
+        if (!pub || pub.documentId !== doc.id) {
+          throw new NotFoundException("Publication was not found");
+        }
+        if (pub.cancelledAt !== null) {
+          throw new ConflictException("Publication is cancelled");
+        }
 
-      const decisionNow = await databaseNow(tx);
-      if (
-        pub.startsAt >= decisionNow ||
-        (pub.endsAt !== null && pub.endsAt <= decisionNow)
-      ) {
-        throw new ConflictException("Publication is not currently active");
-      }
+        const decisionNow = await databaseNow(tx);
+        if (
+          pub.startsAt >= decisionNow ||
+          (pub.endsAt !== null && pub.endsAt <= decisionNow)
+        ) {
+          throw new ConflictException("Publication is not currently active");
+        }
 
-      const updated = await tx.legalDocumentPublication.update({
-        where: { id: pub.id },
-        data: { endsAt: decisionNow },
-        include: { revision: true },
-      });
+        const updated = await tx.legalDocumentPublication.update({
+          where: { id: pub.id },
+          data: { endsAt: decisionNow },
+          include: { revision: true },
+        });
 
-      await tx.legalDocument.update({
-        where: { id: doc.id },
-        data: { generation: { increment: 1 } },
-      });
+        await tx.legalDocument.update({
+          where: { id: doc.id },
+          data: { generation: { increment: 1 } },
+        });
 
-      await this.audit.recordLegalOperator(tx, operator, {
-        legalDocumentId: doc.id,
-        eventType: "legal_document.publication_archived",
-        reasonCode,
-        reason,
-        createdAt: decisionNow,
-        payload: {
-          operation: "publication_archived",
-          documentId: doc.id,
-          publicationId: updated.id,
-          revisionId: updated.revisionId,
-          contentHash: updated.revision.contentHash,
-        },
-      });
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          eventType: "legal_document.publication_archived",
+          reasonCode,
+          reason,
+          createdAt: decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "publication_archived",
+            documentId: doc.id,
+            publicationId: updated.id,
+            revisionId: updated.revisionId,
+            contentHash: updated.revision.contentHash,
+          },
+        });
 
-      return toPublicationSummary(updated);
-    });
+        return toPublicationSummary(updated);
+      },
+    );
   }
-
   async getPublicRevision(
     key: string,
     revisionCode: string,

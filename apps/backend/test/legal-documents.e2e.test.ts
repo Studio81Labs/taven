@@ -31,6 +31,18 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
   let adminCsrfToken: string;
   let adminOperatorId: string;
 
+  function adminHeaders(idempotencyKey?: string) {
+    return {
+      Cookie: adminCookie,
+      origin: "http://localhost:3002",
+      "x-csrf-token": adminCsrfToken,
+      "Content-Type": "application/json",
+      ...(idempotencyKey !== undefined
+        ? { "Idempotency-Key": idempotencyKey }
+        : {}),
+    };
+  }
+
   async function resetLegalState() {
     await prisma.$executeRawUnsafe(`
       ALTER TABLE legal_documents DISABLE TRIGGER ALL;
@@ -168,17 +180,30 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     const docBefore = await getRes.json();
     const gen = docBefore.generation;
 
+    // Missing Idempotency-Key is rejected with 400
+    const missingKeyRes = await fetch(
+      new URL("/admin/legal-documents/terms/revisions", baseUrl),
+      {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({
+          expectedGeneration: gen,
+          title: "Obchodní podmínky v2",
+          summary: "Druhá verze",
+          sections: [{ title: "Sekce 1", note: "Poznámka" }],
+          reasonCode: "TEST_REASON",
+          reason: "Test draft create",
+        }),
+      },
+    );
+    expect(missingKeyRes.status).toBe(400);
+
     // 2. Reject mismatched expectedGeneration
     const conflictRes = await fetch(
       new URL("/admin/legal-documents/terms/revisions", baseUrl),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedGeneration: gen + 999,
           title: "Obchodní podmínky v2",
@@ -191,30 +216,27 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(conflictRes.status).toBe(409);
 
-    // 3. Create draft revision
+    // 3. Create draft revision with idempotency key
+    const draftCreateKey = randomUUID();
+    const draftPayload = {
+      expectedGeneration: gen,
+      title: "Obchodní podmínky v2",
+      summary: "Druhá verze obchodních podmínek",
+      sections: [
+        {
+          title: "1. Všeobecná ustanovení",
+          paragraphs: ["Tento text definuje základní pravidla služby."],
+        },
+      ],
+      reasonCode: "TERMS_V2_DRAFT",
+      reason: "Příprava druhé verze obchodních podmínek",
+    };
     const createRes = await fetch(
       new URL("/admin/legal-documents/terms/revisions", baseUrl),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          expectedGeneration: gen,
-          title: "Obchodní podmínky v2",
-          summary: "Druhá verze obchodních podmínek",
-          sections: [
-            {
-              title: "1. Všeobecná ustanovení",
-              paragraphs: ["Tento text definuje základní pravidla služby."],
-            },
-          ],
-          reasonCode: "TERMS_V2_DRAFT",
-          reason: "Příprava druhé verze obchodních podmínek",
-        }),
+        headers: adminHeaders(draftCreateKey),
+        body: JSON.stringify(draftPayload),
       },
     );
     expect(createRes.status).toBe(200);
@@ -224,6 +246,34 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(createdDraft.status).toBe("DRAFT");
     expect(createdDraft.contentHash).toMatch(/^[0-9a-f]{64}$/);
 
+    // 3b. Replaying identical input with the same idempotency key returns 200 with identical response
+    const replayRes = await fetch(
+      new URL("/admin/legal-documents/terms/revisions", baseUrl),
+      {
+        method: "POST",
+        headers: adminHeaders(draftCreateKey),
+        body: JSON.stringify(draftPayload),
+      },
+    );
+    expect(replayRes.status).toBe(200);
+    const replayedDraft = await replayRes.json();
+    expect(replayedDraft.id).toBe(createdDraft.id);
+    expect(replayedDraft.contentHash).toBe(createdDraft.contentHash);
+
+    // 3c. Replaying altered input with the same idempotency key returns 409 Conflict
+    const conflictReplayRes = await fetch(
+      new URL("/admin/legal-documents/terms/revisions", baseUrl),
+      {
+        method: "POST",
+        headers: adminHeaders(draftCreateKey),
+        body: JSON.stringify({
+          ...draftPayload,
+          title: "Altered title",
+        }),
+      },
+    );
+    expect(conflictReplayRes.status).toBe(409);
+
     // 4. Update draft revision
     const updateRes = await fetch(
       new URL(
@@ -232,12 +282,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "PUT",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedEditVersion: 1,
           title: "Obchodní podmínky v2 - aktualizované",
@@ -268,12 +313,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedEditVersion: 999,
           expectedContentHash: updatedDraft.contentHash,
@@ -295,12 +335,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedEditVersion: updatedDraft.editVersion,
           expectedContentHash: updatedDraft.contentHash,
@@ -322,12 +357,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedEditVersion: updatedDraft.editVersion,
           expectedContentHash: updatedDraft.contentHash,
@@ -353,12 +383,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "PUT",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedEditVersion: 2,
           title: "Pokus o změnu schváleného",
@@ -417,12 +442,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedGeneration: termsDoc.generation,
           reasonCode: "PUBLISH_TERMS",
@@ -462,12 +482,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedGeneration: termsDocAfter.generation,
           reasonCode: "REPUBLISH_ATTEMPT",
@@ -482,12 +497,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       new URL("/admin/legal-documents/terms/revisions", baseUrl),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedGeneration: termsDocAfter.generation,
           title: "Obchodní podmínky v3",
@@ -507,12 +517,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedEditVersion: draft3.editVersion,
           expectedContentHash: draft3.contentHash,
@@ -532,6 +537,25 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       })
     ).json();
 
+    // Rejects publication when startsAt precedes decision time
+    const backdatedPubRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/revisions/${approved3.id}/publish`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedGeneration: docBeforeSchedule.generation,
+          startsAt: new Date(Date.now() - 3600000).toISOString(),
+          reasonCode: "SCHEDULE_PAST",
+          reason: "Backdated publication attempt",
+        }),
+      },
+    );
+    expect(backdatedPubRes.status).toBe(400);
+
     const futureStartsAt = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
     const scheduleRes = await fetch(
       new URL(
@@ -540,12 +564,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedGeneration: docBeforeSchedule.generation,
           startsAt: futureStartsAt,
@@ -575,12 +594,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedGeneration: docWhilePending.generation,
           reasonCode: "ARCHIVE_TEST",
@@ -598,12 +612,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       ),
       {
         method: "POST",
-        headers: {
-          Cookie: adminCookie,
-          origin: "http://localhost:3002",
-          "x-csrf-token": adminCsrfToken,
-          "Content-Type": "application/json",
-        },
+        headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedGeneration: docWhilePending.generation,
           reasonCode: "CANCEL_SCHEDULED",
@@ -755,7 +764,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         editVersion: 1,
         status: "APPROVED",
         revisionCode: "terms-cancellation-test",
-        effectiveAt: new Date(),
+        effectiveAt: new Date(Date.now() - 7200000),
         approvalEvidence: "evidence",
         approvedBy: adminOperatorId,
         approvedAt: new Date(),
@@ -817,6 +826,51 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     await expect(
       app.get(LegalDocumentsService).listPublications(noReadOperator, "terms"),
     ).rejects.toThrow(ForbiddenException);
+
+    const privacyDoc = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "privacy" },
+    });
+    const decisionTimeDraft = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: privacyDoc.id,
+        sequence: 999,
+        editVersion: 1,
+        status: "APPROVED",
+        revisionCode: "privacy-decision-test",
+        effectiveAt: new Date(Date.now() - 7200000),
+        approvalEvidence: "evidence",
+        approvedBy: adminOperatorId,
+        approvedAt: new Date(),
+        contentVersion: 1,
+        title: "Title",
+        summary: "Summary",
+        sections: [{ title: "Title", paragraphs: ["Content"] }],
+        contentHash: "9".repeat(64),
+      },
+    });
+
+    // Database trigger rejects publication starts_at preceding database decision time
+    await expect(
+      prisma.legalDocumentPublication.create({
+        data: {
+          documentId: privacyDoc.id,
+          revisionId: decisionTimeDraft.id,
+          startsAt: new Date(Date.now() - 3600000),
+          publishedBy: adminOperatorId,
+          reason: "Invalid starts_at before decision time",
+        },
+      }),
+    ).rejects.toThrow(/cannot precede database decision time/i);
+
+    // Database trigger rejects cancelling a publication that has already started
+    await expect(
+      prisma.$executeRawUnsafe(
+        "UPDATE legal_document_publications SET cancelled_at = clock_timestamp() WHERE id = " +
+          "\x27" +
+          pub.id +
+          "\x27",
+      ),
+    ).rejects.toThrow(/Cannot cancel a publication that has already started/i);
 
     // Database trigger rejects publication with starts_at < revision effective_at
     const futureEffectiveDate = new Date(Date.now() + 7200000);

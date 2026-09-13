@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -50,6 +51,18 @@ import {
   UpdateLegalDraftDto,
 } from "./legal-documents.dto";
 import { LegalDocumentsService } from "./legal-documents.service";
+
+const TRIMMED_IDEMPOTENCY_KEY_PATTERN = "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$";
+const IDEMPOTENCY_HEADER = {
+  name: "Idempotency-Key",
+  required: true,
+  description: "Stable command key; replaying altered input returns 409",
+  schema: {
+    type: "string",
+    minLength: 8,
+    pattern: TRIMMED_IDEMPOTENCY_KEY_PATTERN,
+  },
+};
 
 function scalarQueryValue(name: string, value: unknown): string | undefined {
   if (value === undefined) return undefined;
@@ -225,6 +238,7 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Create a new draft revision for a legal document" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiParam({
     name: "key",
     type: String,
@@ -239,16 +253,23 @@ export class LegalDocumentsAdminController {
   @ApiForbiddenResponse()
   async createDraft(
     @Param("key") key: string,
+    @Headers("idempotency-key") idempotencyKey: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: CreateLegalDraftDto,
   ): Promise<LegalRevisionDetailDto> {
-    return await this.legalDocs.createDraft(operator, key, body);
+    return await this.legalDocs.createDraft(
+      operator,
+      key,
+      body,
+      idempotencyKey,
+    );
   }
 
   @Put(":key/revisions/:revisionId")
   @ApiOperation({ summary: "Update an existing draft revision" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiParam({
     name: "key",
     type: String,
@@ -273,10 +294,17 @@ export class LegalDocumentsAdminController {
       new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
     )
     revisionId: string,
+    @Headers("idempotency-key") idempotencyKey: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: UpdateLegalDraftDto,
   ): Promise<LegalRevisionDetailDto> {
-    return await this.legalDocs.updateDraft(operator, key, revisionId, body);
+    return await this.legalDocs.updateDraft(
+      operator,
+      key,
+      revisionId,
+      body,
+      idempotencyKey,
+    );
   }
 
   @Post(":key/revisions/:revisionId/approve")
@@ -284,6 +312,7 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Approve a draft revision" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiParam({
     name: "key",
     type: String,
@@ -308,6 +337,7 @@ export class LegalDocumentsAdminController {
       new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
     )
     revisionId: string,
+    @Headers("idempotency-key") idempotencyKey: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: ApproveLegalRevisionDto,
   ): Promise<LegalRevisionDetailDto> {
@@ -316,6 +346,7 @@ export class LegalDocumentsAdminController {
       key,
       revisionId,
       body,
+      idempotencyKey,
     );
   }
 
@@ -324,6 +355,7 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Publish an approved legal revision" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiParam({
     name: "key",
     type: String,
@@ -348,6 +380,7 @@ export class LegalDocumentsAdminController {
       new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
     )
     revisionId: string,
+    @Headers("idempotency-key") idempotencyKey: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: PublishLegalRevisionDto,
   ): Promise<LegalPublicationSummaryDto> {
@@ -356,6 +389,7 @@ export class LegalDocumentsAdminController {
       key,
       revisionId,
       body,
+      idempotencyKey,
     );
   }
 
@@ -364,6 +398,7 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Cancel a pending scheduled publication" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiParam({
     name: "key",
     type: String,
@@ -388,6 +423,7 @@ export class LegalDocumentsAdminController {
       new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
     )
     publicationId: string,
+    @Headers("idempotency-key") idempotencyKey: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: CancelLegalPublicationDto,
   ): Promise<LegalPublicationSummaryDto> {
@@ -396,6 +432,7 @@ export class LegalDocumentsAdminController {
       key,
       publicationId,
       body,
+      idempotencyKey,
     );
   }
 
@@ -406,6 +443,7 @@ export class LegalDocumentsAdminController {
   })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiParam({
     name: "key",
     type: String,
@@ -430,6 +468,7 @@ export class LegalDocumentsAdminController {
       new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
     )
     publicationId: string,
+    @Headers("idempotency-key") idempotencyKey: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: ArchiveLegalPublicationDto,
   ): Promise<LegalPublicationSummaryDto> {
@@ -438,6 +477,7 @@ export class LegalDocumentsAdminController {
       key,
       publicationId,
       body,
+      idempotencyKey,
     );
   }
 }
