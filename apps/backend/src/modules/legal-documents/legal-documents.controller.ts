@@ -32,7 +32,6 @@ export class LegalDocumentsController {
     type: String,
     description: "Immutable revision code",
   })
-  @Header("Cache-Control", "public, max-age=3600, immutable")
   @ApiOkResponse({ type: PublicLegalRevisionDto })
   @ApiNotFoundResponse()
   async getRevision(
@@ -41,6 +40,7 @@ export class LegalDocumentsController {
     @Res({ passthrough: true }) response: ResponseLike,
   ): Promise<PublicLegalRevisionDto> {
     const revision = await this.legalDocs.getPublicRevision(key, revisionCode);
+    response.setHeader("Cache-Control", "public, max-age=3600, immutable");
     response.setHeader("ETag", `"${revision.contentHash}"`);
     return revision;
   }

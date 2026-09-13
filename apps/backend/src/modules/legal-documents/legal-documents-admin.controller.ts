@@ -3,7 +3,9 @@ import {
   Controller,
   Get,
   HttpCode,
+  HttpStatus,
   Param,
+  ParseUUIDPipe,
   Post,
   Put,
   Query,
@@ -172,7 +174,11 @@ export class LegalDocumentsAdminController {
   @ApiForbiddenResponse()
   async updateDraft(
     @Param("key") key: string,
-    @Param("revisionId") revisionId: string,
+    @Param(
+      "revisionId",
+      new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
+    )
+    revisionId: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: UpdateLegalDraftDto,
   ): Promise<LegalRevisionDetailDto> {
@@ -203,7 +209,11 @@ export class LegalDocumentsAdminController {
   @ApiForbiddenResponse()
   async approveRevision(
     @Param("key") key: string,
-    @Param("revisionId") revisionId: string,
+    @Param(
+      "revisionId",
+      new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
+    )
+    revisionId: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: ApproveLegalRevisionDto,
   ): Promise<LegalRevisionDetailDto> {
@@ -239,7 +249,11 @@ export class LegalDocumentsAdminController {
   @ApiForbiddenResponse()
   async publishRevision(
     @Param("key") key: string,
-    @Param("revisionId") revisionId: string,
+    @Param(
+      "revisionId",
+      new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
+    )
+    revisionId: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: PublishLegalRevisionDto,
   ): Promise<LegalPublicationSummaryDto> {
@@ -275,7 +289,11 @@ export class LegalDocumentsAdminController {
   @ApiForbiddenResponse()
   async cancelPublication(
     @Param("key") key: string,
-    @Param("publicationId") publicationId: string,
+    @Param(
+      "publicationId",
+      new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
+    )
+    publicationId: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: CancelLegalPublicationDto,
   ): Promise<LegalPublicationSummaryDto> {
@@ -313,7 +331,11 @@ export class LegalDocumentsAdminController {
   @ApiForbiddenResponse()
   async archivePublication(
     @Param("key") key: string,
-    @Param("publicationId") publicationId: string,
+    @Param(
+      "publicationId",
+      new ParseUUIDPipe({ errorHttpStatusCode: HttpStatus.BAD_REQUEST }),
+    )
+    publicationId: string,
     @CurrentOperator() operator: OperatorContext,
     @Body() body: ArchiveLegalPublicationDto,
   ): Promise<LegalPublicationSummaryDto> {

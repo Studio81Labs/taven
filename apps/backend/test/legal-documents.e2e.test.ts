@@ -175,6 +175,8 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           title: "Obchodní podmínky v2",
           summary: "Druhá verze",
           sections: [{ title: "Sekce 1", note: "Poznámka" }],
+          reasonCode: "TEST_REASON",
+          reason: "Test draft create",
         }),
       },
     );
@@ -201,6 +203,8 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
               paragraphs: ["Tento text definuje základní pravidla služby."],
             },
           ],
+          reasonCode: "TERMS_V2_DRAFT",
+          reason: "Příprava druhé verze obchodních podmínek",
         }),
       },
     );
@@ -236,6 +240,8 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
               items: ["Položka A", "Položka B"],
             },
           ],
+          reasonCode: "TERMS_V2_UPDATE",
+          reason: "Doplnění sekcí druhé verze obchodních podmínek",
         }),
       },
     );
@@ -294,6 +300,8 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           title: "Pokus o změnu schváleného",
           summary: "test",
           sections: [{ title: "X", note: "Y" }],
+          reasonCode: "UPDATE_ATTEMPT",
+          reason: "Pokus o změnu",
         }),
       },
     );
@@ -421,6 +429,8 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           title: "Obchodní podmínky v3",
           summary: "Budoucí verze podmínek",
           sections: [{ title: "Budoucnost", note: "Platné od zítřka" }],
+          reasonCode: "TERMS_V3_DRAFT",
+          reason: "Příprava třetí verze obchodních podmínek",
         }),
       },
     );

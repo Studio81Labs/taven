@@ -2450,6 +2450,8 @@ export interface components {
         };
         CreateLegalDraftDto: {
             expectedGeneration: number;
+            reason: string;
+            reasonCode: string;
             sections: components["schemas"]["LegalDocumentSectionDto"][];
             summary: string;
             title: string;
@@ -4083,6 +4085,8 @@ export interface components {
         };
         UpdateLegalDraftDto: {
             expectedEditVersion: number;
+            reason: string;
+            reasonCode: string;
             sections: components["schemas"]["LegalDocumentSectionDto"][];
             summary: string;
             title: string;

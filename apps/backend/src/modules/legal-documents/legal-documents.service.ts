@@ -69,6 +69,17 @@ function requireSafeInteger(val: unknown, fieldName: string, min = 1): number {
   return val;
 }
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function requireUuid(val: unknown, fieldName: string): string {
+  const str = requireString(val, fieldName);
+  if (!UUID_REGEX.test(str)) {
+    throw new BadRequestException(`${fieldName} must be a valid UUID`);
+  }
+  return str.toLowerCase();
+}
+
 @Injectable()
 export class LegalDocumentsService {
   constructor(
@@ -212,6 +223,10 @@ export class LegalDocumentsService {
 
     const title = requireString(dto?.title, "Draft title", { maxLength: 255 });
     const summary = requireString(dto?.summary, "Draft summary");
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
     const expectedGeneration = requireSafeInteger(
       dto?.expectedGeneration,
       "Expected generation",
@@ -267,8 +282,8 @@ export class LegalDocumentsService {
       await this.audit.recordLegalOperator(tx, operator, {
         legalDocumentId: doc.id,
         eventType: "legal_document.draft_created",
-        reasonCode: "LEGAL_DRAFT_CREATED",
-        reason: "Draft revision created",
+        reasonCode,
+        reason,
         payload: {
           operation: "draft_created",
           documentId: doc.id,
@@ -289,6 +304,7 @@ export class LegalDocumentsService {
   ): Promise<LegalRevisionDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
+    const validRevisionId = requireUuid(revisionId, "Revision ID");
     const expectedEditVersion = requireSafeInteger(
       dto?.expectedEditVersion,
       "Expected edit version",
@@ -296,6 +312,10 @@ export class LegalDocumentsService {
     );
     const title = requireString(dto?.title, "Draft title", { maxLength: 255 });
     const summary = requireString(dto?.summary, "Draft summary");
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
     const sections = normalizeLegalSections(dto?.sections);
     assertContentSize({ title, summary, sections });
     const contentHash = computeLegalRevisionContentHash({
@@ -314,7 +334,7 @@ export class LegalDocumentsService {
       await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
 
       const revision = await tx.legalDocumentRevision.findUnique({
-        where: { id: revisionId },
+        where: { id: validRevisionId },
       });
       if (!revision || revision.documentId !== doc.id) {
         throw new NotFoundException("Revision was not found");
@@ -340,8 +360,8 @@ export class LegalDocumentsService {
       await this.audit.recordLegalOperator(tx, operator, {
         legalDocumentId: doc.id,
         eventType: "legal_document.draft_updated",
-        reasonCode: "LEGAL_DRAFT_UPDATED",
-        reason: "Draft revision updated",
+        reasonCode,
+        reason,
         payload: {
           operation: "draft_updated",
           documentId: doc.id,
@@ -361,6 +381,8 @@ export class LegalDocumentsService {
     dto: ApproveLegalRevisionDto,
   ): Promise<LegalRevisionDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+
+    const validRevisionId = requireUuid(revisionId, "Revision ID");
 
     const revisionCode = requireString(dto?.revisionCode, "Revision code", {
       pattern: REVISION_CODE_PATTERN,
@@ -395,7 +417,7 @@ export class LegalDocumentsService {
       await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
 
       const revision = await tx.legalDocumentRevision.findUnique({
-        where: { id: revisionId },
+        where: { id: validRevisionId },
       });
       if (!revision || revision.documentId !== doc.id) {
         throw new NotFoundException("Revision was not found");
@@ -452,6 +474,8 @@ export class LegalDocumentsService {
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
+    const validRevisionId = requireUuid(revisionId, "Revision ID");
+
     const expectedGeneration = requireSafeInteger(
       dto?.expectedGeneration,
       "Expected generation",
@@ -484,7 +508,7 @@ export class LegalDocumentsService {
       }
 
       const revision = await tx.legalDocumentRevision.findUnique({
-        where: { id: revisionId },
+        where: { id: validRevisionId },
       });
       if (!revision || revision.documentId !== doc.id) {
         throw new NotFoundException("Revision was not found");
@@ -606,6 +630,8 @@ export class LegalDocumentsService {
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
+    const validPublicationId = requireUuid(publicationId, "Publication ID");
+
     const expectedGeneration = requireSafeInteger(
       dto?.expectedGeneration,
       "Expected generation",
@@ -695,6 +721,8 @@ export class LegalDocumentsService {
     dto: ArchiveLegalPublicationDto,
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+
+    const validPublicationId = requireUuid(publicationId, "Publication ID");
 
     const expectedGeneration = requireSafeInteger(
       dto?.expectedGeneration,

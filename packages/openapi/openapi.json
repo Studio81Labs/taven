@@ -2282,6 +2282,14 @@
           "expectedGeneration": {
             "type": "number"
           },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "type": "string"
+          },
           "sections": {
             "items": {
               "$ref": "#/components/schemas/LegalDocumentSectionDto"
@@ -2300,7 +2308,9 @@
           "expectedGeneration",
           "title",
           "summary",
-          "sections"
+          "sections",
+          "reasonCode",
+          "reason"
         ],
         "type": "object"
       },
@@ -8111,6 +8121,14 @@
           "expectedEditVersion": {
             "type": "number"
           },
+          "reason": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "type": "string"
+          },
           "sections": {
             "items": {
               "$ref": "#/components/schemas/LegalDocumentSectionDto"
@@ -8129,7 +8147,9 @@
           "expectedEditVersion",
           "title",
           "summary",
-          "sections"
+          "sections",
+          "reasonCode",
+          "reason"
         ],
         "type": "object"
       },

@@ -26,6 +26,12 @@ export class CreateLegalDraftDto {
 
   @ApiProperty({ type: [LegalDocumentSectionDto] })
   sections!: LegalDocumentSectionDto[];
+
+  @ApiProperty({ type: String, maxLength: 100 })
+  reasonCode!: string;
+
+  @ApiProperty({ type: String, maxLength: 1000 })
+  reason!: string;
 }
 
 export class UpdateLegalDraftDto {
@@ -40,6 +46,12 @@ export class UpdateLegalDraftDto {
 
   @ApiProperty({ type: [LegalDocumentSectionDto] })
   sections!: LegalDocumentSectionDto[];
+
+  @ApiProperty({ type: String, maxLength: 100 })
+  reasonCode!: string;
+
+  @ApiProperty({ type: String, maxLength: 1000 })
+  reason!: string;
 }
 
 export class ApproveLegalRevisionDto {

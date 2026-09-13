@@ -243,11 +243,20 @@ BEGIN
         END IF;
 
         IF OLD."cancelled_at" IS NULL AND NEW."cancelled_at" IS NOT NULL THEN
-            IF CURRENT_TIMESTAMP >= NEW."starts_at" THEN
+            IF statement_timestamp() >= NEW."starts_at" THEN
                 RAISE EXCEPTION 'Cannot cancel a publication that has already started';
             END IF;
             IF NEW."cancelled_at" >= NEW."starts_at" THEN
                 RAISE EXCEPTION 'Cancellation must be strictly before starts_at';
+            END IF;
+            IF NEW."cancelled_at" > statement_timestamp() THEN
+                RAISE EXCEPTION 'Cancellation cannot be in the future';
+            END IF;
+        END IF;
+
+        IF OLD."ends_at" IS NOT NULL AND OLD."ends_at" <= statement_timestamp() THEN
+            IF NEW."ends_at" IS DISTINCT FROM OLD."ends_at" THEN
+                RAISE EXCEPTION 'Elapsed publication ends_at is immutable and cannot be modified';
             END IF;
         END IF;
 
