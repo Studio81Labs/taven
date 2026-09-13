@@ -25,6 +25,18 @@ BEGIN
         RAISE EXCEPTION 'Legal documents are permanent and cannot be deleted';
     END IF;
 
+    IF TG_OP = 'INSERT'
+       AND (NEW."key", NEW."document_id") NOT IN (
+           ('terms', 'terms-of-service'),
+           ('claims', 'complaints-policy'),
+           ('privacy', 'privacy-policy'),
+           ('prohibitedContent', 'prohibited-content-policy'),
+           ('retention', 'retention-policy'),
+           ('photoConsent', 'photo-consent-and-confidentiality')
+       ) THEN
+        RAISE EXCEPTION 'Legal document key/document_id pair is not part of the fixed legal document mapping';
+    END IF;
+
     IF TG_OP = 'UPDATE' THEN
         IF NEW."id" IS DISTINCT FROM OLD."id"
            OR NEW."key" IS DISTINCT FROM OLD."key"
@@ -42,7 +54,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER legal_documents_integrity_trg
-BEFORE UPDATE OR DELETE ON "legal_documents"
+BEFORE INSERT OR UPDATE OR DELETE ON "legal_documents"
 FOR EACH ROW
 EXECUTE FUNCTION legal_documents_integrity_fn();
 

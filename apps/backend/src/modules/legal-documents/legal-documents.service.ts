@@ -40,6 +40,14 @@ const POSTGRES_MIN_TIMESTAMP_YEAR = -4712;
 const RFC3339_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
 
+function requireNoNul(value: string, fieldName: string): void {
+  if (value.includes("\u0000")) {
+    throw new BadRequestException(
+      `${fieldName} must not contain NUL characters`,
+    );
+  }
+}
+
 function requireString(
   val: unknown,
   fieldName: string,
@@ -48,6 +56,7 @@ function requireString(
   if (typeof val !== "string") {
     throw new BadRequestException(`${fieldName} must be a string`);
   }
+  requireNoNul(val, fieldName);
   const trimmed = val.trim();
   const minLength = options?.minLength ?? 1;
   if (trimmed.length < minLength) {
@@ -158,6 +167,7 @@ function requireIdempotencyKey(value?: unknown): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new BadRequestException("Idempotency-Key header is required");
   }
+  requireNoNul(value, "Idempotency-Key");
   const trimmed = value.trim();
   if (trimmed.length < 8 || trimmed.length > 255) {
     throw new BadRequestException(
@@ -1372,6 +1382,7 @@ export function normalizeLegalSections(
     if (typeof rawSection.title !== "string" || !rawSection.title.trim()) {
       throw new BadRequestException("Section title must not be empty");
     }
+    requireNoNul(rawSection.title, `Section ${idx} title`);
     const title = rawSection.title.trim();
     if (title.length > 255) {
       throw new BadRequestException("Section title exceeds maximum length");
@@ -1391,6 +1402,7 @@ export function normalizeLegalSections(
               `Section ${idx} paragraph ${pIdx} must be a string`,
             );
           }
+          requireNoNul(p, `Section ${idx} paragraph ${pIdx}`);
           return p.trim();
         })
         .filter((p) => p.length > 0);
@@ -1408,6 +1420,7 @@ export function normalizeLegalSections(
               `Section ${idx} item ${iIdx} must be a string`,
             );
           }
+          requireNoNul(i, `Section ${idx} item ${iIdx}`);
           return i.trim();
         })
         .filter((i) => i.length > 0);
@@ -1418,6 +1431,7 @@ export function normalizeLegalSections(
       if (typeof rawSection.note !== "string") {
         throw new BadRequestException(`Section ${idx} note must be a string`);
       }
+      requireNoNul(rawSection.note, `Section ${idx} note`);
       const trimmedNote = rawSection.note.trim();
       if (trimmedNote.length > 0) {
         note = trimmedNote;

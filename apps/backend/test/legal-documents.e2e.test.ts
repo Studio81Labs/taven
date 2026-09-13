@@ -214,6 +214,23 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(missingKeyRes.status).toBe(400);
 
+    const nulTitleRes = await fetch(
+      new URL("/admin/legal-documents/terms/revisions", baseUrl),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedGeneration: gen,
+          title: "Invalid\u0000title",
+          summary: "Summary",
+          sections: [{ title: "Section", note: "Content" }],
+          reasonCode: "TEST_NUL",
+          reason: "NUL input validation",
+        }),
+      },
+    );
+    expect(nulTitleRes.status).toBe(400);
+
     // 2. Reject mismatched expectedGeneration
     const conflictRes = await fetch(
       new URL("/admin/legal-documents/terms/revisions", baseUrl),
@@ -1460,6 +1477,16 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         `UPDATE legal_document_publications SET id = gen_random_uuid() WHERE id = '${pub.id}'`,
       ),
     ).rejects.toThrow();
+
+    await expect(
+      prisma.legalDocument.create({
+        data: {
+          key: "unrecognized",
+          documentId: "unrecognized-document",
+          generation: 1,
+        },
+      }),
+    ).rejects.toThrow(/fixed legal document mapping/i);
 
     // Database legal documents integrity trigger rejects deletion, identity updates, and non-monotonic generation
     await expect(
