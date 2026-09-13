@@ -14,6 +14,7 @@ import { SlicingModule } from "./modules/slicing/slicing.module";
 import { StorageModule } from "./modules/storage/storage.module";
 import { ResourcesModule } from "./modules/resources/resources.module";
 import { LegalApprovalsModule } from "./modules/legal-approvals/legal-approvals.module";
+import { LegalDocumentsModule } from "./modules/legal-documents/legal-documents.module";
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { LegalApprovalsModule } from "./modules/legal-approvals/legal-approvals.
     PricingModule,
     ResourcesModule,
     LegalApprovalsModule,
+    LegalDocumentsModule,
     StorageModule,
     PaymentsModule,
     AdminAccessModule,

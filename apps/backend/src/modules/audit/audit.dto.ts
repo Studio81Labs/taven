@@ -19,6 +19,9 @@ export class AuditEventSummaryDto {
   legacy?: boolean;
 
   @ApiPropertyOptional({ type: String, format: "uuid" })
+  legalDocumentId?: string;
+
+  @ApiPropertyOptional({ type: String, format: "uuid" })
   nodeId?: string;
 
   @ApiPropertyOptional({ type: String, format: "uuid" })
