@@ -1126,7 +1126,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           reason: "Invalid immediate publication while pending",
         },
       }),
-    ).rejects.toThrow(/already has a pending publication/i);
+    ).rejects.toThrow(/ends_at must be assigned by the database lifecycle/i);
     await expect(
       prisma.legalDocumentPublication.update({
         where: { id: directCancellationPublication.id },

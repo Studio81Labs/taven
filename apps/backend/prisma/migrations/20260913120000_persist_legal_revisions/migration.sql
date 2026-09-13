@@ -78,10 +78,11 @@ BEGIN
                     RETURN false;
                 END IF;
                 FOR entry IN SELECT * FROM jsonb_array_elements(section->field_name) LOOP
-                    IF jsonb_typeof(entry) <> 'string' THEN
+                    IF jsonb_typeof(entry) <> 'string'
+                       OR (entry #>> '{}') ~ '^[[:space:]]*$' THEN
                         RETURN false;
                     END IF;
-                    has_content := has_content OR (entry #>> '{}') !~ '^[[:space:]]*$';
+                    has_content := true;
                 END LOOP;
             END IF;
         END LOOP;
@@ -447,6 +448,10 @@ BEGIN
             RAISE EXCEPTION 'Revision % must have an effective_at before publication', NEW."revision_id";
         END IF;
 
+        IF NEW."ends_at" IS NOT NULL THEN
+            RAISE EXCEPTION 'Publication ends_at must be assigned by the database lifecycle';
+        END IF;
+
         IF NEW."cancelled_at" IS NOT NULL THEN
             RAISE EXCEPTION 'Publication cannot be inserted cancelled';
         END IF;
@@ -513,10 +518,10 @@ BEGIN
             NEW."cancelled_at" := v_post_lock_now;
         END IF;
 
-        IF OLD."ends_at" IS NOT NULL AND OLD."ends_at" <= v_post_lock_now THEN
-            IF NEW."ends_at" IS DISTINCT FROM OLD."ends_at" THEN
-                RAISE EXCEPTION 'Elapsed publication ends_at is immutable and cannot be modified';
-            END IF;
+        IF OLD."ends_at" IS NOT NULL
+           AND NEW."ends_at" IS DISTINCT FROM OLD."ends_at"
+           AND pg_trigger_depth() = 1 THEN
+            RAISE EXCEPTION 'Publication ends_at is immutable and cannot be modified';
         END IF;
 
         IF OLD."ends_at" IS NULL
