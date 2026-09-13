@@ -64,6 +64,7 @@ BEGIN
 
     FOR section IN SELECT * FROM jsonb_array_elements(value) LOOP
         IF jsonb_typeof(section) <> 'object'
+           OR section - ARRAY['title', 'paragraphs', 'items', 'note'] <> '{}'::jsonb
            OR jsonb_typeof(section->'title') <> 'string'
            OR length(btrim(coalesce(section->>'title', ''))) = 0
            OR length(btrim(section->>'title')) > 255 THEN
@@ -103,24 +104,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION legal_document_content_fits_size_limit(
-    title text,
-    summary text,
-    sections jsonb
-)
-RETURNS boolean AS $$
-    SELECT octet_length(
-        convert_to(
-            jsonb_build_object(
-                'title', title,
-                'summary', summary,
-                'sections', sections
-            )::text,
-            'UTF8'
-        )
-    ) <= 262144;
-$$ LANGUAGE sql IMMUTABLE STRICT;
-
 CREATE OR REPLACE FUNCTION legal_canonical_json(value jsonb)
 RETURNS text AS $$
 DECLARE
@@ -156,6 +139,26 @@ BEGIN
     RAISE EXCEPTION 'Unsupported JSON value type %', value_type;
 END;
 $$ LANGUAGE plpgsql IMMUTABLE STRICT;
+
+CREATE OR REPLACE FUNCTION legal_document_content_fits_size_limit(
+    title text,
+    summary text,
+    sections jsonb
+)
+RETURNS boolean AS $$
+    SELECT octet_length(
+        convert_to(
+            legal_canonical_json(
+                jsonb_build_object(
+                    'title', title,
+                    'summary', summary,
+                    'sections', sections
+                )
+            ),
+            'UTF8'
+        )
+    ) <= 262144;
+$$ LANGUAGE sql IMMUTABLE STRICT;
 
 CREATE OR REPLACE FUNCTION legal_document_revision_content_hash(
     content_version integer,
@@ -213,6 +216,7 @@ CREATE TABLE "legal_document_revisions" (
         (
             "status" = 'APPROVED'
             AND "revision_code" IS NOT NULL
+            AND "revision_code" ~ '^[A-Za-z0-9_.-]{1,100}$'
             AND "effective_at" IS NOT NULL
             AND "approval_evidence" IS NOT NULL
             AND length(btrim("approval_evidence")) BETWEEN 1 AND 5000
