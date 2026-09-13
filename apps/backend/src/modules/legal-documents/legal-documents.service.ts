@@ -36,7 +36,8 @@ type Transaction = Prisma.TransactionClient;
 
 export const MAX_LEGAL_PAYLOAD_BYTES = 256 * 1024;
 export const REVISION_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
-const POSTGRES_MIN_TIMESTAMP_YEAR = -4712;
+const MIN_LEGAL_TIMESTAMP_YEAR = 1;
+const MAX_LEGAL_TIMESTAMP_YEAR = 9999;
 const RFC3339_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
 
@@ -101,7 +102,8 @@ function parseLegalRfc3339Instant(value: string, fieldName: string): Date {
     calendar.getUTCFullYear() !== Number(match[1]) ||
     calendar.getUTCMonth() !== Number(match[2]) - 1 ||
     calendar.getUTCDate() !== Number(match[3]) ||
-    result.getUTCFullYear() < POSTGRES_MIN_TIMESTAMP_YEAR
+    result.getUTCFullYear() < MIN_LEGAL_TIMESTAMP_YEAR ||
+    result.getUTCFullYear() > MAX_LEGAL_TIMESTAMP_YEAR
   ) {
     throw new BadRequestException(
       `${fieldName} must be a valid RFC 3339 date-time`,
@@ -144,7 +146,8 @@ function parsePublicationCursor(cursor: string): {
     const d = new Date(parsed.startsAt);
     if (
       Number.isNaN(d.getTime()) ||
-      d.getUTCFullYear() < POSTGRES_MIN_TIMESTAMP_YEAR
+      d.getUTCFullYear() < MIN_LEGAL_TIMESTAMP_YEAR ||
+      d.getUTCFullYear() > MAX_LEGAL_TIMESTAMP_YEAR
     ) {
       throw new Error();
     }
@@ -1298,18 +1301,28 @@ export class LegalDocumentsService {
     key: string,
     revisionCode: string,
   ): Promise<PublicLegalRevisionDto> {
+    const validKey = requireString(key, "Legal document key", {
+      maxLength: 50,
+    });
+    const validRevisionCode = requireString(revisionCode, "Revision code", {
+      pattern: REVISION_CODE_PATTERN,
+    });
     return await this.prisma.$transaction(async (tx) => {
-      const doc = await tx.legalDocument.findUnique({ where: { key } });
+      const doc = await tx.legalDocument.findUnique({
+        where: { key: validKey },
+      });
       if (!doc) {
-        throw new NotFoundException(`Legal document '${key}' was not found`);
+        throw new NotFoundException(
+          `Legal document '${validKey}' was not found`,
+        );
       }
 
       const revision = await tx.legalDocumentRevision.findUnique({
-        where: { revisionCode },
+        where: { revisionCode: validRevisionCode },
       });
       if (!revision || revision.documentId !== doc.id) {
         throw new NotFoundException(
-          `Revision '${revisionCode}' was not found for '${key}'`,
+          `Revision '${validRevisionCode}' was not found for '${validKey}'`,
         );
       }
       if (
@@ -1317,7 +1330,7 @@ export class LegalDocumentsService {
         !revision.effectiveAt
       ) {
         throw new NotFoundException(
-          `Revision '${revisionCode}' is not an approved revision`,
+          `Revision '${validRevisionCode}' is not an approved revision`,
         );
       }
 
@@ -1338,7 +1351,7 @@ export class LegalDocumentsService {
 
       if (!publication) {
         throw new NotFoundException(
-          `Revision '${revisionCode}' has not been published`,
+          `Revision '${validRevisionCode}' has not been published`,
         );
       }
 

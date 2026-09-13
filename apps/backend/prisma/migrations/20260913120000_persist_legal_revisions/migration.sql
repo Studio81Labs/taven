@@ -231,6 +231,8 @@ CREATE TABLE "legal_document_revisions" (
             AND "content_version" = 1
             AND "effective_at" IS NOT NULL
             AND isfinite("effective_at")
+            AND "effective_at" >= '0001-01-01 00:00:00+00'::timestamptz
+            AND "effective_at" < '10000-01-01 00:00:00+00'::timestamptz
             AND "approval_evidence" IS NOT NULL
             AND length("approval_evidence") <= 5000
             AND "approval_evidence" !~ '^[[:space:]]*$'
@@ -267,6 +269,8 @@ CREATE TABLE "legal_document_publications" (
     CONSTRAINT "legal_document_publications_published_by_fkey" FOREIGN KEY ("published_by") REFERENCES "operator_identities"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_document_publications_interval_check" CHECK (
         isfinite("starts_at")
+        AND "starts_at" >= '0001-01-01 00:00:00+00'::timestamptz
+        AND "starts_at" < '10000-01-01 00:00:00+00'::timestamptz
         AND ("ends_at" IS NULL OR "ends_at" > "starts_at")
     ),
     CONSTRAINT "legal_document_publications_cancellation_check" CHECK ("cancelled_at" IS NULL OR "cancelled_at" < "starts_at"),

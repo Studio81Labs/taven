@@ -539,6 +539,15 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(beforePubRes.status).toBe(404);
     expect(beforePubRes.headers.get("cache-control")).toBe("no-store");
 
+    const nulRevisionCodeRes = await fetch(
+      new URL("/legal-documents/terms/revisions/%00", baseUrl),
+    );
+    expect(nulRevisionCodeRes.status).toBe(400);
+    const nulDocumentKeyRes = await fetch(
+      new URL("/legal-documents/%00/revisions/terms-2026-09-e2e-v1", baseUrl),
+    );
+    expect(nulDocumentKeyRes.status).toBe(400);
+
     // 3. Publish approved revision immediately
     const pubRes = await fetch(
       new URL(
@@ -1024,7 +1033,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
 
     // A direct writer cannot backdate publication history: a past instant is
     // derived to the trigger's post-lock database time instead.
-    const beforeDerivedPublication = Date.now();
+    const beforeDerivedPublication = Date.now() - 1000;
     const derivedPublication = await prisma.legalDocumentPublication.create({
       data: {
         documentId: privacyDoc.id,
@@ -1330,11 +1339,39 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
 
     await expect(
       prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_revisions (
+          document_id, sequence, edit_version, status, content_version,
+          revision_code, effective_at, approval_evidence, approved_by,
+          title, summary, sections, content_hash
+        ) VALUES (
+          '${termsDoc.id}'::uuid, 9001, 1, 'APPROVED'::legal_revision_status, 1,
+          'terms-out-of-range-effective-test', '280000-01-01'::timestamptz, 'evidence', '${adminOperatorId}'::uuid,
+          'Title', 'Summary', '[{"title":"Section 1","paragraphs":["Content"]}]'::jsonb,
+          legal_document_revision_content_hash(
+            1, 'Title', 'Summary', '[{"title":"Section 1","paragraphs":["Content"]}]'::jsonb
+          )
+        )
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
         INSERT INTO legal_document_publications (
           document_id, revision_id, starts_at, published_by, reason
         ) VALUES (
           '${termsDoc.id}'::uuid, '${futureEffectiveDraft.id}'::uuid,
           'infinity'::timestamptz, '${adminOperatorId}'::uuid, 'Infinite publication start'
+        )
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_publications (
+          document_id, revision_id, starts_at, published_by, reason
+        ) VALUES (
+          '${termsDoc.id}'::uuid, '${futureEffectiveDraft.id}'::uuid,
+          '280000-01-01'::timestamptz, '${adminOperatorId}'::uuid, 'Out-of-range publication start'
         )
       `),
     ).rejects.toThrow();
