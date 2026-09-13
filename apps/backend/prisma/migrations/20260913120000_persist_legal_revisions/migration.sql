@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TYPE "legal_revision_status" AS ENUM ('DRAFT', 'APPROVED');
 
@@ -120,6 +121,68 @@ RETURNS boolean AS $$
     ) <= 262144;
 $$ LANGUAGE sql IMMUTABLE STRICT;
 
+CREATE OR REPLACE FUNCTION legal_canonical_json(value jsonb)
+RETURNS text AS $$
+DECLARE
+    value_type text;
+    result text;
+BEGIN
+    value_type := jsonb_typeof(value);
+    IF value_type IN ('null', 'boolean', 'number') THEN
+        RETURN value::text;
+    END IF;
+    IF value_type = 'string' THEN
+        RETURN to_json(value #>> '{}')::text;
+    END IF;
+    IF value_type = 'array' THEN
+        SELECT '[' || coalesce(string_agg(legal_canonical_json(item.value), ',' ORDER BY item.ordinality), '') || ']'
+        INTO result
+        FROM jsonb_array_elements(value) WITH ORDINALITY AS item(value, ordinality);
+        RETURN result;
+    END IF;
+    IF value_type = 'object' THEN
+        SELECT '{' || coalesce(
+            string_agg(
+                to_json(item.key)::text || ':' || legal_canonical_json(item.value),
+                ','
+                ORDER BY item.key COLLATE "C"
+            ),
+            ''
+        ) || '}'
+        INTO result
+        FROM jsonb_each(value) AS item(key, value);
+        RETURN result;
+    END IF;
+    RAISE EXCEPTION 'Unsupported JSON value type %', value_type;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE STRICT;
+
+CREATE OR REPLACE FUNCTION legal_document_revision_content_hash(
+    content_version integer,
+    title text,
+    summary text,
+    sections jsonb
+)
+RETURNS text AS $$
+    SELECT encode(
+        digest(
+            convert_to(
+                legal_canonical_json(
+                    jsonb_build_object(
+                        'contentVersion', content_version,
+                        'title', title,
+                        'summary', summary,
+                        'sections', sections
+                    )
+                ),
+                'UTF8'
+            ),
+            'sha256'
+        ),
+        'hex'
+    );
+$$ LANGUAGE sql IMMUTABLE STRICT;
+
 CREATE TABLE "legal_document_revisions" (
     "id" uuid NOT NULL DEFAULT gen_random_uuid(),
     "document_id" uuid NOT NULL,
@@ -159,6 +222,7 @@ CREATE TABLE "legal_document_revisions" (
             AND length(trim("summary")) > 0
             AND legal_document_sections_are_valid("sections")
             AND legal_document_content_fits_size_limit("title", "summary", "sections")
+            AND "content_hash" = legal_document_revision_content_hash("content_version", "title", "summary", "sections")
         )
     ),
     CONSTRAINT "legal_document_revisions_content_hash_check" CHECK ("content_hash" ~ '^[0-9a-f]{64}$')
@@ -456,6 +520,32 @@ CREATE TRIGGER legal_document_publications_integrity_trg
 BEFORE INSERT OR UPDATE OR DELETE ON "legal_document_publications"
 FOR EACH ROW
 EXECUTE FUNCTION legal_document_publications_integrity_fn();
+
+CREATE OR REPLACE FUNCTION legal_document_publications_restore_predecessor_fn()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD."cancelled_at" IS NULL AND NEW."cancelled_at" IS NOT NULL THEN
+        UPDATE "legal_document_publications"
+        SET "ends_at" = NULL
+        WHERE "id" = (
+            SELECT "id"
+            FROM "legal_document_publications"
+            WHERE "document_id" = OLD."document_id"
+              AND "cancelled_at" IS NULL
+              AND "starts_at" < OLD."starts_at"
+              AND "ends_at" = OLD."starts_at"
+            ORDER BY "starts_at" DESC
+            LIMIT 1
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER legal_document_publications_restore_predecessor_trg
+AFTER UPDATE OF "cancelled_at" ON "legal_document_publications"
+FOR EACH ROW
+EXECUTE FUNCTION legal_document_publications_restore_predecessor_fn();
 
 -- Seed initial documents and draft revisions
 -- Seed terms

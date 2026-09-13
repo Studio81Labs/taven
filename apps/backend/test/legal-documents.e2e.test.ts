@@ -12,7 +12,10 @@ process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??=
 import "reflect-metadata";
 import { type INestApplication, ForbiddenException } from "@nestjs/common";
 import { AuditService } from "../src/modules/audit/audit.service";
-import { LegalDocumentsService } from "../src/modules/legal-documents/legal-documents.service";
+import {
+  computeLegalRevisionContentHash,
+  LegalDocumentsService,
+} from "../src/modules/legal-documents/legal-documents.service";
 import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import type { OperatorContext } from "../src/modules/admin-access/operator-context";
 import { Test } from "@nestjs/testing";
@@ -41,6 +44,19 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         ? { "Idempotency-Key": idempotencyKey }
         : {}),
     };
+  }
+
+  function legalContentHash(
+    title: string,
+    summary: string,
+    sections: Parameters<typeof computeLegalRevisionContentHash>[0]["sections"],
+  ): string {
+    return computeLegalRevisionContentHash({
+      contentVersion: 1,
+      title,
+      summary,
+      sections,
+    });
   }
 
   async function resetLegalState() {
@@ -824,7 +840,9 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         title: "Title",
         summary: "Summary",
         sections: [{ title: "Title", paragraphs: ["Content"] }],
-        contentHash: "0".repeat(64),
+        contentHash: legalContentHash("Title", "Summary", [
+          { title: "Title", paragraphs: ["Content"] },
+        ]),
       },
     });
     const invalidFuture = new Date(Date.now() + 3600000);
@@ -897,7 +915,9 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         title: "Title",
         summary: "Summary",
         sections: [{ title: "Title", paragraphs: ["Content"] }],
-        contentHash: "9".repeat(64),
+        contentHash: legalContentHash("Title", "Summary", [
+          { title: "Title", paragraphs: ["Content"] },
+        ]),
       },
     });
 
@@ -916,6 +936,54 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(derivedPublication.startsAt.getTime()).toBeGreaterThanOrEqual(
       beforeDerivedPublication,
     );
+
+    const directCancellationStartsAt = new Date(Date.now() + 3_600_000);
+    const directCancellationRevision =
+      await prisma.legalDocumentRevision.create({
+        data: {
+          documentId: privacyDoc.id,
+          sequence: 998,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "privacy-direct-cancellation-test",
+          effectiveAt: directCancellationStartsAt,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Direct cancellation",
+          summary: "Direct cancellation coverage",
+          sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+          contentHash: legalContentHash(
+            "Direct cancellation",
+            "Direct cancellation coverage",
+            [{ title: "Section 1", paragraphs: ["Content"] }],
+          ),
+        },
+      });
+    await prisma.legalDocumentPublication.update({
+      where: { id: derivedPublication.id },
+      data: { endsAt: directCancellationStartsAt },
+    });
+    const directCancellationPublication =
+      await prisma.legalDocumentPublication.create({
+        data: {
+          documentId: privacyDoc.id,
+          revisionId: directCancellationRevision.id,
+          startsAt: directCancellationStartsAt,
+          publishedBy: adminOperatorId,
+          reason: "Direct scheduled publication for cancellation coverage",
+        },
+      });
+    await prisma.legalDocumentPublication.update({
+      where: { id: directCancellationPublication.id },
+      data: { cancelledAt: new Date() },
+    });
+    const restoredPredecessor =
+      await prisma.legalDocumentPublication.findUniqueOrThrow({
+        where: { id: derivedPublication.id },
+      });
+    expect(restoredPredecessor.endsAt).toBeNull();
 
     // Database trigger rejects cancelling a publication that has already started
     await expect(
@@ -944,7 +1012,9 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         title: "Title",
         summary: "Summary",
         sections: [{ title: "Section 1", paragraphs: ["Content"] }],
-        contentHash: "1".repeat(64),
+        contentHash: legalContentHash("Title", "Summary", [
+          { title: "Section 1", paragraphs: ["Content"] },
+        ]),
       },
     });
     await expect(
@@ -984,6 +1054,26 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           summary: "Summary",
           sections: [],
           contentHash: "2".repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 991,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-content-hash-mismatch-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+          contentHash: "8".repeat(64),
         },
       }),
     ).rejects.toThrow();
