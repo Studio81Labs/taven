@@ -1913,6 +1913,8 @@ export interface components {
             effectiveAt: string;
             /** @description Expected SHA-256 content hash */
             expectedContentHash: string;
+            /** @description Expected draft edit version */
+            expectedEditVersion: number;
             reason: string;
             reasonCode: string;
             revisionCode: string;

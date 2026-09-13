@@ -384,6 +384,11 @@ export class LegalDocumentsService {
 
     const validRevisionId = requireUuid(revisionId, "Revision ID");
 
+    const expectedEditVersion = requireSafeInteger(
+      dto?.expectedEditVersion,
+      "Expected edit version",
+      1,
+    );
     const revisionCode = requireString(dto?.revisionCode, "Revision code", {
       pattern: REVISION_CODE_PATTERN,
       maxLength: 100,
@@ -424,6 +429,9 @@ export class LegalDocumentsService {
       }
       if (revision.status !== LegalRevisionStatus.DRAFT) {
         throw new ConflictException("Revision is already approved");
+      }
+      if (revision.editVersion !== expectedEditVersion) {
+        throw new ConflictException("Draft edit version mismatch");
       }
       if (revision.contentHash !== expectedContentHash) {
         throw new ConflictException("Revision content hash mismatch");
@@ -590,17 +598,17 @@ export class LegalDocumentsService {
       });
 
       if (activePub) {
-        if (effectiveStartsAt <= decisionNow) {
-          await tx.legalDocumentPublication.update({
-            where: { id: activePub.id },
-            data: { endsAt: decisionNow },
-          });
-        } else {
-          await tx.legalDocumentPublication.update({
-            where: { id: activePub.id },
-            data: { endsAt: effectiveStartsAt },
-          });
+        const targetEndsAt =
+          effectiveStartsAt <= decisionNow ? decisionNow : effectiveStartsAt;
+        if (activePub.startsAt >= targetEndsAt) {
+          throw new ConflictException(
+            "Active publication cannot end at or before its start time",
+          );
         }
+        await tx.legalDocumentPublication.update({
+          where: { id: activePub.id },
+          data: { endsAt: targetEndsAt },
+        });
       }
 
       const publication = await tx.legalDocumentPublication.create({
@@ -777,7 +785,7 @@ export class LegalDocumentsService {
 
       const decisionNow = await databaseNow(tx);
       if (
-        pub.startsAt > decisionNow ||
+        pub.startsAt >= decisionNow ||
         (pub.endsAt !== null && pub.endsAt <= decisionNow)
       ) {
         throw new ConflictException("Publication is not currently active");

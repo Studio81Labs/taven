@@ -110,6 +110,7 @@ export class AuditService {
       createdAt?: Date;
     }>,
   ): Promise<void> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
     const legalDocumentId = canonicalUuid(input.legalDocumentId);
     const reason = input.reason.trim();
     const reasonCode = input.reasonCode.trim();

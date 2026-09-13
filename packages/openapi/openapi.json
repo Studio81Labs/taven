@@ -152,6 +152,10 @@
             "description": "Expected SHA-256 content hash",
             "type": "string"
           },
+          "expectedEditVersion": {
+            "description": "Expected draft edit version",
+            "type": "number"
+          },
           "reason": {
             "maxLength": 1000,
             "type": "string"
@@ -166,6 +170,7 @@
           }
         },
         "required": [
+          "expectedEditVersion",
           "expectedContentHash",
           "revisionCode",
           "effectiveAt",

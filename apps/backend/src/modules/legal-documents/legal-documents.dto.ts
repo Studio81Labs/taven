@@ -55,6 +55,9 @@ export class UpdateLegalDraftDto {
 }
 
 export class ApproveLegalRevisionDto {
+  @ApiProperty({ type: Number, description: "Expected draft edit version" })
+  expectedEditVersion!: number;
+
   @ApiProperty({ type: String, description: "Expected SHA-256 content hash" })
   expectedContentHash!: string;
 

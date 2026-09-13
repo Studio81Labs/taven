@@ -10,7 +10,10 @@ process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
 process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??=
   "test-only-upload-client-hash-key-32";
 import "reflect-metadata";
-import type { INestApplication } from "@nestjs/common";
+import { type INestApplication, ForbiddenException } from "@nestjs/common";
+import { AuditService } from "../src/modules/audit/audit.service";
+import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
+import type { OperatorContext } from "../src/modules/admin-access/operator-context";
 import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -251,7 +254,34 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(updatedDraft.title).toBe("Obchodní podmínky v2 - aktualizované");
     expect(updatedDraft.contentHash).not.toBe(createdDraft.contentHash);
 
-    // 5. Approve draft revision
+    // 5. Mismatched expectedEditVersion is rejected with 409
+    const mismatchEditRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/revisions/${createdDraft.id}/approve`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: {
+          Cookie: adminCookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": adminCsrfToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          expectedEditVersion: 999,
+          expectedContentHash: updatedDraft.contentHash,
+          revisionCode: "terms-2026-09-e2e-v1",
+          effectiveAt: "2026-09-01T00:00:00.000Z",
+          approvalEvidence: "Právní posouzení č. 2026/09/LP-01",
+          reasonCode: "LEGAL_APPROVED",
+          reason: "Schválení nového znění podmínek vedením",
+        }),
+      },
+    );
+    expect(mismatchEditRes.status).toBe(409);
+
+    // Approve draft revision with correct expectedEditVersion
     const approveRes = await fetch(
       new URL(
         `/admin/legal-documents/terms/revisions/${createdDraft.id}/approve`,
@@ -266,6 +296,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          expectedEditVersion: updatedDraft.editVersion,
           expectedContentHash: updatedDraft.contentHash,
           revisionCode: "terms-2026-09-e2e-v1",
           effectiveAt: "2026-09-01T00:00:00.000Z",
@@ -450,6 +481,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          expectedEditVersion: draft3.editVersion,
           expectedContentHash: draft3.contentHash,
           revisionCode: "terms-2026-10-future-v1",
           effectiveAt: "2026-09-01T00:00:00.000Z",
@@ -569,5 +601,61 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         },
       }),
     ).rejects.toThrow();
+
+    // 11. AuditService.recordLegalOperator requires legal:write permission
+    const readOnlyOperator: OperatorContext = {
+      operatorId: adminOperatorId,
+      role: "ADMIN",
+      nodeIds: [],
+      permissions: [OPERATOR_PERMISSIONS.LEGAL_READ],
+      authenticationMethod: "DEVELOPMENT_PASSWORD",
+      sessionId: "00000000-0000-0000-0000-000000000000",
+    };
+    await expect(
+      app.get(AuditService).recordLegalOperator(prisma, readOnlyOperator, {
+        legalDocumentId: termsDoc.id,
+        eventType: "legal_document.draft_created",
+        reasonCode: "TEST",
+        reason: "Test",
+        payload: { test: true },
+      }),
+    ).rejects.toThrow(ForbiddenException);
+
+    // 12. Reject archival at or before start boundary with 409 Conflict
+    const futurePub = await prisma.legalDocumentPublication.create({
+      data: {
+        documentId: termsDoc.id,
+        revisionId: approvedRev.id,
+        startsAt: new Date(Date.now() + 600000),
+        publishedBy: adminOperatorId,
+        reason: "Future pub for archive test",
+      },
+    });
+    const termsDocForArchive = await (
+      await fetch(new URL("/admin/legal-documents/terms", baseUrl), {
+        headers: { Cookie: adminCookie },
+      })
+    ).json();
+    const archiveFutureRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/publications/${futurePub.id}/archive`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: {
+          Cookie: adminCookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": adminCsrfToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          expectedGeneration: termsDocForArchive.generation,
+          reasonCode: "ARCHIVE_TEST",
+          reason: "Archive test on future publication",
+        }),
+      },
+    );
+    expect(archiveFutureRes.status).toBe(409);
   });
 });
