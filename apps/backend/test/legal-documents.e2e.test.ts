@@ -12,6 +12,7 @@ process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??=
 import "reflect-metadata";
 import { type INestApplication, ForbiddenException } from "@nestjs/common";
 import { AuditService } from "../src/modules/audit/audit.service";
+import { LegalDocumentsService } from "../src/modules/legal-documents/legal-documents.service";
 import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import type { OperatorContext } from "../src/modules/admin-access/operator-context";
 import { Test } from "@nestjs/testing";
@@ -660,6 +661,22 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         reason: "Test",
         payload: { test: true },
       }),
+    ).rejects.toThrow(ForbiddenException);
+
+    // 12. LegalDocumentsService document readers enforce legal:read permission
+    const noReadOperator: OperatorContext = {
+      operatorId: adminOperatorId,
+      role: "ADMIN",
+      nodeIds: [],
+      permissions: [],
+      authenticationMethod: "DEVELOPMENT_PASSWORD",
+      sessionId: "00000000-0000-0000-0000-000000000000",
+    };
+    await expect(
+      app.get(LegalDocumentsService).listDocuments(noReadOperator),
+    ).rejects.toThrow(ForbiddenException);
+    await expect(
+      app.get(LegalDocumentsService).getDocumentByKey(noReadOperator, "terms"),
     ).rejects.toThrow(ForbiddenException);
   });
 });

@@ -66,8 +66,10 @@ export class LegalDocumentsAdminController {
   @ApiOkResponse({ type: [LegalDocumentSummaryDto] })
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
-  async list(): Promise<LegalDocumentSummaryDto[]> {
-    return await this.legalDocs.listDocuments();
+  async list(
+    @CurrentOperator() operator: OperatorContext,
+  ): Promise<LegalDocumentSummaryDto[]> {
+    return await this.legalDocs.listDocuments(operator);
   }
 
   @Get(":key")
@@ -85,12 +87,18 @@ export class LegalDocumentsAdminController {
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
   async detail(
+    @CurrentOperator() operator: OperatorContext,
     @Param("key") key: string,
     @Query("cursor") cursor?: string,
     @Query("limit") limit?: string,
   ): Promise<LegalDocumentDetailDto> {
     const parsedLimit = limit ? Number.parseInt(limit, 10) : 25;
-    return await this.legalDocs.getDocumentByKey(key, cursor, parsedLimit);
+    return await this.legalDocs.getDocumentByKey(
+      operator,
+      key,
+      cursor,
+      parsedLimit,
+    );
   }
 
   @Get(":key/audit-events")
@@ -116,7 +124,12 @@ export class LegalDocumentsAdminController {
     @Query("cursor") cursor?: string,
     @Query("limit") limit?: string,
   ): Promise<AuditEventPageDto> {
-    const doc = await this.legalDocs.getDocumentByKey(key, undefined, 1);
+    const doc = await this.legalDocs.getDocumentByKey(
+      operator,
+      key,
+      undefined,
+      1,
+    );
     const parsedLimit = limit ? Number.parseInt(limit, 10) : 25;
     return await this.audit.listLegalDocumentAuditEvents(
       operator,

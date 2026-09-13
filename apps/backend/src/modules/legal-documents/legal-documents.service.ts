@@ -87,7 +87,10 @@ export class LegalDocumentsService {
     private readonly audit: AuditService,
   ) {}
 
-  async listDocuments(): Promise<LegalDocumentSummaryDto[]> {
+  async listDocuments(
+    operator: OperatorContext,
+  ): Promise<LegalDocumentSummaryDto[]> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
     const [docs, now] = await Promise.all([
       this.prisma.legalDocument.findMany({
         orderBy: { key: "asc" },
@@ -132,10 +135,12 @@ export class LegalDocumentsService {
   }
 
   async getDocumentByKey(
+    operator: OperatorContext,
     key: string,
     cursor?: string,
     limit = 25,
   ): Promise<LegalDocumentDetailDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
     const doc = await this.prisma.legalDocument.findUnique({
       where: { key },
       include: {
@@ -279,11 +284,13 @@ export class LegalDocumentsService {
         data: { generation: { increment: 1 } },
       });
 
+      const decisionNow = await databaseNow(tx);
       await this.audit.recordLegalOperator(tx, operator, {
         legalDocumentId: doc.id,
         eventType: "legal_document.draft_created",
         reasonCode,
         reason,
+        createdAt: decisionNow,
         payload: {
           operation: "draft_created",
           documentId: doc.id,
@@ -357,11 +364,13 @@ export class LegalDocumentsService {
         },
       });
 
+      const decisionNow = await databaseNow(tx);
       await this.audit.recordLegalOperator(tx, operator, {
         legalDocumentId: doc.id,
         eventType: "legal_document.draft_updated",
         reasonCode,
         reason,
+        createdAt: decisionNow,
         payload: {
           operation: "draft_updated",
           documentId: doc.id,
@@ -477,6 +486,7 @@ export class LegalDocumentsService {
         eventType: "legal_document.revision_approved",
         reasonCode,
         reason,
+        createdAt: now,
         payload: {
           operation: "revision_approved",
           documentId: doc.id,
@@ -632,6 +642,7 @@ export class LegalDocumentsService {
         eventType: "legal_document.published",
         reasonCode,
         reason,
+        createdAt: decisionNow,
         payload: {
           operation: "published",
           documentId: doc.id,
@@ -727,6 +738,7 @@ export class LegalDocumentsService {
         eventType: "legal_document.publication_cancelled",
         reasonCode,
         reason,
+        createdAt: decisionNow,
         payload: {
           operation: "publication_cancelled",
           documentId: doc.id,
@@ -807,6 +819,7 @@ export class LegalDocumentsService {
         eventType: "legal_document.publication_archived",
         reasonCode,
         reason,
+        createdAt: decisionNow,
         payload: {
           operation: "publication_archived",
           documentId: doc.id,
