@@ -550,6 +550,24 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       expect(item.legalDocumentId).toBe(termsDoc.id);
       expect(item.nodeId).toBeUndefined();
       expect(item.payload).toBeDefined();
+      const payload = item.payload as { contentHash?: string };
+      expect(payload.contentHash).toBeDefined();
+      expect(payload.contentHash).toMatch(/^[0-9a-f]{64}$/);
     }
+
+    // 10. Database trigger/check constraint rejects invalid cancellation state on insert
+    const invalidFuture = new Date(Date.now() + 3600000);
+    await expect(
+      prisma.legalDocumentPublication.create({
+        data: {
+          documentId: termsDoc.id,
+          revisionId: rev1.id,
+          startsAt: invalidFuture,
+          cancelledAt: invalidFuture,
+          publishedBy: operator.id,
+          reason: "Invalid cancellation on insert",
+        },
+      }),
+    ).rejects.toThrow();
   });
 });

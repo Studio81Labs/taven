@@ -437,17 +437,32 @@ export class LegalDocumentsService {
       }
 
       const now = await databaseNow(tx);
-      const approved = await tx.legalDocumentRevision.update({
-        where: { id: revision.id },
-        data: {
-          status: LegalRevisionStatus.APPROVED,
-          revisionCode,
-          effectiveAt: effectiveAtDate,
-          approvalEvidence,
-          approvedBy: operator.operatorId,
-          approvedAt: now,
-        },
-      });
+      let approved;
+      try {
+        approved = await tx.legalDocumentRevision.update({
+          where: { id: revision.id },
+          data: {
+            status: LegalRevisionStatus.APPROVED,
+            revisionCode,
+            effectiveAt: effectiveAtDate,
+            approvalEvidence,
+            approvedBy: operator.operatorId,
+            approvedAt: now,
+          },
+        });
+      } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002"
+        ) {
+          throw new ConflictException("Revision code is already in use");
+        }
+        const dbCode = (error as { code?: string })?.code;
+        if (dbCode === "23505") {
+          throw new ConflictException("Revision code is already in use");
+        }
+        throw error;
+      }
 
       await this.audit.recordLegalOperator(tx, operator, {
         legalDocumentId: doc.id,
@@ -614,6 +629,7 @@ export class LegalDocumentsService {
           documentId: doc.id,
           revisionId: revision.id,
           publicationId: publication.id,
+          contentHash: revision.contentHash,
           ...(activePub ? { previousPublicationId: activePub.id } : {}),
         },
       });
@@ -707,6 +723,8 @@ export class LegalDocumentsService {
           operation: "publication_cancelled",
           documentId: doc.id,
           publicationId: updated.id,
+          revisionId: pub.revisionId,
+          contentHash: pub.revision.contentHash,
         },
       });
 
@@ -785,6 +803,8 @@ export class LegalDocumentsService {
           operation: "publication_archived",
           documentId: doc.id,
           publicationId: updated.id,
+          revisionId: updated.revisionId,
+          contentHash: updated.revision.contentHash,
         },
       });
 

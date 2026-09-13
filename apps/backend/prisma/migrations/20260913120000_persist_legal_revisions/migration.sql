@@ -67,6 +67,7 @@ CREATE TABLE "legal_document_publications" (
     CONSTRAINT "legal_document_publications_revision_id_fkey" FOREIGN KEY ("revision_id") REFERENCES "legal_document_revisions"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_document_publications_published_by_fkey" FOREIGN KEY ("published_by") REFERENCES "operator_identities"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_document_publications_interval_check" CHECK ("ends_at" IS NULL OR "ends_at" > "starts_at"),
+    CONSTRAINT "legal_document_publications_cancellation_check" CHECK ("cancelled_at" IS NULL OR "cancelled_at" < "starts_at"),
     CONSTRAINT "legal_document_publications_no_overlap" EXCLUDE USING gist (
         "document_id" WITH =,
         tstzrange("starts_at", coalesce("ends_at", 'infinity'::timestamptz), '[)') WITH &&
@@ -230,6 +231,15 @@ BEGIN
               AND ("cancelled_at" IS NULL OR "cancelled_at" >= "starts_at")
         ) THEN
             RAISE EXCEPTION 'Revision % has already been published and cannot be republished', NEW."revision_id";
+        END IF;
+
+        IF NEW."cancelled_at" IS NOT NULL THEN
+            IF NEW."cancelled_at" >= NEW."starts_at" THEN
+                RAISE EXCEPTION 'Cancellation must be strictly before starts_at';
+            END IF;
+            IF NEW."cancelled_at" > statement_timestamp() THEN
+                RAISE EXCEPTION 'Cancellation cannot be in the future';
+            END IF;
         END IF;
 
         RETURN NEW;
