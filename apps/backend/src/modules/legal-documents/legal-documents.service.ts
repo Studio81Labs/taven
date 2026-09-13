@@ -627,6 +627,11 @@ export class LegalDocumentsService {
       { pattern: /^[0-9a-f]{64}$/ },
     );
     const effectiveAtStr = requireString(dto?.effectiveAt, "Effective date");
+    if (!/(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(effectiveAtStr)) {
+      throw new BadRequestException(
+        "Effective date must include an explicit timezone offset (e.g. 'Z' or '+02:00')",
+      );
+    }
     const effectiveAtDate = new Date(effectiveAtStr);
     if (Number.isNaN(effectiveAtDate.getTime())) {
       throw new BadRequestException("Effective date is invalid");
@@ -746,6 +751,11 @@ export class LegalDocumentsService {
     let parsedStartsAt: Date | undefined;
     if (dto?.startsAt !== undefined && dto?.startsAt !== null) {
       const startsAtStr = requireString(dto.startsAt, "Publication startsAt");
+      if (!/(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(startsAtStr)) {
+        throw new BadRequestException(
+          "Publication startsAt must include an explicit timezone offset (e.g. 'Z' or '+02:00')",
+        );
+      }
       parsedStartsAt = new Date(startsAtStr);
       if (Number.isNaN(parsedStartsAt.getTime())) {
         throw new BadRequestException("Publication startsAt is invalid");

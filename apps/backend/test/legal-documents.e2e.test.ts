@@ -287,6 +287,33 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(mismatchEditRes.status).toBe(409);
 
+    // Rejects approval when effectiveAt lacks an explicit timezone
+    const noTzApproveRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/revisions/${createdDraft.id}/approve`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: {
+          Cookie: adminCookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": adminCsrfToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          expectedEditVersion: updatedDraft.editVersion,
+          expectedContentHash: updatedDraft.contentHash,
+          revisionCode: "terms-2026-09-e2e-v1",
+          effectiveAt: "2026-09-01T00:00:00",
+          approvalEvidence: "Právní posouzení č. 2026/09/LP-01",
+          reasonCode: "LEGAL_APPROVED",
+          reason: "Schválení nového znění podmínek vedením",
+        }),
+      },
+    );
+    expect(noTzApproveRes.status).toBe(400);
+
     // Approve draft revision with correct expectedEditVersion
     const approveRes = await fetch(
       new URL(
