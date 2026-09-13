@@ -1,5 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
+const MILLISECOND_RFC3339_PATTERN =
+  "^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d{1,3})?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$";
+
 export class LegalDocumentSectionDto {
   @ApiProperty({ type: String })
   title!: string;
@@ -64,7 +67,12 @@ export class ApproveLegalRevisionDto {
   @ApiProperty({ type: String, maxLength: 100 })
   revisionCode!: string;
 
-  @ApiProperty({ type: String, format: "date-time" })
+  @ApiProperty({
+    type: String,
+    format: "date-time",
+    pattern: MILLISECOND_RFC3339_PATTERN,
+    description: "RFC 3339 instant with at most millisecond precision",
+  })
   effectiveAt!: string;
 
   @ApiProperty({ type: String })
@@ -81,7 +89,12 @@ export class PublishLegalRevisionDto {
   @ApiProperty({ type: Number })
   expectedGeneration!: number;
 
-  @ApiPropertyOptional({ type: String, format: "date-time" })
+  @ApiPropertyOptional({
+    type: String,
+    format: "date-time",
+    pattern: MILLISECOND_RFC3339_PATTERN,
+    description: "RFC 3339 instant with at most millisecond precision",
+  })
   startsAt?: string;
 
   @ApiProperty({ type: String, maxLength: 100 })

@@ -221,6 +221,12 @@ CREATE TABLE "legal_document_revisions" (
     CONSTRAINT "legal_document_revisions_revision_code_key" UNIQUE ("revision_code"),
     CONSTRAINT "legal_document_revisions_document_id_fkey" FOREIGN KEY ("document_id") REFERENCES "legal_documents"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_document_revisions_approved_by_fkey" FOREIGN KEY ("approved_by") REFERENCES "operator_identities"("id") ON DELETE RESTRICT,
+    CONSTRAINT "legal_document_revisions_timestamp_range_check" CHECK (
+        "created_at" >= '0001-01-01 00:00:00+00'::timestamptz
+        AND "created_at" < '10000-01-01 00:00:00+00'::timestamptz
+        AND "updated_at" >= '0001-01-01 00:00:00+00'::timestamptz
+        AND "updated_at" < '10000-01-01 00:00:00+00'::timestamptz
+    ),
     CONSTRAINT "legal_document_revisions_status_fields_check" CHECK (
         ("status" = 'DRAFT' AND "revision_code" IS NULL AND "effective_at" IS NULL AND "approval_evidence" IS NULL AND "approved_by" IS NULL AND "approved_at" IS NULL)
         OR

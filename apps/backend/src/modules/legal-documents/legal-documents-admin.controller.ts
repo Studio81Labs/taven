@@ -69,6 +69,9 @@ function scalarQueryValue(name: string, value: unknown): string | undefined {
   if (typeof value !== "string") {
     throw new BadRequestException(`${name} is invalid`);
   }
+  if (value.includes("\u0000")) {
+    throw new BadRequestException(`${name} must not contain NUL characters`);
+  }
   return value;
 }
 

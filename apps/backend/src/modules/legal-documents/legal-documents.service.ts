@@ -227,6 +227,7 @@ export class LegalDocumentsService {
     documentId: string;
     generation: number;
   }> {
+    requireNoNul(key, "Legal document key");
     const rows = await tx.$queryRaw<
       Array<{ id: string; key: string; documentId: string; generation: number }>
     >`
