@@ -66,7 +66,7 @@ BEGIN
         IF jsonb_typeof(section) <> 'object'
            OR section - ARRAY['title', 'paragraphs', 'items', 'note'] <> '{}'::jsonb
            OR jsonb_typeof(section->'title') <> 'string'
-           OR length(btrim(coalesce(section->>'title', ''))) = 0
+           OR coalesce(section->>'title', '') ~ '^[[:space:]]*$'
            OR length(btrim(section->>'title')) > 255 THEN
             RETURN false;
         END IF;
@@ -81,7 +81,7 @@ BEGIN
                     IF jsonb_typeof(entry) <> 'string' THEN
                         RETURN false;
                     END IF;
-                    has_content := has_content OR length(btrim(entry #>> '{}')) > 0;
+                    has_content := has_content OR (entry #>> '{}') !~ '^[[:space:]]*$';
                 END LOOP;
             END IF;
         END LOOP;
@@ -92,7 +92,7 @@ BEGIN
             END IF;
             has_content := has_content OR (
                 jsonb_typeof(section->'note') = 'string'
-                AND length(btrim(section->>'note')) > 0
+                AND section->>'note' !~ '^[[:space:]]*$'
             );
         END IF;
 
@@ -255,6 +255,10 @@ CREATE TABLE "legal_document_publications" (
     CONSTRAINT "legal_document_publications_published_by_fkey" FOREIGN KEY ("published_by") REFERENCES "operator_identities"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_document_publications_interval_check" CHECK ("ends_at" IS NULL OR "ends_at" > "starts_at"),
     CONSTRAINT "legal_document_publications_cancellation_check" CHECK ("cancelled_at" IS NULL OR "cancelled_at" < "starts_at"),
+    CONSTRAINT "legal_document_publications_reason_check" CHECK (
+        length("reason") <= 1000
+        AND "reason" !~ '^[[:space:]]*$'
+    ),
     CONSTRAINT "legal_document_publications_no_overlap" EXCLUDE USING gist (
         "document_id" WITH =,
         tstzrange("starts_at", coalesce("ends_at", 'infinity'::timestamptz), '[)') WITH &&
@@ -415,7 +419,6 @@ DECLARE
     v_rev_status "legal_revision_status";
     v_rev_effective_at timestamptz;
     v_post_lock_now timestamptz;
-    v_requested_starts_at timestamptz;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Publication history is append-only and cannot be deleted';
@@ -449,24 +452,7 @@ BEGIN
         END IF;
 
         IF NEW."starts_at" <= v_post_lock_now THEN
-            v_requested_starts_at := NEW."starts_at";
             NEW."starts_at" := GREATEST(v_rev_effective_at, v_post_lock_now);
-            UPDATE "legal_document_publications"
-            SET "ends_at" = NEW."starts_at"
-            WHERE "id" = (
-                SELECT "id"
-                FROM "legal_document_publications"
-                WHERE "document_id" = NEW."document_id"
-                  AND "cancelled_at" IS NULL
-                  AND "starts_at" <= v_post_lock_now
-                  AND (
-                      "ends_at" IS NULL
-                      OR "ends_at" > v_post_lock_now
-                      OR "ends_at" = v_requested_starts_at
-                  )
-                ORDER BY "starts_at" DESC
-                LIMIT 1
-            );
         END IF;
 
         IF NEW."starts_at" < v_rev_effective_at THEN
@@ -489,6 +475,19 @@ BEGIN
         ) THEN
             RAISE EXCEPTION 'Document % already has a pending publication', NEW."document_id";
         END IF;
+
+        UPDATE "legal_document_publications"
+        SET "ends_at" = NEW."starts_at"
+        WHERE "id" = (
+            SELECT "id"
+            FROM "legal_document_publications"
+            WHERE "document_id" = NEW."document_id"
+              AND "cancelled_at" IS NULL
+              AND "starts_at" < NEW."starts_at"
+              AND ("ends_at" IS NULL OR "ends_at" > NEW."starts_at")
+            ORDER BY "starts_at" DESC
+            LIMIT 1
+        );
 
         RETURN NEW;
     END IF;
@@ -522,7 +521,6 @@ BEGIN
 
         IF OLD."ends_at" IS NULL
            AND NEW."ends_at" IS NOT NULL
-           AND NEW."ends_at" <= v_post_lock_now
            AND pg_trigger_depth() = 1 THEN
             NEW."ends_at" := v_post_lock_now;
         END IF;

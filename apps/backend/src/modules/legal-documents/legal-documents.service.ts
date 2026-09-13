@@ -1033,7 +1033,6 @@ export class LegalDocumentsService {
           effectiveStartsAt = decisionNow;
         }
 
-        // Query active publication
         const activePub = await tx.legalDocumentPublication.findFirst({
           where: {
             documentId: doc.id,
@@ -1042,20 +1041,6 @@ export class LegalDocumentsService {
             OR: [{ endsAt: null }, { endsAt: { gt: decisionNow } }],
           },
         });
-
-        if (activePub && effectiveStartsAt > decisionNow) {
-          const targetEndsAt =
-            effectiveStartsAt <= decisionNow ? decisionNow : effectiveStartsAt;
-          if (activePub.startsAt >= targetEndsAt) {
-            throw new ConflictException(
-              "Active publication cannot end at or before its start time",
-            );
-          }
-          await tx.legalDocumentPublication.update({
-            where: { id: activePub.id },
-            data: { endsAt: targetEndsAt },
-          });
-        }
 
         const publication = await tx.legalDocumentPublication.create({
           data: {

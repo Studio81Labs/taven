@@ -1081,10 +1081,6 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           ),
         },
       });
-    await prisma.legalDocumentPublication.update({
-      where: { id: derivedPublication.id },
-      data: { endsAt: directCancellationStartsAt },
-    });
     const directCancellationPublication =
       await prisma.legalDocumentPublication.create({
         data: {
