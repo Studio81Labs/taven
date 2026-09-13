@@ -693,6 +693,13 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(cancelAudit).toBeDefined();
     expect(cancelAudit.createdAt).toBe(cancelled.cancelledAt);
+    const initialPublicationAudit = auditPage.items.find(
+      (item: { eventType: string; payload: unknown }) =>
+        item.eventType === "legal_document.published" &&
+        (item.payload as { publicationId?: string }).publicationId === pub.id,
+    );
+    expect(initialPublicationAudit).toBeDefined();
+    expect(initialPublicationAudit.createdAt).toBe(pub.startsAt);
     expect(
       (cancelAudit.payload as { previousPublicationId?: string })
         .previousPublicationId,
@@ -977,6 +984,66 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           summary: "Summary",
           sections: [],
           contentHash: "2".repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 994,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-null-evidence-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: null,
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+          contentHash: "5".repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 993,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-numeric-title-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: [{ title: 123, note: "Content" }],
+          contentHash: "6".repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 992,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-oversized-content-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "x".repeat(256 * 1024),
+          sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+          contentHash: "7".repeat(64),
         },
       }),
     ).rejects.toThrow();

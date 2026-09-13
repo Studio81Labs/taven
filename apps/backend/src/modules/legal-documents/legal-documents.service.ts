@@ -1045,7 +1045,10 @@ export class LegalDocumentsService {
           eventType: "legal_document.published",
           reasonCode,
           reason,
-          createdAt: decisionNow,
+          createdAt:
+            effectiveStartsAt <= decisionNow
+              ? publication.startsAt
+              : decisionNow,
           idempotencyKey: commandKey,
           payload: {
             operation: "published",

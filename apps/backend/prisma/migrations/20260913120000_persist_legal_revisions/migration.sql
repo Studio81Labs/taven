@@ -63,6 +63,7 @@ BEGIN
 
     FOR section IN SELECT * FROM jsonb_array_elements(value) LOOP
         IF jsonb_typeof(section) <> 'object'
+           OR jsonb_typeof(section->'title') <> 'string'
            OR length(btrim(coalesce(section->>'title', ''))) = 0
            OR length(btrim(section->>'title')) > 255 THEN
             RETURN false;
@@ -101,6 +102,24 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
+CREATE OR REPLACE FUNCTION legal_document_content_fits_size_limit(
+    title text,
+    summary text,
+    sections jsonb
+)
+RETURNS boolean AS $$
+    SELECT octet_length(
+        convert_to(
+            jsonb_build_object(
+                'title', title,
+                'summary', summary,
+                'sections', sections
+            )::text,
+            'UTF8'
+        )
+    ) <= 262144;
+$$ LANGUAGE sql IMMUTABLE STRICT;
+
 CREATE TABLE "legal_document_revisions" (
     "id" uuid NOT NULL DEFAULT gen_random_uuid(),
     "document_id" uuid NOT NULL,
@@ -132,12 +151,14 @@ CREATE TABLE "legal_document_revisions" (
             "status" = 'APPROVED'
             AND "revision_code" IS NOT NULL
             AND "effective_at" IS NOT NULL
+            AND "approval_evidence" IS NOT NULL
             AND length(btrim("approval_evidence")) BETWEEN 1 AND 5000
             AND "approved_by" IS NOT NULL
             AND "approved_at" IS NOT NULL
             AND length(trim("title")) > 0
             AND length(trim("summary")) > 0
             AND legal_document_sections_are_valid("sections")
+            AND legal_document_content_fits_size_limit("title", "summary", "sections")
         )
     ),
     CONSTRAINT "legal_document_revisions_content_hash_check" CHECK ("content_hash" ~ '^[0-9a-f]{64}$')
