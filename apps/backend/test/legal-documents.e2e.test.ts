@@ -185,6 +185,27 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(terms.revisions[0].sections.length).toBeGreaterThan(0);
   });
 
+  it("rejects NUL bytes in administrative legal route and query parameters", async () => {
+    const nulDocumentKeyRes = await fetch(
+      new URL("/admin/legal-documents/%00", baseUrl),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(nulDocumentKeyRes.status).toBe(400);
+
+    const nulEventTypeRes = await fetch(
+      new URL(
+        "/admin/legal-documents/terms/audit-events?eventType=%00",
+        baseUrl,
+      ),
+      {
+        headers: { Cookie: adminCookie },
+      },
+    );
+    expect(nulEventTypeRes.status).toBe(400);
+  });
+
   it("performs full revision lifecycle: create draft, update draft, approve revision", async () => {
     // 1. Get current generation of terms
     const getRes = await fetch(
