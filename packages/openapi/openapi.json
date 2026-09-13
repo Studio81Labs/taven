@@ -9739,6 +9739,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9792,6 +9801,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9830,6 +9848,24 @@
       "post": {
         "operationId": "LegalDocumentsAdminController_archivePublication",
         "parameters": [
+          {
+            "description": "Publication UUID",
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
@@ -9895,6 +9931,24 @@
         "operationId": "LegalDocumentsAdminController_cancelPublication",
         "parameters": [
           {
+            "description": "Publication UUID",
+            "in": "path",
+            "name": "publicationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
             "name": "x-csrf-token",
@@ -9958,6 +10012,15 @@
       "post": {
         "operationId": "LegalDocumentsAdminController_createDraft",
         "parameters": [
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
@@ -10023,6 +10086,24 @@
         "operationId": "LegalDocumentsAdminController_updateDraft",
         "parameters": [
           {
+            "description": "Draft revision UUID",
+            "in": "path",
+            "name": "revisionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
             "name": "x-csrf-token",
@@ -10087,6 +10168,24 @@
         "operationId": "LegalDocumentsAdminController_approveRevision",
         "parameters": [
           {
+            "description": "Draft revision UUID",
+            "in": "path",
+            "name": "revisionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
             "name": "x-csrf-token",
@@ -10150,6 +10249,24 @@
       "post": {
         "operationId": "LegalDocumentsAdminController_publishRevision",
         "parameters": [
+          {
+            "description": "Approved revision UUID",
+            "in": "path",
+            "name": "revisionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
             "in": "header",
@@ -14799,7 +14916,26 @@
     "/legal-documents/{key}/revisions/{revisionCode}": {
       "get": {
         "operationId": "LegalDocumentsController_getRevision",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Immutable revision code",
+            "in": "path",
+            "name": "revisionCode",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Legal document identifier key",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

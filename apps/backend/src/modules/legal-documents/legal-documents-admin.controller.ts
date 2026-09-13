@@ -18,6 +18,7 @@ import {
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiQuery,
   ApiSecurity,
   ApiTags,
@@ -70,6 +71,11 @@ export class LegalDocumentsAdminController {
   @Get(":key")
   @ApiOperation({ summary: "Get legal document details and revisions" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_READ)
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
   @ApiOkResponse({ type: LegalDocumentDetailDto })
   @ApiQuery({ name: "cursor", required: false, type: String })
   @ApiQuery({ name: "limit", required: false, type: Number })
@@ -91,6 +97,11 @@ export class LegalDocumentsAdminController {
     OPERATOR_PERMISSIONS.LEGAL_READ,
     OPERATOR_PERMISSIONS.AUDIT_READ,
   )
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
   @ApiOkResponse({ type: AuditEventPageDto })
   @ApiQuery({ name: "cursor", required: false, type: String })
   @ApiQuery({ name: "limit", required: false, type: Number })
@@ -118,6 +129,11 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Create a new draft revision for a legal document" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
   @ApiBody({ type: CreateLegalDraftDto })
   @ApiOkResponse({ type: LegalRevisionDetailDto })
   @ApiBadRequestResponse()
@@ -137,6 +153,16 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Update an existing draft revision" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
+  @ApiParam({
+    name: "revisionId",
+    type: String,
+    description: "Draft revision UUID",
+  })
   @ApiBody({ type: UpdateLegalDraftDto })
   @ApiOkResponse({ type: LegalRevisionDetailDto })
   @ApiBadRequestResponse()
@@ -158,6 +184,16 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Approve a draft revision" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
+  @ApiParam({
+    name: "revisionId",
+    type: String,
+    description: "Draft revision UUID",
+  })
   @ApiBody({ type: ApproveLegalRevisionDto })
   @ApiOkResponse({ type: LegalRevisionDetailDto })
   @ApiBadRequestResponse()
@@ -184,6 +220,16 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Publish an approved legal revision" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
+  @ApiParam({
+    name: "revisionId",
+    type: String,
+    description: "Approved revision UUID",
+  })
   @ApiBody({ type: PublishLegalRevisionDto })
   @ApiOkResponse({ type: LegalPublicationSummaryDto })
   @ApiBadRequestResponse()
@@ -210,6 +256,16 @@ export class LegalDocumentsAdminController {
   @ApiOperation({ summary: "Cancel a pending scheduled publication" })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
+  @ApiParam({
+    name: "publicationId",
+    type: String,
+    description: "Publication UUID",
+  })
   @ApiBody({ type: CancelLegalPublicationDto })
   @ApiOkResponse({ type: LegalPublicationSummaryDto })
   @ApiBadRequestResponse()
@@ -238,6 +294,16 @@ export class LegalDocumentsAdminController {
   })
   @RequireOperatorPermissions(OPERATOR_PERMISSIONS.LEGAL_WRITE)
   @ApiHeader(OPERATOR_CSRF_HEADER)
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
+  @ApiParam({
+    name: "publicationId",
+    type: String,
+    description: "Publication UUID",
+  })
   @ApiBody({ type: ArchiveLegalPublicationDto })
   @ApiOkResponse({ type: LegalPublicationSummaryDto })
   @ApiBadRequestResponse()

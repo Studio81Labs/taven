@@ -3,6 +3,7 @@ import {
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiParam,
   ApiTags,
 } from "@nestjs/swagger";
 type ResponseLike = {
@@ -20,6 +21,16 @@ export class LegalDocumentsController {
   @ApiOperation({
     summary:
       "Public exact-version reader for published legal document revisions",
+  })
+  @ApiParam({
+    name: "key",
+    type: String,
+    description: "Legal document identifier key",
+  })
+  @ApiParam({
+    name: "revisionCode",
+    type: String,
+    description: "Immutable revision code",
   })
   @Header("Cache-Control", "public, max-age=3600, immutable")
   @ApiOkResponse({ type: PublicLegalRevisionDto })

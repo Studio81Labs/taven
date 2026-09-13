@@ -4890,7 +4890,10 @@ export interface operations {
                 cursor?: string;
             };
             header?: never;
-            path?: never;
+            path: {
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -4930,7 +4933,10 @@ export interface operations {
                 cursor?: string;
             };
             header?: never;
-            path?: never;
+            path: {
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -4970,7 +4976,12 @@ export interface operations {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
-            path?: never;
+            path: {
+                /** @description Publication UUID */
+                publicationId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -5026,7 +5037,12 @@ export interface operations {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
-            path?: never;
+            path: {
+                /** @description Publication UUID */
+                publicationId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -5082,7 +5098,10 @@ export interface operations {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
-            path?: never;
+            path: {
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -5138,7 +5157,12 @@ export interface operations {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
-            path?: never;
+            path: {
+                /** @description Draft revision UUID */
+                revisionId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -5194,7 +5218,12 @@ export interface operations {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
-            path?: never;
+            path: {
+                /** @description Draft revision UUID */
+                revisionId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -5250,7 +5279,12 @@ export interface operations {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
             };
-            path?: never;
+            path: {
+                /** @description Approved revision UUID */
+                revisionId: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -7462,7 +7496,12 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description Immutable revision code */
+                revisionCode: string;
+                /** @description Legal document identifier key */
+                key: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

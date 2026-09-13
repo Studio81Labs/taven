@@ -36,6 +36,39 @@ type Transaction = Prisma.TransactionClient;
 export const MAX_LEGAL_PAYLOAD_BYTES = 256 * 1024;
 export const REVISION_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
 
+function requireString(
+  val: unknown,
+  fieldName: string,
+  options?: { minLength?: number; maxLength?: number; pattern?: RegExp },
+): string {
+  if (typeof val !== "string") {
+    throw new BadRequestException(`${fieldName} must be a string`);
+  }
+  const trimmed = val.trim();
+  const minLength = options?.minLength ?? 1;
+  if (trimmed.length < minLength) {
+    throw new BadRequestException(`${fieldName} cannot be empty`);
+  }
+  if (options?.maxLength !== undefined && trimmed.length > options.maxLength) {
+    throw new BadRequestException(
+      `${fieldName} exceeds maximum length of ${options.maxLength}`,
+    );
+  }
+  if (options?.pattern && !options.pattern.test(trimmed)) {
+    throw new BadRequestException(`${fieldName} format is invalid`);
+  }
+  return trimmed;
+}
+
+function requireSafeInteger(val: unknown, fieldName: string, min = 1): number {
+  if (typeof val !== "number" || !Number.isSafeInteger(val) || val < min) {
+    throw new BadRequestException(
+      `${fieldName} must be a valid integer >= ${min}`,
+    );
+  }
+  return val;
+}
+
 @Injectable()
 export class LegalDocumentsService {
   constructor(
@@ -140,10 +173,15 @@ export class LegalDocumentsService {
       (p) => p.startsAt <= now && (p.endsAt === null || p.endsAt > now),
     );
     const pendingPub = doc.publications.find((p) => p.startsAt > now);
-    const draftCount = await this.prisma.legalDocumentRevision.count({
-      where: { documentId: doc.id, status: "DRAFT" },
-    });
-    const latestDraft = page.find((r) => r.status === "DRAFT");
+    const [draftCount, latestDraft] = await Promise.all([
+      this.prisma.legalDocumentRevision.count({
+        where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
+      }),
+      this.prisma.legalDocumentRevision.findFirst({
+        where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
+        orderBy: { sequence: "desc" },
+      }),
+    ]);
 
     return {
       id: doc.id,
@@ -172,15 +210,14 @@ export class LegalDocumentsService {
   ): Promise<LegalRevisionDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
-    const title = dto.title.trim();
-    if (!title || title.length > 255) {
-      throw new BadRequestException("Draft title is invalid");
-    }
-    const summary = dto.summary.trim();
-    if (!summary) {
-      throw new BadRequestException("Draft summary is invalid");
-    }
-    const sections = normalizeLegalSections(dto.sections);
+    const title = requireString(dto?.title, "Draft title", { maxLength: 255 });
+    const summary = requireString(dto?.summary, "Draft summary");
+    const expectedGeneration = requireSafeInteger(
+      dto?.expectedGeneration,
+      "Expected generation",
+      1,
+    );
+    const sections = normalizeLegalSections(dto?.sections);
     assertContentSize({ title, summary, sections });
     const contentHash = computeLegalRevisionContentHash({
       contentVersion: 1,
@@ -198,7 +235,7 @@ export class LegalDocumentsService {
       // Rank 1: Acquire exclusive row lock on legal_document
       await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
 
-      if (doc.generation !== dto.expectedGeneration) {
+      if (doc.generation !== expectedGeneration) {
         throw new ConflictException("Document generation mismatch");
       }
 
@@ -252,15 +289,14 @@ export class LegalDocumentsService {
   ): Promise<LegalRevisionDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
-    const title = dto.title.trim();
-    if (!title || title.length > 255) {
-      throw new BadRequestException("Draft title is invalid");
-    }
-    const summary = dto.summary.trim();
-    if (!summary) {
-      throw new BadRequestException("Draft summary is invalid");
-    }
-    const sections = normalizeLegalSections(dto.sections);
+    const expectedEditVersion = requireSafeInteger(
+      dto?.expectedEditVersion,
+      "Expected edit version",
+      1,
+    );
+    const title = requireString(dto?.title, "Draft title", { maxLength: 255 });
+    const summary = requireString(dto?.summary, "Draft summary");
+    const sections = normalizeLegalSections(dto?.sections);
     assertContentSize({ title, summary, sections });
     const contentHash = computeLegalRevisionContentHash({
       contentVersion: 1,
@@ -286,7 +322,7 @@ export class LegalDocumentsService {
       if (revision.status !== LegalRevisionStatus.DRAFT) {
         throw new ConflictException("Cannot edit an approved revision");
       }
-      if (revision.editVersion !== dto.expectedEditVersion) {
+      if (revision.editVersion !== expectedEditVersion) {
         throw new ConflictException("Draft edit version mismatch");
       }
 
@@ -326,26 +362,29 @@ export class LegalDocumentsService {
   ): Promise<LegalRevisionDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
-    const revisionCode = dto.revisionCode.trim();
-    if (!REVISION_CODE_PATTERN.test(revisionCode)) {
-      throw new BadRequestException("Revision code is invalid");
-    }
-    const effectiveAtDate = new Date(dto.effectiveAt);
+    const revisionCode = requireString(dto?.revisionCode, "Revision code", {
+      pattern: REVISION_CODE_PATTERN,
+      maxLength: 100,
+    });
+    const expectedContentHash = requireString(
+      dto?.expectedContentHash,
+      "Expected content hash",
+      { pattern: /^[0-9a-f]{64}$/ },
+    );
+    const effectiveAtStr = requireString(dto?.effectiveAt, "Effective date");
+    const effectiveAtDate = new Date(effectiveAtStr);
     if (Number.isNaN(effectiveAtDate.getTime())) {
       throw new BadRequestException("Effective date is invalid");
     }
-    const approvalEvidence = dto.approvalEvidence.trim();
-    if (!approvalEvidence || approvalEvidence.length > 5000) {
-      throw new BadRequestException("Approval evidence is invalid");
-    }
-    const reason = dto.reason.trim();
-    const reasonCode = dto.reasonCode.trim();
-    if (!reason || reason.length > 1000) {
-      throw new BadRequestException("Reason is invalid");
-    }
-    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
-      throw new BadRequestException("Reason code is invalid");
-    }
+    const approvalEvidence = requireString(
+      dto?.approvalEvidence,
+      "Approval evidence",
+      { maxLength: 5000 },
+    );
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
 
     return await this.prisma.$transaction(async (tx) => {
       const doc = await tx.legalDocument.findUnique({ where: { key } });
@@ -364,7 +403,7 @@ export class LegalDocumentsService {
       if (revision.status !== LegalRevisionStatus.DRAFT) {
         throw new ConflictException("Revision is already approved");
       }
-      if (revision.contentHash !== dto.expectedContentHash) {
+      if (revision.contentHash !== expectedContentHash) {
         throw new ConflictException("Revision content hash mismatch");
       }
 
@@ -413,18 +452,20 @@ export class LegalDocumentsService {
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
-    const reason = dto.reason.trim();
-    const reasonCode = dto.reasonCode.trim();
-    if (!reason || reason.length > 1000) {
-      throw new BadRequestException("Reason is invalid");
-    }
-    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
-      throw new BadRequestException("Reason code is invalid");
-    }
+    const expectedGeneration = requireSafeInteger(
+      dto?.expectedGeneration,
+      "Expected generation",
+      1,
+    );
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
 
     let parsedStartsAt: Date | undefined;
-    if (dto.startsAt) {
-      parsedStartsAt = new Date(dto.startsAt);
+    if (dto?.startsAt !== undefined && dto?.startsAt !== null) {
+      const startsAtStr = requireString(dto.startsAt, "Publication startsAt");
+      parsedStartsAt = new Date(startsAtStr);
       if (Number.isNaN(parsedStartsAt.getTime())) {
         throw new BadRequestException("Publication startsAt is invalid");
       }
@@ -438,7 +479,7 @@ export class LegalDocumentsService {
 
       await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
 
-      if (doc.generation !== dto.expectedGeneration) {
+      if (doc.generation !== expectedGeneration) {
         throw new ConflictException("Document generation mismatch");
       }
 
@@ -565,14 +606,15 @@ export class LegalDocumentsService {
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
-    const reason = dto.reason.trim();
-    const reasonCode = dto.reasonCode.trim();
-    if (!reason || reason.length > 1000) {
-      throw new BadRequestException("Reason is invalid");
-    }
-    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
-      throw new BadRequestException("Reason code is invalid");
-    }
+    const expectedGeneration = requireSafeInteger(
+      dto?.expectedGeneration,
+      "Expected generation",
+      1,
+    );
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
 
     return await this.prisma.$transaction(async (tx) => {
       const doc = await tx.legalDocument.findUnique({ where: { key } });
@@ -582,7 +624,7 @@ export class LegalDocumentsService {
 
       await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
 
-      if (doc.generation !== dto.expectedGeneration) {
+      if (doc.generation !== expectedGeneration) {
         throw new ConflictException("Document generation mismatch");
       }
 
@@ -654,14 +696,15 @@ export class LegalDocumentsService {
   ): Promise<LegalPublicationSummaryDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
 
-    const reason = dto.reason.trim();
-    const reasonCode = dto.reasonCode.trim();
-    if (!reason || reason.length > 1000) {
-      throw new BadRequestException("Reason is invalid");
-    }
-    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
-      throw new BadRequestException("Reason code is invalid");
-    }
+    const expectedGeneration = requireSafeInteger(
+      dto?.expectedGeneration,
+      "Expected generation",
+      1,
+    );
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
 
     return await this.prisma.$transaction(async (tx) => {
       const doc = await tx.legalDocument.findUnique({ where: { key } });
@@ -671,7 +714,7 @@ export class LegalDocumentsService {
 
       await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
 
-      if (doc.generation !== dto.expectedGeneration) {
+      if (doc.generation !== expectedGeneration) {
         throw new ConflictException("Document generation mismatch");
       }
 
@@ -796,21 +839,70 @@ function assertContentSize(content: {
 }
 
 export function normalizeLegalSections(
-  sections: LegalDocumentSectionDto[],
+  sections: unknown,
 ): LegalDocumentSectionDto[] {
   if (!Array.isArray(sections) || sections.length === 0) {
     throw new BadRequestException("Sections must be a non-empty array");
   }
-  return sections.map((s) => {
-    const title = s?.title?.trim();
-    if (!title) {
+  return sections.map((s, idx) => {
+    if (!s || typeof s !== "object") {
+      throw new BadRequestException(`Section ${idx} must be an object`);
+    }
+    const rawSection = s as Record<string, unknown>;
+    if (typeof rawSection.title !== "string" || !rawSection.title.trim()) {
       throw new BadRequestException("Section title must not be empty");
     }
-    const paragraphs = s.paragraphs
-      ?.map((p) => p.trim())
-      .filter((p) => p.length > 0);
-    const items = s.items?.map((i) => i.trim()).filter((i) => i.length > 0);
-    const note = s.note?.trim();
+    const title = rawSection.title.trim();
+    if (title.length > 255) {
+      throw new BadRequestException("Section title exceeds maximum length");
+    }
+
+    let paragraphs: string[] | undefined;
+    if (rawSection.paragraphs !== undefined) {
+      if (!Array.isArray(rawSection.paragraphs)) {
+        throw new BadRequestException(
+          `Section ${idx} paragraphs must be an array`,
+        );
+      }
+      paragraphs = rawSection.paragraphs
+        .map((p, pIdx) => {
+          if (typeof p !== "string") {
+            throw new BadRequestException(
+              `Section ${idx} paragraph ${pIdx} must be a string`,
+            );
+          }
+          return p.trim();
+        })
+        .filter((p) => p.length > 0);
+    }
+
+    let items: string[] | undefined;
+    if (rawSection.items !== undefined) {
+      if (!Array.isArray(rawSection.items)) {
+        throw new BadRequestException(`Section ${idx} items must be an array`);
+      }
+      items = rawSection.items
+        .map((i, iIdx) => {
+          if (typeof i !== "string") {
+            throw new BadRequestException(
+              `Section ${idx} item ${iIdx} must be a string`,
+            );
+          }
+          return i.trim();
+        })
+        .filter((i) => i.length > 0);
+    }
+
+    let note: string | undefined;
+    if (rawSection.note !== undefined && rawSection.note !== null) {
+      if (typeof rawSection.note !== "string") {
+        throw new BadRequestException(`Section ${idx} note must be a string`);
+      }
+      const trimmedNote = rawSection.note.trim();
+      if (trimmedNote.length > 0) {
+        note = trimmedNote;
+      }
+    }
 
     if (
       (!paragraphs || paragraphs.length === 0) &&

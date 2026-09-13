@@ -243,6 +243,9 @@ BEGIN
         END IF;
 
         IF OLD."cancelled_at" IS NULL AND NEW."cancelled_at" IS NOT NULL THEN
+            IF CURRENT_TIMESTAMP >= NEW."starts_at" THEN
+                RAISE EXCEPTION 'Cannot cancel a publication that has already started';
+            END IF;
             IF NEW."cancelled_at" >= NEW."starts_at" THEN
                 RAISE EXCEPTION 'Cancellation must be strictly before starts_at';
             END IF;
