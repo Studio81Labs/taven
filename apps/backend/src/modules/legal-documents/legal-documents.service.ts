@@ -125,6 +125,30 @@ export class LegalDocumentsService {
     private readonly audit: AuditService,
   ) {}
 
+  private async lockDocumentByKey(
+    tx: Prisma.TransactionClient,
+    key: string,
+  ): Promise<{
+    id: string;
+    key: string;
+    documentId: string;
+    generation: number;
+  }> {
+    const rows = await tx.$queryRaw<
+      Array<{ id: string; key: string; documentId: string; generation: number }>
+    >`
+      SELECT id, key, "document_id" AS "documentId", generation
+      FROM "legal_documents"
+      WHERE "key" = ${key}
+      FOR UPDATE
+    `;
+    const doc = rows[0];
+    if (!doc) {
+      throw new NotFoundException(`Legal document '${key}' was not found`);
+    }
+    return doc;
+  }
+
   async listDocuments(
     operator: OperatorContext,
   ): Promise<LegalDocumentSummaryDto[]> {
@@ -453,13 +477,7 @@ export class LegalDocumentsService {
     });
 
     return await this.prisma.$transaction(async (tx) => {
-      const doc = await tx.legalDocument.findUnique({ where: { key } });
-      if (!doc) {
-        throw new NotFoundException(`Legal document '${key}' was not found`);
-      }
-
-      // Rank 1: Acquire exclusive row lock on legal_document
-      await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
+      const doc = await this.lockDocumentByKey(tx, key);
 
       if (doc.generation !== expectedGeneration) {
         throw new ConflictException("Document generation mismatch");
@@ -539,12 +557,7 @@ export class LegalDocumentsService {
     });
 
     return await this.prisma.$transaction(async (tx) => {
-      const doc = await tx.legalDocument.findUnique({ where: { key } });
-      if (!doc) {
-        throw new NotFoundException(`Legal document '${key}' was not found`);
-      }
-
-      await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
+      const doc = await this.lockDocumentByKey(tx, key);
 
       const revision = await tx.legalDocumentRevision.findUnique({
         where: { id: validRevisionId },
@@ -629,12 +642,7 @@ export class LegalDocumentsService {
     });
 
     return await this.prisma.$transaction(async (tx) => {
-      const doc = await tx.legalDocument.findUnique({ where: { key } });
-      if (!doc) {
-        throw new NotFoundException(`Legal document '${key}' was not found`);
-      }
-
-      await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
+      const doc = await this.lockDocumentByKey(tx, key);
 
       const revision = await tx.legalDocumentRevision.findUnique({
         where: { id: validRevisionId },
@@ -650,6 +658,16 @@ export class LegalDocumentsService {
       }
       if (revision.contentHash !== expectedContentHash) {
         throw new ConflictException("Revision content hash mismatch");
+      }
+      if (
+        !revision.title.trim() ||
+        !revision.summary.trim() ||
+        !Array.isArray(revision.sections) ||
+        revision.sections.length === 0
+      ) {
+        throw new BadRequestException(
+          "Approved revision must have non-empty title, summary, and sections",
+        );
       }
 
       const existingCode = await tx.legalDocumentRevision.findUnique({
@@ -735,12 +753,7 @@ export class LegalDocumentsService {
     }
 
     return await this.prisma.$transaction(async (tx) => {
-      const doc = await tx.legalDocument.findUnique({ where: { key } });
-      if (!doc) {
-        throw new NotFoundException(`Legal document '${key}' was not found`);
-      }
-
-      await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
+      const doc = await this.lockDocumentByKey(tx, key);
 
       if (doc.generation !== expectedGeneration) {
         throw new ConflictException("Document generation mismatch");
@@ -884,12 +897,7 @@ export class LegalDocumentsService {
     });
 
     return await this.prisma.$transaction(async (tx) => {
-      const doc = await tx.legalDocument.findUnique({ where: { key } });
-      if (!doc) {
-        throw new NotFoundException(`Legal document '${key}' was not found`);
-      }
-
-      await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
+      const doc = await this.lockDocumentByKey(tx, key);
 
       if (doc.generation !== expectedGeneration) {
         throw new ConflictException("Document generation mismatch");
@@ -951,6 +959,7 @@ export class LegalDocumentsService {
           publicationId: updated.id,
           revisionId: pub.revisionId,
           contentHash: pub.revision.contentHash,
+          ...(predecessor ? { previousPublicationId: predecessor.id } : {}),
         },
       });
 
@@ -979,12 +988,7 @@ export class LegalDocumentsService {
     });
 
     return await this.prisma.$transaction(async (tx) => {
-      const doc = await tx.legalDocument.findUnique({ where: { key } });
-      if (!doc) {
-        throw new NotFoundException(`Legal document '${key}' was not found`);
-      }
-
-      await tx.$queryRaw`SELECT id FROM "legal_documents" WHERE "id" = ${doc.id}::uuid FOR UPDATE`;
+      const doc = await this.lockDocumentByKey(tx, key);
 
       if (doc.generation !== expectedGeneration) {
         throw new ConflictException("Document generation mismatch");

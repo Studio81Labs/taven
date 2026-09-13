@@ -12,8 +12,38 @@ CREATE TABLE "legal_documents" (
 
     CONSTRAINT "legal_documents_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "legal_documents_key_key" UNIQUE ("key"),
-    CONSTRAINT "legal_documents_document_id_key" UNIQUE ("document_id")
+    CONSTRAINT "legal_documents_document_id_key" UNIQUE ("document_id"),
+    CONSTRAINT "legal_documents_generation_check" CHECK ("generation" >= 1)
 );
+
+-- Triggers for legal_documents integrity and monotonicity
+CREATE OR REPLACE FUNCTION legal_documents_integrity_fn()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Legal documents are permanent and cannot be deleted';
+    END IF;
+
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW."id" IS DISTINCT FROM OLD."id"
+           OR NEW."key" IS DISTINCT FROM OLD."key"
+           OR NEW."document_id" IS DISTINCT FROM OLD."document_id" THEN
+            RAISE EXCEPTION 'Legal document identities (id, key, document_id) are immutable';
+        END IF;
+
+        IF NEW."generation" < OLD."generation" THEN
+            RAISE EXCEPTION 'Legal document generation must be strictly monotonic (current %, requested %)', OLD."generation", NEW."generation";
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER legal_documents_integrity_trg
+BEFORE UPDATE OR DELETE ON "legal_documents"
+FOR EACH ROW
+EXECUTE FUNCTION legal_documents_integrity_fn();
 
 CREATE TABLE "legal_document_revisions" (
     "id" uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -42,7 +72,18 @@ CREATE TABLE "legal_document_revisions" (
     CONSTRAINT "legal_document_revisions_status_fields_check" CHECK (
         ("status" = 'DRAFT' AND "revision_code" IS NULL AND "effective_at" IS NULL AND "approval_evidence" IS NULL AND "approved_by" IS NULL AND "approved_at" IS NULL)
         OR
-        ("status" = 'APPROVED' AND "revision_code" IS NOT NULL AND "effective_at" IS NOT NULL AND "approval_evidence" IS NOT NULL AND "approved_by" IS NOT NULL AND "approved_at" IS NOT NULL)
+        (
+            "status" = 'APPROVED'
+            AND "revision_code" IS NOT NULL
+            AND "effective_at" IS NOT NULL
+            AND "approval_evidence" IS NOT NULL
+            AND "approved_by" IS NOT NULL
+            AND "approved_at" IS NOT NULL
+            AND length(trim("title")) > 0
+            AND length(trim("summary")) > 0
+            AND jsonb_typeof("sections") = 'array'
+            AND jsonb_array_length("sections") > 0
+        )
     ),
     CONSTRAINT "legal_document_revisions_content_hash_check" CHECK ("content_hash" ~ '^[0-9a-f]{64}$')
 );
@@ -158,6 +199,18 @@ CREATE INDEX "audit_events_legal_document_id_created_at_id_idx"
 CREATE OR REPLACE FUNCTION legal_document_revisions_immutability_fn()
 RETURNS TRIGGER AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.status = 'APPROVED' THEN
+            IF length(trim(NEW.title)) = 0
+               OR length(trim(NEW.summary)) = 0
+               OR jsonb_typeof(NEW.sections) <> 'array'
+               OR jsonb_array_length(NEW.sections) = 0 THEN
+                RAISE EXCEPTION 'Approved revision % must have non-empty title, summary, and sections', NEW.id;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END IF;
+
     IF TG_OP = 'DELETE' THEN
         IF OLD.status = 'APPROVED' THEN
             RAISE EXCEPTION 'Approved revision % is immutable and cannot be deleted', OLD.id;
@@ -167,7 +220,8 @@ BEGIN
 
     IF TG_OP = 'UPDATE' THEN
         IF OLD.status = 'APPROVED' THEN
-            IF NEW.status <> 'APPROVED'
+            IF NEW.id IS DISTINCT FROM OLD.id
+               OR NEW.status <> 'APPROVED'
                OR NEW.document_id <> OLD.document_id
                OR NEW.sequence <> OLD.sequence
                OR NEW.content_version <> OLD.content_version
@@ -183,6 +237,16 @@ BEGIN
                 RAISE EXCEPTION 'Approved revision % is immutable and cannot be modified', OLD.id;
             END IF;
         END IF;
+
+        IF OLD.status = 'DRAFT' AND NEW.status = 'APPROVED' THEN
+            IF length(trim(NEW.title)) = 0
+               OR length(trim(NEW.summary)) = 0
+               OR jsonb_typeof(NEW.sections) <> 'array'
+               OR jsonb_array_length(NEW.sections) = 0 THEN
+                RAISE EXCEPTION 'Approved revision % must have non-empty title, summary, and sections', NEW.id;
+            END IF;
+        END IF;
+
         RETURN NEW;
     END IF;
 
@@ -191,7 +255,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER legal_document_revisions_immutability_trg
-BEFORE UPDATE OR DELETE ON "legal_document_revisions"
+BEFORE INSERT OR UPDATE OR DELETE ON "legal_document_revisions"
 FOR EACH ROW
 EXECUTE FUNCTION legal_document_revisions_immutability_fn();
 
@@ -275,11 +339,14 @@ BEGIN
             END IF;
         END IF;
 
-        IF NEW."document_id" <> OLD."document_id"
-           OR NEW."revision_id" <> OLD."revision_id"
-           OR NEW."starts_at" <> OLD."starts_at"
-           OR NEW."published_by" <> OLD."published_by" THEN
-            RAISE EXCEPTION 'Cannot modify publication identity or start time';
+        IF NEW."id" IS DISTINCT FROM OLD."id"
+           OR NEW."document_id" IS DISTINCT FROM OLD."document_id"
+           OR NEW."revision_id" IS DISTINCT FROM OLD."revision_id"
+           OR NEW."starts_at" IS DISTINCT FROM OLD."starts_at"
+           OR NEW."published_by" IS DISTINCT FROM OLD."published_by"
+           OR NEW."reason" IS DISTINCT FROM OLD."reason"
+           OR NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
+            RAISE EXCEPTION 'Cannot modify publication historical fields (id, document_id, revision_id, starts_at, published_by, reason, created_at)';
         END IF;
 
         RETURN NEW;

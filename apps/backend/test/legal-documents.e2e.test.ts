@@ -33,6 +33,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
 
   async function resetLegalState() {
     await prisma.$executeRawUnsafe(`
+      ALTER TABLE legal_documents DISABLE TRIGGER ALL;
       ALTER TABLE legal_document_publications DISABLE TRIGGER ALL;
       ALTER TABLE legal_document_revisions DISABLE TRIGGER ALL;
       ALTER TABLE audit_events DISABLE TRIGGER ALL;
@@ -40,6 +41,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       DELETE FROM legal_document_revisions WHERE sequence > 1;
       DELETE FROM audit_events WHERE legal_document_id IS NOT NULL;
       UPDATE legal_documents SET generation = 1;
+      ALTER TABLE legal_documents ENABLE TRIGGER ALL;
       ALTER TABLE legal_document_publications ENABLE TRIGGER ALL;
       ALTER TABLE legal_document_revisions ENABLE TRIGGER ALL;
       ALTER TABLE audit_events ENABLE TRIGGER ALL;
@@ -620,6 +622,15 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       expect(payload.contentHash).toBeDefined();
       expect(payload.contentHash).toMatch(/^[0-9a-f]{64}$/);
     }
+    const cancelAudit = auditPage.items.find(
+      (item: { eventType: string }) =>
+        item.eventType === "legal_document.publication_cancelled",
+    );
+    expect(cancelAudit).toBeDefined();
+    expect(
+      (cancelAudit.payload as { previousPublicationId?: string })
+        .previousPublicationId,
+    ).toBe(pub.id);
 
     const filteredAuditRes = await fetch(
       new URL(
@@ -724,7 +735,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         contentVersion: 1,
         title: "Title",
         summary: "Summary",
-        sections: [],
+        sections: [{ title: "Title", paragraphs: ["Content"] }],
         contentHash: "0".repeat(64),
       },
     });
@@ -796,7 +807,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         contentVersion: 1,
         title: "Title",
         summary: "Summary",
-        sections: [],
+        sections: [{ title: "Section 1", paragraphs: ["Content"] }],
         contentHash: "1".repeat(64),
       },
     });
@@ -810,6 +821,64 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           reason: "Invalid starts_at before effective_at",
         },
       }),
+    ).rejects.toThrow();
+
+    // Database immutability trigger rejects mutating id on approved revision
+    await expect(
+      prisma.$executeRawUnsafe(
+        `UPDATE legal_document_revisions SET id = gen_random_uuid() WHERE id = '${futureEffectiveDraft.id}'`,
+      ),
+    ).rejects.toThrow();
+
+    // Database check constraint rejects approved revision with empty sections
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 997,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-empty-sections-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: [],
+          contentHash: "2".repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+
+    // Database publication integrity trigger rejects modifying historical fields (reason, id)
+    await expect(
+      prisma.$executeRawUnsafe(
+        `UPDATE legal_document_publications SET reason = 'modified reason' WHERE id = '${pub.id}'`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        `UPDATE legal_document_publications SET id = gen_random_uuid() WHERE id = '${pub.id}'`,
+      ),
+    ).rejects.toThrow();
+
+    // Database legal documents integrity trigger rejects deletion, identity updates, and non-monotonic generation
+    await expect(
+      prisma.$executeRawUnsafe(
+        `DELETE FROM legal_documents WHERE id = '${termsDoc.id}'`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        `UPDATE legal_documents SET key = 'changed-key' WHERE id = '${termsDoc.id}'`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        `UPDATE legal_documents SET generation = 0 WHERE id = '${termsDoc.id}'`,
+      ),
     ).rejects.toThrow();
   });
 });
