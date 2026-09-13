@@ -36,6 +36,7 @@ type Transaction = Prisma.TransactionClient;
 
 export const MAX_LEGAL_PAYLOAD_BYTES = 256 * 1024;
 export const REVISION_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
+const POSTGRES_MIN_TIMESTAMP_YEAR = -4712;
 
 function requireString(
   val: unknown,
@@ -102,7 +103,12 @@ function parsePublicationCursor(cursor: string): {
       throw new Error();
     }
     const d = new Date(parsed.startsAt);
-    if (Number.isNaN(d.getTime())) throw new Error();
+    if (
+      Number.isNaN(d.getTime()) ||
+      d.getUTCFullYear() < POSTGRES_MIN_TIMESTAMP_YEAR
+    ) {
+      throw new Error();
+    }
     return { startsAt: d, id: parsed.id };
   } catch {
     throw new BadRequestException("Publication cursor is invalid");

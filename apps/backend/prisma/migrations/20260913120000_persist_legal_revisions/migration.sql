@@ -217,6 +217,7 @@ CREATE TABLE "legal_document_revisions" (
             "status" = 'APPROVED'
             AND "revision_code" IS NOT NULL
             AND "revision_code" ~ '^[A-Za-z0-9_.-]{1,100}$'
+            AND "content_version" = 1
             AND "effective_at" IS NOT NULL
             AND "approval_evidence" IS NOT NULL
             AND length(btrim("approval_evidence")) BETWEEN 1 AND 5000
@@ -411,6 +412,7 @@ DECLARE
     v_rev_status "legal_revision_status";
     v_rev_effective_at timestamptz;
     v_post_lock_now timestamptz;
+    v_requested_starts_at timestamptz;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Publication history is append-only and cannot be deleted';
@@ -441,6 +443,7 @@ BEGIN
         END IF;
 
         IF NEW."starts_at" <= v_post_lock_now THEN
+            v_requested_starts_at := NEW."starts_at";
             NEW."starts_at" := GREATEST(v_rev_effective_at, v_post_lock_now);
             UPDATE "legal_document_publications"
             SET "ends_at" = NEW."starts_at"
@@ -450,7 +453,11 @@ BEGIN
                 WHERE "document_id" = NEW."document_id"
                   AND "cancelled_at" IS NULL
                   AND "starts_at" <= v_post_lock_now
-                  AND ("ends_at" IS NULL OR "ends_at" > v_post_lock_now)
+                  AND (
+                      "ends_at" IS NULL
+                      OR "ends_at" > v_post_lock_now
+                      OR "ends_at" = v_requested_starts_at
+                  )
                 ORDER BY "starts_at" DESC
                 LIMIT 1
             );
@@ -466,6 +473,15 @@ BEGIN
               AND ("cancelled_at" IS NULL OR "cancelled_at" >= "starts_at")
         ) THEN
             RAISE EXCEPTION 'Revision % has already been published and cannot be republished', NEW."revision_id";
+        END IF;
+
+        IF NEW."starts_at" > v_post_lock_now AND EXISTS (
+            SELECT 1 FROM "legal_document_publications"
+            WHERE "document_id" = NEW."document_id"
+              AND "cancelled_at" IS NULL
+              AND "starts_at" > v_post_lock_now
+        ) THEN
+            RAISE EXCEPTION 'Document % already has a pending publication', NEW."document_id";
         END IF;
 
         IF NEW."cancelled_at" IS NOT NULL THEN
@@ -501,6 +517,12 @@ BEGIN
             IF NEW."ends_at" IS DISTINCT FROM OLD."ends_at" THEN
                 RAISE EXCEPTION 'Elapsed publication ends_at is immutable and cannot be modified';
             END IF;
+        END IF;
+
+        IF OLD."ends_at" IS NULL
+           AND NEW."ends_at" IS NOT NULL
+           AND NEW."ends_at" <= v_post_lock_now THEN
+            RAISE EXCEPTION 'Publication ends_at cannot be assigned in the past';
         END IF;
 
         IF NEW."id" IS DISTINCT FROM OLD."id"
