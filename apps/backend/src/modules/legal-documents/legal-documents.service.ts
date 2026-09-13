@@ -1257,7 +1257,7 @@ export class LegalDocumentsService {
 
         const decisionNow = await databaseNow(tx);
         if (
-          pub.startsAt >= decisionNow ||
+          pub.startsAt > decisionNow ||
           (pub.endsAt !== null && pub.endsAt <= decisionNow)
         ) {
           throw new ConflictException("Publication is not currently active");

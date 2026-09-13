@@ -230,6 +230,7 @@ CREATE TABLE "legal_document_revisions" (
             AND "revision_code" ~ '^[A-Za-z0-9_.-]{1,100}$'
             AND "content_version" = 1
             AND "effective_at" IS NOT NULL
+            AND isfinite("effective_at")
             AND "approval_evidence" IS NOT NULL
             AND length("approval_evidence") <= 5000
             AND "approval_evidence" !~ '^[[:space:]]*$'

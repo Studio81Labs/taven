@@ -1310,6 +1310,23 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         },
       }),
     ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_revisions (
+          document_id, sequence, edit_version, status, content_version,
+          revision_code, effective_at, approval_evidence, approved_by,
+          title, summary, sections, content_hash
+        ) VALUES (
+          '${termsDoc.id}'::uuid, 9000, 1, 'APPROVED'::legal_revision_status, 1,
+          'terms-infinite-effective-test', 'infinity'::timestamptz, 'evidence', '${adminOperatorId}'::uuid,
+          'Title', 'Summary', '[{"title":"Section 1","paragraphs":["Content"]}]'::jsonb,
+          legal_document_revision_content_hash(
+            1, 'Title', 'Summary', '[{"title":"Section 1","paragraphs":["Content"]}]'::jsonb
+          )
+        )
+      `),
+    ).rejects.toThrow();
     const nullNoteSections = [
       { title: "Section 1", paragraphs: ["Content"], note: null },
     ] as unknown as Parameters<
