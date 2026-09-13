@@ -7116,6 +7116,9 @@
           "contentHash": {
             "type": "string"
           },
+          "contentVersion": {
+            "type": "number"
+          },
           "documentId": {
             "type": "string"
           },
@@ -7146,6 +7149,7 @@
           "documentId",
           "key",
           "revisionCode",
+          "contentVersion",
           "contentHash",
           "title",
           "summary",

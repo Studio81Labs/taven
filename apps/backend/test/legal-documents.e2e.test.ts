@@ -372,6 +372,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(publicRes.headers.get("etag")).toBe(`"${approvedRev.contentHash}"`);
     const publicBody = await publicRes.json();
     expect(publicBody.revisionCode).toBe("terms-2026-09-e2e-v1");
+    expect(publicBody.contentVersion).toBe(1);
     expect(publicBody.contentHash).toBe(approvedRev.contentHash);
     expect(publicBody.sections.length).toBeGreaterThan(0);
 

@@ -44,21 +44,22 @@ export class LegalDocumentsService {
   ) {}
 
   async listDocuments(): Promise<LegalDocumentSummaryDto[]> {
-    const docs = await this.prisma.legalDocument.findMany({
-      orderBy: { key: "asc" },
-      include: {
-        publications: {
-          where: { cancelledAt: null },
-          orderBy: { startsAt: "desc" },
-          include: { revision: true },
+    const [docs, now] = await Promise.all([
+      this.prisma.legalDocument.findMany({
+        orderBy: { key: "asc" },
+        include: {
+          publications: {
+            where: { cancelledAt: null },
+            orderBy: { startsAt: "desc" },
+            include: { revision: true },
+          },
+          revisions: {
+            orderBy: { sequence: "desc" },
+          },
         },
-        revisions: {
-          orderBy: { sequence: "desc" },
-        },
-      },
-    });
-
-    const now = new Date();
+      }),
+      databaseNow(this.prisma),
+    ]);
     return docs.map((doc) => {
       const activePub = doc.publications.find(
         (p) => p.startsAt <= now && (p.endsAt === null || p.endsAt > now),
@@ -134,7 +135,7 @@ export class LegalDocumentsService {
     const nextCursor =
       revisions.length > limit && last ? String(last.sequence) : undefined;
 
-    const now = new Date();
+    const now = await databaseNow(this.prisma);
     const activePub = doc.publications.find(
       (p) => p.startsAt <= now && (p.endsAt === null || p.endsAt > now),
     );
@@ -724,54 +725,62 @@ export class LegalDocumentsService {
     key: string,
     revisionCode: string,
   ): Promise<PublicLegalRevisionDto> {
-    const doc = await this.prisma.legalDocument.findUnique({ where: { key } });
-    if (!doc) {
-      throw new NotFoundException(`Legal document '${key}' was not found`);
-    }
+    return await this.prisma.$transaction(async (tx) => {
+      const doc = await tx.legalDocument.findUnique({ where: { key } });
+      if (!doc) {
+        throw new NotFoundException(`Legal document '${key}' was not found`);
+      }
 
-    const revision = await this.prisma.legalDocumentRevision.findUnique({
-      where: { revisionCode },
+      const revision = await tx.legalDocumentRevision.findUnique({
+        where: { revisionCode },
+      });
+      if (!revision || revision.documentId !== doc.id) {
+        throw new NotFoundException(
+          `Revision '${revisionCode}' was not found for '${key}'`,
+        );
+      }
+      if (
+        revision.status !== LegalRevisionStatus.APPROVED ||
+        !revision.effectiveAt
+      ) {
+        throw new NotFoundException(
+          `Revision '${revisionCode}' is not an approved revision`,
+        );
+      }
+
+      const now = await databaseNow(tx);
+      // Must have at least one publication that has started and was not cancelled before startsAt
+      const publication = await tx.legalDocumentPublication.findFirst({
+        where: {
+          revisionId: revision.id,
+          startsAt: { lte: now },
+          OR: [
+            { cancelledAt: null },
+            {
+              cancelledAt: { gte: tx.legalDocumentPublication.fields.startsAt },
+            },
+          ],
+        },
+      });
+
+      if (!publication) {
+        throw new NotFoundException(
+          `Revision '${revisionCode}' has not been published`,
+        );
+      }
+
+      return {
+        documentId: doc.documentId,
+        key: doc.key,
+        revisionCode: revision.revisionCode!,
+        contentVersion: revision.contentVersion,
+        contentHash: revision.contentHash,
+        title: revision.title,
+        summary: revision.summary,
+        sections: revision.sections as unknown as LegalDocumentSectionDto[],
+        effectiveAt: revision.effectiveAt.toISOString(),
+      };
     });
-    if (!revision || revision.documentId !== doc.id) {
-      throw new NotFoundException(
-        `Revision '${revisionCode}' was not found for '${key}'`,
-      );
-    }
-    if (
-      revision.status !== LegalRevisionStatus.APPROVED ||
-      !revision.effectiveAt
-    ) {
-      throw new NotFoundException(
-        `Revision '${revisionCode}' is not an approved revision`,
-      );
-    }
-
-    const now = new Date();
-    // Must have at least one publication that has started and was not cancelled before startsAt
-    const publication = await this.prisma.legalDocumentPublication.findFirst({
-      where: {
-        revisionId: revision.id,
-        startsAt: { lte: now },
-        OR: [{ cancelledAt: null }, { cancelledAt: { gte: now } }],
-      },
-    });
-
-    if (!publication) {
-      throw new NotFoundException(
-        `Revision '${revisionCode}' has not been published`,
-      );
-    }
-
-    return {
-      documentId: doc.documentId,
-      key: doc.key,
-      revisionCode: revision.revisionCode!,
-      contentHash: revision.contentHash,
-      title: revision.title,
-      summary: revision.summary,
-      sections: revision.sections as unknown as LegalDocumentSectionDto[],
-      effectiveAt: revision.effectiveAt.toISOString(),
-    };
   }
 }
 

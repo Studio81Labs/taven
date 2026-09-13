@@ -3823,6 +3823,7 @@ export interface components {
         };
         PublicLegalRevisionDto: {
             contentHash: string;
+            contentVersion: number;
             documentId: string;
             /** Format: date-time */
             effectiveAt: string;

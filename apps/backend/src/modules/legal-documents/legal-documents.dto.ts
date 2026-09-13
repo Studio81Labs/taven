@@ -229,6 +229,9 @@ export class PublicLegalRevisionDto {
   @ApiProperty({ type: String })
   revisionCode!: string;
 
+  @ApiProperty({ type: Number })
+  contentVersion!: number;
+
   @ApiProperty({ type: String })
   contentHash!: string;
 
