@@ -352,6 +352,7 @@ BEGIN
                OR jsonb_array_length(NEW.sections) = 0 THEN
                 RAISE EXCEPTION 'Approved revision % must have non-empty title, summary, and sections', NEW.id;
             END IF;
+            NEW.approved_at := clock_timestamp();
         END IF;
         RETURN NEW;
     END IF;
@@ -390,6 +391,7 @@ BEGIN
                OR jsonb_array_length(NEW.sections) = 0 THEN
                 RAISE EXCEPTION 'Approved revision % must have non-empty title, summary, and sections', NEW.id;
             END IF;
+            NEW.approved_at := clock_timestamp();
         END IF;
 
         RETURN NEW;
@@ -530,8 +532,9 @@ BEGIN
 
     IF TG_OP = 'UPDATE' THEN
         IF OLD."cancelled_at" IS NOT NULL THEN
-            IF NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at" THEN
-                RAISE EXCEPTION 'Cancelled publication cancelled_at is permanent and cannot be modified';
+            IF NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at"
+               OR NEW."ends_at" IS DISTINCT FROM OLD."ends_at" THEN
+                RAISE EXCEPTION 'Cancelled publication interval is permanent and cannot be modified';
             END IF;
         END IF;
 

@@ -774,7 +774,10 @@ export class LegalDocumentsService {
       );
     }
     const effectiveAtDate = new Date(effectiveAtStr);
-    if (Number.isNaN(effectiveAtDate.getTime())) {
+    if (
+      Number.isNaN(effectiveAtDate.getTime()) ||
+      effectiveAtDate.getUTCFullYear() < POSTGRES_MIN_TIMESTAMP_YEAR
+    ) {
       throw new BadRequestException("Effective date is invalid");
     }
     const approvalEvidence = requireString(
@@ -885,7 +888,7 @@ export class LegalDocumentsService {
           eventType: "legal_document.revision_approved",
           reasonCode,
           reason,
-          createdAt: now,
+          createdAt: approved.approvedAt ?? now,
           idempotencyKey: commandKey,
           payload: {
             operation: "revision_approved",

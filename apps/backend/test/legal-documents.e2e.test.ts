@@ -365,6 +365,27 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(noTzApproveRes.status).toBe(400);
 
+    const outOfRangeApproveRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/revisions/${createdDraft.id}/approve`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedEditVersion: updatedDraft.editVersion,
+          expectedContentHash: updatedDraft.contentHash,
+          revisionCode: "terms-2026-09-e2e-v1",
+          effectiveAt: "-100000-01-01T00:00:00.000Z",
+          approvalEvidence: "Právní posouzení č. 2026/09/LP-01",
+          reasonCode: "LEGAL_APPROVED",
+          reason: "Schválení nového znění podmínek vedením",
+        }),
+      },
+    );
+    expect(outOfRangeApproveRes.status).toBe(400);
+
     // Approval recomputes canonical content under the document lock rather
     // than trusting a stale hash introduced by direct SQL/import work.
     await prisma.$executeRaw`
@@ -921,6 +942,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     const privacyDoc = await prisma.legalDocument.findUniqueOrThrow({
       where: { key: "privacy" },
     });
+    const beforeDirectApproval = Date.now();
     const decisionTimeDraft = await prisma.legalDocumentRevision.create({
       data: {
         documentId: privacyDoc.id,
@@ -931,7 +953,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         effectiveAt: new Date(Date.now() - 7200000),
         approvalEvidence: "evidence",
         approvedBy: adminOperatorId,
-        approvedAt: new Date(),
+        approvedAt: new Date(0),
         contentVersion: 1,
         title: "Title",
         summary: "Summary",
@@ -941,6 +963,10 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         ]),
       },
     });
+    expect(decisionTimeDraft.approvedAt).not.toBeNull();
+    expect(decisionTimeDraft.approvedAt?.getTime()).toBeGreaterThanOrEqual(
+      beforeDirectApproval,
+    );
 
     // A direct writer cannot backdate publication history: a past instant is
     // derived to the trigger's post-lock database time instead.
@@ -1036,6 +1062,12 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       where: { id: directCancellationPublication.id },
       data: { cancelledAt: new Date() },
     });
+    await expect(
+      prisma.legalDocumentPublication.update({
+        where: { id: directCancellationPublication.id },
+        data: { endsAt: directCancellationStartsAt },
+      }),
+    ).rejects.toThrow(/Cancelled publication interval is permanent/i);
     const restoredPredecessor =
       await prisma.legalDocumentPublication.findUniqueOrThrow({
         where: { id: derivedPublication.id },
