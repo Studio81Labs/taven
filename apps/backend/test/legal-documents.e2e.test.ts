@@ -685,6 +685,27 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(foundCancelled).toBeDefined();
     expect(foundCancelled.cancelledAt).toBeDefined();
 
+    // A normal archive uses a database-created operation instant, which the
+    // integrity trigger accepts even though it captures its own later lock
+    // timestamp.
+    const archiveActiveRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/publications/${pub.id}/archive`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedGeneration: docAfterCancel.generation,
+          reasonCode: "ARCHIVE_ACTIVE",
+          reason: "Archive active publication",
+        }),
+      },
+    );
+    expect(archiveActiveRes.status).toBe(200);
+    expect((await archiveActiveRes.json()).endsAt).toBeDefined();
+
     // 9. Verify legal audit events endpoint and filters
     const auditRes = await fetch(
       new URL("/admin/legal-documents/terms/audit-events", baseUrl),
@@ -975,6 +996,42 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           reason: "Direct scheduled publication for cancellation coverage",
         },
       });
+    const pendingCollisionRevision = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: privacyDoc.id,
+        sequence: 997,
+        editVersion: 1,
+        status: "APPROVED",
+        revisionCode: "privacy-pending-collision-test",
+        effectiveAt: new Date(Date.now() - 7200000),
+        approvalEvidence: "evidence",
+        approvedBy: adminOperatorId,
+        approvedAt: new Date(),
+        contentVersion: 1,
+        title: "Pending collision",
+        summary: "Pending collision coverage",
+        sections: [{ title: "Section 1", paragraphs: ["Content"] }],
+        contentHash: legalContentHash(
+          "Pending collision",
+          "Pending collision coverage",
+          [{ title: "Section 1", paragraphs: ["Content"] }],
+        ),
+      },
+    });
+    // A direct writer cannot insert an immediate, non-overlapping publication
+    // while another revision is already pending for this document.
+    await expect(
+      prisma.legalDocumentPublication.create({
+        data: {
+          documentId: privacyDoc.id,
+          revisionId: pendingCollisionRevision.id,
+          startsAt: new Date(),
+          endsAt: directCancellationStartsAt,
+          publishedBy: adminOperatorId,
+          reason: "Invalid immediate publication while pending",
+        },
+      }),
+    ).rejects.toThrow(/already has a pending publication/i);
     await prisma.legalDocumentPublication.update({
       where: { id: directCancellationPublication.id },
       data: { cancelledAt: new Date() },
@@ -1054,6 +1111,33 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
           summary: "Summary",
           sections: [],
           contentHash: "2".repeat(64),
+        },
+      }),
+    ).rejects.toThrow();
+    const nullNoteSections = [
+      { title: "Section 1", paragraphs: ["Content"], note: null },
+    ] as unknown as Parameters<
+      typeof computeLegalRevisionContentHash
+    >[0]["sections"];
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 990,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-null-note-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: [
+            { title: "Section 1", paragraphs: ["Content"], note: null },
+          ],
+          contentHash: legalContentHash("Title", "Summary", nullNoteSections),
         },
       }),
     ).rejects.toThrow();

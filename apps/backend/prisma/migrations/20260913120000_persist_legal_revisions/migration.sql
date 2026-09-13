@@ -87,7 +87,7 @@ BEGIN
         END LOOP;
 
         IF section ? 'note' THEN
-            IF jsonb_typeof(section->'note') NOT IN ('string', 'null') THEN
+            IF jsonb_typeof(section->'note') <> 'string' THEN
                 RETURN false;
             END IF;
             has_content := has_content OR (
@@ -405,6 +405,20 @@ FOR EACH ROW
 EXECUTE FUNCTION legal_document_revisions_immutability_fn();
 
 -- Triggers for legal_document_publications integrity
+CREATE OR REPLACE FUNCTION legal_document_publication_operation_now()
+RETURNS timestamptz AS $$
+DECLARE
+    v_now timestamptz := clock_timestamp()::timestamptz(3);
+BEGIN
+    PERFORM set_config(
+        'taven.legal_document_publication_operation_now',
+        v_now::text,
+        true
+    );
+    RETURN v_now;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
 CREATE OR REPLACE FUNCTION legal_document_publications_integrity_fn()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -413,6 +427,8 @@ DECLARE
     v_rev_effective_at timestamptz;
     v_post_lock_now timestamptz;
     v_requested_starts_at timestamptz;
+    v_operation_now timestamptz;
+    v_operation_now_setting text;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Publication history is append-only and cannot be deleted';
@@ -420,6 +436,17 @@ BEGIN
 
     PERFORM 1 FROM "legal_documents" WHERE "id" = NEW."document_id" FOR UPDATE;
     v_post_lock_now := clock_timestamp();
+    v_operation_now_setting := current_setting(
+        'taven.legal_document_publication_operation_now',
+        true
+    );
+    IF v_operation_now_setting IS NOT NULL AND v_operation_now_setting <> '' THEN
+        BEGIN
+            v_operation_now := v_operation_now_setting::timestamptz;
+        EXCEPTION WHEN invalid_datetime_format THEN
+            RAISE EXCEPTION 'Invalid legal publication operation timestamp';
+        END;
+    END IF;
 
     IF TG_OP = 'INSERT' THEN
         SELECT "document_id", "status", "effective_at" INTO v_rev_doc_id, v_rev_status, v_rev_effective_at
@@ -445,6 +472,11 @@ BEGIN
         IF NEW."starts_at" <= v_post_lock_now THEN
             v_requested_starts_at := NEW."starts_at";
             NEW."starts_at" := GREATEST(v_rev_effective_at, v_post_lock_now);
+            PERFORM set_config(
+                'taven.legal_document_publication_operation_now',
+                NEW."starts_at"::text,
+                true
+            );
             UPDATE "legal_document_publications"
             SET "ends_at" = NEW."starts_at"
             WHERE "id" = (
@@ -475,7 +507,7 @@ BEGIN
             RAISE EXCEPTION 'Revision % has already been published and cannot be republished', NEW."revision_id";
         END IF;
 
-        IF NEW."starts_at" > v_post_lock_now AND EXISTS (
+        IF EXISTS (
             SELECT 1 FROM "legal_document_publications"
             WHERE "document_id" = NEW."document_id"
               AND "cancelled_at" IS NULL
@@ -521,7 +553,8 @@ BEGIN
 
         IF OLD."ends_at" IS NULL
            AND NEW."ends_at" IS NOT NULL
-           AND NEW."ends_at" <= v_post_lock_now THEN
+           AND NEW."ends_at" <= v_post_lock_now
+           AND NEW."ends_at" IS DISTINCT FROM v_operation_now THEN
             RAISE EXCEPTION 'Publication ends_at cannot be assigned in the past';
         END IF;
 
