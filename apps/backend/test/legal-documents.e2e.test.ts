@@ -1487,6 +1487,63 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       }),
     ).rejects.toThrow();
 
+    const emptyParagraphsSections = [
+      { title: "Section 1", paragraphs: [], note: "Content" },
+    ] as Parameters<typeof computeLegalRevisionContentHash>[0]["sections"];
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 9100,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-empty-paragraphs-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: emptyParagraphsSections as never,
+          contentHash: legalContentHash(
+            "Title",
+            "Summary",
+            emptyParagraphsSections,
+          ),
+        },
+      }),
+    ).rejects.toThrow();
+
+    const paddedSectionTitle = `${" ".repeat(255)}x`;
+    const oversizedSectionTitleSections = [
+      { title: paddedSectionTitle, paragraphs: ["Content"] },
+    ] as Parameters<typeof computeLegalRevisionContentHash>[0]["sections"];
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 9101,
+          editVersion: 1,
+          status: "APPROVED",
+          revisionCode: "terms-padded-section-title-test",
+          effectiveAt: futureEffectiveDate,
+          approvalEvidence: "evidence",
+          approvedBy: adminOperatorId,
+          approvedAt: new Date(),
+          contentVersion: 1,
+          title: "Title",
+          summary: "Summary",
+          sections: oversizedSectionTitleSections as never,
+          contentHash: legalContentHash(
+            "Title",
+            "Summary",
+            oversizedSectionTitleSections,
+          ),
+        },
+      }),
+    ).rejects.toThrow();
+
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO legal_document_revisions (

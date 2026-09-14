@@ -97,7 +97,7 @@ BEGIN
            OR section - ARRAY['title', 'paragraphs', 'items', 'note'] <> '{}'::jsonb
            OR jsonb_typeof(section->'title') <> 'string'
            OR NOT legal_document_text_is_nonblank(section->>'title')
-           OR length(btrim(section->>'title')) > 255 THEN
+           OR length(section->>'title') > 255 THEN
             RETURN false;
         END IF;
 
@@ -105,6 +105,9 @@ BEGIN
         FOREACH field_name IN ARRAY ARRAY['paragraphs', 'items'] LOOP
             IF section ? field_name THEN
                 IF jsonb_typeof(section->field_name) <> 'array' THEN
+                    RETURN false;
+                END IF;
+                IF jsonb_array_length(section->field_name) = 0 THEN
                     RETURN false;
                 END IF;
                 FOR entry IN SELECT * FROM jsonb_array_elements(section->field_name) LOOP
