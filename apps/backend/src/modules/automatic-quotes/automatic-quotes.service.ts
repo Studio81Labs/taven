@@ -1584,6 +1584,7 @@ export class AutomaticQuotesService {
       "automatic-quote.prepare",
       commandKey,
       async (transaction) => {
+        await this.requiredLegalApprovals().lockAndRead(transaction, ["terms"]);
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const draft = await transaction.automaticQuoteDraft.findFirst({
@@ -2367,6 +2368,7 @@ export class AutomaticQuotesService {
       bindingMatchesAutomaticDraft(
         draftOrder.activePriceBinding.orderPriceBinding,
         draft,
+        legalTermsRevisionId,
       )
     ) {
       return;
@@ -2393,7 +2395,7 @@ export class AutomaticQuotesService {
     );
     if (!transient) return;
     const bindingId = deterministicUuid(
-      `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}`,
+      `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}:${legalTermsRevisionId}`,
     );
     const preparationInput = {
       priceList,
@@ -5812,6 +5814,7 @@ function automaticBindingConfigurationRevision(
 function bindingMatchesAutomaticDraft(
   binding: {
     deliveryDestinationId: string;
+    legalTermsRevisionId: string | null;
     priceSnapshot: { inputSnapshot: Prisma.JsonValue };
   },
   draft: {
@@ -5819,9 +5822,12 @@ function bindingMatchesAutomaticDraft(
     expressRequested: boolean;
     configurationRevision: number;
   },
+  expectedLegalTermsRevisionId?: string,
 ): boolean {
   return (
     binding.deliveryDestinationId === draft.selectedDeliveryDestinationId &&
+    (expectedLegalTermsRevisionId === undefined ||
+      binding.legalTermsRevisionId === expectedLegalTermsRevisionId) &&
     automaticBindingExpressRequested(binding.priceSnapshot.inputSnapshot) ===
       draft.expressRequested &&
     automaticBindingConfigurationRevision(

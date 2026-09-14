@@ -1,4 +1,5 @@
 import type { components } from "@taven/openapi-client";
+import { toValue, type MaybeRefOrGetter } from "vue";
 import { legalDocuments } from "../content/public-site";
 import type { LegalDocumentKey } from "../content/launch-manifest";
 import { useLegalAvailability } from "./useLegalAvailability";
@@ -23,7 +24,11 @@ export type PublicLegalDocument = Readonly<{
  * The bundled draft is presentation-only fallback. Acceptance never trusts it:
  * an effective document must be fetched by the revision/hash advertised by DB.
  */
-export function usePublicLegalDocument(key: LegalDocumentKey) {
+export function usePublicLegalDocument(
+  key: LegalDocumentKey,
+  pinnedRevision?: MaybeRefOrGetter<string | null>,
+  pinnedContentHash?: MaybeRefOrGetter<string | null>,
+) {
   const { $api } = useNuxtApp();
   const { availability, refresh: refreshAvailability } = useLegalAvailability();
   const fallback = legalDocuments[key];
@@ -38,18 +43,26 @@ export function usePublicLegalDocument(key: LegalDocumentKey) {
       effectiveAt: null,
     }),
   );
-  const effective = computed(
-    () =>
+  const effective = computed(() => {
+    const revision = pinnedRevision && toValue(pinnedRevision);
+    if (revision) return document.value.id === revision;
+    return (
       availability.value?.documents[key].effective === true &&
       document.value.effectiveAt ===
         availability.value.documents[key].effectiveAt &&
-      document.value.id === availability.value.documents[key].revision,
-  );
+      document.value.id === availability.value.documents[key].revision
+    );
+  });
 
   async function refresh(): Promise<void> {
     const selected = await refreshAvailability();
     const record = selected?.documents[key];
-    if (!record?.effective || !record.contentHash || !record.effectiveAt) {
+    const revisionCode = pinnedRevision ? toValue(pinnedRevision) : null;
+    const contentHash = pinnedContentHash ? toValue(pinnedContentHash) : null;
+    if (
+      !revisionCode &&
+      (!record?.effective || !record.contentHash || !record.effectiveAt)
+    ) {
       document.value = {
         id: fallback.id,
         path: fallback.path,
@@ -63,15 +76,19 @@ export function usePublicLegalDocument(key: LegalDocumentKey) {
     try {
       const response = await $api.GET(
         "/legal-documents/{key}/revisions/{revisionCode}",
-        { params: { path: { key, revisionCode: record.revision } } },
+        {
+          params: {
+            path: { key, revisionCode: revisionCode ?? record!.revision },
+          },
+        },
       );
       const revision = response.data as PublicRevision | undefined;
       if (
         !revision ||
         revision.key !== key ||
-        revision.revisionCode !== record.revision ||
-        revision.contentHash !== record.contentHash ||
-        revision.effectiveAt !== record.effectiveAt
+        revision.revisionCode !== (revisionCode ?? record!.revision) ||
+        revision.contentHash !== (contentHash ?? record!.contentHash) ||
+        (!revisionCode && revision.effectiveAt !== record!.effectiveAt)
       ) {
         throw new Error("stale legal document response");
       }

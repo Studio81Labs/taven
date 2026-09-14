@@ -4,7 +4,18 @@ import { usePublicLegalDocument } from "../composables/usePublicLegalDocument";
 definePageMeta({ layout: "public" });
 
 const contacts = usePublicContacts();
-const { document, effective, refresh } = usePublicLegalDocument("claims");
+const route = useRoute();
+const pinnedRevision = computed(() =>
+  typeof route.query.revision === "string" ? route.query.revision : null,
+);
+const pinnedContentHash = computed(() =>
+  typeof route.query.contentHash === "string" ? route.query.contentHash : null,
+);
+const { document, effective, refresh } = usePublicLegalDocument(
+  "claims",
+  pinnedRevision,
+  pinnedContentHash,
+);
 if (import.meta.server) await refresh();
 else onMounted(() => void refresh());
 

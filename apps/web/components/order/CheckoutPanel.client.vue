@@ -100,6 +100,16 @@ const retryMode = computed(
   () =>
     retryContext.value?.retryAllowed === true && retryEvidence.value !== null,
 );
+function legalRevisionLink(
+  key: "terms" | "claims",
+  revision: string | undefined,
+  contentHash: string | undefined | null,
+) {
+  return {
+    path: legalDocuments[key].path,
+    query: revision && contentHash ? { revision, contentHash } : undefined,
+  };
+}
 const paymentMethods = computed(() =>
   retryMode.value
     ? retryContext.value!.methods
@@ -723,7 +733,29 @@ function compactBilling(
           Opakujete neúspěšný platební pokus s dříve zaznamenaným zněním VOP ({{
             retryEvidence.termsRevision
           }}) a reklamačního řádu ({{ retryEvidence.claimPolicyRevision }}).
-          Tento záznam neměníme ani znovu neudělujete souhlas s fotografiemi.
+          <NuxtLink
+            class="underline"
+            :to="
+              legalRevisionLink(
+                'terms',
+                retryEvidence.terms.revision,
+                retryEvidence.terms.contentHash,
+              )
+            "
+            >Zobrazit VOP</NuxtLink
+          >
+          a
+          <NuxtLink
+            class="underline"
+            :to="
+              legalRevisionLink(
+                'claims',
+                retryEvidence.claims.revision,
+                retryEvidence.claims.contentHash,
+              )
+            "
+            >reklamační řád</NuxtLink
+          >. Tento záznam neměníme ani znovu neudělujete souhlas s fotografiemi.
         </p>
         <template v-else>
           <label class="flex items-start gap-3 text-sm leading-6"
@@ -734,7 +766,15 @@ function compactBilling(
               type="checkbox"
             /><span
               >Souhlasím s
-              <NuxtLink class="underline" :to="legalDocuments.terms.path"
+              <NuxtLink
+                class="underline"
+                :to="
+                  legalRevisionLink(
+                    'terms',
+                    approvedDocuments?.termsRevision,
+                    availability?.documents.terms.contentHash,
+                  )
+                "
                 >VOP</NuxtLink
               >
               ve znění {{ approvedDocuments?.termsRevision }}.</span
@@ -748,7 +788,15 @@ function compactBilling(
               type="checkbox"
             /><span
               >Seznámil/a jsem se s
-              <NuxtLink class="underline" :to="legalDocuments.claims.path"
+              <NuxtLink
+                class="underline"
+                :to="
+                  legalRevisionLink(
+                    'claims',
+                    approvedDocuments?.claimPolicyRevision,
+                    availability?.documents.claims.contentHash,
+                  )
+                "
                 >reklamačním řádem</NuxtLink
               >
               ve znění {{ approvedDocuments?.claimPolicyRevision }}.</span

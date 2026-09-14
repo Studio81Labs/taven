@@ -422,6 +422,106 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     );
 $$;
 
+-- Balance-timeout settlement is another consumer of the frozen acceptance
+-- contract. New bindings prove terms through the revision FK and ledger while
+-- pre-cutover bindings retain their PriceList provenance check.
+CREATE OR REPLACE FUNCTION taven_balance_timeout_earned_amount(
+    target_order_id uuid,
+    target_phase_id uuid,
+    target_binding_id uuid,
+    target_snapshot_id uuid
+)
+RETURNS bigint
+LANGUAGE sql
+STABLE
+AS $$
+    WITH accepted_policy AS (
+        SELECT list."parameters" -> 'balance_timeout_earned_component_kinds' AS kinds
+        FROM "orders" target_order
+        JOIN "order_price_bindings" binding
+          ON binding."id" = target_binding_id
+         AND binding."order_id" = target_order_id
+         AND binding."price_snapshot_id" = target_snapshot_id
+        JOIN "price_snapshots" snapshot ON snapshot."id" = binding."price_snapshot_id"
+        JOIN "price_lists" list ON list."id" = snapshot."price_list_id"
+        WHERE target_order."id" = target_order_id
+          AND taven_order_accepts_bound_price_list_terms(
+              target_order_id, target_binding_id
+          )
+    ),
+    earned_by_slot AS (
+        SELECT allocation."fulfilment_slot_id" AS slot_id,
+               sum(allocation."amount_minor")::bigint AS amount_minor
+        FROM "price_snapshot_components" component
+        JOIN "price_component_fulfilment_allocations" allocation
+          ON allocation."price_snapshot_component_id" = component."id"
+        JOIN "fulfilment_slots" slot
+          ON slot."id" = allocation."fulfilment_slot_id"
+         AND slot."order_id" = target_order_id
+         AND slot."order_phase_id" = target_phase_id
+        CROSS JOIN accepted_policy policy
+        WHERE component."price_snapshot_id" = target_snapshot_id
+          AND component."kind"::text IN (
+              SELECT jsonb_array_elements_text(policy.kinds)
+          )
+        GROUP BY allocation."fulfilment_slot_id"
+    ),
+    earned_credits_by_slot AS (
+        SELECT (credit.value ->> 'fulfilmentSlotId')::uuid AS slot_id,
+               sum((credit.value ->> 'amountMinor')::bigint)::bigint AS amount_minor
+        FROM "price_adjustments" adjustment
+        CROSS JOIN LATERAL jsonb_array_elements(
+            adjustment."allocation" -> 'slotCredits'
+        ) credit(value)
+        CROSS JOIN accepted_policy policy
+        WHERE adjustment."order_id" = target_order_id
+          AND (
+              adjustment."reason" <> 'EXPRESS_BREACH'
+              OR 'EXPRESS' IN (
+                  SELECT jsonb_array_elements_text(policy.kinds)
+              )
+          )
+        GROUP BY (credit.value ->> 'fulfilmentSlotId')::uuid
+    ),
+    active_contract AS (
+        SELECT revision."contract_total_minor"
+        FROM "order_active_contract_prices" active
+        JOIN "order_contract_price_revisions" revision
+          ON revision."id" = active."contract_price_revision_id"
+         AND revision."order_id" = active."order_id"
+         AND revision."base_price_snapshot_id" = target_snapshot_id
+        WHERE active."order_id" = target_order_id
+    )
+    SELECT least(
+        active_contract."contract_total_minor",
+        coalesce(sum(greatest(
+            earned."amount_minor" - coalesce(credits."amount_minor", 0),
+            0
+        )), 0)::bigint
+    )
+    FROM active_contract
+    LEFT JOIN earned_by_slot earned ON true
+    LEFT JOIN earned_credits_by_slot credits ON credits.slot_id = earned.slot_id
+    GROUP BY active_contract."contract_total_minor";
+$$;
+
+CREATE OR REPLACE FUNCTION taven_prevent_order_price_binding_legal_terms_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW."legal_terms_revision_id" IS DISTINCT FROM OLD."legal_terms_revision_id" THEN
+        RAISE EXCEPTION 'order price binding legal terms revision is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_price_binding_immutable_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "order_price_bindings_legal_terms_immutable"
+BEFORE UPDATE OF "legal_terms_revision_id" ON "order_price_bindings"
+FOR EACH ROW EXECUTE FUNCTION taven_prevent_order_price_binding_legal_terms_mutation();
+
 CREATE OR REPLACE FUNCTION taven_require_price_list_terms_acceptance()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

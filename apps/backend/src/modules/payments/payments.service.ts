@@ -1966,12 +1966,21 @@ function frozenCheckoutEvidence(
   ) {
     throw incompleteCheckoutEvidence();
   }
-  const retryAttemptExists = order.payments.some(
-    (payment) =>
-      payment.orderPriceBindingId === binding.id &&
-      payment.role === "FULL" &&
-      payment.status === PaymentStatus.FAILED,
-  );
+  const retryAttemptExists =
+    order.payments.some(
+      (payment) =>
+        payment.orderPriceBindingId === binding.id &&
+        payment.role === "FULL" &&
+        payment.status === PaymentStatus.FAILED,
+    ) &&
+    !order.payments.some(
+      (payment) =>
+        payment.orderPriceBindingId === binding.id &&
+        payment.role === "FULL" &&
+        (payment.status === PaymentStatus.CREATED ||
+          payment.status === PaymentStatus.PENDING ||
+          payment.status === PaymentStatus.CAPTURED),
+    );
   return {
     acceptedOrderPriceBindingId: accepted.bindingId,
     termsRevision: accepted.termsRevision,
@@ -1989,8 +1998,12 @@ function frozenCheckoutEvidence(
       "claims",
       accepted.claimsRevision,
     ),
-    photoConsent: photo
-      ? publicAcceptanceReference(photo, "photoConsent", photo.revision)
+    photoConsent: photoGranted
+      ? publicAcceptanceReference(
+          photo,
+          "photoConsent",
+          order.photoPublicationConsentRevision!,
+        )
       : null,
     retryAttemptExists,
   };
