@@ -718,7 +718,7 @@ BEGIN
         IF OLD."ends_at" IS NOT NULL
            AND NEW."ends_at" IS DISTINCT FROM OLD."ends_at"
            AND pg_trigger_depth() = 1 THEN
-            IF OLD."starts_at" > v_post_lock_now
+            IF OLD."starts_at" >= v_post_lock_now
                OR OLD."ends_at" <= v_post_lock_now THEN
                 RAISE EXCEPTION 'Can only archive a currently active publication'
                     USING ERRCODE = '23514', CONSTRAINT = 'legal_document_publications_archive_boundary_check';
@@ -729,7 +729,7 @@ BEGIN
         IF OLD."ends_at" IS NULL
            AND NEW."ends_at" IS NOT NULL
            AND pg_trigger_depth() = 1 THEN
-            IF OLD."starts_at" > v_post_lock_now THEN
+            IF OLD."starts_at" >= v_post_lock_now THEN
                 RAISE EXCEPTION 'Can only archive a currently active publication'
                     USING ERRCODE = '23514', CONSTRAINT = 'legal_document_publications_archive_boundary_check';
             END IF;

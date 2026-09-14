@@ -115,8 +115,8 @@ describe("legal documents helper functions", () => {
     const raw = [
       {
         title: "  1. Úvodní ustanovení  ",
-        paragraphs: ["  První odstavec.  ", "  ", "Druhý odstavec."],
-        items: ["  Bod A ", ""],
+        paragraphs: ["  První odstavec.  ", "Druhý odstavec."],
+        items: ["  Bod A "],
         note: " Doplňující poznámka ",
       },
     ];
@@ -141,24 +141,35 @@ describe("legal documents helper functions", () => {
     );
   });
 
-  it("rejects a section with no paragraphs, items, or note", () => {
-    expect(() =>
-      normalizeLegalSections([{ title: "Prázdná sekce", paragraphs: ["  "] }]),
-    ).toThrow("must contain at least one non-empty string");
-  });
-
   it.each([
     { paragraphs: [] },
     { paragraphs: ["  "] },
     { items: [] },
     { items: ["  "] },
-  ])("rejects supplied empty section arrays", (content) => {
+  ])("rejects supplied empty or blank-only section arrays", (content) => {
     expect(() =>
       normalizeLegalSections([
         { title: "Section", note: "Content", ...content },
       ]),
-    ).toThrow("must contain at least one non-empty string");
+    ).toThrow(/must (contain at least one non-empty string|not be empty)/);
   });
+
+  it.each([
+    [
+      { paragraphs: ["Operative text", " "] },
+      "Section 0 paragraph 1 must not be empty",
+    ],
+    [{ items: ["Operative item", " "] }, "Section 0 item 1 must not be empty"],
+  ])(
+    "rejects blank members in otherwise valid section arrays",
+    (content, error) => {
+      expect(() =>
+        normalizeLegalSections([
+          { title: "Section", note: "Content", ...content },
+        ]),
+      ).toThrow(error);
+    },
+  );
 
   it("rejects unknown section fields", () => {
     expect(() =>

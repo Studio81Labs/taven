@@ -1578,22 +1578,26 @@ export function normalizeLegalSections(
           `Section ${idx} paragraphs must be an array`,
         );
       }
-      paragraphs = rawSection.paragraphs
-        .map((p, pIdx) => {
-          if (typeof p !== "string") {
-            throw new BadRequestException(
-              `Section ${idx} paragraph ${pIdx} must be a string`,
-            );
-          }
-          if (hasUnpairedSurrogate(p)) {
-            throw new BadRequestException(
-              `Section ${idx} paragraph ${pIdx} contains an invalid Unicode scalar`,
-            );
-          }
-          requireNoNul(p, `Section ${idx} paragraph ${pIdx}`);
-          return p.trim();
-        })
-        .filter((p) => p.length > 0);
+      paragraphs = rawSection.paragraphs.map((p, pIdx) => {
+        if (typeof p !== "string") {
+          throw new BadRequestException(
+            `Section ${idx} paragraph ${pIdx} must be a string`,
+          );
+        }
+        if (hasUnpairedSurrogate(p)) {
+          throw new BadRequestException(
+            `Section ${idx} paragraph ${pIdx} contains an invalid Unicode scalar`,
+          );
+        }
+        requireNoNul(p, `Section ${idx} paragraph ${pIdx}`);
+        const paragraph = p.trim();
+        if (!paragraph) {
+          throw new BadRequestException(
+            `Section ${idx} paragraph ${pIdx} must not be empty`,
+          );
+        }
+        return paragraph;
+      });
       if (paragraphs.length === 0) {
         throw new BadRequestException(
           `Section ${idx} paragraphs must contain at least one non-empty string`,
@@ -1606,22 +1610,26 @@ export function normalizeLegalSections(
       if (!Array.isArray(rawSection.items)) {
         throw new BadRequestException(`Section ${idx} items must be an array`);
       }
-      items = rawSection.items
-        .map((i, iIdx) => {
-          if (typeof i !== "string") {
-            throw new BadRequestException(
-              `Section ${idx} item ${iIdx} must be a string`,
-            );
-          }
-          if (hasUnpairedSurrogate(i)) {
-            throw new BadRequestException(
-              `Section ${idx} item ${iIdx} contains an invalid Unicode scalar`,
-            );
-          }
-          requireNoNul(i, `Section ${idx} item ${iIdx}`);
-          return i.trim();
-        })
-        .filter((i) => i.length > 0);
+      items = rawSection.items.map((i, iIdx) => {
+        if (typeof i !== "string") {
+          throw new BadRequestException(
+            `Section ${idx} item ${iIdx} must be a string`,
+          );
+        }
+        if (hasUnpairedSurrogate(i)) {
+          throw new BadRequestException(
+            `Section ${idx} item ${iIdx} contains an invalid Unicode scalar`,
+          );
+        }
+        requireNoNul(i, `Section ${idx} item ${iIdx}`);
+        const item = i.trim();
+        if (!item) {
+          throw new BadRequestException(
+            `Section ${idx} item ${iIdx} must not be empty`,
+          );
+        }
+        return item;
+      });
       if (items.length === 0) {
         throw new BadRequestException(
           `Section ${idx} items must contain at least one non-empty string`,
