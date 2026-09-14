@@ -23,8 +23,13 @@ type AuditEventRow = Awaited<
 type LegalAuditPayloadReferences = Readonly<{
   documentId: string;
   revisionIds: ReadonlySet<string>;
-  revisionHashes: ReadonlyMap<string, string>;
   publicationIds: ReadonlySet<string>;
+}>;
+
+type LegalAuditEvidence = Readonly<{
+  documentId: string;
+  revisionId: string;
+  contentHash: string;
 }>;
 export type LegalAuditFilters = Readonly<{
   eventType?: string;
@@ -115,6 +120,8 @@ export class AuditService {
     operator: OperatorContext,
     input: Readonly<{
       legalDocumentId: string;
+      legalRevisionId: string;
+      legalContentHash: string;
       eventType: string;
       reasonCode: string;
       reason: string;
@@ -126,6 +133,10 @@ export class AuditService {
   ): Promise<void> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
     const legalDocumentId = canonicalUuid(input.legalDocumentId);
+    const legalRevisionId = canonicalUuid(input.legalRevisionId);
+    if (!/^[0-9a-f]{64}$/.test(input.legalContentHash)) {
+      throw new BadRequestException("Legal audit content hash is invalid");
+    }
     const reason = input.reason.trim();
     const reasonCode = input.reasonCode.trim();
     if (!reason) {
@@ -145,6 +156,8 @@ export class AuditService {
         actorId: operator.operatorId,
         operatorIdentityId: operator.operatorId,
         legalDocumentId,
+        legalRevisionId,
+        legalContentHash: input.legalContentHash,
         nodeId: null,
         schemaVersion: 3,
         reasonCode,
@@ -226,7 +239,7 @@ export class AuditService {
               documentId,
               id: { in: [...candidates.revisionIds] },
             },
-            select: { id: true, contentHash: true },
+            select: { id: true },
           })
         : [];
     const publications =
@@ -242,9 +255,6 @@ export class AuditService {
     return {
       documentId,
       revisionIds: new Set(revisions.map((revision) => revision.id)),
-      revisionHashes: new Map(
-        revisions.map((revision) => [revision.id, revision.contentHash]),
-      ),
       publicationIds: new Set(
         publications.map((publication) => publication.id),
       ),
@@ -352,7 +362,11 @@ function toSummary(
     ...(row.correlationId ? { correlationId: row.correlationId } : {}),
     ...(row.reasonCode ? { reasonCode: row.reasonCode } : {}),
     ...(row.reason ? { reason: row.reason } : {}),
-    payload: redactPayload(row.payload, legalPayloadReferences),
+    payload: redactPayload(
+      row.payload,
+      legalPayloadReferences,
+      legalAuditEvidence(row),
+    ),
   };
 }
 
@@ -427,10 +441,11 @@ function operationalOrderScope(
 function redactPayload(
   value: Prisma.JsonValue,
   legalPayloadReferences?: LegalAuditPayloadReferences,
+  legalEvidence?: LegalAuditEvidence,
 ): Record<string, AuditPayloadValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   if (legalPayloadReferences) {
-    return redactLegalPayload(value, legalPayloadReferences);
+    return redactLegalPayload(value, legalPayloadReferences, legalEvidence);
   }
 
   const result: Record<string, AuditPayloadValue> = {};
@@ -485,16 +500,22 @@ const LEGAL_AUDIT_PUBLICATION_IDENTIFIER_FIELDS = [
 function redactLegalPayload(
   value: Prisma.JsonObject,
   references: LegalAuditPayloadReferences,
+  evidence?: LegalAuditEvidence,
 ): Record<string, AuditPayloadValue> {
   const result: Record<string, AuditPayloadValue> = {};
   const operation = value.operation;
   if (typeof operation === "string" && LEGAL_AUDIT_OPERATIONS.has(operation)) {
     result.operation = operation;
   }
-  if (value.documentId === references.documentId) {
+  if (evidence) {
+    result.documentId = evidence.documentId;
+    result.revisionId = evidence.revisionId;
+    result.contentHash = evidence.contentHash;
+  } else if (value.documentId === references.documentId) {
     result.documentId = references.documentId;
   }
   for (const field of LEGAL_AUDIT_REVISION_IDENTIFIER_FIELDS) {
+    if (field === "revisionId" && evidence) continue;
     const identifier = value[field];
     if (
       typeof identifier === "string" &&
@@ -512,14 +533,26 @@ function redactLegalPayload(
       result[field] = identifier;
     }
   }
-  if (
-    typeof value.contentHash === "string" &&
-    typeof value.revisionId === "string" &&
-    references.revisionHashes.get(value.revisionId) === value.contentHash
-  ) {
-    result.contentHash = value.contentHash;
-  }
   return result;
+}
+
+function legalAuditEvidence(
+  row: AuditEventRow,
+): LegalAuditEvidence | undefined {
+  if (
+    row.schemaVersion !== 3 ||
+    !row.legalDocumentId ||
+    !row.legalRevisionId ||
+    !row.legalContentHash ||
+    !/^[0-9a-f]{64}$/.test(row.legalContentHash)
+  ) {
+    return undefined;
+  }
+  return {
+    documentId: row.legalDocumentId,
+    revisionId: row.legalRevisionId,
+    contentHash: row.legalContentHash,
+  };
 }
 
 function collectLegalPayloadCandidates(

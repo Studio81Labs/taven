@@ -251,6 +251,12 @@ CREATE TABLE "legal_document_revisions" (
         AND "updated_at" >= '0001-01-01 00:00:00+00'::timestamptz
         AND "updated_at" < '10000-01-01 00:00:00+00'::timestamptz
     ),
+    CONSTRAINT "legal_document_revisions_content_fields_check" CHECK (
+        legal_document_text_is_nonblank("title")
+        AND legal_document_text_is_nonblank("summary")
+        AND legal_document_sections_are_valid("sections")
+        AND legal_document_content_fits_size_limit("title", "summary", "sections")
+    ),
     CONSTRAINT "legal_document_revisions_status_fields_check" CHECK (
         ("status" = 'DRAFT' AND "revision_code" IS NULL AND "effective_at" IS NULL AND "approval_evidence" IS NULL AND "approved_by" IS NULL AND "approved_at" IS NULL)
         OR
@@ -268,10 +274,6 @@ CREATE TABLE "legal_document_revisions" (
             AND legal_document_text_is_nonblank("approval_evidence")
             AND "approved_by" IS NOT NULL
             AND "approved_at" IS NOT NULL
-            AND legal_document_text_is_nonblank("title")
-            AND legal_document_text_is_nonblank("summary")
-            AND legal_document_sections_are_valid("sections")
-            AND legal_document_content_fits_size_limit("title", "summary", "sections")
         )
     ),
     CONSTRAINT "legal_document_revisions_content_hash_check" CHECK (
@@ -358,9 +360,35 @@ ALTER TABLE "audit_events"
     ADD COLUMN "legal_document_id" uuid;
 
 ALTER TABLE "audit_events"
+    ADD COLUMN "legal_revision_id" uuid,
+    ADD COLUMN "legal_content_hash" varchar(64);
+
+ALTER TABLE "audit_events"
     ADD CONSTRAINT "audit_events_legal_document_id_fkey"
         FOREIGN KEY ("legal_document_id")
         REFERENCES "legal_documents"("id") ON DELETE RESTRICT;
+
+ALTER TABLE "audit_events"
+    ADD CONSTRAINT "audit_events_legal_revision_id_fkey"
+        FOREIGN KEY ("legal_revision_id")
+        REFERENCES "legal_document_revisions"("id") ON DELETE RESTRICT;
+
+ALTER TABLE "audit_events"
+    ADD CONSTRAINT "audit_events_legal_evidence_shape_check" CHECK (
+        ("schema_version" IN (1, 2)
+            AND "legal_revision_id" IS NULL
+            AND "legal_content_hash" IS NULL)
+        OR (
+            "schema_version" = 3
+            AND (
+                ("legal_revision_id" IS NULL AND "legal_content_hash" IS NULL)
+                OR (
+                    "legal_revision_id" IS NOT NULL
+                    AND "legal_content_hash" ~ '^[0-9a-f]{64}$'
+                )
+            )
+        )
+    );
 
 ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_operator_identity_check";
 ALTER TABLE "audit_events"
@@ -398,6 +426,58 @@ ALTER TABLE "audit_events"
             AND "created_at" < '10000-01-01 00:00:00+00'::timestamptz
         )
     );
+
+-- Version 3 audit evidence is immutable typed data. Existing v3 rows can lack
+-- it; every newly inserted v3 row must prove the revision belongs to the same
+-- document and that the stored hash is the revision's historical content hash.
+CREATE OR REPLACE FUNCTION audit_events_legal_evidence_fn()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_revision_document_id uuid;
+    v_revision_content_hash text;
+BEGIN
+    IF NEW."schema_version" <> 3 THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW."legal_revision_id" IS NULL OR NEW."legal_content_hash" IS NULL THEN
+        RAISE EXCEPTION 'Version 3 legal audit events require revision and content-hash evidence';
+    END IF;
+
+    SELECT "document_id", "content_hash"
+    INTO v_revision_document_id, v_revision_content_hash
+    FROM "legal_document_revisions"
+    WHERE "id" = NEW."legal_revision_id"
+    FOR SHARE;
+
+    IF NOT FOUND OR v_revision_document_id IS DISTINCT FROM NEW."legal_document_id" THEN
+        RAISE EXCEPTION 'Legal audit revision evidence does not belong to the legal document';
+    END IF;
+
+    IF v_revision_content_hash IS DISTINCT FROM NEW."legal_content_hash" THEN
+        RAISE EXCEPTION 'Legal audit content-hash evidence does not match the revision';
+    END IF;
+
+    IF NEW."payload" ? 'documentId'
+       AND NEW."payload"->>'documentId' IS DISTINCT FROM NEW."legal_document_id"::text THEN
+        RAISE EXCEPTION 'Legal audit payload documentId does not match typed evidence';
+    END IF;
+    IF NEW."payload" ? 'revisionId'
+       AND NEW."payload"->>'revisionId' IS DISTINCT FROM NEW."legal_revision_id"::text THEN
+        RAISE EXCEPTION 'Legal audit payload revisionId does not match typed evidence';
+    END IF;
+    IF NEW."payload" ? 'contentHash'
+       AND NEW."payload"->>'contentHash' IS DISTINCT FROM NEW."legal_content_hash" THEN
+        RAISE EXCEPTION 'Legal audit payload contentHash does not match typed evidence';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_events_legal_evidence_trg
+BEFORE INSERT ON "audit_events"
+FOR EACH ROW EXECUTE FUNCTION audit_events_legal_evidence_fn();
 
 -- Earlier audit constraints treated newlines as non-whitespace. Clear these
 -- semantically empty legacy reason pairs before validating the stricter rule.

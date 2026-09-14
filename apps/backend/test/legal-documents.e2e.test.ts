@@ -929,11 +929,49 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       expect(item.legalDocumentId).toBe(termsDoc.id);
       expect(item.nodeId).toBeUndefined();
       expect(item.payload).toBeDefined();
-      const payload = item.payload as { contentHash?: string };
-      if (payload.contentHash !== undefined) {
-        expect(payload.contentHash).toMatch(/^[0-9a-f]{64}$/);
-      }
+      const payload = item.payload as {
+        documentId?: string;
+        revisionId?: string;
+        contentHash?: string;
+      };
+      expect(payload.documentId).toBe(termsDoc.id);
+      expect(payload.revisionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(payload.contentHash).toMatch(/^[0-9a-f]{64}$/);
     }
+    const persistedAuditEvidence = await prisma.auditEvent.findMany({
+      where: { legalDocumentId: termsDoc.id, schemaVersion: 3 },
+      select: {
+        eventType: true,
+        legalRevisionId: true,
+        legalContentHash: true,
+      },
+    });
+    const originalDraftHash = legalContentHash(
+      "Obchodní podmínky v2",
+      "Druhá verze obchodních podmínek",
+      [
+        {
+          title: "1. Všeobecná ustanovení",
+          paragraphs: ["Tento text definuje základní pravidla služby."],
+        },
+      ],
+    );
+    expect(
+      persistedAuditEvidence.find(
+        (event) => event.eventType === "legal_document.draft_created",
+      ),
+    ).toMatchObject({
+      legalRevisionId: approvedRev.id,
+      legalContentHash: originalDraftHash,
+    });
+    expect(
+      persistedAuditEvidence.find(
+        (event) => event.eventType === "legal_document.draft_updated",
+      ),
+    ).toMatchObject({
+      legalRevisionId: approvedRev.id,
+      legalContentHash: approvedRev.contentHash,
+    });
     const cancelAudit = auditPage.items.find(
       (item: { eventType: string }) =>
         item.eventType === "legal_document.publication_cancelled",
@@ -1102,6 +1140,25 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         },
       }),
     ).rejects.toThrow();
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 10_002,
+          editVersion: 1,
+          status: "DRAFT",
+          contentVersion: 1,
+          title: "\n",
+          summary: "Direct draft with invalid content",
+          sections: [{ title: "Section", paragraphs: ["Content"] }],
+          contentHash: legalContentHash(
+            "\n",
+            "Direct draft with invalid content",
+            [{ title: "Section", paragraphs: ["Content"] }],
+          ),
+        },
+      }),
+    ).rejects.toThrow();
 
     // 11. Database trigger/check constraint rejects invalid cancellation state on insert
     const invalidDraft = await prisma.legalDocumentRevision.create({
@@ -1150,6 +1207,8 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     await expect(
       app.get(AuditService).recordLegalOperator(prisma, readOnlyOperator, {
         legalDocumentId: termsDoc.id,
+        legalRevisionId: invalidDraft.id,
+        legalContentHash: invalidDraft.contentHash,
         eventType: "legal_document.draft_created",
         reasonCode: "TEST",
         reason: "Test",
@@ -1694,6 +1753,67 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         )
       `),
     ).rejects.toThrow();
+
+    // New v3 audit events must persist evidence at the database boundary,
+    // including direct SQL/import writers that bypass AuditService.
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO audit_events (
+          id, event_type, actor_kind, actor_id, operator_identity_id,
+          legal_document_id, schema_version, reason_code, reason, payload
+        ) VALUES (
+          gen_random_uuid(), 'legal_document.missing_evidence', 'OPERATOR'::audit_actor_kind,
+          '${adminOperatorId}'::uuid, '${adminOperatorId}'::uuid,
+          '${termsDoc.id}'::uuid, 3, 'DIRECT_IMPORT', 'Missing audit evidence', '{}'::jsonb
+        )
+      `),
+    ).rejects.toThrow(/require revision and content-hash evidence/i);
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO audit_events (
+          id, event_type, actor_kind, actor_id, operator_identity_id,
+          legal_document_id, legal_revision_id, legal_content_hash,
+          schema_version, reason_code, reason, payload
+        ) VALUES (
+          gen_random_uuid(), 'legal_document.wrong_hash', 'OPERATOR'::audit_actor_kind,
+          '${adminOperatorId}'::uuid, '${adminOperatorId}'::uuid,
+          '${termsDoc.id}'::uuid, '${futureEffectiveDraft.id}'::uuid, '${"0".repeat(64)}',
+          3, 'DIRECT_IMPORT', 'Wrong audit evidence hash', '{}'::jsonb
+        )
+      `),
+    ).rejects.toThrow(/does not match the revision/i);
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO audit_events (
+          id, event_type, actor_kind, actor_id, operator_identity_id,
+          legal_document_id, legal_revision_id, legal_content_hash,
+          schema_version, reason_code, reason, payload
+        ) VALUES (
+          gen_random_uuid(), 'legal_document.foreign_revision', 'OPERATOR'::audit_actor_kind,
+          '${adminOperatorId}'::uuid, '${adminOperatorId}'::uuid,
+          '${termsDoc.id}'::uuid, '${decisionTimeDraft.id}'::uuid, '${decisionTimeDraft.contentHash}',
+          3, 'DIRECT_IMPORT', 'Foreign audit revision', '{}'::jsonb
+        )
+      `),
+    ).rejects.toThrow(/does not belong to the legal document/i);
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO audit_events (
+          id, event_type, actor_kind, actor_id, operator_identity_id,
+          legal_document_id, legal_revision_id, legal_content_hash,
+          schema_version, reason_code, reason, payload
+        ) VALUES (
+          gen_random_uuid(), 'legal_document.payload_mismatch', 'OPERATOR'::audit_actor_kind,
+          '${adminOperatorId}'::uuid, '${adminOperatorId}'::uuid,
+          '${termsDoc.id}'::uuid, '${futureEffectiveDraft.id}'::uuid, '${futureEffectiveDraft.contentHash}',
+          3, 'DIRECT_IMPORT', 'Mismatched audit payload',
+          jsonb_build_object('revisionId', '${decisionTimeDraft.id}')
+        )
+      `),
+    ).rejects.toThrow(/payload revisionId does not match typed evidence/i);
 
     await expect(
       prisma.$executeRawUnsafe(`

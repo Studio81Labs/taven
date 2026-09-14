@@ -164,6 +164,8 @@ describe("AuditService legacy projection", () => {
         createdAt: new Date("2026-01-01T00:00:00.000Z"),
         operatorIdentityId: operator.operatorId,
         legalDocumentId,
+        legalRevisionId: "66666666-6666-4666-8666-666666666666",
+        legalContentHash: "a".repeat(64),
         nodeId: null,
         schemaVersion: 3,
         orderId: null,
@@ -190,12 +192,9 @@ describe("AuditService legacy projection", () => {
         },
       },
     ]);
-    const revisionFindMany = vi.fn().mockResolvedValue([
-      {
-        id: "66666666-6666-4666-8666-666666666666",
-        contentHash: "a".repeat(64),
-      },
-    ]);
+    const revisionFindMany = vi
+      .fn()
+      .mockResolvedValue([{ id: "66666666-6666-4666-8666-666666666666" }]);
     const publicationFindMany = vi.fn().mockResolvedValue([]);
     const service = new AuditService({
       auditEvent: { findMany },

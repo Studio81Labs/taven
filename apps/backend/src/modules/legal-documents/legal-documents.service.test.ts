@@ -45,6 +45,17 @@ describe("legal documents helper functions", () => {
     );
   });
 
+  it.each([
+    { title: "\ud800", paragraphs: ["Content"] },
+    { title: "Section", paragraphs: ["\udc00"] },
+    { title: "Section", items: ["\ud800"] },
+    { title: "Section", note: "\udc00" },
+  ])("rejects an unpaired surrogate in section content", (section) => {
+    expect(() => normalizeLegalSections([section])).toThrow(
+      "invalid Unicode scalar",
+    );
+  });
+
   it("computes deterministic sha256 hash for canonical content", () => {
     const hash1 = computeLegalRevisionContentHash({
       contentVersion: 1,

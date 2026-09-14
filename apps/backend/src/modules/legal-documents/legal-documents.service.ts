@@ -91,7 +91,7 @@ function hasUnpairedSurrogate(value: string): boolean {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) return true;
+      if (!Number.isFinite(next) || next < 0xdc00 || next > 0xdfff) return true;
       index += 1;
     } else if (code >= 0xdc00 && code <= 0xdfff) {
       return true;
@@ -747,6 +747,8 @@ export class LegalDocumentsService {
         const decisionNow = await databaseNow(tx);
         await this.audit.recordLegalOperator(tx, operator, {
           legalDocumentId: doc.id,
+          legalRevisionId: revision.id,
+          legalContentHash: revision.contentHash,
           eventType: "legal_document.draft_created",
           reasonCode,
           reason,
@@ -829,6 +831,8 @@ export class LegalDocumentsService {
         const decisionNow = await databaseNow(tx);
         await this.audit.recordLegalOperator(tx, operator, {
           legalDocumentId: doc.id,
+          legalRevisionId: updated.id,
+          legalContentHash: updated.contentHash,
           eventType: "legal_document.draft_updated",
           reasonCode,
           reason,
@@ -986,6 +990,8 @@ export class LegalDocumentsService {
 
         await this.audit.recordLegalOperator(tx, operator, {
           legalDocumentId: doc.id,
+          legalRevisionId: approved.id,
+          legalContentHash: approved.contentHash,
           eventType: "legal_document.revision_approved",
           reasonCode,
           reason,
@@ -1143,6 +1149,8 @@ export class LegalDocumentsService {
 
         await this.audit.recordLegalOperator(tx, operator, {
           legalDocumentId: doc.id,
+          legalRevisionId: revision.id,
+          legalContentHash: revision.contentHash,
           eventType: "legal_document.published",
           reasonCode,
           reason,
@@ -1257,6 +1265,8 @@ export class LegalDocumentsService {
 
         await this.audit.recordLegalOperator(tx, operator, {
           legalDocumentId: doc.id,
+          legalRevisionId: pub.revisionId,
+          legalContentHash: pub.revision.contentHash,
           eventType: "legal_document.publication_cancelled",
           reasonCode,
           reason,
@@ -1354,6 +1364,8 @@ export class LegalDocumentsService {
 
         await this.audit.recordLegalOperator(tx, operator, {
           legalDocumentId: doc.id,
+          legalRevisionId: updated.revisionId,
+          legalContentHash: updated.revision.contentHash,
           eventType: "legal_document.publication_archived",
           reasonCode,
           reason,
@@ -1470,6 +1482,11 @@ export function normalizeLegalSections(
     if (typeof rawSection.title !== "string" || !rawSection.title.trim()) {
       throw new BadRequestException("Section title must not be empty");
     }
+    if (hasUnpairedSurrogate(rawSection.title)) {
+      throw new BadRequestException(
+        `Section ${idx} title contains an invalid Unicode scalar`,
+      );
+    }
     requireNoNul(rawSection.title, `Section ${idx} title`);
     const title = rawSection.title.trim();
     if (codePointLength(title) > 255) {
@@ -1490,6 +1507,11 @@ export function normalizeLegalSections(
               `Section ${idx} paragraph ${pIdx} must be a string`,
             );
           }
+          if (hasUnpairedSurrogate(p)) {
+            throw new BadRequestException(
+              `Section ${idx} paragraph ${pIdx} contains an invalid Unicode scalar`,
+            );
+          }
           requireNoNul(p, `Section ${idx} paragraph ${pIdx}`);
           return p.trim();
         })
@@ -1508,6 +1530,11 @@ export function normalizeLegalSections(
               `Section ${idx} item ${iIdx} must be a string`,
             );
           }
+          if (hasUnpairedSurrogate(i)) {
+            throw new BadRequestException(
+              `Section ${idx} item ${iIdx} contains an invalid Unicode scalar`,
+            );
+          }
           requireNoNul(i, `Section ${idx} item ${iIdx}`);
           return i.trim();
         })
@@ -1518,6 +1545,11 @@ export function normalizeLegalSections(
     if (rawSection.note !== undefined && rawSection.note !== null) {
       if (typeof rawSection.note !== "string") {
         throw new BadRequestException(`Section ${idx} note must be a string`);
+      }
+      if (hasUnpairedSurrogate(rawSection.note)) {
+        throw new BadRequestException(
+          `Section ${idx} note contains an invalid Unicode scalar`,
+        );
       }
       requireNoNul(rawSection.note, `Section ${idx} note`);
       const trimmedNote = rawSection.note.trim();
