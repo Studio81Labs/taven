@@ -4950,6 +4950,12 @@ export interface operations {
                     "application/json": components["schemas"]["LegalDocumentDetailDto"];
                 };
             };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5002,6 +5008,12 @@ export interface operations {
                     "application/json": components["schemas"]["AuditEventPageDto"];
                 };
             };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5051,6 +5063,12 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LegalPublicationPageDto"];
                 };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: {
                 headers: {

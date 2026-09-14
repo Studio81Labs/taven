@@ -9887,6 +9887,9 @@
             },
             "description": ""
           },
+          "400": {
+            "description": ""
+          },
           "401": {
             "description": ""
           },
@@ -9971,6 +9974,9 @@
             },
             "description": ""
           },
+          "400": {
+            "description": ""
+          },
           "401": {
             "description": ""
           },
@@ -10036,6 +10042,9 @@
                 }
               }
             },
+            "description": ""
+          },
+          "400": {
             "description": ""
           },
           "401": {

@@ -145,6 +145,7 @@ export class LegalDocumentsAdminController {
     minimum: 1,
     maximum: 100,
   })
+  @ApiBadRequestResponse()
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
@@ -202,6 +203,7 @@ export class LegalDocumentsAdminController {
     minimum: 1,
     maximum: 100,
   })
+  @ApiBadRequestResponse()
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
@@ -253,6 +255,7 @@ export class LegalDocumentsAdminController {
     minimum: 1,
     maximum: 100,
   })
+  @ApiBadRequestResponse()
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
