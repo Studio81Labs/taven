@@ -616,7 +616,7 @@ BEGIN
     END IF;
 
     PERFORM 1 FROM "legal_documents" WHERE "id" = NEW."document_id" FOR UPDATE;
-    v_post_lock_now := clock_timestamp();
+    v_post_lock_now := date_trunc('milliseconds', clock_timestamp());
     IF TG_OP = 'INSERT' THEN
         SELECT "document_id", "status", "effective_at" INTO v_rev_doc_id, v_rev_status, v_rev_effective_at
         FROM "legal_document_revisions"
