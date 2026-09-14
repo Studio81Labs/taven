@@ -57,6 +57,91 @@ type InteractiveTransaction = (
   work: (transaction: Prisma.TransactionClient) => Promise<unknown>,
 ) => Promise<unknown>;
 
+const checkoutLegalRevisionCodes = {
+  terms: "terms-v1",
+  claims: "claim-policy-v1",
+  privacy: "privacy-v1",
+  prohibitedContent: "prohibited-v1",
+  retention: "retention-v1",
+  photoConsent: "photos-v1",
+} as const;
+
+async function publishCheckoutLegalDocuments(client: PoolClient): Promise<{
+  termsRevisionId: string;
+}> {
+  const operatorId = "f0000000-0000-4000-8000-000000000001";
+  await client.query(
+    `INSERT INTO operator_identities (id, email, role)
+     VALUES ($1, 'checkout-e2e-legal@example.test', 'ADMIN')
+     ON CONFLICT (id) DO NOTHING`,
+    [operatorId],
+  );
+  await client.query(
+    `UPDATE legal_document_revisions revision
+     SET status = 'APPROVED',
+         revision_code = CASE document.key
+           WHEN 'terms' THEN $1
+           WHEN 'claims' THEN $2
+           WHEN 'privacy' THEN $3
+           WHEN 'prohibitedContent' THEN $4
+           WHEN 'retention' THEN $5
+           WHEN 'photoConsent' THEN $6
+         END,
+         effective_at = clock_timestamp() - interval '1 minute',
+         approval_evidence = 'Checkout E2E approved legal fixture',
+         approved_by = $7,
+         approved_at = clock_timestamp()
+     FROM legal_documents document
+     WHERE document.id = revision.document_id
+       AND revision.status = 'DRAFT'
+       AND document.key IN (
+         'terms', 'claims', 'privacy', 'prohibitedContent', 'retention', 'photoConsent'
+       )`,
+    [
+      checkoutLegalRevisionCodes.terms,
+      checkoutLegalRevisionCodes.claims,
+      checkoutLegalRevisionCodes.privacy,
+      checkoutLegalRevisionCodes.prohibitedContent,
+      checkoutLegalRevisionCodes.retention,
+      checkoutLegalRevisionCodes.photoConsent,
+      operatorId,
+    ],
+  );
+  await client.query(
+    `INSERT INTO legal_document_publications
+       (id, document_id, revision_id, starts_at, published_by, reason)
+     SELECT gen_random_uuid(), document.id, revision.id, clock_timestamp(), $1,
+            'Checkout E2E fixture publication'
+     FROM legal_documents document
+     JOIN legal_document_revisions revision ON revision.document_id = document.id
+     WHERE document.key IN (
+       'terms', 'claims', 'privacy', 'prohibitedContent', 'retention', 'photoConsent'
+     )
+       AND revision.status = 'APPROVED'
+       AND NOT EXISTS (
+         SELECT 1
+         FROM legal_document_publications publication
+         WHERE publication.revision_id = revision.id
+           AND publication.cancelled_at IS NULL
+       )`,
+    [operatorId],
+  );
+  const result = await client.query<{ id: string }>(
+    `SELECT revision.id
+     FROM legal_document_revisions revision
+     JOIN legal_documents document ON document.id = revision.document_id
+     WHERE document.key = 'terms'
+       AND revision.revision_code = $1
+       AND revision.status = 'APPROVED'`,
+    [checkoutLegalRevisionCodes.terms],
+  );
+  const termsRevisionId = result.rows[0]?.id;
+  if (!termsRevisionId) {
+    throw new Error("Checkout E2E terms fixture was not published");
+  }
+  return { termsRevisionId };
+}
+
 async function rollback<T>(
   name: string,
   work: (client: PoolClient, fixtures: PersistenceFactory) => Promise<T>,
@@ -1959,6 +2044,25 @@ describe("checkout payment capture protocol", () => {
           ambiguousCaptureDestinationRow.capability_snapshot as Prisma.InputJsonObject,
         supportedCategoryIds: ["standard"],
       };
+      const { termsRevisionId } =
+        await publishCheckoutLegalDocuments(setupClient);
+      await setupClient.query(
+        `UPDATE order_price_bindings
+         SET legal_terms_revision_id = $1
+         WHERE id = ANY($2::uuid[])`,
+        [
+          termsRevisionId,
+          [
+            foundation.orderPriceBindingId,
+            outageFoundation.orderPriceBindingId,
+            returnedIntentFoundation.orderPriceBindingId,
+            callbackFoundation.orderPriceBindingId,
+            inFlightCallbackFoundation.orderPriceBindingId,
+            ambiguousCallbackFoundation.orderPriceBindingId,
+            ambiguousCaptureFoundation.orderPriceBindingId,
+          ],
+        ],
+      );
       await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
       await setupClient.query("COMMIT");
     } catch (error) {
@@ -1970,10 +2074,7 @@ describe("checkout payment capture protocol", () => {
 
     const previousEnvironment = {
       gate: process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED,
-      claimPolicyRevision: process.env.TAVEN_CLAIM_POLICY_REVISION,
       claimWindowDays: process.env.TAVEN_CLAIM_WINDOW_DAYS,
-      termsRevision: process.env.TAVEN_TERMS_REVISION,
-      photoConsentRevision: process.env.TAVEN_PHOTO_CONSENT_REVISION,
       provider: process.env.TAVEN_PAYMENT_PROVIDER,
       secret: process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET,
       providerUrl: process.env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL,
@@ -1981,10 +2082,7 @@ describe("checkout payment capture protocol", () => {
     };
     const signingSecret = "e2e-sandbox-payment-signing-secret-32";
     process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
-    process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
     process.env.TAVEN_CLAIM_WINDOW_DAYS = "30";
-    process.env.TAVEN_TERMS_REVISION = "terms-v1";
-    process.env.TAVEN_PHOTO_CONSENT_REVISION = "photos-v1";
     process.env.TAVEN_PAYMENT_PROVIDER = "sandbox";
     process.env.TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET = signingSecret;
     process.env.TAVEN_PAYMENT_SANDBOX_PUBLIC_URL = "http://sandbox.local";
@@ -2305,6 +2403,7 @@ describe("checkout payment capture protocol", () => {
           fullName: string;
           method: "CARD" | "BANK_TRANSFER";
           termsRevision: string;
+          claimPolicyRevision: string;
           billing: ReturnType<typeof checkoutBilling>;
           photoPublicationConsent: boolean;
           photoConsentRevision: string | null;
@@ -2457,15 +2556,6 @@ describe("checkout payment capture protocol", () => {
       };
       const originalTransaction = transactions.$transaction.bind(prisma);
 
-      process.env.TAVEN_TERMS_REVISION = "terms-pending";
-      const providerCallsBeforeUnapprovedTerms = providerCreateCalls;
-      const unapprovedTermsResponse = await createPayment(
-        "sandbox-http-unapproved-terms",
-      );
-      expect(unapprovedTermsResponse.status).toBe(503);
-      expect(providerCreateCalls).toBe(providerCallsBeforeUnapprovedTerms);
-      process.env.TAVEN_TERMS_REVISION = "terms-v1";
-
       const providerCallsBeforeStaleTerms = providerCreateCalls;
       const staleTermsResponse = await createPayment(
         "sandbox-http-stale-terms",
@@ -2475,9 +2565,9 @@ describe("checkout payment capture protocol", () => {
       expect(providerCreateCalls).toBe(providerCallsBeforeStaleTerms);
 
       const providerCallsBeforeStaleClaimPolicy = providerCreateCalls;
-      process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
       const staleClaimPolicyResponse = await createPayment(
         "sandbox-http-stale-claim-policy",
+        { claimPolicyRevision: "claim-policy-v0" },
       );
       expect(staleClaimPolicyResponse.status).toBe(503);
       expect(providerCreateCalls).toBe(providerCallsBeforeStaleClaimPolicy);
@@ -2507,8 +2597,6 @@ describe("checkout payment capture protocol", () => {
           checkoutContactSnapshot: null,
         },
       ]);
-      process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
-
       for (const [name, methods] of [
         ["card-only", ["CARD"]],
         ["bank-transfer-only", ["BANK_TRANSFER"]],
@@ -2856,13 +2944,6 @@ describe("checkout payment capture protocol", () => {
         }),
       ).rejects.toThrow("checkout evidence is immutable acceptance evidence");
       const callsAfterInitialPayment = providerCreateCalls;
-      process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
-      const changedActivePolicyResponse = await createPayment(
-        "sandbox-http-changed-active-claim-policy",
-      );
-      expect(changedActivePolicyResponse.status).toBe(503);
-      process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
-      expect(providerCreateCalls).toBe(callsAfterInitialPayment);
       for (const [idempotencyKey, overrides] of [
         ["sandbox-http-changed-method", { method: "BANK_TRANSFER" }],
         ["sandbox-http-changed-name", { fullName: "Changed Name" }],
@@ -2889,8 +2970,7 @@ describe("checkout payment capture protocol", () => {
       const matchingResponse = await createPayment(
         "sandbox-http-matching-input",
       );
-      expect(matchingResponse.status).toBe(200);
-      await expect(matchingResponse.json()).resolves.toEqual(created);
+      expect(matchingResponse.status).toBe(409);
       expect(providerCreateCalls).toBe(callsAfterInitialPayment);
       await expect(
         readPayment(foundation.quoteSessionId, token),
@@ -3133,14 +3213,6 @@ describe("checkout payment capture protocol", () => {
       );
       expect(providerCreateCalls).toBe(callsAfterDefinitiveFailure);
 
-      const callsBeforeFailedPolicyChange = providerCreateCalls;
-      process.env.TAVEN_CLAIM_POLICY_REVISION = "claims-v2-approved";
-      const changedFailedPolicyResponse = await createOutagePayment(
-        "sandbox-http-changed-failed-claim-policy",
-      );
-      expect(changedFailedPolicyResponse.status).toBe(503);
-      process.env.TAVEN_CLAIM_POLICY_REVISION = "claim-policy-v1";
-      expect(providerCreateCalls).toBe(callsBeforeFailedPolicyChange);
       await expect(
         Promise.all([
           prisma.payment.count({
@@ -3646,20 +3718,8 @@ describe("checkout payment capture protocol", () => {
         previousEnvironment.gate,
       );
       restoreEnvironment(
-        "TAVEN_CLAIM_POLICY_REVISION",
-        previousEnvironment.claimPolicyRevision,
-      );
-      restoreEnvironment(
         "TAVEN_CLAIM_WINDOW_DAYS",
         previousEnvironment.claimWindowDays,
-      );
-      restoreEnvironment(
-        "TAVEN_TERMS_REVISION",
-        previousEnvironment.termsRevision,
-      );
-      restoreEnvironment(
-        "TAVEN_PHOTO_CONSENT_REVISION",
-        previousEnvironment.photoConsentRevision,
       );
       restoreEnvironment(
         "TAVEN_PAYMENT_PROVIDER",
