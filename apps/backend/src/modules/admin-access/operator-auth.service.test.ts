@@ -8,6 +8,32 @@ describe("OperatorAuthService expiry cleanup", () => {
     vi.unstubAllEnvs();
   });
 
+  it("leaves session-store failures for the route guard to translate", async () => {
+    vi.stubEnv("TAVEN_ENVIRONMENT", "development");
+    vi.stubEnv("TAVEN_ADMIN_CSRF_KEY", KEY);
+    vi.stubEnv("TAVEN_ADMIN_CLIENT_HASH_KEY", KEY);
+    const service = new OperatorAuthService(
+      {
+        operatorSession: {
+          findUnique: vi.fn().mockRejectedValue({ code: "P1001" }),
+        },
+      } as never,
+      {
+        exchangeCode: async () => {
+          throw new Error("GitHub must not be used during authentication");
+        },
+      },
+    );
+
+    const error = await service
+      .authenticateRequest({
+        headers: { cookie: `taven_admin=${"a".repeat(20)}` },
+      })
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({ code: "P1001" });
+  });
+
   it("removes expired auth records, retained sessions, and stale rate buckets within the batch limit", async () => {
     vi.stubEnv("TAVEN_ENVIRONMENT", "development");
     vi.stubEnv("TAVEN_ADMIN_CSRF_KEY", KEY);

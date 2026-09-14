@@ -1,11 +1,16 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { AuditActorKind, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
+import {
+  DATABASE_CLOCK_UNAVAILABLE_MESSAGE,
+  withDatastoreAvailability,
+} from "../../prisma/datastore-availability";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { requireOperatorPermission } from "../admin-access/operator-command";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
@@ -16,6 +21,25 @@ import type {
 } from "./audit.dto";
 
 type Transaction = Prisma.TransactionClient;
+type AuditEventRow = Awaited<
+  ReturnType<PrismaService["auditEvent"]["findMany"]>
+>[number];
+type LegalAuditPayloadReferences = Readonly<{
+  documentId: string;
+  revisionIds: ReadonlySet<string>;
+  publicationIds: ReadonlySet<string>;
+}>;
+
+type LegalAuditEvidence = Readonly<{
+  documentId: string;
+  revisionId: string;
+  contentHash: string;
+}>;
+export type LegalAuditFilters = Readonly<{
+  eventType?: string;
+  operatorIdentityId?: string;
+}>;
+
 type AuditFilters = Readonly<{
   eventType?: string;
   nodeId?: string;
@@ -23,6 +47,7 @@ type AuditFilters = Readonly<{
   orderId?: string;
   paymentId?: string;
   quoteRequestId?: string;
+  legalDocumentId?: string;
 }>;
 
 const UUID_PATTERN =
@@ -94,6 +119,159 @@ export class AuditService {
     });
   }
 
+  async recordLegalOperator(
+    transaction: Transaction,
+    operator: OperatorContext,
+    input: Readonly<{
+      legalDocumentId: string;
+      legalRevisionId: string;
+      legalContentHash: string;
+      eventType: string;
+      reasonCode: string;
+      reason: string;
+      payload: Prisma.InputJsonObject;
+      correlationId?: string;
+      idempotencyKey?: string;
+      createdAt?: Date;
+    }>,
+  ): Promise<void> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+    const legalDocumentId = canonicalUuid(input.legalDocumentId);
+    const legalRevisionId = canonicalUuid(input.legalRevisionId);
+    if (!/^[0-9a-f]{64}$/.test(input.legalContentHash)) {
+      throw new BadRequestException("Legal audit content hash is invalid");
+    }
+    const reason = input.reason.trim();
+    const reasonCode = input.reasonCode.trim();
+    if (!reason) {
+      throw new BadRequestException("Audit reason is invalid");
+    }
+    if (codePointLength(reason) > 1_000) {
+      throw new BadRequestException("Audit reason is too long");
+    }
+    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
+      throw new BadRequestException("Audit reason code is invalid");
+    }
+    const createdAt = input.createdAt ?? (await databaseNow(transaction));
+    await transaction.auditEvent.create({
+      data: {
+        eventType: input.eventType,
+        actorKind: AuditActorKind.OPERATOR,
+        actorId: operator.operatorId,
+        operatorIdentityId: operator.operatorId,
+        legalDocumentId,
+        legalRevisionId,
+        legalContentHash: input.legalContentHash,
+        nodeId: null,
+        schemaVersion: 3,
+        reasonCode,
+        reason,
+        orderId: null,
+        paymentId: null,
+        quoteRequestId: null,
+        quoteId: null,
+        correlationId: input.correlationId ?? null,
+        idempotencyKey: input.idempotencyKey ?? null,
+        payload: input.payload,
+        createdAt,
+      },
+    });
+  }
+
+  async listLegalDocumentAuditEvents(
+    operator: OperatorContext,
+    legalDocumentId: string,
+    filters?: LegalAuditFilters,
+    cursor?: string,
+    limit = 25,
+  ): Promise<AuditEventPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.AUDIT_READ);
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new BadRequestException("Audit limit is invalid");
+    }
+    const docId = canonicalUuid(legalDocumentId);
+    const normalizedFilters = normalizeLegalAuditFilters(filters);
+    const filterHash = digest({ legalDocumentId: docId, ...normalizedFilters });
+    const keyset =
+      cursor !== undefined ? parseCursor(cursor, filterHash) : undefined;
+    const where: Prisma.AuditEventWhereInput = {
+      legalDocumentId: docId,
+      schemaVersion: 3,
+      ...(normalizedFilters.eventType
+        ? { eventType: normalizedFilters.eventType }
+        : {}),
+      ...(normalizedFilters.operatorIdentityId
+        ? { operatorIdentityId: normalizedFilters.operatorIdentityId }
+        : {}),
+      ...(keyset
+        ? {
+            OR: [
+              { createdAt: { lt: keyset.createdAt } },
+              { createdAt: keyset.createdAt, id: { lt: keyset.id } },
+            ],
+          }
+        : {}),
+    };
+    const rows = await withDatastoreAvailability(
+      () =>
+        this.prisma.auditEvent.findMany({
+          where,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: limit + 1,
+        }),
+      "Legal audit datastore is unavailable",
+    );
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    const nextCursor =
+      rows.length > limit && last
+        ? encodeCursor({ createdAt: last.createdAt, id: last.id, filterHash })
+        : undefined;
+    const payloadReferences = await withDatastoreAvailability(
+      () => this.legalPayloadReferences(docId, page),
+      "Legal audit datastore is unavailable",
+    );
+    return {
+      items: page.map((row) => toSummary(row, payloadReferences)),
+      ...(nextCursor ? { nextCursor } : {}),
+    };
+  }
+
+  private async legalPayloadReferences(
+    documentId: string,
+    rows: readonly AuditEventRow[],
+  ): Promise<LegalAuditPayloadReferences> {
+    const candidates = collectLegalPayloadCandidates(rows);
+    const revisions =
+      candidates.revisionIds.size > 0
+        ? await this.prisma.legalDocumentRevision.findMany({
+            where: {
+              documentId,
+              id: { in: [...candidates.revisionIds] },
+            },
+            select: { id: true },
+          })
+        : [];
+    const publications =
+      candidates.publicationIds.size > 0
+        ? await this.prisma.legalDocumentPublication.findMany({
+            where: {
+              id: { in: [...candidates.publicationIds] },
+              revision: { documentId },
+            },
+            select: { id: true },
+          })
+        : [];
+    return {
+      documentId,
+      revisionIds: new Set(revisions.map((revision) => revision.id)),
+      publicationIds: new Set(
+        publications.map((publication) => publication.id),
+      ),
+    };
+  }
+
   async list(
     operator: OperatorContext,
     filters: AuditFilters,
@@ -101,6 +279,9 @@ export class AuditService {
     limit = 25,
   ): Promise<AuditEventPageDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.AUDIT_READ);
+    if (operator.nodeIds.length !== 1) {
+      throw new ForbiddenException("Operator node scope is unavailable");
+    }
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
       throw new BadRequestException("Audit limit is invalid");
     }
@@ -147,7 +328,7 @@ export class AuditService {
         ? encodeCursor({ createdAt: last.createdAt, id: last.id, filterHash })
         : undefined;
     return {
-      items: page.map(toSummary),
+      items: page.map((row) => toSummary(row)),
       ...(nextCursor ? { nextCursor } : {}),
     };
   }
@@ -164,12 +345,13 @@ async function databaseNow(
     SELECT clock_timestamp() AS now
   `;
   const observedAt = rows[0]?.now;
-  if (!observedAt) throw new Error("Audit database clock is unavailable");
+  if (!observedAt) throw new Error(DATABASE_CLOCK_UNAVAILABLE_MESSAGE);
   return observedAt;
 }
 
 function toSummary(
-  row: Awaited<ReturnType<PrismaService["auditEvent"]["findMany"]>>[number],
+  row: AuditEventRow,
+  legalPayloadReferences?: LegalAuditPayloadReferences,
 ): AuditEventSummaryDto {
   return {
     id: row.id,
@@ -178,6 +360,7 @@ function toSummary(
     ...(row.operatorIdentityId
       ? { operatorIdentityId: row.operatorIdentityId }
       : {}),
+    ...(row.legalDocumentId ? { legalDocumentId: row.legalDocumentId } : {}),
     ...(row.schemaVersion === 1 ? { legacy: true } : {}),
     ...(row.nodeId ? { nodeId: row.nodeId } : {}),
     ...(row.orderId ? { orderId: row.orderId } : {}),
@@ -190,7 +373,11 @@ function toSummary(
     ...(row.correlationId ? { correlationId: row.correlationId } : {}),
     ...(row.reasonCode ? { reasonCode: row.reasonCode } : {}),
     ...(row.reason ? { reason: row.reason } : {}),
-    payload: redactPayload(row.payload),
+    payload: redactPayload(
+      row.payload,
+      legalPayloadReferences,
+      legalAuditEvidence(row),
+    ),
   };
 }
 
@@ -264,17 +451,24 @@ function operationalOrderScope(
 
 function redactPayload(
   value: Prisma.JsonValue,
+  legalPayloadReferences?: LegalAuditPayloadReferences,
+  legalEvidence?: LegalAuditEvidence,
 ): Record<string, AuditPayloadValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (legalPayloadReferences) {
+    return redactLegalPayload(value, legalPayloadReferences, legalEvidence);
+  }
+
   const result: Record<string, AuditPayloadValue> = {};
-  for (const key of [
+  const allowedFields = [
     "operation",
     "status",
     "outcome",
     "version",
     "photoAssetId",
     "deltaMilligrams",
-  ] as const) {
+  ];
+  for (const key of allowedFields) {
     const field = value[key];
     if (
       typeof field === "boolean" ||
@@ -295,6 +489,108 @@ function redactPayload(
   const targets = response ? jsonObject(response.targets) : undefined;
   if (targets) redactTargetIdentifiers(result, targets);
   return result;
+}
+
+const LEGAL_AUDIT_OPERATIONS = new Set([
+  "draft_created",
+  "draft_updated",
+  "revision_approved",
+  "published",
+  "publication_cancelled",
+  "publication_archived",
+]);
+const LEGAL_AUDIT_REVISION_IDENTIFIER_FIELDS = [
+  "revisionId",
+  "previousRevisionId",
+] as const;
+const LEGAL_AUDIT_PUBLICATION_IDENTIFIER_FIELDS = [
+  "publicationId",
+  "previousPublicationId",
+] as const;
+
+function redactLegalPayload(
+  value: Prisma.JsonObject,
+  references: LegalAuditPayloadReferences,
+  evidence?: LegalAuditEvidence,
+): Record<string, AuditPayloadValue> {
+  const result: Record<string, AuditPayloadValue> = {};
+  const operation = value.operation;
+  if (typeof operation === "string" && LEGAL_AUDIT_OPERATIONS.has(operation)) {
+    result.operation = operation;
+  }
+  if (evidence) {
+    result.documentId = evidence.documentId;
+    result.revisionId = evidence.revisionId;
+    result.contentHash = evidence.contentHash;
+  } else if (value.documentId === references.documentId) {
+    result.documentId = references.documentId;
+  }
+  for (const field of LEGAL_AUDIT_REVISION_IDENTIFIER_FIELDS) {
+    if (field === "revisionId" && evidence) continue;
+    const identifier = value[field];
+    if (
+      typeof identifier === "string" &&
+      references.revisionIds.has(identifier)
+    ) {
+      result[field] = identifier;
+    }
+  }
+  for (const field of LEGAL_AUDIT_PUBLICATION_IDENTIFIER_FIELDS) {
+    const identifier = value[field];
+    if (
+      typeof identifier === "string" &&
+      references.publicationIds.has(identifier)
+    ) {
+      result[field] = identifier;
+    }
+  }
+  return result;
+}
+
+function legalAuditEvidence(
+  row: AuditEventRow,
+): LegalAuditEvidence | undefined {
+  if (
+    row.schemaVersion !== 3 ||
+    !row.legalDocumentId ||
+    !row.legalRevisionId ||
+    !row.legalContentHash ||
+    !/^[0-9a-f]{64}$/.test(row.legalContentHash)
+  ) {
+    return undefined;
+  }
+  return {
+    documentId: row.legalDocumentId,
+    revisionId: row.legalRevisionId,
+    contentHash: row.legalContentHash,
+  };
+}
+
+function collectLegalPayloadCandidates(
+  rows: readonly AuditEventRow[],
+): Readonly<{
+  revisionIds: Set<string>;
+  publicationIds: Set<string>;
+}> {
+  const revisionIds = new Set<string>();
+  const publicationIds = new Set<string>();
+  for (const row of rows) {
+    const payload = jsonObject(row.payload);
+    if (!payload) continue;
+    for (const field of LEGAL_AUDIT_REVISION_IDENTIFIER_FIELDS) {
+      const value = payload[field];
+      if (typeof value === "string" && UUID_PATTERN.test(value)) {
+        revisionIds.add(value);
+      }
+    }
+    for (const field of LEGAL_AUDIT_PUBLICATION_IDENTIFIER_FIELDS) {
+      const value = payload[field];
+      if (typeof value === "string" && UUID_PATTERN.test(value)) {
+        publicationIds.add(value);
+      }
+    }
+  }
+  return { revisionIds, publicationIds };
 }
 
 function jsonObject(
@@ -428,4 +724,34 @@ function canonicalUuid(value: string): string {
     throw new BadRequestException("Audit UUID is invalid");
   }
   return value.toLowerCase();
+}
+
+function normalizeLegalAuditFilters(filters?: LegalAuditFilters): AuditFilters {
+  if (!filters) return {};
+  if (
+    filters.eventType !== undefined &&
+    typeof filters.eventType !== "string"
+  ) {
+    throw new BadRequestException("eventType is invalid");
+  }
+  if (
+    filters.operatorIdentityId !== undefined &&
+    typeof filters.operatorIdentityId !== "string"
+  ) {
+    throw new BadRequestException("operatorIdentityId is invalid");
+  }
+  const eventType = filters.eventType?.trim();
+  const operatorIdentityId = filters.operatorIdentityId?.trim();
+  if (filters.eventType !== undefined && !eventType) {
+    throw new BadRequestException("eventType is invalid");
+  }
+  if (filters.operatorIdentityId !== undefined && !operatorIdentityId) {
+    throw new BadRequestException("operatorIdentityId is invalid");
+  }
+  return {
+    ...(eventType ? { eventType } : {}),
+    ...(operatorIdentityId
+      ? { operatorIdentityId: canonicalUuid(operatorIdentityId) }
+      : {}),
+  };
 }

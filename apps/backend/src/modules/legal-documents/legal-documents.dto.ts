@@ -1,0 +1,387 @@
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiSchema,
+  type ApiSchemaOptions,
+} from "@nestjs/swagger";
+
+const MILLISECOND_RFC3339_PATTERN =
+  "^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d{1,3})?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$";
+const REVISION_CODE_PATTERN = "^[A-Za-z0-9_.-]{1,100}$";
+const SHA256_PATTERN = "^[0-9a-f]{64}$";
+const REASON_CODE_PATTERN = "^[A-Z][A-Z0-9_]{0,99}$";
+const NON_BLANK_STRING_PATTERN = ".*\\S.*";
+const LEGAL_DOCUMENT_SECTION_SCHEMA: ApiSchemaOptions & {
+  additionalProperties: false;
+  minProperties: 2;
+} = {
+  additionalProperties: false,
+  minProperties: 2,
+};
+
+@ApiSchema(LEGAL_DOCUMENT_SECTION_SCHEMA)
+export class LegalDocumentSectionDto {
+  @ApiProperty({
+    type: String,
+    maxLength: 255,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  title!: string;
+
+  @ApiPropertyOptional({
+    type: "array",
+    minItems: 1,
+    items: { type: "string", pattern: NON_BLANK_STRING_PATTERN },
+  })
+  paragraphs?: string[];
+
+  @ApiPropertyOptional({
+    type: "array",
+    minItems: 1,
+    items: { type: "string", pattern: NON_BLANK_STRING_PATTERN },
+  })
+  items?: string[];
+
+  @ApiPropertyOptional({ type: String, pattern: NON_BLANK_STRING_PATTERN })
+  note?: string;
+}
+
+export class CreateLegalDraftDto {
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
+  expectedGeneration!: number;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 255,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  title!: string;
+
+  @ApiProperty({ type: String, pattern: NON_BLANK_STRING_PATTERN })
+  summary!: string;
+
+  @ApiProperty({ type: [LegalDocumentSectionDto], minItems: 1 })
+  sections!: LegalDocumentSectionDto[];
+
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
+  reasonCode!: string;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  reason!: string;
+}
+
+export class UpdateLegalDraftDto {
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
+  expectedEditVersion!: number;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 255,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  title!: string;
+
+  @ApiProperty({ type: String, pattern: NON_BLANK_STRING_PATTERN })
+  summary!: string;
+
+  @ApiProperty({ type: [LegalDocumentSectionDto], minItems: 1 })
+  sections!: LegalDocumentSectionDto[];
+
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
+  reasonCode!: string;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  reason!: string;
+}
+
+export class ApproveLegalRevisionDto {
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    description: "Expected draft edit version",
+  })
+  expectedEditVersion!: number;
+
+  @ApiProperty({
+    type: String,
+    minLength: 64,
+    maxLength: 64,
+    pattern: SHA256_PATTERN,
+    description: "Expected SHA-256 content hash",
+  })
+  expectedContentHash!: string;
+
+  @ApiProperty({ type: String, maxLength: 100, pattern: REVISION_CODE_PATTERN })
+  revisionCode!: string;
+
+  @ApiProperty({
+    type: String,
+    format: "date-time",
+    pattern: MILLISECOND_RFC3339_PATTERN,
+    description: "RFC 3339 instant with at most millisecond precision",
+  })
+  effectiveAt!: string;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 5000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  approvalEvidence!: string;
+
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
+  reasonCode!: string;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  reason!: string;
+}
+
+export class PublishLegalRevisionDto {
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
+  expectedGeneration!: number;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: "date-time",
+    pattern: MILLISECOND_RFC3339_PATTERN,
+    description: "RFC 3339 instant with at most millisecond precision",
+  })
+  startsAt?: string;
+
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
+  reasonCode!: string;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  reason!: string;
+}
+
+export class CancelLegalPublicationDto {
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
+  expectedGeneration!: number;
+
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
+  reasonCode!: string;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  reason!: string;
+}
+
+export class ArchiveLegalPublicationDto {
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
+  expectedGeneration!: number;
+
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
+  reasonCode!: string;
+
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
+  reason!: string;
+}
+
+export class LegalPublicationSummaryDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  id!: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  revisionId!: string;
+
+  @ApiPropertyOptional({ type: String })
+  revisionCode?: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  startsAt!: string;
+
+  @ApiPropertyOptional({ type: String, format: "date-time" })
+  endsAt?: string;
+
+  @ApiPropertyOptional({ type: String, format: "date-time" })
+  cancelledAt?: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  publishedBy!: string;
+
+  @ApiProperty({ type: String })
+  reason!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  createdAt!: string;
+}
+
+export class LegalRevisionSummaryDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  id!: string;
+
+  @ApiProperty({ type: Number })
+  sequence!: number;
+
+  @ApiProperty({ type: Number })
+  editVersion!: number;
+
+  @ApiProperty({ type: String, enum: ["DRAFT", "APPROVED"] })
+  status!: "DRAFT" | "APPROVED";
+
+  @ApiProperty({ type: Number })
+  contentVersion!: number;
+
+  @ApiProperty({ type: String })
+  title!: string;
+
+  @ApiProperty({ type: String })
+  summary!: string;
+
+  @ApiProperty({ type: String })
+  contentHash!: string;
+
+  @ApiPropertyOptional({ type: String })
+  revisionCode?: string;
+
+  @ApiPropertyOptional({ type: String, format: "date-time" })
+  effectiveAt?: string;
+
+  @ApiPropertyOptional({ type: String })
+  approvalEvidence?: string;
+
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  approvedBy?: string;
+
+  @ApiPropertyOptional({ type: String, format: "date-time" })
+  approvedAt?: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  createdAt!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  updatedAt!: string;
+}
+
+export class LegalRevisionDetailDto extends LegalRevisionSummaryDto {
+  @ApiProperty({ type: [LegalDocumentSectionDto] })
+  sections!: LegalDocumentSectionDto[];
+}
+
+export class LegalDocumentSummaryDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  id!: string;
+
+  @ApiProperty({ type: String })
+  key!: string;
+
+  @ApiProperty({ type: String })
+  documentId!: string;
+
+  @ApiProperty({ type: Number })
+  generation!: number;
+
+  @ApiPropertyOptional({ type: LegalPublicationSummaryDto })
+  activePublication?: LegalPublicationSummaryDto;
+
+  @ApiPropertyOptional({ type: LegalPublicationSummaryDto })
+  pendingPublication?: LegalPublicationSummaryDto;
+
+  @ApiProperty({ type: Number })
+  draftRevisionsCount!: number;
+
+  @ApiPropertyOptional({ type: LegalRevisionSummaryDto })
+  latestDraft?: LegalRevisionSummaryDto;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  createdAt!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  updatedAt!: string;
+}
+
+export class LegalDocumentDetailDto extends LegalDocumentSummaryDto {
+  @ApiProperty({ type: [LegalRevisionDetailDto] })
+  revisions!: LegalRevisionDetailDto[];
+
+  @ApiProperty({ type: [LegalPublicationSummaryDto] })
+  publications!: LegalPublicationSummaryDto[];
+
+  @ApiPropertyOptional({ type: String })
+  nextCursor?: string;
+
+  @ApiPropertyOptional({ type: String })
+  publicationsNextCursor?: string;
+}
+
+export class LegalPublicationPageDto {
+  @ApiProperty({ type: [LegalPublicationSummaryDto] })
+  items!: LegalPublicationSummaryDto[];
+
+  @ApiPropertyOptional({ type: String })
+  nextCursor?: string;
+}
+
+export class PublicLegalRevisionDto {
+  @ApiProperty({ type: String })
+  documentId!: string;
+
+  @ApiProperty({ type: String })
+  key!: string;
+
+  @ApiProperty({ type: String })
+  revisionCode!: string;
+
+  @ApiProperty({ type: Number })
+  contentVersion!: number;
+
+  @ApiProperty({ type: String })
+  contentHash!: string;
+
+  @ApiProperty({ type: String })
+  title!: string;
+
+  @ApiProperty({ type: String })
+  summary!: string;
+
+  @ApiProperty({ type: [LegalDocumentSectionDto] })
+  sections!: LegalDocumentSectionDto[];
+
+  @ApiProperty({ type: String, format: "date-time" })
+  effectiveAt!: string;
+}

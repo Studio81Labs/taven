@@ -23,6 +23,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
+import { DATABASE_CLOCK_UNAVAILABLE_MESSAGE } from "../../prisma/datastore-availability";
 import {
   readAdminAccessConfig,
   type AdminAccessConfig,
@@ -30,7 +31,10 @@ import {
 } from "./admin-access.config";
 import { GITHUB_AUTH, type GithubAuth } from "./github-auth.port";
 import type { AdminRequest, OperatorContext } from "./operator-context";
-import { permissionsForRole } from "./operator-permissions";
+import {
+  OPERATOR_PERMISSIONS,
+  permissionsForRole,
+} from "./operator-permissions";
 
 const SESSION_IDLE_MILLISECONDS = 30 * 60 * 1_000;
 const SESSION_ABSOLUTE_MILLISECONDS = 8 * 60 * 60 * 1_000;
@@ -285,6 +289,12 @@ export class OperatorAuthService {
   }
 
   async authenticateRequest(request: AdminRequest): Promise<OperatorContext> {
+    return await this.authenticateRequestFromStore(request);
+  }
+
+  private async authenticateRequestFromStore(
+    request: AdminRequest,
+  ): Promise<OperatorContext> {
     const token = readCookie(
       request,
       sessionCookieName(this.config.environment),
@@ -317,7 +327,11 @@ export class OperatorAuthService {
       throw new UnauthorizedException("Operator authentication is required");
     }
     const context = contextForSession(session);
-    if (context.nodeIds.length !== 1) {
+    if (context.role === "ADMIN") {
+      if (context.nodeIds.length > 1) {
+        throw new ForbiddenException("Operator node scope is unavailable");
+      }
+    } else if (context.nodeIds.length !== 1) {
       throw new ForbiddenException("Operator node scope is unavailable");
     }
     if (
@@ -507,7 +521,11 @@ export class OperatorAuthService {
       .filter((grant) => grant.node.active)
       .map((grant) => grant.nodeId)
       .sort();
-    if (nodeIds.length !== 1) {
+    if (operator.role === "ADMIN") {
+      if (nodeIds.length > 1) {
+        throw new ForbiddenException("Operator node scope is unavailable");
+      }
+    } else if (nodeIds.length !== 1) {
       throw new ForbiddenException("Operator node scope is unavailable");
     }
     const token = randomToken();
@@ -525,10 +543,18 @@ export class OperatorAuthService {
         ),
       },
     });
+    const permissions =
+      operator.role === "ADMIN" && nodeIds.length === 0
+        ? [
+            OPERATOR_PERMISSIONS.LEGAL_READ,
+            OPERATOR_PERMISSIONS.LEGAL_WRITE,
+            OPERATOR_PERMISSIONS.AUDIT_READ,
+          ]
+        : permissionsForRole(operator.role);
     const context: OperatorContext = {
       operatorId: operator.id,
       role: operator.role,
-      permissions: permissionsForRole(operator.role),
+      permissions,
       nodeIds,
       authenticationMethod,
       sessionId: session.id,
@@ -750,7 +776,7 @@ export class OperatorAuthService {
     `;
     const now = rows[0]?.now;
     if (!(now instanceof Date)) {
-      throw new Error("Database clock query did not return a timestamp");
+      throw new Error(DATABASE_CLOCK_UNAVAILABLE_MESSAGE);
     }
     return now;
   }
@@ -765,14 +791,23 @@ function contextForSession(session: {
     nodeGrants: Array<{ nodeId: string; node: { active: boolean } }>;
   };
 }): OperatorContext {
+  const nodeIds = session.operator.nodeGrants
+    .filter((grant) => grant.node.active)
+    .map((grant) => grant.nodeId)
+    .sort();
+  const permissions =
+    session.operator.role === "ADMIN" && nodeIds.length === 0
+      ? [
+          OPERATOR_PERMISSIONS.LEGAL_READ,
+          OPERATOR_PERMISSIONS.LEGAL_WRITE,
+          OPERATOR_PERMISSIONS.AUDIT_READ,
+        ]
+      : permissionsForRole(session.operator.role);
   return {
     operatorId: session.operator.id,
     role: session.operator.role,
-    permissions: permissionsForRole(session.operator.role),
-    nodeIds: session.operator.nodeGrants
-      .filter((grant) => grant.node.active)
-      .map((grant) => grant.nodeId)
-      .sort(),
+    permissions,
+    nodeIds,
     authenticationMethod: session.authenticationMethod,
     sessionId: session.id,
   };

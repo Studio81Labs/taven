@@ -1,13 +1,23 @@
-import { CanActivate, ExecutionContext, Injectable } from "@nestjs/common";
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
+import { withDatastoreAvailability } from "../../prisma/datastore-availability";
 import { OperatorAuthService } from "./operator-auth.service";
 import type { AdminRequest } from "./operator-context";
 import { OPERATOR_PERMISSIONS_KEY } from "./require-operator-permissions.decorator";
 import type { OperatorPermission } from "./operator-permissions";
+import { ALLOW_NODE_FREE_ADMIN_KEY } from "./allow-node-free-admin.decorator";
+import { TRANSLATE_DATASTORE_AVAILABILITY_KEY } from "./translate-datastore-availability.decorator";
 
 /**
  * Authenticates the operator's browser session and applies route permissions.
  * Unsafe methods additionally require the session-bound CSRF header.
+ * By default requires exactly 1 node scope; node-free ADMIN is allowed only
+ * when decorated with @AllowNodeFreeAdmin().
  */
 @Injectable()
 export class OperatorAccessGuard implements CanActivate {
@@ -24,7 +34,30 @@ export class OperatorAccessGuard implements CanActivate {
       .switchToHttp()
       .getResponse<{ setHeader(name: string, value: string): void }>();
     response.setHeader("Cache-Control", "no-store");
-    const operator = await this.auth.authenticateRequest(request);
+    const translateDatastoreAvailability =
+      this.reflector.getAllAndOverride<boolean>(
+        TRANSLATE_DATASTORE_AVAILABILITY_KEY,
+        [context.getHandler(), context.getClass()],
+      ) ?? false;
+    const operator = translateDatastoreAvailability
+      ? await withDatastoreAvailability(
+          () => this.auth.authenticateRequest(request),
+          "Legal document datastore is unavailable",
+        )
+      : await this.auth.authenticateRequest(request);
+
+    const allowNodeFreeAdmin =
+      this.reflector.getAllAndOverride<boolean>(ALLOW_NODE_FREE_ADMIN_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? false;
+
+    if (!allowNodeFreeAdmin || operator.role !== "ADMIN") {
+      if (operator.nodeIds.length !== 1) {
+        throw new ForbiddenException("Operator node scope is unavailable");
+      }
+    }
+
     if (!isSafeMethod(request.method)) {
       await this.auth.assertCsrf(request);
     }

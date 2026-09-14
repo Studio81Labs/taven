@@ -9,6 +9,8 @@ describe("orderLockTargets", () => {
       { kind: "job", id: "job-b", nodeId: "node-1" },
       { kind: "order_phase", id: "phase-1" },
       { kind: "order", id: "order-1" },
+      { kind: "legal_document", id: "doc-1" },
+      { kind: "idempotency_record", id: "idemp-1" },
       { kind: "job", id: "job-a", nodeId: "node-1" },
       { kind: "shipment", id: "shipment-1" },
       { kind: "shipment_plan", id: "shipment-plan-1" },
@@ -23,6 +25,8 @@ describe("orderLockTargets", () => {
     expect(
       orderLockTargets(input).map(({ kind, id }) => `${kind}:${id}`),
     ).toEqual([
+      "idempotency_record:idemp-1",
+      "legal_document:doc-1",
       "order:order-1",
       "order_phase:phase-1",
       "shipment_plan:shipment-plan-1",
@@ -44,7 +48,7 @@ describe("orderLockTargets", () => {
     );
   });
 
-  it.each(["payment", "shipment"] as const)(
+  it.each(["legal_document", "payment", "shipment"] as const)(
     "rejects node scope on globally scoped %s targets",
     (kind) => {
       expect(() =>

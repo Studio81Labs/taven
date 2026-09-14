@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
 import { AuditService } from "./audit.service";
 import type { OperatorContext } from "../admin-access/operator-context";
@@ -6,6 +7,7 @@ import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const orderId = "22222222-2222-4222-8222-222222222222";
 const eventId = "33333333-3333-4333-8333-333333333333";
+const legalDocumentId = "55555555-5555-4555-8555-555555555555";
 const quoteId = "66666666-6666-4666-8666-666666666666";
 const refundTransactionId = "77777777-7777-4777-8777-777777777777";
 
@@ -19,6 +21,47 @@ const operator: OperatorContext = {
 };
 
 describe("AuditService legacy projection", () => {
+  it("maps unavailable legal audit reads to 503", async () => {
+    const service = new AuditService({
+      auditEvent: {
+        findMany: vi.fn().mockRejectedValue({ code: "P1001" }),
+      },
+    } as never);
+    const legalReader: OperatorContext = {
+      ...operator,
+      permissions: [
+        OPERATOR_PERMISSIONS.AUDIT_READ,
+        OPERATOR_PERMISSIONS.LEGAL_READ,
+      ],
+      nodeIds: [],
+    };
+
+    const error = await service
+      .listLegalDocumentAuditEvents(legalReader, legalDocumentId)
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+  });
+
+  it("rejects blank legal audit filters instead of broadening the read", async () => {
+    const service = new AuditService({} as never);
+    const legalReader: OperatorContext = {
+      ...operator,
+      permissions: [
+        OPERATOR_PERMISSIONS.AUDIT_READ,
+        OPERATOR_PERMISSIONS.LEGAL_READ,
+      ],
+      nodeIds: [],
+    };
+
+    await expect(
+      service.listLegalDocumentAuditEvents(legalReader, legalDocumentId, {
+        operatorIdentityId: " ",
+      }),
+    ).rejects.toThrow("operatorIdentityId is invalid");
+  });
+
   it("shows a legacy order event only after its parent scope is proven", async () => {
     const findMany = vi.fn().mockResolvedValue([
       {
@@ -122,6 +165,153 @@ describe("AuditService legacy projection", () => {
       status: "ISSUED",
       refundIds: [refundTransactionId],
     });
+  });
+
+  it("does not project legal-only fields from operational audit payloads", async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: eventId,
+        eventType: "quote_request.updated",
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        operatorIdentityId: operator.operatorId,
+        nodeId,
+        schemaVersion: 2,
+        orderId: null,
+        paymentId: null,
+        refundTransactionId: null,
+        quoteRequestId: orderId,
+        quoteId: null,
+        correlationId: null,
+        reasonCode: null,
+        reason: null,
+        payload: {
+          operation: "quote_update",
+          contentHash: "sensitive-legacy-hash",
+          revisionId: "sensitive-legacy-revision",
+        },
+      },
+    ]);
+    const service = new AuditService({ auditEvent: { findMany } } as never);
+
+    const page = await service.list(operator, {});
+
+    expect(page.items[0]?.payload).toEqual({ operation: "quote_update" });
+  });
+
+  it("does not project operational payload fields from legal audit events", async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: eventId,
+        eventType: "legal_document.revision_approved",
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        operatorIdentityId: operator.operatorId,
+        legalDocumentId,
+        legalRevisionId: "66666666-6666-4666-8666-666666666666",
+        legalContentHash: "a".repeat(64),
+        nodeId: null,
+        schemaVersion: 3,
+        orderId: null,
+        paymentId: null,
+        refundTransactionId: null,
+        quoteRequestId: null,
+        quoteId: null,
+        correlationId: null,
+        reasonCode: "LEGAL_APPROVED",
+        reason: "Approved revision",
+        payload: {
+          operation: "revision_approved",
+          documentId: legalDocumentId,
+          revisionId: "66666666-6666-4666-8666-666666666666",
+          previousRevisionId: refundTransactionId,
+          publicationId: refundTransactionId,
+          contentHash: "a".repeat(64),
+          previousPublicationId: "customer@example.com",
+          photoAssetId: "operational-photo",
+          response: {
+            status: "ISSUED",
+            targets: { shipmentId: "operational-shipment" },
+          },
+        },
+      },
+    ]);
+    const revisionFindMany = vi
+      .fn()
+      .mockResolvedValue([{ id: "66666666-6666-4666-8666-666666666666" }]);
+    const publicationFindMany = vi.fn().mockResolvedValue([]);
+    const service = new AuditService({
+      auditEvent: { findMany },
+      legalDocumentRevision: { findMany: revisionFindMany },
+      legalDocumentPublication: { findMany: publicationFindMany },
+    } as never);
+    const legalOperator: OperatorContext = {
+      ...operator,
+      nodeIds: [],
+      permissions: [
+        OPERATOR_PERMISSIONS.AUDIT_READ,
+        OPERATOR_PERMISSIONS.LEGAL_READ,
+      ],
+    };
+
+    const page = await service.listLegalDocumentAuditEvents(
+      legalOperator,
+      legalDocumentId,
+    );
+
+    expect(page.items[0]?.payload).toEqual({
+      operation: "revision_approved",
+      documentId: legalDocumentId,
+      revisionId: "66666666-6666-4666-8666-666666666666",
+      contentHash: "a".repeat(64),
+    });
+    expect(publicationFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          revision: { documentId: legalDocumentId },
+        }),
+      }),
+    );
+  });
+
+  it("does not expose malformed legal audit operation values", async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: eventId,
+        eventType: "legal_document.revision_approved",
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        operatorIdentityId: operator.operatorId,
+        legalDocumentId,
+        nodeId: null,
+        schemaVersion: 3,
+        orderId: null,
+        paymentId: null,
+        refundTransactionId: null,
+        quoteRequestId: null,
+        quoteId: null,
+        correlationId: null,
+        reasonCode: "LEGAL_APPROVED",
+        reason: "Approved revision",
+        payload: {
+          operation: "approval evidence",
+          documentId: legalDocumentId,
+        },
+      },
+    ]);
+    const service = new AuditService({ auditEvent: { findMany } } as never);
+    const legalOperator: OperatorContext = {
+      ...operator,
+      nodeIds: [],
+      permissions: [
+        OPERATOR_PERMISSIONS.AUDIT_READ,
+        OPERATOR_PERMISSIONS.LEGAL_READ,
+      ],
+    };
+
+    const page = await service.listLegalDocumentAuditEvents(
+      legalOperator,
+      legalDocumentId,
+    );
+
+    expect(page.items[0]?.payload).toEqual({ documentId: legalDocumentId });
   });
 
   it("rejects malformed operator reason pairs before writing an audit event", async () => {

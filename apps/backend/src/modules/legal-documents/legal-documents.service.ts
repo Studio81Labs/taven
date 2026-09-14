@@ -1,0 +1,1826 @@
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { IdempotencyStatus, LegalRevisionStatus, Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { PrismaService } from "../../prisma/prisma.service";
+import {
+  DATABASE_CLOCK_UNAVAILABLE_MESSAGE,
+  withDatastoreAvailability,
+} from "../../prisma/datastore-availability";
+import type { OperatorContext } from "../admin-access/operator-context";
+import { requireOperatorPermission } from "../admin-access/operator-command";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { AuditService } from "../audit/audit.service";
+import {
+  canonicalJson,
+  type CanonicalJson,
+} from "../resources/resource-identity";
+import type {
+  ApproveLegalRevisionDto,
+  ArchiveLegalPublicationDto,
+  CancelLegalPublicationDto,
+  CreateLegalDraftDto,
+  LegalDocumentDetailDto,
+  LegalDocumentSectionDto,
+  LegalDocumentSummaryDto,
+  LegalPublicationPageDto,
+  LegalPublicationSummaryDto,
+  LegalRevisionDetailDto,
+  LegalRevisionSummaryDto,
+  PublicLegalRevisionDto,
+  PublishLegalRevisionDto,
+  UpdateLegalDraftDto,
+} from "./legal-documents.dto";
+
+type Transaction = Prisma.TransactionClient;
+
+export const MAX_LEGAL_PAYLOAD_BYTES = 256 * 1024;
+export const REVISION_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
+const MIN_LEGAL_TIMESTAMP_YEAR = 1;
+const MAX_LEGAL_TIMESTAMP_YEAR = 9999;
+const PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT =
+  "legal_document_publications_cancellation_boundary_check";
+const PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT =
+  "legal_document_publications_archive_boundary_check";
+const PUBLICATION_DOCUMENT_LOCK_CONFLICT =
+  "legal_document_publications_document_lock_conflict";
+const RFC3339_DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
+
+function requireNoNul(value: string, fieldName: string): void {
+  if (value.includes("\u0000")) {
+    throw new BadRequestException(
+      `${fieldName} must not contain NUL characters`,
+    );
+  }
+}
+
+function requireString(
+  val: unknown,
+  fieldName: string,
+  options?: { minLength?: number; maxLength?: number; pattern?: RegExp },
+): string {
+  if (typeof val !== "string") {
+    throw new BadRequestException(`${fieldName} must be a string`);
+  }
+  if (hasUnpairedSurrogate(val)) {
+    throw new BadRequestException(
+      `${fieldName} contains an invalid Unicode scalar`,
+    );
+  }
+  requireNoNul(val, fieldName);
+  const trimmed = val.trim();
+  const minLength = options?.minLength ?? 1;
+  if (codePointLength(trimmed) < minLength) {
+    throw new BadRequestException(`${fieldName} cannot be empty`);
+  }
+  if (
+    options?.maxLength !== undefined &&
+    codePointLength(trimmed) > options.maxLength
+  ) {
+    throw new BadRequestException(
+      `${fieldName} exceeds maximum length of ${options.maxLength}`,
+    );
+  }
+  if (options?.pattern && !options.pattern.test(trimmed)) {
+    throw new BadRequestException(`${fieldName} format is invalid`);
+  }
+  return trimmed;
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!Number.isFinite(next) || next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function isPublicationCancellationBoundaryError(error: unknown): boolean {
+  return isPublicationBoundaryError(
+    error,
+    PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT,
+  );
+}
+
+function isPublicationArchiveBoundaryError(error: unknown): boolean {
+  return isPublicationBoundaryError(
+    error,
+    PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT,
+  );
+}
+
+export function isPublicationDocumentLockConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as {
+    code?: unknown;
+    message?: unknown;
+    meta?: {
+      code?: unknown;
+      constraint?: unknown;
+      driverAdapterError?: {
+        message?: unknown;
+        cause?: {
+          code?: unknown;
+          originalCode?: unknown;
+          message?: unknown;
+          originalMessage?: unknown;
+        };
+      };
+    };
+  };
+  const adapterError = record.meta?.driverAdapterError;
+  const adapterCause = adapterError?.cause;
+  const codes = [
+    record.code,
+    record.meta?.code,
+    adapterCause?.code,
+    adapterCause?.originalCode,
+  ];
+  const identifiers = [
+    record.meta?.constraint,
+    record.message,
+    adapterError?.message,
+    adapterCause?.message,
+    adapterCause?.originalMessage,
+  ];
+  return (
+    codes.includes("55P03") &&
+    identifiers.some(
+      (identifier) =>
+        identifier === PUBLICATION_DOCUMENT_LOCK_CONFLICT ||
+        (typeof identifier === "string" &&
+          identifier.includes(PUBLICATION_DOCUMENT_LOCK_CONFLICT)),
+    )
+  );
+}
+
+function isPublicationBoundaryError(
+  error: unknown,
+  constraintName: string,
+): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as {
+    message?: unknown;
+    meta?: { constraint?: unknown };
+  };
+  const constraint = record.meta?.constraint;
+  return (
+    constraint === constraintName ||
+    (typeof record.message === "string" &&
+      record.message.includes(constraintName))
+  );
+}
+
+function requireSafeInteger(val: unknown, fieldName: string, min = 1): number {
+  if (typeof val !== "number" || !Number.isSafeInteger(val) || val < min) {
+    throw new BadRequestException(
+      `${fieldName} must be a valid integer >= ${min}`,
+    );
+  }
+  return val;
+}
+
+function parseLegalRfc3339Instant(value: string, fieldName: string): Date {
+  const match = RFC3339_DATE_TIME_PATTERN.exec(value);
+  if (!match) {
+    throw new BadRequestException(
+      `${fieldName} must be a valid RFC 3339 date-time`,
+    );
+  }
+  const result = new Date(value);
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+  if (
+    Number.isNaN(result.getTime()) ||
+    calendar.getUTCFullYear() !== Number(match[1]) ||
+    calendar.getUTCMonth() !== Number(match[2]) - 1 ||
+    calendar.getUTCDate() !== Number(match[3]) ||
+    result.getUTCFullYear() < MIN_LEGAL_TIMESTAMP_YEAR ||
+    result.getUTCFullYear() > MAX_LEGAL_TIMESTAMP_YEAR
+  ) {
+    throw new BadRequestException(
+      `${fieldName} must be a valid RFC 3339 date-time`,
+    );
+  }
+  return result;
+}
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function requireUuid(val: unknown, fieldName: string): string {
+  const str = requireString(val, fieldName);
+  if (!UUID_REGEX.test(str)) {
+    throw new BadRequestException(`${fieldName} must be a valid UUID`);
+  }
+  return str.toLowerCase();
+}
+
+interface PublicationCursorPayload {
+  startsAt: string;
+  id: string;
+}
+
+function parsePublicationCursor(cursor: string): {
+  startsAt: Date;
+  id: string;
+} {
+  try {
+    const raw = Buffer.from(cursor, "base64url").toString("utf8");
+    const parsed = JSON.parse(raw) as PublicationCursorPayload;
+    if (
+      !parsed ||
+      typeof parsed.startsAt !== "string" ||
+      typeof parsed.id !== "string" ||
+      !UUID_REGEX.test(parsed.id)
+    ) {
+      throw new Error();
+    }
+    const d = new Date(parsed.startsAt);
+    if (
+      Number.isNaN(d.getTime()) ||
+      d.getUTCFullYear() < MIN_LEGAL_TIMESTAMP_YEAR ||
+      d.getUTCFullYear() > MAX_LEGAL_TIMESTAMP_YEAR
+    ) {
+      throw new Error();
+    }
+    return { startsAt: d, id: parsed.id };
+  } catch {
+    throw new BadRequestException("Publication cursor is invalid");
+  }
+}
+
+function encodePublicationCursor(item: { startsAt: Date; id: string }): string {
+  return Buffer.from(
+    JSON.stringify({
+      startsAt: item.startsAt.toISOString(),
+      id: item.id,
+    }),
+  ).toString("base64url");
+}
+
+function requireIdempotencyKey(value?: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new BadRequestException("Idempotency-Key header is required");
+  }
+  requireNoNul(value, "Idempotency-Key");
+  const trimmed = value.trim();
+  if (trimmed.length < 8 || trimmed.length > 255) {
+    throw new BadRequestException(
+      "Idempotency-Key must contain between 8 and 255 characters",
+    );
+  }
+  return trimmed;
+}
+
+function canonicalInput(value: unknown): CanonicalJson {
+  if (
+    value === null ||
+    typeof value === "boolean" ||
+    typeof value === "string"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new BadRequestException("Idempotency input must be finite JSON");
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(canonicalInput);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, v]) => v !== undefined)
+        .map(([key, entry]) => [key, canonicalInput(entry)]),
+    );
+  }
+  throw new BadRequestException("Idempotency input must be JSON");
+}
+
+function fingerprintFor(input: unknown): string {
+  return createHash("sha256")
+    .update(canonicalJson(canonicalInput(input)))
+    .digest("hex");
+}
+
+@Injectable()
+export class LegalDocumentsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
+
+  private async lockDocumentByKey(
+    tx: Prisma.TransactionClient,
+    key: string,
+  ): Promise<{
+    id: string;
+    key: string;
+    documentId: string;
+    generation: number;
+  }> {
+    requireNoNul(key, "Legal document key");
+    const rows = await tx.$queryRaw<
+      Array<{ id: string; key: string; documentId: string; generation: number }>
+    >`
+      SELECT id, key, "document_id" AS "documentId", generation
+      FROM "legal_documents"
+      WHERE "key" = ${key}
+      FOR UPDATE
+    `;
+    const doc = rows[0];
+    if (!doc) {
+      throw new NotFoundException(`Legal document '${key}' was not found`);
+    }
+    return doc;
+  }
+
+  private async executeWithIdempotency<T>(
+    namespace: string,
+    idempotencyKeyInput: string,
+    input: unknown,
+    execute: (tx: Prisma.TransactionClient, commandKey: string) => Promise<T>,
+  ): Promise<T> {
+    const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
+    const fingerprint = fingerprintFor(input);
+
+    return await withDatastoreAvailability(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${namespace + ":" + idempotencyKey}, 0))::text`;
+
+          const now = await databaseNow(tx);
+          const existing = await tx.idempotencyRecord.findFirst({
+            where: { namespace, idempotencyKey },
+            orderBy: { generation: "desc" },
+          });
+
+          if (existing && existing.expiresAt > now) {
+            if (existing.requestFingerprint !== fingerprint) {
+              throw new ConflictException(
+                "Idempotency key was already used with different input",
+              );
+            }
+            if (
+              existing.status !== IdempotencyStatus.COMPLETED ||
+              !existing.responseBody
+            ) {
+              throw new ConflictException("Idempotent command is incomplete");
+            }
+            return existing.responseBody as unknown as T;
+          }
+
+          const record = await tx.idempotencyRecord.create({
+            data: {
+              namespace,
+              idempotencyKey,
+              generation: (existing?.generation ?? 0) + 1,
+              requestFingerprint: fingerprint,
+              expiresAt: new Date(now.getTime() + 30 * 86_400_000),
+            },
+          });
+
+          const result = await execute(tx, idempotencyKey);
+
+          await tx.idempotencyRecord.update({
+            where: { id: record.id },
+            data: {
+              status: IdempotencyStatus.COMPLETED,
+              responseStatusCode: 200,
+              responseBody: result as unknown as Prisma.InputJsonObject,
+            },
+          });
+
+          return result;
+        }),
+      "Legal document datastore is unavailable",
+    );
+  }
+
+  async listDocuments(
+    operator: OperatorContext,
+  ): Promise<LegalDocumentSummaryDto[]> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
+    return await withDatastoreAvailability(
+      () =>
+        this.prisma.$transaction(
+          async (tx) => {
+            const now = await databaseNow(tx);
+            const docs = await tx.legalDocument.findMany({
+              orderBy: { key: "asc" },
+              include: {
+                publications: {
+                  where: {
+                    cancelledAt: null,
+                    OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+                  },
+                  orderBy: { startsAt: "desc" },
+                  include: {
+                    revision: {
+                      select: {
+                        id: true,
+                        documentId: true,
+                        sequence: true,
+                        editVersion: true,
+                        status: true,
+                        contentVersion: true,
+                        title: true,
+                        summary: true,
+                        contentHash: true,
+                        revisionCode: true,
+                        effectiveAt: true,
+                        approvalEvidence: true,
+                        approvedBy: true,
+                        approvedAt: true,
+                        createdAt: true,
+                        updatedAt: true,
+                      },
+                    },
+                  },
+                },
+              },
+            });
+
+            const docIds = docs.map((d) => d.id);
+            const [draftCounts, latestDrafts] = await Promise.all([
+              tx.legalDocumentRevision.groupBy({
+                by: ["documentId"],
+                where: {
+                  documentId: { in: docIds },
+                  status: LegalRevisionStatus.DRAFT,
+                },
+                _count: { _all: true },
+              }),
+              tx.legalDocumentRevision.findMany({
+                where: {
+                  documentId: { in: docIds },
+                  status: LegalRevisionStatus.DRAFT,
+                },
+                distinct: ["documentId"],
+                orderBy: [{ sequence: "desc" }],
+                select: {
+                  id: true,
+                  documentId: true,
+                  sequence: true,
+                  editVersion: true,
+                  status: true,
+                  contentVersion: true,
+                  title: true,
+                  summary: true,
+                  contentHash: true,
+                  revisionCode: true,
+                  effectiveAt: true,
+                  approvalEvidence: true,
+                  approvedBy: true,
+                  approvedAt: true,
+                  createdAt: true,
+                  updatedAt: true,
+                },
+              }),
+            ]);
+
+            const draftCountMap = new Map<string, number>(
+              draftCounts.map((c) => [c.documentId, c._count._all]),
+            );
+            const latestDraftMap = new Map<string, (typeof latestDrafts)[0]>(
+              latestDrafts.map((d) => [d.documentId, d]),
+            );
+
+            return docs.map((doc) => {
+              const activePub = doc.publications.find(
+                (p) =>
+                  p.startsAt <= now && (p.endsAt === null || p.endsAt > now),
+              );
+              const pendingPub = doc.publications.find((p) => p.startsAt > now);
+              const draftRevisionsCount = draftCountMap.get(doc.id) ?? 0;
+              const latestDraft = latestDraftMap.get(doc.id);
+
+              return {
+                id: doc.id,
+                key: doc.key,
+                documentId: doc.documentId,
+                generation: doc.generation,
+                ...(activePub
+                  ? { activePublication: toPublicationSummary(activePub) }
+                  : {}),
+                ...(pendingPub
+                  ? { pendingPublication: toPublicationSummary(pendingPub) }
+                  : {}),
+                draftRevisionsCount,
+                ...(latestDraft
+                  ? { latestDraft: toRevisionSummary(latestDraft) }
+                  : {}),
+                createdAt: doc.createdAt.toISOString(),
+                updatedAt: doc.updatedAt.toISOString(),
+              };
+            });
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+        ),
+      "Legal document datastore is unavailable",
+    );
+  }
+
+  async getDocumentByKey(
+    operator: OperatorContext,
+    key: string,
+    cursor?: string,
+    limit = 25,
+    publicationCursor?: string,
+    publicationLimit = 25,
+  ): Promise<LegalDocumentDetailDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
+    return await withDatastoreAvailability(
+      () =>
+        this.prisma.$transaction(
+          async (tx) => {
+            const doc = await tx.legalDocument.findUnique({
+              where: { key },
+            });
+
+            if (!doc) {
+              throw new NotFoundException(
+                `Legal document '${key}' was not found`,
+              );
+            }
+
+            if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+              throw new BadRequestException("Revision limit is invalid");
+            }
+
+            if (
+              !Number.isSafeInteger(publicationLimit) ||
+              publicationLimit < 1 ||
+              publicationLimit > 100
+            ) {
+              throw new BadRequestException("Publication limit is invalid");
+            }
+
+            let cursorSequence: number | undefined;
+            if (cursor !== undefined) {
+              if (!/^[1-9]\d*$/.test(cursor)) {
+                throw new BadRequestException("Revision cursor is invalid");
+              }
+              cursorSequence = Number(cursor);
+              if (!Number.isSafeInteger(cursorSequence) || cursorSequence < 1) {
+                throw new BadRequestException("Revision cursor is invalid");
+              }
+            }
+
+            const pubKeyset =
+              publicationCursor !== undefined
+                ? parsePublicationCursor(publicationCursor)
+                : undefined;
+
+            const [revisions, pubRows, now] = await Promise.all([
+              tx.legalDocumentRevision.findMany({
+                where: {
+                  documentId: doc.id,
+                  ...(cursorSequence !== undefined
+                    ? { sequence: { lt: cursorSequence } }
+                    : {}),
+                },
+                orderBy: { sequence: "desc" },
+                take: limit + 1,
+              }),
+              tx.legalDocumentPublication.findMany({
+                where: {
+                  documentId: doc.id,
+                  ...(pubKeyset
+                    ? {
+                        OR: [
+                          { startsAt: { lt: pubKeyset.startsAt } },
+                          {
+                            startsAt: pubKeyset.startsAt,
+                            id: { lt: pubKeyset.id },
+                          },
+                        ],
+                      }
+                    : {}),
+                },
+                orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+                take: publicationLimit + 1,
+                include: { revision: true },
+              }),
+              databaseNow(tx),
+            ]);
+
+            const page = revisions.slice(0, limit);
+            const last = page.at(-1);
+            const nextCursor =
+              revisions.length > limit && last
+                ? String(last.sequence)
+                : undefined;
+
+            const pubPage = pubRows.slice(0, publicationLimit);
+            const lastPub = pubPage.at(-1);
+            const publicationsNextCursor =
+              pubRows.length > publicationLimit && lastPub
+                ? encodePublicationCursor(lastPub)
+                : undefined;
+
+            const [activePub, pendingPub, draftCount, latestDraft] =
+              await Promise.all([
+                tx.legalDocumentPublication.findFirst({
+                  where: {
+                    documentId: doc.id,
+                    cancelledAt: null,
+                    startsAt: { lte: now },
+                    OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+                  },
+                  orderBy: { startsAt: "desc" },
+                  include: { revision: true },
+                }),
+                tx.legalDocumentPublication.findFirst({
+                  where: {
+                    documentId: doc.id,
+                    cancelledAt: null,
+                    startsAt: { gt: now },
+                  },
+                  orderBy: { startsAt: "asc" },
+                  include: { revision: true },
+                }),
+                tx.legalDocumentRevision.count({
+                  where: {
+                    documentId: doc.id,
+                    status: LegalRevisionStatus.DRAFT,
+                  },
+                }),
+                tx.legalDocumentRevision.findFirst({
+                  where: {
+                    documentId: doc.id,
+                    status: LegalRevisionStatus.DRAFT,
+                  },
+                  orderBy: { sequence: "desc" },
+                }),
+              ]);
+
+            return {
+              id: doc.id,
+              key: doc.key,
+              documentId: doc.documentId,
+              generation: doc.generation,
+              ...(activePub
+                ? { activePublication: toPublicationSummary(activePub) }
+                : {}),
+              ...(pendingPub
+                ? { pendingPublication: toPublicationSummary(pendingPub) }
+                : {}),
+              draftRevisionsCount: draftCount,
+              ...(latestDraft
+                ? { latestDraft: toRevisionSummary(latestDraft) }
+                : {}),
+              revisions: page.map(toRevisionDetail),
+              publications: pubPage.map(toPublicationSummary),
+              ...(nextCursor ? { nextCursor } : {}),
+              ...(publicationsNextCursor ? { publicationsNextCursor } : {}),
+              createdAt: doc.createdAt.toISOString(),
+              updatedAt: doc.updatedAt.toISOString(),
+            };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+        ),
+      "Legal document datastore is unavailable",
+    );
+  }
+
+  async listPublications(
+    operator: OperatorContext,
+    key: string,
+    cursor?: string,
+    limit = 25,
+  ): Promise<LegalPublicationPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
+    const doc = await withDatastoreAvailability(
+      () => this.prisma.legalDocument.findUnique({ where: { key } }),
+      "Legal document datastore is unavailable",
+    );
+    if (!doc) {
+      throw new NotFoundException(`Legal document '${key}' was not found`);
+    }
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new BadRequestException("Publication limit is invalid");
+    }
+    const pubKeyset =
+      cursor !== undefined ? parsePublicationCursor(cursor) : undefined;
+    const pubRows = await withDatastoreAvailability(
+      () =>
+        this.prisma.legalDocumentPublication.findMany({
+          where: {
+            documentId: doc.id,
+            ...(pubKeyset
+              ? {
+                  OR: [
+                    { startsAt: { lt: pubKeyset.startsAt } },
+                    {
+                      startsAt: pubKeyset.startsAt,
+                      id: { lt: pubKeyset.id },
+                    },
+                  ],
+                }
+              : {}),
+          },
+          orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+          take: limit + 1,
+          include: { revision: true },
+        }),
+      "Legal document datastore is unavailable",
+    );
+    const page = pubRows.slice(0, limit);
+    const last = page.at(-1);
+    const nextCursor =
+      pubRows.length > limit && last
+        ? encodePublicationCursor(last)
+        : undefined;
+
+    return {
+      items: page.map(toPublicationSummary),
+      ...(nextCursor ? { nextCursor } : {}),
+    };
+  }
+
+  async createDraft(
+    operator: OperatorContext,
+    key: string,
+    dto: CreateLegalDraftDto,
+    idempotencyKey: string,
+  ): Promise<LegalRevisionDetailDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+
+    const title = requireString(dto?.title, "Draft title", { maxLength: 255 });
+    const summary = requireString(dto?.summary, "Draft summary");
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
+    const expectedGeneration = requireSafeInteger(
+      dto?.expectedGeneration,
+      "Expected generation",
+      1,
+    );
+    const sections = normalizeLegalSections(dto?.sections);
+    assertContentSize({ title, summary, sections });
+    const contentHash = computeLegalRevisionContentHash({
+      contentVersion: 1,
+      title,
+      summary,
+      sections,
+    });
+
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      { action: "createDraft", key, dto },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
+
+        if (doc.generation !== expectedGeneration) {
+          throw new ConflictException("Document generation mismatch");
+        }
+
+        const latestSeq = await tx.legalDocumentRevision.aggregate({
+          where: { documentId: doc.id },
+          _max: { sequence: true },
+        });
+        const nextSequence = (latestSeq._max.sequence ?? 0) + 1;
+
+        const revision = await tx.legalDocumentRevision.create({
+          data: {
+            documentId: doc.id,
+            sequence: nextSequence,
+            editVersion: 1,
+            status: LegalRevisionStatus.DRAFT,
+            contentVersion: 1,
+            title,
+            summary,
+            sections: sections as unknown as Prisma.InputJsonValue,
+            contentHash,
+          },
+        });
+
+        await tx.legalDocument.update({
+          where: { id: doc.id },
+          data: { generation: { increment: 1 } },
+        });
+
+        const decisionNow = await databaseNow(tx);
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          legalRevisionId: revision.id,
+          legalContentHash: revision.contentHash,
+          eventType: "legal_document.draft_created",
+          reasonCode,
+          reason,
+          createdAt: decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "draft_created",
+            documentId: doc.id,
+            revisionId: revision.id,
+            contentHash: revision.contentHash,
+          },
+        });
+
+        return toRevisionDetail(revision);
+      },
+    );
+  }
+
+  async updateDraft(
+    operator: OperatorContext,
+    key: string,
+    revisionId: string,
+    dto: UpdateLegalDraftDto,
+    idempotencyKey: string,
+  ): Promise<LegalRevisionDetailDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+
+    const validRevisionId = requireUuid(revisionId, "Revision ID");
+    const expectedEditVersion = requireSafeInteger(
+      dto?.expectedEditVersion,
+      "Expected edit version",
+      1,
+    );
+    const title = requireString(dto?.title, "Draft title", { maxLength: 255 });
+    const summary = requireString(dto?.summary, "Draft summary");
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
+    const sections = normalizeLegalSections(dto?.sections);
+    assertContentSize({ title, summary, sections });
+    const contentHash = computeLegalRevisionContentHash({
+      contentVersion: 1,
+      title,
+      summary,
+      sections,
+    });
+
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      { action: "updateDraft", key, revisionId: validRevisionId, dto },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
+
+        const revision = await tx.legalDocumentRevision.findUnique({
+          where: { id: validRevisionId },
+        });
+        if (!revision || revision.documentId !== doc.id) {
+          throw new NotFoundException("Revision was not found");
+        }
+        if (revision.status !== LegalRevisionStatus.DRAFT) {
+          throw new ConflictException("Cannot edit an approved revision");
+        }
+        if (revision.editVersion !== expectedEditVersion) {
+          throw new ConflictException("Draft edit version mismatch");
+        }
+
+        const draftUpdate = await tx.legalDocumentRevision.updateMany({
+          where: {
+            id: revision.id,
+            documentId: doc.id,
+            status: LegalRevisionStatus.DRAFT,
+            editVersion: expectedEditVersion,
+            contentHash: revision.contentHash,
+          },
+          data: {
+            title,
+            summary,
+            sections: sections as unknown as Prisma.InputJsonValue,
+            contentHash,
+            editVersion: { increment: 1 },
+          },
+        });
+        if (draftUpdate.count !== 1) {
+          throw new ConflictException("Draft edit version mismatch");
+        }
+        const updated = await tx.legalDocumentRevision.findUniqueOrThrow({
+          where: { id: revision.id },
+        });
+
+        const decisionNow = await databaseNow(tx);
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          legalRevisionId: updated.id,
+          legalContentHash: updated.contentHash,
+          eventType: "legal_document.draft_updated",
+          reasonCode,
+          reason,
+          createdAt: decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "draft_updated",
+            documentId: doc.id,
+            revisionId: updated.id,
+            contentHash: updated.contentHash,
+          },
+        });
+
+        return toRevisionDetail(updated);
+      },
+    );
+  }
+
+  async approveRevision(
+    operator: OperatorContext,
+    key: string,
+    revisionId: string,
+    dto: ApproveLegalRevisionDto,
+    idempotencyKey: string,
+  ): Promise<LegalRevisionDetailDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+
+    const validRevisionId = requireUuid(revisionId, "Revision ID");
+
+    const expectedEditVersion = requireSafeInteger(
+      dto?.expectedEditVersion,
+      "Expected edit version",
+      1,
+    );
+    const revisionCode = requireString(dto?.revisionCode, "Revision code", {
+      pattern: REVISION_CODE_PATTERN,
+      maxLength: 100,
+    });
+    const expectedContentHash = requireString(
+      dto?.expectedContentHash,
+      "Expected content hash",
+      { pattern: /^[0-9a-f]{64}$/ },
+    );
+    const effectiveAtStr = requireString(dto?.effectiveAt, "Effective date");
+    const effectiveAtDate = parseLegalRfc3339Instant(
+      effectiveAtStr,
+      "Effective date",
+    );
+    const approvalEvidence = requireString(
+      dto?.approvalEvidence,
+      "Approval evidence",
+      { maxLength: 5000 },
+    );
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
+
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      { action: "approveRevision", key, revisionId: validRevisionId, dto },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
+
+        let revision = await tx.legalDocumentRevision.findUnique({
+          where: { id: validRevisionId },
+        });
+        if (!revision || revision.documentId !== doc.id) {
+          throw new NotFoundException("Revision was not found");
+        }
+        if (revision.status !== LegalRevisionStatus.DRAFT) {
+          throw new ConflictException("Revision is already approved");
+        }
+        if (revision.editVersion !== expectedEditVersion) {
+          throw new ConflictException("Draft edit version mismatch");
+        }
+        if (revision.contentHash !== expectedContentHash) {
+          throw new ConflictException("Revision content hash mismatch");
+        }
+        const title = requireString(revision.title, "Draft title", {
+          maxLength: 255,
+        });
+        const summary = requireString(revision.summary, "Draft summary");
+        const sections = normalizeLegalSections(revision.sections);
+        assertContentSize({ title, summary, sections });
+        const contentHash = computeLegalRevisionContentHash({
+          contentVersion: 1,
+          title,
+          summary,
+          sections,
+        });
+
+        const contentNeedsNormalization =
+          revision.title !== title ||
+          revision.summary !== summary ||
+          JSON.stringify(revision.sections) !== JSON.stringify(sections);
+        if (revision.contentHash !== contentHash || contentNeedsNormalization) {
+          const normalized = await tx.legalDocumentRevision.updateMany({
+            where: {
+              id: revision.id,
+              documentId: doc.id,
+              status: LegalRevisionStatus.DRAFT,
+              editVersion: expectedEditVersion,
+              contentHash: expectedContentHash,
+            },
+            data: {
+              title,
+              summary,
+              sections: sections as unknown as Prisma.InputJsonValue,
+              contentHash,
+            },
+          });
+          if (normalized.count !== 1) {
+            throw new ConflictException("Draft changed during approval");
+          }
+          revision = await tx.legalDocumentRevision.findUniqueOrThrow({
+            where: { id: revision.id },
+          });
+        }
+
+        if (
+          !revision.title.trim() ||
+          !revision.summary.trim() ||
+          !Array.isArray(revision.sections) ||
+          revision.sections.length === 0
+        ) {
+          throw new BadRequestException(
+            "Approved revision must have non-empty title, summary, and sections",
+          );
+        }
+
+        const existingCode = await tx.legalDocumentRevision.findUnique({
+          where: { revisionCode },
+        });
+        if (existingCode && existingCode.id !== revision.id) {
+          throw new ConflictException("Revision code is already in use");
+        }
+
+        const now = await databaseNow(tx);
+        let approved;
+        try {
+          const approval = await tx.legalDocumentRevision.updateMany({
+            where: {
+              id: revision.id,
+              documentId: doc.id,
+              status: LegalRevisionStatus.DRAFT,
+              editVersion: expectedEditVersion,
+              contentHash,
+            },
+            data: {
+              status: LegalRevisionStatus.APPROVED,
+              revisionCode,
+              effectiveAt: effectiveAtDate,
+              approvalEvidence,
+              approvedBy: operator.operatorId,
+              approvedAt: now,
+            },
+          });
+          if (approval.count !== 1) {
+            throw new ConflictException("Draft changed during approval");
+          }
+          approved = await tx.legalDocumentRevision.findUniqueOrThrow({
+            where: { id: revision.id },
+          });
+        } catch (error) {
+          if (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2002"
+          ) {
+            throw new ConflictException("Revision code is already in use");
+          }
+          const dbCode = (error as { code?: string })?.code;
+          if (dbCode === "23505") {
+            throw new ConflictException("Revision code is already in use");
+          }
+          throw error;
+        }
+
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          legalRevisionId: approved.id,
+          legalContentHash: approved.contentHash,
+          eventType: "legal_document.revision_approved",
+          reasonCode,
+          reason,
+          createdAt: approved.approvedAt ?? now,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "revision_approved",
+            documentId: doc.id,
+            revisionId: approved.id,
+            contentHash: approved.contentHash,
+          },
+        });
+
+        return toRevisionDetail(approved);
+      },
+    );
+  }
+
+  async publishRevision(
+    operator: OperatorContext,
+    key: string,
+    revisionId: string,
+    dto: PublishLegalRevisionDto,
+    idempotencyKey: string,
+  ): Promise<LegalPublicationSummaryDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+
+    const validRevisionId = requireUuid(revisionId, "Revision ID");
+
+    const expectedGeneration = requireSafeInteger(
+      dto?.expectedGeneration,
+      "Expected generation",
+      1,
+    );
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
+
+    let parsedStartsAt: Date | undefined;
+    if (dto?.startsAt !== undefined) {
+      const startsAtStr = requireString(dto.startsAt, "Publication startsAt");
+      parsedStartsAt = parseLegalRfc3339Instant(
+        startsAtStr,
+        "Publication startsAt",
+      );
+    }
+
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      { action: "publishRevision", key, revisionId: validRevisionId, dto },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
+
+        if (doc.generation !== expectedGeneration) {
+          throw new ConflictException("Document generation mismatch");
+        }
+
+        const revision = await tx.legalDocumentRevision.findUnique({
+          where: { id: validRevisionId },
+        });
+        if (!revision || revision.documentId !== doc.id) {
+          throw new NotFoundException("Revision was not found");
+        }
+        if (revision.status !== LegalRevisionStatus.APPROVED) {
+          throw new ConflictException(
+            "Only approved revisions can be published",
+          );
+        }
+        if (!revision.effectiveAt) {
+          throw new ConflictException("Approved revision missing effectiveAt");
+        }
+
+        const decisionNow = await databaseNow(tx);
+
+        if (parsedStartsAt && parsedStartsAt < decisionNow) {
+          throw new BadRequestException(
+            "Publication startsAt cannot precede decision time",
+          );
+        }
+
+        // Check if this revision has ever had an uncancelled or already started publication
+        const prior = await tx.legalDocumentPublication.findFirst({
+          where: {
+            revisionId: revision.id,
+            OR: [
+              { cancelledAt: null },
+              {
+                cancelledAt: {
+                  gte: tx.legalDocumentPublication.fields.startsAt,
+                },
+              },
+            ],
+          },
+        });
+        if (prior) {
+          throw new ConflictException(
+            "Revision has already been published and cannot be republished",
+          );
+        }
+
+        // Compute startsAt: max(revision.effectiveAt, startsAtProvided || decisionNow)
+        const baseStartsAt = parsedStartsAt ?? decisionNow;
+        let effectiveStartsAt =
+          revision.effectiveAt > baseStartsAt
+            ? revision.effectiveAt
+            : baseStartsAt;
+        if (effectiveStartsAt < decisionNow) {
+          effectiveStartsAt = decisionNow;
+        }
+
+        // A publication at decisionNow is current, not pending. It conflicts only
+        // with an immediate replacement that would give it an empty interval.
+        const pending = await tx.legalDocumentPublication.findFirst({
+          where: {
+            documentId: doc.id,
+            cancelledAt: null,
+            startsAt:
+              effectiveStartsAt <= decisionNow
+                ? { gte: decisionNow }
+                : { gt: decisionNow },
+          },
+        });
+        if (pending) {
+          throw new ConflictException(
+            "A scheduled publication is already pending for this document; cancel it first",
+          );
+        }
+
+        const activePub = await tx.legalDocumentPublication.findFirst({
+          where: {
+            documentId: doc.id,
+            cancelledAt: null,
+            startsAt: { lte: decisionNow },
+            OR: [{ endsAt: null }, { endsAt: { gt: decisionNow } }],
+          },
+        });
+
+        const publication = await tx.legalDocumentPublication.create({
+          data: {
+            documentId: doc.id,
+            revisionId: revision.id,
+            startsAt: effectiveStartsAt,
+            publishedBy: operator.operatorId,
+            reason,
+          },
+          include: { revision: true },
+        });
+
+        await tx.legalDocument.update({
+          where: { id: doc.id },
+          data: { generation: { increment: 1 } },
+        });
+
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          legalRevisionId: revision.id,
+          legalContentHash: revision.contentHash,
+          eventType: "legal_document.published",
+          reasonCode,
+          reason,
+          createdAt:
+            effectiveStartsAt <= decisionNow
+              ? publication.startsAt
+              : decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "published",
+            documentId: doc.id,
+            revisionId: revision.id,
+            publicationId: publication.id,
+            contentHash: revision.contentHash,
+            ...(activePub ? { previousPublicationId: activePub.id } : {}),
+          },
+        });
+
+        return toPublicationSummary(publication);
+      },
+    );
+  }
+
+  async cancelPublication(
+    operator: OperatorContext,
+    key: string,
+    publicationId: string,
+    dto: CancelLegalPublicationDto,
+    idempotencyKey: string,
+  ): Promise<LegalPublicationSummaryDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+
+    const validPublicationId = requireUuid(publicationId, "Publication ID");
+
+    const expectedGeneration = requireSafeInteger(
+      dto?.expectedGeneration,
+      "Expected generation",
+      1,
+    );
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
+
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      {
+        action: "cancelPublication",
+        key,
+        publicationId: validPublicationId,
+        dto,
+      },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
+
+        if (doc.generation !== expectedGeneration) {
+          throw new ConflictException("Document generation mismatch");
+        }
+
+        const pub = await tx.legalDocumentPublication.findUnique({
+          where: { id: validPublicationId },
+          include: { revision: true },
+        });
+        if (!pub || pub.documentId !== doc.id) {
+          throw new NotFoundException("Publication was not found");
+        }
+        if (pub.cancelledAt !== null) {
+          throw new ConflictException("Publication is already cancelled");
+        }
+
+        const decisionNow = await databaseNow(tx);
+        if (decisionNow >= pub.startsAt) {
+          throw new ConflictException(
+            "Cannot cancel a publication that has already started",
+          );
+        }
+
+        const predecessor = await tx.legalDocumentPublication.findFirst({
+          where: {
+            documentId: doc.id,
+            cancelledAt: null,
+            endsAt: pub.startsAt,
+          },
+        });
+
+        let updated;
+        try {
+          updated = await tx.legalDocumentPublication.update({
+            where: { id: pub.id },
+            data: { cancelledAt: decisionNow },
+            include: { revision: true },
+          });
+        } catch (error) {
+          if (isPublicationDocumentLockConflict(error)) {
+            throw new ConflictException(
+              "Legal publication update conflicts with a concurrent document command",
+            );
+          }
+          if (isPublicationCancellationBoundaryError(error)) {
+            throw new ConflictException(
+              "Cannot cancel a publication that has already started",
+            );
+          }
+          throw error;
+        }
+        if (!updated.cancelledAt) {
+          throw new ConflictException(
+            "Publication cancellation did not persist",
+          );
+        }
+
+        await tx.legalDocument.update({
+          where: { id: doc.id },
+          data: { generation: { increment: 1 } },
+        });
+
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          legalRevisionId: pub.revisionId,
+          legalContentHash: pub.revision.contentHash,
+          eventType: "legal_document.publication_cancelled",
+          reasonCode,
+          reason,
+          createdAt: updated.cancelledAt,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "publication_cancelled",
+            documentId: doc.id,
+            publicationId: updated.id,
+            revisionId: pub.revisionId,
+            contentHash: pub.revision.contentHash,
+            ...(predecessor ? { previousPublicationId: predecessor.id } : {}),
+          },
+        });
+
+        return toPublicationSummary(updated);
+      },
+    );
+  }
+
+  async archivePublication(
+    operator: OperatorContext,
+    key: string,
+    publicationId: string,
+    dto: ArchiveLegalPublicationDto,
+    idempotencyKey: string,
+  ): Promise<LegalPublicationSummaryDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_WRITE);
+
+    const validPublicationId = requireUuid(publicationId, "Publication ID");
+
+    const expectedGeneration = requireSafeInteger(
+      dto?.expectedGeneration,
+      "Expected generation",
+      1,
+    );
+    const reason = requireString(dto?.reason, "Reason", { maxLength: 1000 });
+    const reasonCode = requireString(dto?.reasonCode, "Reason code", {
+      pattern: /^[A-Z][A-Z0-9_]{0,99}$/,
+    });
+
+    return await this.executeWithIdempotency(
+      "legal-document",
+      idempotencyKey,
+      {
+        action: "archivePublication",
+        key,
+        publicationId: validPublicationId,
+        dto,
+      },
+      async (tx, commandKey) => {
+        const doc = await this.lockDocumentByKey(tx, key);
+
+        if (doc.generation !== expectedGeneration) {
+          throw new ConflictException("Document generation mismatch");
+        }
+
+        const pub = await tx.legalDocumentPublication.findUnique({
+          where: { id: validPublicationId },
+          include: { revision: true },
+        });
+        if (!pub || pub.documentId !== doc.id) {
+          throw new NotFoundException("Publication was not found");
+        }
+        if (pub.cancelledAt !== null) {
+          throw new ConflictException("Publication is cancelled");
+        }
+
+        const decisionNow = await databaseNow(tx);
+        if (
+          pub.startsAt > decisionNow ||
+          (pub.endsAt !== null && pub.endsAt <= decisionNow)
+        ) {
+          throw new ConflictException("Publication is not currently active");
+        }
+
+        let updated;
+        try {
+          updated = await tx.legalDocumentPublication.update({
+            where: { id: pub.id },
+            data: { endsAt: decisionNow },
+            include: { revision: true },
+          });
+        } catch (error) {
+          if (isPublicationDocumentLockConflict(error)) {
+            throw new ConflictException(
+              "Legal publication update conflicts with a concurrent document command",
+            );
+          }
+          if (isPublicationArchiveBoundaryError(error)) {
+            throw new ConflictException("Publication is not currently active");
+          }
+          throw error;
+        }
+
+        await tx.legalDocument.update({
+          where: { id: doc.id },
+          data: { generation: { increment: 1 } },
+        });
+
+        await this.audit.recordLegalOperator(tx, operator, {
+          legalDocumentId: doc.id,
+          legalRevisionId: updated.revisionId,
+          legalContentHash: updated.revision.contentHash,
+          eventType: "legal_document.publication_archived",
+          reasonCode,
+          reason,
+          createdAt: updated.endsAt ?? decisionNow,
+          idempotencyKey: commandKey,
+          payload: {
+            operation: "publication_archived",
+            documentId: doc.id,
+            publicationId: updated.id,
+            revisionId: updated.revisionId,
+            contentHash: updated.revision.contentHash,
+          },
+        });
+
+        return toPublicationSummary(updated);
+      },
+    );
+  }
+  async getPublicRevision(
+    key: string,
+    revisionCode: string,
+  ): Promise<PublicLegalRevisionDto> {
+    const validKey = requireString(key, "Legal document key", {
+      maxLength: 50,
+    });
+    const validRevisionCode = requireString(revisionCode, "Revision code", {
+      pattern: REVISION_CODE_PATTERN,
+    });
+    return await withDatastoreAvailability(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const doc = await tx.legalDocument.findUnique({
+            where: { key: validKey },
+          });
+          if (!doc) {
+            throw new NotFoundException(
+              `Legal document '${validKey}' was not found`,
+            );
+          }
+
+          const revision = await tx.legalDocumentRevision.findUnique({
+            where: { revisionCode: validRevisionCode },
+          });
+          if (!revision || revision.documentId !== doc.id) {
+            throw new NotFoundException(
+              `Revision '${validRevisionCode}' was not found for '${validKey}'`,
+            );
+          }
+          if (
+            revision.status !== LegalRevisionStatus.APPROVED ||
+            !revision.effectiveAt
+          ) {
+            throw new NotFoundException(
+              `Revision '${validRevisionCode}' is not an approved revision`,
+            );
+          }
+
+          const now = await databaseNow(tx);
+          // Must have at least one publication that has started and was not cancelled before startsAt
+          const publication = await tx.legalDocumentPublication.findFirst({
+            where: {
+              revisionId: revision.id,
+              startsAt: { lte: now },
+              OR: [
+                { cancelledAt: null },
+                {
+                  cancelledAt: {
+                    gte: tx.legalDocumentPublication.fields.startsAt,
+                  },
+                },
+              ],
+            },
+          });
+
+          if (!publication) {
+            throw new NotFoundException(
+              `Revision '${validRevisionCode}' has not been published`,
+            );
+          }
+
+          return {
+            documentId: doc.documentId,
+            key: doc.key,
+            revisionCode: revision.revisionCode!,
+            contentVersion: revision.contentVersion,
+            contentHash: revision.contentHash,
+            title: revision.title,
+            summary: revision.summary,
+            sections: revision.sections as unknown as LegalDocumentSectionDto[],
+            effectiveAt: revision.effectiveAt.toISOString(),
+          };
+        }),
+      "Legal document datastore is unavailable",
+    );
+  }
+}
+
+function assertContentSize(content: {
+  title: string;
+  summary: string;
+  sections: LegalDocumentSectionDto[];
+}): void {
+  const bytes = Buffer.byteLength(JSON.stringify(content), "utf8");
+  if (bytes > MAX_LEGAL_PAYLOAD_BYTES) {
+    throw new BadRequestException("Draft content exceeds 256 KiB limit");
+  }
+}
+
+export function normalizeLegalSections(
+  sections: unknown,
+): LegalDocumentSectionDto[] {
+  if (!Array.isArray(sections) || sections.length === 0) {
+    throw new BadRequestException("Sections must be a non-empty array");
+  }
+  return sections.map((s, idx) => {
+    if (!s || typeof s !== "object") {
+      throw new BadRequestException(`Section ${idx} must be an object`);
+    }
+    const rawSection = s as Record<string, unknown>;
+    if (
+      Object.keys(rawSection).some(
+        (key) => !["title", "paragraphs", "items", "note"].includes(key),
+      )
+    ) {
+      throw new BadRequestException(`Section ${idx} contains an unknown field`);
+    }
+    if (typeof rawSection.title !== "string" || !rawSection.title.trim()) {
+      throw new BadRequestException("Section title must not be empty");
+    }
+    if (hasUnpairedSurrogate(rawSection.title)) {
+      throw new BadRequestException(
+        `Section ${idx} title contains an invalid Unicode scalar`,
+      );
+    }
+    requireNoNul(rawSection.title, `Section ${idx} title`);
+    const title = rawSection.title.trim();
+    if (codePointLength(title) > 255) {
+      throw new BadRequestException("Section title exceeds maximum length");
+    }
+
+    let paragraphs: string[] | undefined;
+    if (rawSection.paragraphs !== undefined) {
+      if (!Array.isArray(rawSection.paragraphs)) {
+        throw new BadRequestException(
+          `Section ${idx} paragraphs must be an array`,
+        );
+      }
+      paragraphs = rawSection.paragraphs.map((p, pIdx) => {
+        if (typeof p !== "string") {
+          throw new BadRequestException(
+            `Section ${idx} paragraph ${pIdx} must be a string`,
+          );
+        }
+        if (hasUnpairedSurrogate(p)) {
+          throw new BadRequestException(
+            `Section ${idx} paragraph ${pIdx} contains an invalid Unicode scalar`,
+          );
+        }
+        requireNoNul(p, `Section ${idx} paragraph ${pIdx}`);
+        const paragraph = p.trim();
+        if (!paragraph) {
+          throw new BadRequestException(
+            `Section ${idx} paragraph ${pIdx} must not be empty`,
+          );
+        }
+        return paragraph;
+      });
+      if (paragraphs.length === 0) {
+        throw new BadRequestException(
+          `Section ${idx} paragraphs must contain at least one non-empty string`,
+        );
+      }
+    }
+
+    let items: string[] | undefined;
+    if (rawSection.items !== undefined) {
+      if (!Array.isArray(rawSection.items)) {
+        throw new BadRequestException(`Section ${idx} items must be an array`);
+      }
+      items = rawSection.items.map((i, iIdx) => {
+        if (typeof i !== "string") {
+          throw new BadRequestException(
+            `Section ${idx} item ${iIdx} must be a string`,
+          );
+        }
+        if (hasUnpairedSurrogate(i)) {
+          throw new BadRequestException(
+            `Section ${idx} item ${iIdx} contains an invalid Unicode scalar`,
+          );
+        }
+        requireNoNul(i, `Section ${idx} item ${iIdx}`);
+        const item = i.trim();
+        if (!item) {
+          throw new BadRequestException(
+            `Section ${idx} item ${iIdx} must not be empty`,
+          );
+        }
+        return item;
+      });
+      if (items.length === 0) {
+        throw new BadRequestException(
+          `Section ${idx} items must contain at least one non-empty string`,
+        );
+      }
+    }
+
+    let note: string | undefined;
+    if (rawSection.note !== undefined) {
+      if (typeof rawSection.note !== "string") {
+        throw new BadRequestException(`Section ${idx} note must be a string`);
+      }
+      if (hasUnpairedSurrogate(rawSection.note)) {
+        throw new BadRequestException(
+          `Section ${idx} note contains an invalid Unicode scalar`,
+        );
+      }
+      requireNoNul(rawSection.note, `Section ${idx} note`);
+      const trimmedNote = rawSection.note.trim();
+      if (!trimmedNote) {
+        throw new BadRequestException(`Section ${idx} note must not be empty`);
+      }
+      note = trimmedNote;
+    }
+
+    if (
+      (!paragraphs || paragraphs.length === 0) &&
+      (!items || items.length === 0) &&
+      !note
+    ) {
+      throw new BadRequestException(
+        "Each section must contain at least one paragraph, item, or note",
+      );
+    }
+
+    const res: LegalDocumentSectionDto = { title };
+    if (paragraphs && paragraphs.length > 0) res.paragraphs = paragraphs;
+    if (items && items.length > 0) res.items = items;
+    if (note) res.note = note;
+    return res;
+  });
+}
+
+export function computeLegalRevisionContentHash(content: {
+  contentVersion: 1;
+  title: string;
+  summary: string;
+  sections: LegalDocumentSectionDto[];
+}): string {
+  const serialized = canonicalJson(content as unknown as CanonicalJson);
+  return createHash("sha256").update(serialized).digest("hex");
+}
+
+async function databaseNow(
+  transaction: Pick<Transaction, "$queryRaw">,
+): Promise<Date> {
+  const rows = await transaction.$queryRaw<Array<{ now: Date }>>`
+    SELECT clock_timestamp() AS now
+  `;
+  const observedAt = rows[0]?.now;
+  if (!observedAt) throw new Error(DATABASE_CLOCK_UNAVAILABLE_MESSAGE);
+  return observedAt;
+}
+
+function toPublicationSummary(pub: {
+  id: string;
+  revisionId: string;
+  revision?: { revisionCode: string | null } | null;
+  startsAt: Date;
+  endsAt: Date | null;
+  cancelledAt: Date | null;
+  publishedBy: string;
+  reason: string;
+  createdAt: Date;
+}): LegalPublicationSummaryDto {
+  return {
+    id: pub.id,
+    revisionId: pub.revisionId,
+    ...(pub.revision?.revisionCode
+      ? { revisionCode: pub.revision.revisionCode }
+      : {}),
+    startsAt: pub.startsAt.toISOString(),
+    ...(pub.endsAt ? { endsAt: pub.endsAt.toISOString() } : {}),
+    ...(pub.cancelledAt ? { cancelledAt: pub.cancelledAt.toISOString() } : {}),
+    publishedBy: pub.publishedBy,
+    reason: pub.reason,
+    createdAt: pub.createdAt.toISOString(),
+  };
+}
+
+function toRevisionSummary(rev: {
+  id: string;
+  sequence: number;
+  editVersion: number;
+  status: LegalRevisionStatus;
+  contentVersion: number;
+  title: string;
+  summary: string;
+  contentHash: string;
+  revisionCode: string | null;
+  effectiveAt: Date | null;
+  approvalEvidence: string | null;
+  approvedBy: string | null;
+  approvedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): LegalRevisionSummaryDto {
+  return {
+    id: rev.id,
+    sequence: rev.sequence,
+    editVersion: rev.editVersion,
+    status: rev.status,
+    contentVersion: rev.contentVersion,
+    title: rev.title,
+    summary: rev.summary,
+    contentHash: rev.contentHash,
+    ...(rev.revisionCode ? { revisionCode: rev.revisionCode } : {}),
+    ...(rev.effectiveAt ? { effectiveAt: rev.effectiveAt.toISOString() } : {}),
+    ...(rev.approvalEvidence ? { approvalEvidence: rev.approvalEvidence } : {}),
+    ...(rev.approvedBy ? { approvedBy: rev.approvedBy } : {}),
+    ...(rev.approvedAt ? { approvedAt: rev.approvedAt.toISOString() } : {}),
+    createdAt: rev.createdAt.toISOString(),
+    updatedAt: rev.updatedAt.toISOString(),
+  };
+}
+
+function toRevisionDetail(
+  rev: Parameters<typeof toRevisionSummary>[0] & { sections: unknown },
+): LegalRevisionDetailDto {
+  return {
+    ...toRevisionSummary(rev),
+    sections: rev.sections as LegalDocumentSectionDto[],
+  };
+}
