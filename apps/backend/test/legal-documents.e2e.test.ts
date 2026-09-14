@@ -1510,6 +1510,17 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
 
     await expect(
       prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_publications (
+          document_id, revision_id, starts_at, published_by, reason
+        ) VALUES (
+          '${termsDoc.id}'::uuid, '${futureEffectiveDraft.id}'::uuid,
+          '2099-01-01'::timestamptz, '${adminOperatorId}'::uuid, chr(160)
+        )
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
         INSERT INTO audit_events (
           id, event_type, actor_kind, actor_id, operator_identity_id,
           legal_document_id, schema_version, reason_code, reason, payload

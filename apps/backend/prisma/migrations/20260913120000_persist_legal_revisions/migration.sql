@@ -66,10 +66,14 @@ BEFORE INSERT OR UPDATE OR DELETE ON "legal_documents"
 FOR EACH ROW
 EXECUTE FUNCTION legal_documents_integrity_fn();
 
+CREATE OR REPLACE FUNCTION legal_document_trim(value text)
+RETURNS text AS $$
+    SELECT btrim(value, U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF');
+$$ LANGUAGE sql IMMUTABLE;
+
 CREATE OR REPLACE FUNCTION legal_document_text_is_nonblank(value text)
 RETURNS boolean AS $$
-    SELECT value IS NOT NULL
-        AND length(btrim(value, U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF')) > 0;
+    SELECT value IS NOT NULL AND length(legal_document_trim(value)) > 0;
 $$ LANGUAGE sql IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION legal_document_sections_are_valid(value jsonb)
@@ -320,7 +324,7 @@ CREATE TABLE "legal_document_publications" (
     ),
     CONSTRAINT "legal_document_publications_reason_check" CHECK (
         length("reason") <= 1000
-        AND "reason" !~ '^[[:space:]]*$'
+        AND legal_document_text_is_nonblank("reason")
     ),
     CONSTRAINT "legal_document_publications_no_overlap" EXCLUDE USING gist (
         "document_id" WITH =,
@@ -393,6 +397,9 @@ ALTER TABLE "audit_events" DISABLE TRIGGER "audit_events_append_only";
 UPDATE "audit_events"
 SET "reason" = NULL, "reason_code" = NULL
 WHERE "reason" IS NOT NULL AND NOT legal_document_text_is_nonblank("reason");
+UPDATE "audit_events"
+SET "reason" = legal_document_trim("reason")
+WHERE "reason" IS NOT NULL AND length("reason") > 1000;
 ALTER TABLE "audit_events" ENABLE TRIGGER "audit_events_append_only";
 
 ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_reason_check";
