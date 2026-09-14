@@ -444,6 +444,17 @@ BEGIN
         RAISE EXCEPTION 'Version 3 legal audit events require revision and content-hash evidence';
     END IF;
 
+    -- Preserve the document-before-revision lock ordering used by legal
+    -- mutations so audit evidence validation cannot form an AB/BA deadlock.
+    PERFORM 1
+    FROM "legal_documents"
+    WHERE "id" = NEW."legal_document_id"
+    FOR SHARE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Legal audit document evidence does not exist';
+    END IF;
+
     SELECT "document_id", "content_hash"
     INTO v_revision_document_id, v_revision_content_hash
     FROM "legal_document_revisions"
