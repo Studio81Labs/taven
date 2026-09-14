@@ -1,6 +1,12 @@
 import "dotenv/config";
 process.env.DATABASE_URL ??= "postgresql://taven:taven@127.0.0.1:5435/taven";
-process.env.TAVEN_ENVIRONMENT ??= "development";
+process.env.TAVEN_ENVIRONMENT = "staging";
+process.env.TAVEN_ADMIN_ORIGINS = "http://localhost:3002";
+process.env.TAVEN_GITHUB_APP_CLIENT_ID = "test-github-client";
+process.env.TAVEN_GITHUB_APP_CLIENT_SECRET = "test-github-secret";
+process.env.TAVEN_GITHUB_APP_CALLBACK_URL =
+  "https://api.example.test/admin/auth/github/callback";
+process.env.TAVEN_ADMIN_COMPLETION_URL = "https://admin.example.test/";
 process.env.TAVEN_S3_ENDPOINT ??= "http://127.0.0.1:9010";
 process.env.TAVEN_S3_REGION ??= "us-east-1";
 process.env.TAVEN_S3_BUCKET ??= "taven";
@@ -22,7 +28,7 @@ import { Test } from "@nestjs/testing";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
-import { passwordHash } from "../src/modules/admin-access/operator-auth.service";
+import { GITHUB_AUTH } from "../src/modules/admin-access/github-auth.port";
 import { PrismaService } from "../src/prisma/prisma.service";
 
 describe("Legal Documents & Node-Free Admin E2E", () => {
@@ -81,42 +87,75 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     await prisma.onModuleInit();
     await resetLegalState();
 
+    const githubUserId = `${Date.now()}${Math.floor(Math.random() * 1_000_000)}`;
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(GITHUB_AUTH)
+      .useValue({
+        exchangeCode: async () => ({
+          id: githubUserId,
+          login: "node-free-admin",
+        }),
+      })
+      .compile();
     app = moduleRef.createNestApplication();
     await app.listen(0, "127.0.0.1");
     baseUrl = await app.getUrl();
 
     // Provision a node-free ADMIN operator (0 node grants), then authenticate
-    // through the actual development login endpoint.
+    // through the production GitHub start/callback session flow.
     const adminEmail = `node-free-admin-${randomUUID()}@example.test`;
-    const adminPassword = "node-free-admin-password";
     const adminIdentity = await prisma.operatorIdentity.create({
       data: {
         email: adminEmail,
         role: "ADMIN",
-        developmentCredential: {
-          create: { passwordHash: await passwordHash(adminPassword) },
+        githubIdentity: {
+          create: {
+            githubUserId,
+            displayLogin: "node-free-admin",
+          },
         },
       },
     });
     adminOperatorId = adminIdentity.id;
 
-    const loginRes = await fetch(new URL("/admin/auth/login", baseUrl), {
+    const startRes = await fetch(new URL("/admin/auth/github/start", baseUrl), {
       method: "POST",
-      headers: {
-        origin: "http://localhost:3002",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email: adminEmail, password: adminPassword }),
+      headers: { origin: "http://localhost:3002" },
     });
-    expect(loginRes.status).toBe(200);
-    const login = await loginRes.json();
-    adminCsrfToken = login.csrfToken;
-    const setCookie = loginRes.headers.get("set-cookie");
-    expect(setCookie).toBeDefined();
-    adminCookie = setCookie!.split(";", 1)[0]!;
+    expect(startRes.status).toBe(200);
+    const loginStart = await startRes.json();
+    const state = new URL(loginStart.authorizationUrl).searchParams.get(
+      "state",
+    );
+    expect(state).toBeDefined();
+    const loginAttemptCookie = startRes.headers.getSetCookie()[0];
+    expect(loginAttemptCookie).toBeDefined();
+
+    const callbackRes = await fetch(
+      new URL(
+        `/admin/auth/github/callback?state=${encodeURIComponent(state!)}&code=${"a".repeat(20)}`,
+        baseUrl,
+      ),
+      {
+        headers: { Cookie: loginAttemptCookie!.split(";", 1)[0]! },
+        redirect: "manual",
+      },
+    );
+    expect(callbackRes.status).toBe(302);
+    const sessionCookie = callbackRes.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith("__Host-taven_admin="));
+    expect(sessionCookie).toBeDefined();
+    adminCookie = sessionCookie!.split(";", 1)[0]!;
+
+    const sessionRes = await fetch(new URL("/admin/auth/session", baseUrl), {
+      headers: { Cookie: adminCookie },
+    });
+    expect(sessionRes.status).toBe(200);
+    const session = await sessionRes.json();
+    adminCsrfToken = session.csrfToken;
   });
 
   afterAll(async () => {
@@ -1811,5 +1850,39 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         `UPDATE legal_documents SET generation = 0 WHERE id = '${termsDoc.id}'`,
       ),
     ).rejects.toThrow();
+  });
+
+  it("recomputes node-free GitHub sessions and revokes them on CSRF-protected logout", async () => {
+    await prisma.operatorIdentity.update({
+      where: { id: adminOperatorId },
+      data: { role: "VIEWER" },
+    });
+    const restrictedSessionRes = await fetch(
+      new URL("/admin/auth/session", baseUrl),
+      { headers: { Cookie: adminCookie } },
+    );
+    expect(restrictedSessionRes.status).toBe(403);
+
+    await prisma.operatorIdentity.update({
+      where: { id: adminOperatorId },
+      data: { role: "ADMIN" },
+    });
+    const restoredSessionRes = await fetch(
+      new URL("/admin/auth/session", baseUrl),
+      { headers: { Cookie: adminCookie } },
+    );
+    expect(restoredSessionRes.status).toBe(200);
+
+    const logoutRes = await fetch(new URL("/admin/auth/session", baseUrl), {
+      method: "DELETE",
+      headers: adminHeaders(),
+    });
+    expect(logoutRes.status).toBe(204);
+
+    const revokedSessionRes = await fetch(
+      new URL("/admin/auth/session", baseUrl),
+      { headers: { Cookie: adminCookie } },
+    );
+    expect(revokedSessionRes.status).toBe(401);
   });
 });
