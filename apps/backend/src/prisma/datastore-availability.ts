@@ -8,6 +8,7 @@ const PRISMA_DATASTORE_UNAVAILABLE_CODES = new Set([
   "P1008",
   "P1009",
   "P1017",
+  "P2037",
 ]);
 const POSTGRES_DATASTORE_UNAVAILABLE_CODES = new Set([
   "08000",
@@ -20,6 +21,7 @@ const POSTGRES_DATASTORE_UNAVAILABLE_CODES = new Set([
   "57P01",
   "57P02",
   "57P03",
+  "53300",
 ]);
 
 export function isDatastoreUnavailable(error: unknown): boolean {

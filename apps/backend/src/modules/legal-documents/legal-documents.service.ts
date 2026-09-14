@@ -846,8 +846,13 @@ export class LegalDocumentsService {
           throw new ConflictException("Draft edit version mismatch");
         }
 
-        const updated = await tx.legalDocumentRevision.update({
-          where: { id: revision.id },
+        const draftUpdate = await tx.legalDocumentRevision.updateMany({
+          where: {
+            id: revision.id,
+            documentId: doc.id,
+            status: LegalRevisionStatus.DRAFT,
+            editVersion: expectedEditVersion,
+          },
           data: {
             title,
             summary,
@@ -855,6 +860,12 @@ export class LegalDocumentsService {
             contentHash,
             editVersion: { increment: 1 },
           },
+        });
+        if (draftUpdate.count !== 1) {
+          throw new ConflictException("Draft edit version mismatch");
+        }
+        const updated = await tx.legalDocumentRevision.findUniqueOrThrow({
+          where: { id: revision.id },
         });
 
         const decisionNow = await databaseNow(tx);

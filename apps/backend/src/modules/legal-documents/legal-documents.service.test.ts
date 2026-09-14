@@ -9,6 +9,7 @@ import {
   normalizeLegalSections,
   REVISION_CODE_PATTERN,
 } from "./legal-documents.service";
+import { isDatastoreUnavailable } from "../../prisma/datastore-availability";
 
 const legalReader: OperatorContext = {
   operatorId: "11111111-1111-4111-8111-111111111111",
@@ -100,6 +101,13 @@ describe("legal documents helper functions", () => {
 
     expect(error).toBeInstanceOf(ServiceUnavailableException);
     expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+  });
+
+  it("recognizes datastore connection exhaustion", () => {
+    expect(isDatastoreUnavailable({ code: "P2037" })).toBe(true);
+    expect(
+      isDatastoreUnavailable({ code: "P2010", meta: { code: "53300" } }),
+    ).toBe(true);
   });
 
   it("normalizes and validates section content", () => {
