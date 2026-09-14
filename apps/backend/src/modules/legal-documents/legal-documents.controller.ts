@@ -29,8 +29,12 @@ export class LegalDocumentsController {
   })
   @ApiParam({
     name: "revisionCode",
-    type: String,
     description: "Immutable revision code",
+    schema: {
+      type: "string",
+      maxLength: 100,
+      pattern: "^[A-Za-z0-9_.-]{1,100}$",
+    },
   })
   @ApiOkResponse({ type: PublicLegalRevisionDto })
   @ApiNotFoundResponse()

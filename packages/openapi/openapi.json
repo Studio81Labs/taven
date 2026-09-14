@@ -10051,6 +10051,7 @@
             "name": "publicationId",
             "required": true,
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -10144,6 +10145,7 @@
             "name": "publicationId",
             "required": true,
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -10321,6 +10323,7 @@
             "name": "revisionId",
             "required": true,
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -10414,6 +10417,7 @@
             "name": "revisionId",
             "required": true,
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -10507,6 +10511,7 @@
             "name": "revisionId",
             "required": true,
             "schema": {
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -15186,6 +15191,8 @@
             "name": "revisionCode",
             "required": true,
             "schema": {
+              "maxLength": 100,
+              "pattern": "^[A-Za-z0-9_.-]{1,100}$",
               "type": "string"
             }
           },

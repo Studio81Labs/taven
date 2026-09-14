@@ -239,6 +239,7 @@ CREATE TABLE "legal_document_revisions" (
     CONSTRAINT "legal_document_revisions_revision_code_key" UNIQUE ("revision_code"),
     CONSTRAINT "legal_document_revisions_document_id_fkey" FOREIGN KEY ("document_id") REFERENCES "legal_documents"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_document_revisions_approved_by_fkey" FOREIGN KEY ("approved_by") REFERENCES "operator_identities"("id") ON DELETE RESTRICT,
+    CONSTRAINT "legal_document_revisions_sequence_check" CHECK ("sequence" >= 1),
     CONSTRAINT "legal_document_revisions_edit_version_check" CHECK ("edit_version" >= 1),
     CONSTRAINT "legal_document_revisions_content_version_check" CHECK ("content_version" = 1),
     CONSTRAINT "legal_document_revisions_timestamp_range_check" CHECK (

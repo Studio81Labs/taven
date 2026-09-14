@@ -318,6 +318,7 @@ export class LegalDocumentsAdminController {
   @ApiParam({
     name: "revisionId",
     type: String,
+    format: "uuid",
     description: "Draft revision UUID",
   })
   @ApiBody({ type: UpdateLegalDraftDto })
@@ -361,6 +362,7 @@ export class LegalDocumentsAdminController {
   @ApiParam({
     name: "revisionId",
     type: String,
+    format: "uuid",
     description: "Draft revision UUID",
   })
   @ApiBody({ type: ApproveLegalRevisionDto })
@@ -404,6 +406,7 @@ export class LegalDocumentsAdminController {
   @ApiParam({
     name: "revisionId",
     type: String,
+    format: "uuid",
     description: "Approved revision UUID",
   })
   @ApiBody({ type: PublishLegalRevisionDto })
@@ -447,6 +450,7 @@ export class LegalDocumentsAdminController {
   @ApiParam({
     name: "publicationId",
     type: String,
+    format: "uuid",
     description: "Publication UUID",
   })
   @ApiBody({ type: CancelLegalPublicationDto })
@@ -492,6 +496,7 @@ export class LegalDocumentsAdminController {
   @ApiParam({
     name: "publicationId",
     type: String,
+    format: "uuid",
     description: "Publication UUID",
   })
   @ApiBody({ type: ArchiveLegalPublicationDto })
