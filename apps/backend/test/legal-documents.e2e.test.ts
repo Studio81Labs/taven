@@ -962,6 +962,13 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(auditRes.status).toBe(200);
     const auditPage = await auditRes.json();
     expect(auditPage.items.length).toBeGreaterThan(0);
+    for (const query of ["eventType", "operatorIdentityId"]) {
+      const invalidAuditFilter = await fetch(
+        new URL(`/admin/legal-documents/terms/audit-events?${query}=`, baseUrl),
+        { headers: { Cookie: adminCookie } },
+      );
+      expect(invalidAuditFilter.status).toBe(400);
+    }
     for (const item of auditPage.items) {
       expect(item.legalDocumentId).toBe(termsDoc.id);
       expect(item.nodeId).toBeUndefined();

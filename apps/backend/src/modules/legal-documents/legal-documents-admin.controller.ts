@@ -292,8 +292,12 @@ export class LegalDocumentsAdminController {
       operator,
       doc.id,
       {
-        ...(scalarEventType ? { eventType: scalarEventType } : {}),
-        ...(scalarOperatorId ? { operatorIdentityId: scalarOperatorId } : {}),
+        ...(scalarEventType !== undefined
+          ? { eventType: scalarEventType }
+          : {}),
+        ...(scalarOperatorId !== undefined
+          ? { operatorIdentityId: scalarOperatorId }
+          : {}),
       },
       scalarCursor,
       parsedLimit,
