@@ -4,6 +4,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiServiceUnavailableResponse,
   ApiTags,
 } from "@nestjs/swagger";
 type ResponseLike = {
@@ -38,6 +39,9 @@ export class LegalDocumentsController {
   })
   @ApiOkResponse({ type: PublicLegalRevisionDto })
   @ApiNotFoundResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async getRevision(
     @Param("key") key: string,
     @Param("revisionCode") revisionCode: string,

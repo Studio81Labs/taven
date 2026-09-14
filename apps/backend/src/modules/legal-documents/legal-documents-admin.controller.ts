@@ -25,6 +25,7 @@ import {
   ApiParam,
   ApiQuery,
   ApiSecurity,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiUnauthorizedResponse,
 } from "@nestjs/swagger";
@@ -104,6 +105,9 @@ export class LegalDocumentsAdminController {
   @ApiOkResponse({ type: [LegalDocumentSummaryDto] })
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async list(
     @CurrentOperator() operator: OperatorContext,
   ): Promise<LegalDocumentSummaryDto[]> {
@@ -144,6 +148,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async detail(
     @CurrentOperator() operator: OperatorContext,
     @Param("key") key: string,
@@ -198,6 +205,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async publications(
     @Param("key") key: string,
     @CurrentOperator() operator: OperatorContext,
@@ -246,6 +256,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async auditEvents(
     @Param("key") key: string,
     @CurrentOperator() operator: OperatorContext,
@@ -302,6 +315,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async createDraft(
     @Param("key") key: string,
     @Headers("idempotency-key") idempotencyKey: string,
@@ -339,6 +355,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async updateDraft(
     @Param("key") key: string,
     @Param(
@@ -383,6 +402,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async approveRevision(
     @Param("key") key: string,
     @Param(
@@ -427,6 +449,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async publishRevision(
     @Param("key") key: string,
     @Param(
@@ -471,6 +496,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async cancelPublication(
     @Param("key") key: string,
     @Param(
@@ -517,6 +545,9 @@ export class LegalDocumentsAdminController {
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
+  @ApiServiceUnavailableResponse({
+    description: "Legal document datastore is unavailable",
+  })
   async archivePublication(
     @Param("key") key: string,
     @Param(

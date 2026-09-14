@@ -4916,6 +4916,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Legal document datastore is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     LegalDocumentsAdminController_detail: {
@@ -4956,6 +4963,13 @@ export interface operations {
                 content?: never;
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Legal document datastore is unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5006,6 +5020,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Legal document datastore is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     LegalDocumentsAdminController_publications: {
@@ -5044,6 +5065,13 @@ export interface operations {
                 content?: never;
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Legal document datastore is unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5112,6 +5140,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Legal document datastore is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     LegalDocumentsAdminController_cancelPublication: {
@@ -5175,6 +5210,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Legal document datastore is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     LegalDocumentsAdminController_createDraft: {
@@ -5231,6 +5273,13 @@ export interface operations {
                 content?: never;
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Legal document datastore is unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5299,6 +5348,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Legal document datastore is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     LegalDocumentsAdminController_approveRevision: {
@@ -5362,6 +5418,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Legal document datastore is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     LegalDocumentsAdminController_publishRevision: {
@@ -5420,6 +5483,13 @@ export interface operations {
                 content?: never;
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Legal document datastore is unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7609,6 +7679,13 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Legal document datastore is unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

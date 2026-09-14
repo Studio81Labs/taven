@@ -9808,6 +9808,9 @@
           },
           "403": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -9892,6 +9895,9 @@
           },
           "404": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -9973,6 +9979,9 @@
           },
           "404": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -10037,6 +10046,9 @@
           },
           "404": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -10131,6 +10143,9 @@
           },
           "409": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -10225,6 +10240,9 @@
           },
           "409": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -10309,6 +10327,9 @@
           },
           "409": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -10403,6 +10424,9 @@
           },
           "409": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -10497,6 +10521,9 @@
           },
           "409": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -10591,6 +10618,9 @@
           },
           "409": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "security": [
@@ -15230,6 +15260,9 @@
           },
           "404": {
             "description": ""
+          },
+          "503": {
+            "description": "Legal document datastore is unavailable"
           }
         },
         "summary": "Public exact-version reader for published legal document revisions",
