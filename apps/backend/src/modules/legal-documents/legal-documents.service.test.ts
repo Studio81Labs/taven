@@ -1,4 +1,6 @@
 import { ServiceUnavailableException } from "@nestjs/common";
+import type { OperatorContext } from "../admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { describe, expect, it, vi } from "vitest";
 import {
   computeLegalRevisionContentHash,
@@ -8,11 +10,23 @@ import {
   REVISION_CODE_PATTERN,
 } from "./legal-documents.service";
 
+const legalReader: OperatorContext = {
+  operatorId: "11111111-1111-4111-8111-111111111111",
+  role: "ADMIN",
+  permissions: [OPERATOR_PERMISSIONS.LEGAL_READ],
+  nodeIds: [],
+  authenticationMethod: "DEVELOPMENT_PASSWORD",
+  sessionId: "22222222-2222-4222-8222-222222222222",
+};
+
 describe("legal documents helper functions", () => {
   it("maps an unavailable idempotent legal datastore to 503", async () => {
     const service = new LegalDocumentsService(
       {
-        $transaction: vi.fn().mockRejectedValue({ code: "P1001" }),
+        $transaction: vi.fn().mockRejectedValue({
+          code: "P2010",
+          meta: { code: "57P01" },
+        }),
       } as never,
       {} as never,
     );
@@ -66,6 +80,22 @@ describe("legal documents helper functions", () => {
         {},
         async () => "unreachable",
       )
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+  });
+
+  it("maps unavailable legal document reads to 503", async () => {
+    const service = new LegalDocumentsService(
+      {
+        $transaction: vi.fn().mockRejectedValue({ code: "P1001" }),
+      } as never,
+      {} as never,
+    );
+
+    const error = await service
+      .listDocuments(legalReader)
       .catch((reason: unknown) => reason);
 
     expect(error).toBeInstanceOf(ServiceUnavailableException);

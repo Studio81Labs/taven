@@ -3,11 +3,11 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
-  ServiceUnavailableException,
 } from "@nestjs/common";
 import { IdempotencyStatus, LegalRevisionStatus, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
+import { withDatastoreAvailability } from "../../prisma/datastore-availability";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { requireOperatorPermission } from "../admin-access/operator-command";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
@@ -43,26 +43,6 @@ const PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT =
   "legal_document_publications_cancellation_boundary_check";
 const PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT =
   "legal_document_publications_archive_boundary_check";
-const PRISMA_DATASTORE_UNAVAILABLE_CODES = new Set([
-  "P1000",
-  "P1001",
-  "P1002",
-  "P1008",
-  "P1009",
-  "P1017",
-]);
-const POSTGRES_DATASTORE_UNAVAILABLE_CODES = new Set([
-  "08000",
-  "08001",
-  "08003",
-  "08004",
-  "08006",
-  "08007",
-  "08P01",
-  "57P01",
-  "57P02",
-  "57P03",
-]);
 const RFC3339_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
 
@@ -153,18 +133,6 @@ function isPublicationBoundaryError(
     constraint === constraintName ||
     (typeof record.message === "string" &&
       record.message.includes(constraintName))
-  );
-}
-
-function isDatastoreUnavailable(error: unknown): boolean {
-  if (error instanceof Prisma.PrismaClientInitializationError) return true;
-  if (!error || typeof error !== "object") return false;
-  const { code, message } = error as { code?: unknown; message?: unknown };
-  return (
-    message === "Database clock is unavailable" ||
-    (typeof code === "string" &&
-      (PRISMA_DATASTORE_UNAVAILABLE_CODES.has(code) ||
-        POSTGRES_DATASTORE_UNAVAILABLE_CODES.has(code)))
   );
 }
 
@@ -346,180 +314,180 @@ export class LegalDocumentsService {
     const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
     const fingerprint = fingerprintFor(input);
 
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${namespace + ":" + idempotencyKey}, 0))::text`;
+    return await withDatastoreAvailability(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${namespace + ":" + idempotencyKey}, 0))::text`;
 
-        const now = await databaseNow(tx);
-        const existing = await tx.idempotencyRecord.findFirst({
-          where: { namespace, idempotencyKey },
-          orderBy: { generation: "desc" },
-        });
+          const now = await databaseNow(tx);
+          const existing = await tx.idempotencyRecord.findFirst({
+            where: { namespace, idempotencyKey },
+            orderBy: { generation: "desc" },
+          });
 
-        if (existing && existing.expiresAt > now) {
-          if (existing.requestFingerprint !== fingerprint) {
-            throw new ConflictException(
-              "Idempotency key was already used with different input",
-            );
+          if (existing && existing.expiresAt > now) {
+            if (existing.requestFingerprint !== fingerprint) {
+              throw new ConflictException(
+                "Idempotency key was already used with different input",
+              );
+            }
+            if (
+              existing.status !== IdempotencyStatus.COMPLETED ||
+              !existing.responseBody
+            ) {
+              throw new ConflictException("Idempotent command is incomplete");
+            }
+            return existing.responseBody as unknown as T;
           }
-          if (
-            existing.status !== IdempotencyStatus.COMPLETED ||
-            !existing.responseBody
-          ) {
-            throw new ConflictException("Idempotent command is incomplete");
-          }
-          return existing.responseBody as unknown as T;
-        }
 
-        const record = await tx.idempotencyRecord.create({
-          data: {
-            namespace,
-            idempotencyKey,
-            generation: (existing?.generation ?? 0) + 1,
-            requestFingerprint: fingerprint,
-            expiresAt: new Date(now.getTime() + 30 * 86_400_000),
-          },
-        });
+          const record = await tx.idempotencyRecord.create({
+            data: {
+              namespace,
+              idempotencyKey,
+              generation: (existing?.generation ?? 0) + 1,
+              requestFingerprint: fingerprint,
+              expiresAt: new Date(now.getTime() + 30 * 86_400_000),
+            },
+          });
 
-        const result = await execute(tx, idempotencyKey);
+          const result = await execute(tx, idempotencyKey);
 
-        await tx.idempotencyRecord.update({
-          where: { id: record.id },
-          data: {
-            status: IdempotencyStatus.COMPLETED,
-            responseStatusCode: 200,
-            responseBody: result as unknown as Prisma.InputJsonObject,
-          },
-        });
+          await tx.idempotencyRecord.update({
+            where: { id: record.id },
+            data: {
+              status: IdempotencyStatus.COMPLETED,
+              responseStatusCode: 200,
+              responseBody: result as unknown as Prisma.InputJsonObject,
+            },
+          });
 
-        return result;
-      });
-    } catch (error) {
-      if (isDatastoreUnavailable(error)) {
-        throw new ServiceUnavailableException(
-          "Legal document datastore is unavailable",
-        );
-      }
-      throw error;
-    }
+          return result;
+        }),
+      "Legal document datastore is unavailable",
+    );
   }
 
   async listDocuments(
     operator: OperatorContext,
   ): Promise<LegalDocumentSummaryDto[]> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
-    return await this.prisma.$transaction(
-      async (tx) => {
-        const now = await databaseNow(tx);
-        const docs = await tx.legalDocument.findMany({
-          orderBy: { key: "asc" },
-          include: {
-            publications: {
-              where: {
-                cancelledAt: null,
-                OR: [{ endsAt: null }, { endsAt: { gt: now } }],
-              },
-              orderBy: { startsAt: "desc" },
+    return await withDatastoreAvailability(
+      () =>
+        this.prisma.$transaction(
+          async (tx) => {
+            const now = await databaseNow(tx);
+            const docs = await tx.legalDocument.findMany({
+              orderBy: { key: "asc" },
               include: {
-                revision: {
-                  select: {
-                    id: true,
-                    documentId: true,
-                    sequence: true,
-                    editVersion: true,
-                    status: true,
-                    contentVersion: true,
-                    title: true,
-                    summary: true,
-                    contentHash: true,
-                    revisionCode: true,
-                    effectiveAt: true,
-                    approvalEvidence: true,
-                    approvedBy: true,
-                    approvedAt: true,
-                    createdAt: true,
-                    updatedAt: true,
+                publications: {
+                  where: {
+                    cancelledAt: null,
+                    OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+                  },
+                  orderBy: { startsAt: "desc" },
+                  include: {
+                    revision: {
+                      select: {
+                        id: true,
+                        documentId: true,
+                        sequence: true,
+                        editVersion: true,
+                        status: true,
+                        contentVersion: true,
+                        title: true,
+                        summary: true,
+                        contentHash: true,
+                        revisionCode: true,
+                        effectiveAt: true,
+                        approvalEvidence: true,
+                        approvedBy: true,
+                        approvedAt: true,
+                        createdAt: true,
+                        updatedAt: true,
+                      },
+                    },
                   },
                 },
               },
-            },
+            });
+
+            const docIds = docs.map((d) => d.id);
+            const [draftCounts, latestDrafts] = await Promise.all([
+              tx.legalDocumentRevision.groupBy({
+                by: ["documentId"],
+                where: {
+                  documentId: { in: docIds },
+                  status: LegalRevisionStatus.DRAFT,
+                },
+                _count: { _all: true },
+              }),
+              tx.legalDocumentRevision.findMany({
+                where: {
+                  documentId: { in: docIds },
+                  status: LegalRevisionStatus.DRAFT,
+                },
+                distinct: ["documentId"],
+                orderBy: [{ sequence: "desc" }],
+                select: {
+                  id: true,
+                  documentId: true,
+                  sequence: true,
+                  editVersion: true,
+                  status: true,
+                  contentVersion: true,
+                  title: true,
+                  summary: true,
+                  contentHash: true,
+                  revisionCode: true,
+                  effectiveAt: true,
+                  approvalEvidence: true,
+                  approvedBy: true,
+                  approvedAt: true,
+                  createdAt: true,
+                  updatedAt: true,
+                },
+              }),
+            ]);
+
+            const draftCountMap = new Map<string, number>(
+              draftCounts.map((c) => [c.documentId, c._count._all]),
+            );
+            const latestDraftMap = new Map<string, (typeof latestDrafts)[0]>(
+              latestDrafts.map((d) => [d.documentId, d]),
+            );
+
+            return docs.map((doc) => {
+              const activePub = doc.publications.find(
+                (p) =>
+                  p.startsAt <= now && (p.endsAt === null || p.endsAt > now),
+              );
+              const pendingPub = doc.publications.find((p) => p.startsAt > now);
+              const draftRevisionsCount = draftCountMap.get(doc.id) ?? 0;
+              const latestDraft = latestDraftMap.get(doc.id);
+
+              return {
+                id: doc.id,
+                key: doc.key,
+                documentId: doc.documentId,
+                generation: doc.generation,
+                ...(activePub
+                  ? { activePublication: toPublicationSummary(activePub) }
+                  : {}),
+                ...(pendingPub
+                  ? { pendingPublication: toPublicationSummary(pendingPub) }
+                  : {}),
+                draftRevisionsCount,
+                ...(latestDraft
+                  ? { latestDraft: toRevisionSummary(latestDraft) }
+                  : {}),
+                createdAt: doc.createdAt.toISOString(),
+                updatedAt: doc.updatedAt.toISOString(),
+              };
+            });
           },
-        });
-
-        const docIds = docs.map((d) => d.id);
-        const [draftCounts, latestDrafts] = await Promise.all([
-          tx.legalDocumentRevision.groupBy({
-            by: ["documentId"],
-            where: {
-              documentId: { in: docIds },
-              status: LegalRevisionStatus.DRAFT,
-            },
-            _count: { _all: true },
-          }),
-          tx.legalDocumentRevision.findMany({
-            where: {
-              documentId: { in: docIds },
-              status: LegalRevisionStatus.DRAFT,
-            },
-            distinct: ["documentId"],
-            orderBy: [{ sequence: "desc" }],
-            select: {
-              id: true,
-              documentId: true,
-              sequence: true,
-              editVersion: true,
-              status: true,
-              contentVersion: true,
-              title: true,
-              summary: true,
-              contentHash: true,
-              revisionCode: true,
-              effectiveAt: true,
-              approvalEvidence: true,
-              approvedBy: true,
-              approvedAt: true,
-              createdAt: true,
-              updatedAt: true,
-            },
-          }),
-        ]);
-
-        const draftCountMap = new Map<string, number>(
-          draftCounts.map((c) => [c.documentId, c._count._all]),
-        );
-        const latestDraftMap = new Map<string, (typeof latestDrafts)[0]>(
-          latestDrafts.map((d) => [d.documentId, d]),
-        );
-
-        return docs.map((doc) => {
-          const activePub = doc.publications.find(
-            (p) => p.startsAt <= now && (p.endsAt === null || p.endsAt > now),
-          );
-          const pendingPub = doc.publications.find((p) => p.startsAt > now);
-          const draftRevisionsCount = draftCountMap.get(doc.id) ?? 0;
-          const latestDraft = latestDraftMap.get(doc.id);
-
-          return {
-            id: doc.id,
-            key: doc.key,
-            documentId: doc.documentId,
-            generation: doc.generation,
-            ...(activePub
-              ? { activePublication: toPublicationSummary(activePub) }
-              : {}),
-            ...(pendingPub
-              ? { pendingPublication: toPublicationSummary(pendingPub) }
-              : {}),
-            draftRevisionsCount,
-            ...(latestDraft
-              ? { latestDraft: toRevisionSummary(latestDraft) }
-              : {}),
-            createdAt: doc.createdAt.toISOString(),
-            updatedAt: doc.updatedAt.toISOString(),
-          };
-        });
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+          { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+        ),
+      "Legal document datastore is unavailable",
     );
   }
 
@@ -532,143 +500,157 @@ export class LegalDocumentsService {
     publicationLimit = 25,
   ): Promise<LegalDocumentDetailDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
-    return await this.prisma.$transaction(
-      async (tx) => {
-        const doc = await tx.legalDocument.findUnique({
-          where: { key },
-        });
+    return await withDatastoreAvailability(
+      () =>
+        this.prisma.$transaction(
+          async (tx) => {
+            const doc = await tx.legalDocument.findUnique({
+              where: { key },
+            });
 
-        if (!doc) {
-          throw new NotFoundException(`Legal document '${key}' was not found`);
-        }
+            if (!doc) {
+              throw new NotFoundException(
+                `Legal document '${key}' was not found`,
+              );
+            }
 
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-          throw new BadRequestException("Revision limit is invalid");
-        }
+            if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+              throw new BadRequestException("Revision limit is invalid");
+            }
 
-        if (
-          !Number.isSafeInteger(publicationLimit) ||
-          publicationLimit < 1 ||
-          publicationLimit > 100
-        ) {
-          throw new BadRequestException("Publication limit is invalid");
-        }
+            if (
+              !Number.isSafeInteger(publicationLimit) ||
+              publicationLimit < 1 ||
+              publicationLimit > 100
+            ) {
+              throw new BadRequestException("Publication limit is invalid");
+            }
 
-        let cursorSequence: number | undefined;
-        if (cursor !== undefined) {
-          if (!/^[1-9]\d*$/.test(cursor)) {
-            throw new BadRequestException("Revision cursor is invalid");
-          }
-          cursorSequence = Number(cursor);
-          if (!Number.isSafeInteger(cursorSequence) || cursorSequence < 1) {
-            throw new BadRequestException("Revision cursor is invalid");
-          }
-        }
+            let cursorSequence: number | undefined;
+            if (cursor !== undefined) {
+              if (!/^[1-9]\d*$/.test(cursor)) {
+                throw new BadRequestException("Revision cursor is invalid");
+              }
+              cursorSequence = Number(cursor);
+              if (!Number.isSafeInteger(cursorSequence) || cursorSequence < 1) {
+                throw new BadRequestException("Revision cursor is invalid");
+              }
+            }
 
-        const pubKeyset =
-          publicationCursor !== undefined
-            ? parsePublicationCursor(publicationCursor)
-            : undefined;
+            const pubKeyset =
+              publicationCursor !== undefined
+                ? parsePublicationCursor(publicationCursor)
+                : undefined;
 
-        const [revisions, pubRows, now] = await Promise.all([
-          tx.legalDocumentRevision.findMany({
-            where: {
-              documentId: doc.id,
-              ...(cursorSequence !== undefined
-                ? { sequence: { lt: cursorSequence } }
+            const [revisions, pubRows, now] = await Promise.all([
+              tx.legalDocumentRevision.findMany({
+                where: {
+                  documentId: doc.id,
+                  ...(cursorSequence !== undefined
+                    ? { sequence: { lt: cursorSequence } }
+                    : {}),
+                },
+                orderBy: { sequence: "desc" },
+                take: limit + 1,
+              }),
+              tx.legalDocumentPublication.findMany({
+                where: {
+                  documentId: doc.id,
+                  ...(pubKeyset
+                    ? {
+                        OR: [
+                          { startsAt: { lt: pubKeyset.startsAt } },
+                          {
+                            startsAt: pubKeyset.startsAt,
+                            id: { lt: pubKeyset.id },
+                          },
+                        ],
+                      }
+                    : {}),
+                },
+                orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+                take: publicationLimit + 1,
+                include: { revision: true },
+              }),
+              databaseNow(tx),
+            ]);
+
+            const page = revisions.slice(0, limit);
+            const last = page.at(-1);
+            const nextCursor =
+              revisions.length > limit && last
+                ? String(last.sequence)
+                : undefined;
+
+            const pubPage = pubRows.slice(0, publicationLimit);
+            const lastPub = pubPage.at(-1);
+            const publicationsNextCursor =
+              pubRows.length > publicationLimit && lastPub
+                ? encodePublicationCursor(lastPub)
+                : undefined;
+
+            const [activePub, pendingPub, draftCount, latestDraft] =
+              await Promise.all([
+                tx.legalDocumentPublication.findFirst({
+                  where: {
+                    documentId: doc.id,
+                    cancelledAt: null,
+                    startsAt: { lte: now },
+                    OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+                  },
+                  orderBy: { startsAt: "desc" },
+                  include: { revision: true },
+                }),
+                tx.legalDocumentPublication.findFirst({
+                  where: {
+                    documentId: doc.id,
+                    cancelledAt: null,
+                    startsAt: { gt: now },
+                  },
+                  orderBy: { startsAt: "asc" },
+                  include: { revision: true },
+                }),
+                tx.legalDocumentRevision.count({
+                  where: {
+                    documentId: doc.id,
+                    status: LegalRevisionStatus.DRAFT,
+                  },
+                }),
+                tx.legalDocumentRevision.findFirst({
+                  where: {
+                    documentId: doc.id,
+                    status: LegalRevisionStatus.DRAFT,
+                  },
+                  orderBy: { sequence: "desc" },
+                }),
+              ]);
+
+            return {
+              id: doc.id,
+              key: doc.key,
+              documentId: doc.documentId,
+              generation: doc.generation,
+              ...(activePub
+                ? { activePublication: toPublicationSummary(activePub) }
                 : {}),
-            },
-            orderBy: { sequence: "desc" },
-            take: limit + 1,
-          }),
-          tx.legalDocumentPublication.findMany({
-            where: {
-              documentId: doc.id,
-              ...(pubKeyset
-                ? {
-                    OR: [
-                      { startsAt: { lt: pubKeyset.startsAt } },
-                      {
-                        startsAt: pubKeyset.startsAt,
-                        id: { lt: pubKeyset.id },
-                      },
-                    ],
-                  }
+              ...(pendingPub
+                ? { pendingPublication: toPublicationSummary(pendingPub) }
                 : {}),
-            },
-            orderBy: [{ startsAt: "desc" }, { id: "desc" }],
-            take: publicationLimit + 1,
-            include: { revision: true },
-          }),
-          databaseNow(tx),
-        ]);
-
-        const page = revisions.slice(0, limit);
-        const last = page.at(-1);
-        const nextCursor =
-          revisions.length > limit && last ? String(last.sequence) : undefined;
-
-        const pubPage = pubRows.slice(0, publicationLimit);
-        const lastPub = pubPage.at(-1);
-        const publicationsNextCursor =
-          pubRows.length > publicationLimit && lastPub
-            ? encodePublicationCursor(lastPub)
-            : undefined;
-
-        const [activePub, pendingPub, draftCount, latestDraft] =
-          await Promise.all([
-            tx.legalDocumentPublication.findFirst({
-              where: {
-                documentId: doc.id,
-                cancelledAt: null,
-                startsAt: { lte: now },
-                OR: [{ endsAt: null }, { endsAt: { gt: now } }],
-              },
-              orderBy: { startsAt: "desc" },
-              include: { revision: true },
-            }),
-            tx.legalDocumentPublication.findFirst({
-              where: {
-                documentId: doc.id,
-                cancelledAt: null,
-                startsAt: { gt: now },
-              },
-              orderBy: { startsAt: "asc" },
-              include: { revision: true },
-            }),
-            tx.legalDocumentRevision.count({
-              where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
-            }),
-            tx.legalDocumentRevision.findFirst({
-              where: { documentId: doc.id, status: LegalRevisionStatus.DRAFT },
-              orderBy: { sequence: "desc" },
-            }),
-          ]);
-
-        return {
-          id: doc.id,
-          key: doc.key,
-          documentId: doc.documentId,
-          generation: doc.generation,
-          ...(activePub
-            ? { activePublication: toPublicationSummary(activePub) }
-            : {}),
-          ...(pendingPub
-            ? { pendingPublication: toPublicationSummary(pendingPub) }
-            : {}),
-          draftRevisionsCount: draftCount,
-          ...(latestDraft
-            ? { latestDraft: toRevisionSummary(latestDraft) }
-            : {}),
-          revisions: page.map(toRevisionDetail),
-          publications: pubPage.map(toPublicationSummary),
-          ...(nextCursor ? { nextCursor } : {}),
-          ...(publicationsNextCursor ? { publicationsNextCursor } : {}),
-          createdAt: doc.createdAt.toISOString(),
-          updatedAt: doc.updatedAt.toISOString(),
-        };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+              draftRevisionsCount: draftCount,
+              ...(latestDraft
+                ? { latestDraft: toRevisionSummary(latestDraft) }
+                : {}),
+              revisions: page.map(toRevisionDetail),
+              publications: pubPage.map(toPublicationSummary),
+              ...(nextCursor ? { nextCursor } : {}),
+              ...(publicationsNextCursor ? { publicationsNextCursor } : {}),
+              createdAt: doc.createdAt.toISOString(),
+              updatedAt: doc.updatedAt.toISOString(),
+            };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+        ),
+      "Legal document datastore is unavailable",
     );
   }
 
@@ -679,9 +661,10 @@ export class LegalDocumentsService {
     limit = 25,
   ): Promise<LegalPublicationPageDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.LEGAL_READ);
-    const doc = await this.prisma.legalDocument.findUnique({
-      where: { key },
-    });
+    const doc = await withDatastoreAvailability(
+      () => this.prisma.legalDocument.findUnique({ where: { key } }),
+      "Legal document datastore is unavailable",
+    );
     if (!doc) {
       throw new NotFoundException(`Legal document '${key}' was not found`);
     }
@@ -690,25 +673,29 @@ export class LegalDocumentsService {
     }
     const pubKeyset =
       cursor !== undefined ? parsePublicationCursor(cursor) : undefined;
-    const pubRows = await this.prisma.legalDocumentPublication.findMany({
-      where: {
-        documentId: doc.id,
-        ...(pubKeyset
-          ? {
-              OR: [
-                { startsAt: { lt: pubKeyset.startsAt } },
-                {
-                  startsAt: pubKeyset.startsAt,
-                  id: { lt: pubKeyset.id },
-                },
-              ],
-            }
-          : {}),
-      },
-      orderBy: [{ startsAt: "desc" }, { id: "desc" }],
-      take: limit + 1,
-      include: { revision: true },
-    });
+    const pubRows = await withDatastoreAvailability(
+      () =>
+        this.prisma.legalDocumentPublication.findMany({
+          where: {
+            documentId: doc.id,
+            ...(pubKeyset
+              ? {
+                  OR: [
+                    { startsAt: { lt: pubKeyset.startsAt } },
+                    {
+                      startsAt: pubKeyset.startsAt,
+                      id: { lt: pubKeyset.id },
+                    },
+                  ],
+                }
+              : {}),
+          },
+          orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+          take: limit + 1,
+          include: { revision: true },
+        }),
+      "Legal document datastore is unavailable",
+    );
     const page = pubRows.slice(0, limit);
     const last = page.at(-1);
     const nextCursor =
@@ -1436,66 +1423,72 @@ export class LegalDocumentsService {
     const validRevisionCode = requireString(revisionCode, "Revision code", {
       pattern: REVISION_CODE_PATTERN,
     });
-    return await this.prisma.$transaction(async (tx) => {
-      const doc = await tx.legalDocument.findUnique({
-        where: { key: validKey },
-      });
-      if (!doc) {
-        throw new NotFoundException(
-          `Legal document '${validKey}' was not found`,
-        );
-      }
+    return await withDatastoreAvailability(
+      () =>
+        this.prisma.$transaction(async (tx) => {
+          const doc = await tx.legalDocument.findUnique({
+            where: { key: validKey },
+          });
+          if (!doc) {
+            throw new NotFoundException(
+              `Legal document '${validKey}' was not found`,
+            );
+          }
 
-      const revision = await tx.legalDocumentRevision.findUnique({
-        where: { revisionCode: validRevisionCode },
-      });
-      if (!revision || revision.documentId !== doc.id) {
-        throw new NotFoundException(
-          `Revision '${validRevisionCode}' was not found for '${validKey}'`,
-        );
-      }
-      if (
-        revision.status !== LegalRevisionStatus.APPROVED ||
-        !revision.effectiveAt
-      ) {
-        throw new NotFoundException(
-          `Revision '${validRevisionCode}' is not an approved revision`,
-        );
-      }
+          const revision = await tx.legalDocumentRevision.findUnique({
+            where: { revisionCode: validRevisionCode },
+          });
+          if (!revision || revision.documentId !== doc.id) {
+            throw new NotFoundException(
+              `Revision '${validRevisionCode}' was not found for '${validKey}'`,
+            );
+          }
+          if (
+            revision.status !== LegalRevisionStatus.APPROVED ||
+            !revision.effectiveAt
+          ) {
+            throw new NotFoundException(
+              `Revision '${validRevisionCode}' is not an approved revision`,
+            );
+          }
 
-      const now = await databaseNow(tx);
-      // Must have at least one publication that has started and was not cancelled before startsAt
-      const publication = await tx.legalDocumentPublication.findFirst({
-        where: {
-          revisionId: revision.id,
-          startsAt: { lte: now },
-          OR: [
-            { cancelledAt: null },
-            {
-              cancelledAt: { gte: tx.legalDocumentPublication.fields.startsAt },
+          const now = await databaseNow(tx);
+          // Must have at least one publication that has started and was not cancelled before startsAt
+          const publication = await tx.legalDocumentPublication.findFirst({
+            where: {
+              revisionId: revision.id,
+              startsAt: { lte: now },
+              OR: [
+                { cancelledAt: null },
+                {
+                  cancelledAt: {
+                    gte: tx.legalDocumentPublication.fields.startsAt,
+                  },
+                },
+              ],
             },
-          ],
-        },
-      });
+          });
 
-      if (!publication) {
-        throw new NotFoundException(
-          `Revision '${validRevisionCode}' has not been published`,
-        );
-      }
+          if (!publication) {
+            throw new NotFoundException(
+              `Revision '${validRevisionCode}' has not been published`,
+            );
+          }
 
-      return {
-        documentId: doc.documentId,
-        key: doc.key,
-        revisionCode: revision.revisionCode!,
-        contentVersion: revision.contentVersion,
-        contentHash: revision.contentHash,
-        title: revision.title,
-        summary: revision.summary,
-        sections: revision.sections as unknown as LegalDocumentSectionDto[],
-        effectiveAt: revision.effectiveAt.toISOString(),
-      };
-    });
+          return {
+            documentId: doc.documentId,
+            key: doc.key,
+            revisionCode: revision.revisionCode!,
+            contentVersion: revision.contentVersion,
+            contentHash: revision.contentHash,
+            title: revision.title,
+            summary: revision.summary,
+            sections: revision.sections as unknown as LegalDocumentSectionDto[],
+            effectiveAt: revision.effectiveAt.toISOString(),
+          };
+        }),
+      "Legal document datastore is unavailable",
+    );
   }
 }
 

@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from "@nestjs/common";
 import { describe, expect, it, vi } from "vitest";
 import { AuditService } from "./audit.service";
 import type { OperatorContext } from "../admin-access/operator-context";
@@ -20,6 +21,29 @@ const operator: OperatorContext = {
 };
 
 describe("AuditService legacy projection", () => {
+  it("maps unavailable legal audit reads to 503", async () => {
+    const service = new AuditService({
+      auditEvent: {
+        findMany: vi.fn().mockRejectedValue({ code: "P1001" }),
+      },
+    } as never);
+    const legalReader: OperatorContext = {
+      ...operator,
+      permissions: [
+        OPERATOR_PERMISSIONS.AUDIT_READ,
+        OPERATOR_PERMISSIONS.LEGAL_READ,
+      ],
+      nodeIds: [],
+    };
+
+    const error = await service
+      .listLegalDocumentAuditEvents(legalReader, legalDocumentId)
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+  });
+
   it("shows a legacy order event only after its parent scope is proven", async () => {
     const findMany = vi.fn().mockResolvedValue([
       {

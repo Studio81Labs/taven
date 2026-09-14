@@ -7,6 +7,7 @@ import {
 import { AuditActorKind, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
+import { withDatastoreAvailability } from "../../prisma/datastore-availability";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { requireOperatorPermission } from "../admin-access/operator-command";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
@@ -209,18 +210,25 @@ export class AuditService {
           }
         : {}),
     };
-    const rows = await this.prisma.auditEvent.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: limit + 1,
-    });
+    const rows = await withDatastoreAvailability(
+      () =>
+        this.prisma.auditEvent.findMany({
+          where,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: limit + 1,
+        }),
+      "Legal audit datastore is unavailable",
+    );
     const page = rows.slice(0, limit);
     const last = page.at(-1);
     const nextCursor =
       rows.length > limit && last
         ? encodeCursor({ createdAt: last.createdAt, id: last.id, filterHash })
         : undefined;
-    const payloadReferences = await this.legalPayloadReferences(docId, page);
+    const payloadReferences = await withDatastoreAvailability(
+      () => this.legalPayloadReferences(docId, page),
+      "Legal audit datastore is unavailable",
+    );
     return {
       items: page.map((row) => toSummary(row, payloadReferences)),
       ...(nextCursor ? { nextCursor } : {}),
