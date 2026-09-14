@@ -17100,6 +17100,7 @@ describe("commerce persistence foundations", () => {
                  accepted_claim_window_days = 30,
                  withdrawal_exception_acknowledged_at = clock_timestamp(),
                  checkout_contact_snapshot = jsonb_build_object(
+                   'version', 2,
                    'email', 'test@example.test',
                    'fullName', 'Test customer'
                  )
@@ -17156,6 +17157,7 @@ describe("commerce persistence foundations", () => {
                  accepted_claim_window_days = 30,
                  withdrawal_exception_acknowledged_at = clock_timestamp(),
                  checkout_contact_snapshot = jsonb_build_object(
+                   'version', 2,
                    'email', 'test@example.test',
                    'fullName', 'Test customer'
                  )
@@ -17180,6 +17182,7 @@ describe("commerce persistence foundations", () => {
                  withdrawal_exception_acknowledged_at =
                    clock_timestamp() + interval '60 seconds',
                  checkout_contact_snapshot = jsonb_build_object(
+                   'version', 2,
                    'email', 'test@example.test',
                    'fullName', 'Test customer'
                  )

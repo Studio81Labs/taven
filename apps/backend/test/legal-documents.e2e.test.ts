@@ -74,6 +74,14 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       DELETE FROM legal_document_publications;
       DELETE FROM legal_document_revisions WHERE sequence > 1;
       DELETE FROM audit_events WHERE legal_document_id IS NOT NULL;
+      UPDATE legal_document_revisions
+      SET status = 'DRAFT',
+          revision_code = NULL,
+          effective_at = NULL,
+          approval_evidence = NULL,
+          approved_by = NULL,
+          approved_at = NULL
+      WHERE sequence = 1;
       UPDATE legal_documents SET generation = 1;
       ALTER TABLE legal_documents ENABLE TRIGGER ALL;
       ALTER TABLE legal_document_publications ENABLE TRIGGER ALL;

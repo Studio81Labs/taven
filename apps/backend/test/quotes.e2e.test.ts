@@ -14,6 +14,7 @@ import type { IssueOfferDto } from "../src/modules/quotes/quotes.dto";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
 
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 const quoteCapabilityKey =
@@ -38,6 +39,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let prisma: PrismaService;
   let quotes: QuotesService;
   let priceListId: string;
+  let termsSnapshot: Record<string, unknown>;
   let defaultOfferItem: Record<string, unknown>;
   let operatorCookie: string;
   let operatorCsrfToken: string;
@@ -96,6 +98,23 @@ describe("QuoteRequest and tokenized individual offers", () => {
       orderBy: { createdAt: "asc" },
     });
     priceListId = priceList.id;
+    const termsRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { revisionCode: e2eLegalRevisionCodes.terms },
+      select: {
+        contentVersion: true,
+        title: true,
+        summary: true,
+        sections: true,
+        contentHash: true,
+      },
+    });
+    termsSnapshot = {
+      contentVersion: termsRevision.contentVersion,
+      title: termsRevision.title,
+      summary: termsRevision.summary,
+      sections: termsRevision.sections,
+      contentHash: termsRevision.contentHash,
+    };
     defaultOfferItem = (
       await createModelOfferItem("default-offer-item", "NONE")
     ).item;
@@ -150,10 +169,36 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(issued.response.status).toBe(201);
 
+    for (const acknowledgeWithdrawalException of [undefined, false]) {
+      const rejected = await apiJson(`offers/${issued.body.quoteId}/accept`, {
+        method: "POST",
+        headers: {
+          ...bearer(issued.body.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": key(
+            `launch-gate-withdrawal-${String(acknowledgeWithdrawalException)}`,
+          ),
+        },
+        body: JSON.stringify({
+          version: issued.body.version,
+          termsRevision: issued.body.termsRevision,
+          ...(acknowledgeWithdrawalException === undefined
+            ? {}
+            : { acknowledgeWithdrawalException }),
+        }),
+      });
+      expect(rejected.response.status).toBe(400);
+    }
+    expect(
+      await prisma.individualOrderOrigin.count({
+        where: { quoteId: issued.body.quoteId },
+      }),
+    ).toBe(0);
+
     const configuredTermsRevision = process.env.TAVEN_TERMS_REVISION;
     process.env.TAVEN_TERMS_REVISION = `${issued.body.termsRevision}-next`;
     try {
-      const refused = await apiJson(`offers/${issued.body.quoteId}/accept`, {
+      const accepted = await apiJson(`offers/${issued.body.quoteId}/accept`, {
         method: "POST",
         headers: {
           ...bearer(issued.body.offerToken),
@@ -163,12 +208,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
         body: JSON.stringify({
           version: issued.body.version,
           termsRevision: issued.body.termsRevision,
+          acknowledgeWithdrawalException: true,
         }),
       });
-      expect(refused.response.status).toBe(503);
-      expect(refused.body).toMatchObject({
-        code: "LAUNCH_APPROVAL_REQUIRED",
-      });
+      expect(accepted.response.status).toBe(200);
     } finally {
       if (configuredTermsRevision === undefined) {
         delete process.env.TAVEN_TERMS_REVISION;
@@ -191,7 +234,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         await prisma.individualOrderOrigin.count({
           where: { quoteId: issued.body.quoteId },
         }),
-      ).toBe(0);
+      ).toBe(1);
     } finally {
       process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = configured ?? "true";
     }
@@ -1093,6 +1136,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         body: JSON.stringify({
           version: issued.body.version,
           termsRevision: issued.body.termsRevision,
+          acknowledgeWithdrawalException: true,
         }),
       },
     );
@@ -1259,13 +1303,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).resolves.toBe(itemCount);
   });
 
-  it("rejects a non-canonical price-list terms revision", async () => {
+  it("uses the effective legal revision instead of price-list terms metadata", async () => {
     const selectedPriceList = await prisma.priceList.create({
       data: {
         revision: `quote-e2e-spaced-terms-${randomUUID()}`,
         termsRevision: "  terms-spaced-v1  ",
         currency: "CZK",
         parameters: {
+          sellerTaxPolicy: {
+            regime: "NON_VAT_PAYER",
+            vatRateBasisPoints: 0,
+          },
           balance_payment_days: 7,
           balance_timeout_earned_component_kinds: ["ITEM_PRODUCTION"],
         },
@@ -1290,13 +1338,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
       defaultItems(),
       selectedPriceList.id,
     );
-    expect(issued.response.status).toBe(400);
-    expect(issued.body).toMatchObject({
-      message: "priceListId has a non-canonical terms revision",
-    });
-    await expect(
-      prisma.quote.count({ where: { quoteRequestId: created.requestId } }),
-    ).resolves.toBe(0);
+    expect(issued.response.status).toBe(201);
+    expect(issued.body.termsRevision).toBe(e2eLegalRevisionCodes.terms);
   });
 
   it("rejects a current offer idempotently and prevents later acceptance", async () => {
@@ -1449,7 +1492,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         netAmountMinor: 110_000,
         vatAmountMinor: 0,
         depositMinor: 33_000,
-        termsSnapshot: { revisionAcceptedByOffer: true },
+        termsSnapshot,
         inputSnapshot: { operatorEstimate: "manual-v0" },
         deliveryDestination: defaultDeliveryDestination(),
         shipmentPlans: defaultShipmentPlans(),
@@ -2071,6 +2114,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
         phone: "+420123456789",
       },
       attribution: { channel: "unknown", source: "e2e" },
+      privacyAcknowledged: true,
+      privacyNoticeRevision: e2eLegalRevisionCodes.privacy,
     };
   }
 
@@ -2214,7 +2259,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
           options.netAmountMinor ?? options.contractTotalMinor ?? 110_000,
         vatAmountMinor: options.vatAmountMinor ?? 0,
         depositMinor: options.depositMinor ?? 33_000,
-        termsSnapshot: { revisionAcceptedByOffer: true },
+        termsSnapshot,
         inputSnapshot: { operatorEstimate: "manual-v0" },
         deliveryDestination:
           options.deliveryDestination ?? defaultDeliveryDestination(),
@@ -2344,6 +2389,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       body: JSON.stringify({
         version: issued.version,
         termsRevision: issued.termsRevision,
+        acknowledgeWithdrawalException: true,
       }),
     });
   }

@@ -1453,8 +1453,6 @@ export class QuotesService {
             acceptedClaimPolicyRevision: approvals.documents.claims.revision,
             acceptedClaimWindowDays: quote.claimWindowDays,
             withdrawalExceptionAcknowledgedAt: observedAt,
-            status: "QUOTED",
-            quotedAt: observedAt,
           },
         });
         await transaction.legalAcceptance.createMany({

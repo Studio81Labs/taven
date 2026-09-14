@@ -1215,6 +1215,7 @@ export class PersistenceFactory {
                accepted_claim_window_days = 30,
                withdrawal_exception_acknowledged_at = $2,
                checkout_contact_snapshot = jsonb_build_object(
+                 'version', 2,
                  'email', $4::text,
                  'fullName', 'Test customer'
                ),
@@ -1315,6 +1316,7 @@ export class PersistenceFactory {
            accepted_claim_window_days = 30,
            withdrawal_exception_acknowledged_at = $2,
            checkout_contact_snapshot = jsonb_build_object(
+             'version', 2,
              'email', 'test@example.test',
              'fullName', 'Test customer'
            ),

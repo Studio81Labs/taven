@@ -220,6 +220,170 @@ CREATE CONSTRAINT TRIGGER "legal_acceptances_order_evidence_valid"
 AFTER INSERT ON "legal_acceptances" DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_legal_acceptance();
 
+-- Individual offers record withdrawal acknowledgement before the order becomes
+-- QUOTED. The order-level trigger below restricts that DRAFT exception to its
+-- immutable accepted-offer conversion; ordinary checkout evidence still must
+-- follow the quoted timestamp.
+ALTER TABLE "orders" DROP CONSTRAINT "orders_timestamps_check";
+ALTER TABLE "orders" ADD CONSTRAINT "orders_timestamps_check" CHECK (
+    ("quoted_at" IS NULL OR "quoted_at" >= "created_at" - interval '5 seconds')
+    AND ("confirmed_at" IS NULL OR ("quoted_at" IS NOT NULL AND "confirmed_at" >= "quoted_at"))
+    AND (
+        "withdrawal_exception_acknowledged_at" IS NULL
+        OR "withdrawal_exception_acknowledged_at" >= coalesce("quoted_at", "created_at" - interval '5 seconds')
+    )
+    AND (
+        ("status" = 'DRAFT' AND "quoted_at" IS NULL AND "confirmed_at" IS NULL)
+        OR ("status" IN ('QUOTED', 'EXPIRED') AND "quoted_at" IS NOT NULL AND "confirmed_at" IS NULL)
+        OR (
+            "status" IN (
+                'CONFIRMED', 'IN_PRODUCTION', 'QC_PASSED', 'AWAITING_BALANCE',
+                'READY_TO_SHIP', 'SHIPPED', 'DELIVERED', 'COMPLETED',
+                'RECOVERY_PENDING', 'PARTIALLY_FULFILLED'
+            )
+            AND "quoted_at" IS NOT NULL
+            AND "confirmed_at" IS NOT NULL
+        )
+        OR ("status" IN ('CANCELLED', 'REFUNDED', 'CANCELLED_SETTLED') AND "quoted_at" IS NOT NULL)
+    )
+);
+
+-- Individual offer acceptance deliberately happens before payment checkout.
+-- It freezes the accepted offer package first; checkout may later record its
+-- separately immutable contact snapshot and optional photo decision once.
+DROP TRIGGER "orders_checkout_contact_snapshot_protected" ON "orders";
+
+CREATE OR REPLACE FUNCTION taven_protect_order_checkout_contact_snapshot()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."checkout_contact_snapshot" IS NOT NULL
+       OR NEW."accepted_order_price_binding_id" IS NOT NULL
+       OR NEW."accepted_terms_revision" IS NOT NULL
+       OR NEW."accepted_claim_policy_revision" IS NOT NULL
+       OR NEW."accepted_claim_window_days" IS NOT NULL
+       OR NEW."withdrawal_exception_acknowledged_at" IS NOT NULL
+       OR NEW."photo_publication_consent_granted_at" IS NOT NULL
+       OR NEW."photo_publication_consent_revision" IS NOT NULL THEN
+      RAISE EXCEPTION 'checkout evidence cannot predate the quoted order'
+        USING ERRCODE = '23514',
+              CONSTRAINT = 'order_checkout_contact_snapshot_immutable_check';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF NEW."checkout_contact_snapshot" IS NOT DISTINCT FROM OLD."checkout_contact_snapshot"
+     AND NEW."accepted_order_price_binding_id" IS NOT DISTINCT FROM OLD."accepted_order_price_binding_id"
+     AND NEW."accepted_terms_revision" IS NOT DISTINCT FROM OLD."accepted_terms_revision"
+     AND NEW."accepted_claim_policy_revision" IS NOT DISTINCT FROM OLD."accepted_claim_policy_revision"
+     AND NEW."accepted_claim_window_days" IS NOT DISTINCT FROM OLD."accepted_claim_window_days"
+     AND NEW."withdrawal_exception_acknowledged_at" IS NOT DISTINCT FROM OLD."withdrawal_exception_acknowledged_at"
+     AND NEW."photo_publication_consent_granted_at" IS NOT DISTINCT FROM OLD."photo_publication_consent_granted_at"
+     AND NEW."photo_publication_consent_revision" IS NOT DISTINCT FROM OLD."photo_publication_consent_revision" THEN
+    RETURN NEW;
+  END IF;
+
+  -- A separately approved legacy Claim-window repair changes only that
+  -- snapshot. Its dedicated trigger verifies the exact approval evidence.
+  IF NEW."checkout_contact_snapshot" IS NOT DISTINCT FROM OLD."checkout_contact_snapshot"
+     AND NEW."accepted_order_price_binding_id" IS NOT DISTINCT FROM OLD."accepted_order_price_binding_id"
+     AND NEW."accepted_terms_revision" IS NOT DISTINCT FROM OLD."accepted_terms_revision"
+     AND NEW."accepted_claim_policy_revision" IS NOT DISTINCT FROM OLD."accepted_claim_policy_revision"
+     AND NEW."withdrawal_exception_acknowledged_at" IS NOT DISTINCT FROM OLD."withdrawal_exception_acknowledged_at"
+     AND NEW."photo_publication_consent_granted_at" IS NOT DISTINCT FROM OLD."photo_publication_consent_granted_at"
+     AND NEW."photo_publication_consent_revision" IS NOT DISTINCT FROM OLD."photo_publication_consent_revision"
+     AND EXISTS (
+       SELECT 1 FROM "claim_window_migration_approvals" approval
+       WHERE approval."order_id" = NEW."id"
+         AND approval."claim_policy_revision" = NEW."accepted_claim_policy_revision"
+         AND approval."claim_window_days" = NEW."accepted_claim_window_days"
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF OLD."checkout_contact_snapshot" IS NULL
+     AND OLD."accepted_order_price_binding_id" IS NULL
+     AND OLD."accepted_terms_revision" IS NULL
+     AND OLD."accepted_claim_policy_revision" IS NULL
+     AND OLD."accepted_claim_window_days" IS NULL
+     AND OLD."withdrawal_exception_acknowledged_at" IS NULL
+     AND OLD."photo_publication_consent_granted_at" IS NULL
+     AND OLD."photo_publication_consent_revision" IS NULL
+     AND NEW."checkout_contact_snapshot" IS NULL
+     AND NEW."accepted_order_price_binding_id" IS NOT NULL
+     AND NEW."accepted_terms_revision" IS NOT NULL
+     AND NEW."accepted_claim_policy_revision" IS NOT NULL
+     AND NEW."accepted_claim_window_days" IS NOT NULL
+     AND NEW."withdrawal_exception_acknowledged_at" IS NOT NULL
+     AND NEW."photo_publication_consent_granted_at" IS NULL
+     AND NEW."photo_publication_consent_revision" IS NULL
+     AND OLD."status" = 'DRAFT'
+     AND NEW."status" = 'DRAFT'
+     AND NOT EXISTS (
+       SELECT 1 FROM "payments" payment WHERE payment."order_id" = OLD."id"
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF OLD."checkout_contact_snapshot" IS NULL
+     AND OLD."accepted_order_price_binding_id" IS NOT NULL
+     AND OLD."accepted_terms_revision" IS NOT NULL
+     AND OLD."accepted_claim_policy_revision" IS NOT NULL
+     AND OLD."accepted_claim_window_days" IS NOT NULL
+     AND OLD."withdrawal_exception_acknowledged_at" IS NOT NULL
+     AND NEW."checkout_contact_snapshot" ->> 'version' = '2'
+     AND NEW."accepted_order_price_binding_id" = OLD."accepted_order_price_binding_id"
+     AND NEW."accepted_terms_revision" = OLD."accepted_terms_revision"
+     AND NEW."accepted_claim_policy_revision" = OLD."accepted_claim_policy_revision"
+     AND NEW."accepted_claim_window_days" = OLD."accepted_claim_window_days"
+     AND NEW."withdrawal_exception_acknowledged_at" = OLD."withdrawal_exception_acknowledged_at"
+     AND OLD."status" = 'QUOTED'
+     AND NEW."status" = 'QUOTED'
+     AND NOT EXISTS (
+       SELECT 1 FROM "payments" payment WHERE payment."order_id" = OLD."id"
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF OLD."checkout_contact_snapshot" IS NULL
+     AND OLD."accepted_order_price_binding_id" IS NULL
+     AND OLD."accepted_terms_revision" IS NULL
+     AND OLD."accepted_claim_policy_revision" IS NULL
+     AND OLD."accepted_claim_window_days" IS NULL
+     AND OLD."withdrawal_exception_acknowledged_at" IS NULL
+     AND OLD."photo_publication_consent_granted_at" IS NULL
+     AND OLD."photo_publication_consent_revision" IS NULL
+     AND NEW."checkout_contact_snapshot" ->> 'version' = '2'
+     AND NEW."accepted_order_price_binding_id" IS NOT NULL
+     AND NEW."accepted_terms_revision" IS NOT NULL
+     AND NEW."accepted_claim_policy_revision" IS NOT NULL
+     AND NEW."accepted_claim_window_days" IS NOT NULL
+     AND NEW."withdrawal_exception_acknowledged_at" IS NOT NULL
+     AND OLD."status" = 'QUOTED'
+     AND NEW."status" = 'QUOTED'
+     AND NOT EXISTS (
+       SELECT 1 FROM "payments" payment WHERE payment."order_id" = OLD."id"
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'checkout evidence is immutable acceptance evidence'
+    USING ERRCODE = '23514',
+          CONSTRAINT = 'order_checkout_contact_snapshot_immutable_check';
+END;
+$$;
+
+CREATE TRIGGER "orders_checkout_contact_snapshot_protected"
+BEFORE INSERT OR UPDATE OF
+  "accepted_order_price_binding_id", "accepted_terms_revision",
+  "accepted_claim_policy_revision", "accepted_claim_window_days",
+  "withdrawal_exception_acknowledged_at", "checkout_contact_snapshot",
+  "photo_publication_consent_granted_at", "photo_publication_consent_revision"
+ON "orders"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_order_checkout_contact_snapshot();
+
 -- All settlement and fulfilment callers already use this function.  A new
 -- binding is authoritative by revision FK; the legacy PriceList comparison is
 -- retained only for records created before this migration.
@@ -289,8 +453,8 @@ END;
 $$;
 
 -- The individual-offer conversion creates its Order aggregate in this same
--- transaction.  It is the sole additional first-acceptance path; it must move
--- DRAFT to QUOTED together with the immutable evidence and cannot be replayed.
+-- transaction. It is the sole additional first-acceptance path; the order
+-- remains DRAFT while its immutable offer evidence is recorded.
 CREATE OR REPLACE FUNCTION taven_protect_order_checkout_acceptance()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -311,23 +475,27 @@ BEGIN
     IF NEW."accepted_order_price_binding_id" IS NOT DISTINCT FROM OLD."accepted_order_price_binding_id"
        AND NEW."accepted_terms_revision" IS NOT DISTINCT FROM OLD."accepted_terms_revision"
        AND NEW."accepted_claim_policy_revision" IS NOT DISTINCT FROM OLD."accepted_claim_policy_revision"
+       AND NEW."accepted_claim_window_days" IS NOT DISTINCT FROM OLD."accepted_claim_window_days"
        AND NEW."withdrawal_exception_acknowledged_at" IS NOT DISTINCT FROM OLD."withdrawal_exception_acknowledged_at" THEN
         RETURN NEW;
     END IF;
 
     individual_initial_acceptance := OLD."status" = 'DRAFT'
-        AND NEW."status" = 'QUOTED'
+        AND NEW."status" = 'DRAFT'
         AND EXISTS (SELECT 1 FROM "individual_order_origins" origin WHERE origin."order_id" = OLD."id");
 
     IF OLD."accepted_order_price_binding_id" IS NOT NULL
        OR OLD."accepted_terms_revision" IS NOT NULL
        OR OLD."accepted_claim_policy_revision" IS NOT NULL
+       OR OLD."accepted_claim_window_days" IS NOT NULL
        OR OLD."withdrawal_exception_acknowledged_at" IS NOT NULL
        OR NEW."accepted_order_price_binding_id" IS NULL
        OR NEW."accepted_terms_revision" IS NULL
        OR btrim(NEW."accepted_terms_revision") = ''
        OR NEW."accepted_claim_policy_revision" IS NULL
        OR btrim(NEW."accepted_claim_policy_revision") = ''
+       OR NEW."accepted_claim_window_days" IS NULL
+       OR NEW."accepted_claim_window_days" <= 0
        OR NEW."withdrawal_exception_acknowledged_at" IS NULL
        OR (NOT individual_initial_acceptance AND (OLD."status" <> 'QUOTED' OR NEW."status" <> 'QUOTED'))
        OR EXISTS (SELECT 1 FROM "payments" payment WHERE payment."order_id" = OLD."id") THEN
@@ -348,6 +516,54 @@ BEGIN
        OR NEW."withdrawal_exception_acknowledged_at" > evidence_now + interval '5 seconds' THEN
         RAISE EXCEPTION 'checkout acceptance evidence must follow the quote and cannot be in the future'
             USING ERRCODE = '23514', CONSTRAINT = 'order_checkout_acceptance_evidence_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION taven_protect_order_claim_window_snapshot()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW."accepted_claim_window_days" IS NOT NULL THEN
+            RAISE EXCEPTION 'new orders cannot begin with a Claim-window snapshot'
+                USING ERRCODE = '23514', CONSTRAINT = 'order_claim_window_snapshot_check';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF OLD."accepted_claim_window_days" IS NOT NULL
+       AND NEW."accepted_claim_window_days" IS DISTINCT FROM OLD."accepted_claim_window_days" THEN
+        RAISE EXCEPTION 'accepted Claim-window snapshot is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_claim_window_snapshot_check';
+    END IF;
+
+    IF NEW."accepted_claim_window_days" IS DISTINCT FROM OLD."accepted_claim_window_days"
+       AND NOT (
+           OLD."accepted_claim_window_days" IS NULL
+           AND NEW."accepted_claim_window_days" IS NOT NULL
+           AND NEW."accepted_claim_policy_revision" IS NOT NULL
+           AND (
+               NEW."status" = 'QUOTED'
+               OR (
+                   NEW."status" = 'DRAFT'
+                   AND EXISTS (
+                       SELECT 1 FROM "individual_order_origins" origin
+                       WHERE origin."order_id" = NEW."id"
+                   )
+               )
+               OR EXISTS (
+                   SELECT 1 FROM "claim_window_migration_approvals" approval
+                   WHERE approval."order_id" = NEW."id"
+                     AND approval."claim_policy_revision" = NEW."accepted_claim_policy_revision"
+                     AND approval."claim_window_days" = NEW."accepted_claim_window_days"
+               )
+           )
+       ) THEN
+        RAISE EXCEPTION 'Claim-window snapshot requires quoted acceptance or exact migration approval evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'order_claim_window_snapshot_check';
     END IF;
     RETURN NEW;
 END;
