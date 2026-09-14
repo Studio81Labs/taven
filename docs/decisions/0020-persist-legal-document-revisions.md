@@ -189,6 +189,106 @@ Execution remains SERIAL, concurrency 1: #151 / PR5a (PR #155) → #152 / PR5b
 before changing production code. #152's acceptance/settlement contracts and
 #38/#39's legal/public-launch gates are unchanged.
 
+### Publication update entry and defensive locking — escalation #157
+
+Decision: [#157](https://github.com/Studio81Labs/taven/issues/157), PR #155 at
+`1d334c6`. Keep document-scoped serialization and the existing publication
+lifecycle. Supported API and maintenance writers must acquire every required
+LegalDocument lock before any publication row lock or mutation. A publication
+UPDATE row trigger cannot establish that order: PostgreSQL already holds its
+target tuple lock. Replace its blocking parent acquisition with a nonblocking
+`FOR UPDATE NOWAIT` integrity guard. This follows the existing resource/price
+binding trigger pattern; it does not introduce a new command service or global
+publication mutex.
+
+**Supported entry protocol.** Normal operator changes continue through the
+existing authenticated, CSRF-protected, idempotent management APIs. Their
+transaction acquires idempotency first, then the document `FOR UPDATE`, checks
+expected generation, and only then touches publications. Controlled SQL
+maintenance/backfill uses an explicit transaction and a separate, completed
+`SELECT ... FROM legal_documents ... ORDER BY key FOR UPDATE` before any
+publication `SELECT ... FOR UPDATE`, INSERT or UPDATE. A batch must know and
+lock all affected document keys in canonical order up front; do not add parent
+locks after child locks. Plain nonlocking reads may discover immutable subject
+IDs, which must be revalidated after locking. Do not rely on CTE evaluation
+order to establish the protocol.
+
+After locking, obtain the database decision instant, revalidate current
+lifecycle/generation, perform the transition and maintain its generation and
+typed actor/reason/audit/command evidence atomically. Use the same transaction
+through commit/rollback. Live historical backdating and fabricated approvals
+remain forbidden; authentic offline restore is a separate operational process.
+Document the SQL protocol as an administrative contract, not a new unauthenticated
+HTTP route or a permission bypass.
+
+**Database fallback.** In the publication BEFORE UPDATE path, reject immutable
+identity/ownership changes first, then acquire the unchanged parent row with
+`FOR UPDATE NOWAIT` before checking mutable interval/lifecycle facts or
+performing predecessor effects. Missing parents still fail. A compliant writer
+already holds that lock, so this adds no wait. An uncoordinated single-row
+statement may succeed if uncontended, but that is not the supported maintenance
+entry contract. If another transaction owns the conflicting parent lock,
+reject immediately with SQLSTATE `55P03` and a stable legal-publication-specific
+error identifier. Do not swallow the conflict, skip the locked row, return
+success, retry within the trigger, or continue a partially failed transaction.
+
+Keep the INSERT path's document-first acquisition: it runs before touching an
+existing predecessor row. Its nested predecessor UPDATE uses the same NOWAIT
+guard against the already held parent. Cancellation's AFTER trigger likewise
+operates under that parent lock. Preserve every interval, no-overlap,
+pending-schedule, pre-start cancellation, archive, predecessor-restoration and
+immutable-history check. Keep the post-lock database clock and the actual
+persisted transition instant used by audit; do not introduce a caller-controlled
+clock. Delete remains forbidden. No blocking parent acquisition may remain on
+the UPDATE trigger path, including nested predecessor updates.
+
+**Failure contract.** Translate this specific guard conflict to HTTP 409 at the
+legal command boundary if it reaches the API, after transaction rollback. Do
+not translate all database failures, deadlocks or constraint violations to 409;
+preserve unavailable-store 503 and existing validation/lifecycle errors. A
+maintenance writer receiving the conflict must roll back the whole transaction
+and re-enter through parent-first locking with freshly validated generation and
+time. The API never reports a committed success or leaves audit/idempotency
+residue from a rejected attempt. Completed replay remains unchanged. Routine
+API-vs-API and compliant maintenance-vs-API contention waits at the document
+entry lock; it should not depend on deadlock detection/retry.
+
+This removes the publication-row → waiting-document edge that caused #157.
+It is a defined protocol and defensive rejection, not a claim that arbitrary
+multi-statement SQL, reversed cross-document lock acquisition, table-locking
+DDL, disabled triggers or privileged restore can never deadlock. Those operations
+must obey the declared lock order or run offline. There is no lock-ownership
+inference from pg_locks, advisory-lock substitution, SECURITY DEFINER procedure,
+role-provisioning migration or new public API.
+
+**Validation and delivery.** #151 / PR5a / PR #155 owns the trigger, narrowly
+scoped error mapping, SQL workflow documentation and real PostgreSQL tests.
+Use coordinated independent connections/barriers rather than timing-only
+sleeps. Reproduce the old cycle, then prove: an API-held document causes an
+unordered direct UPDATE to fail with the identified 55P03 and the API can
+finish; both parent-first API/maintenance arrival orders serialize; same- and
+cross-publication cancellation/archive/replacement races cannot deadlock;
+predecessor close/restore, missing/changed identity, exact-time boundaries,
+rollback, generation, typed audit, replay and redaction retain their semantics.
+Cover multi-document maintenance with canonical prelocking and independent
+documents without global serialization. An expected 409 must not become 500,
+and an unavailable database remains 503. Prove no partial intervals/audits or
+idempotency completion after failure. Inspect all updated/nested SQL paths.
+
+Amend the pending migration only if applied exclusively to disposable
+local/test databases; otherwise append a forward migration without rewriting
+checksums or retained data, as required by #156. There is no new table, column,
+backfill, publication state or approval requirement. Update ADR and workflow
+docs in the same existing PR; run relevant backend/core, DB/e2e, lint/typecheck/
+build, generated, format/boundary checks and independent review. The isolated
+architecture lock experiment is not a substitute for these implementation tests.
+
+Resume orchestration #145 order 5, Epic phase 6: incorporate this ADR amendment
+and implement the #157 fix in #151 / PR5a. Closing the escalation is architectural
+resolution, not proof that PR #155 is fixed or merge-ready. Resolve its review
+thread only with implementation evidence; merge after normal review/CI gates,
+then begin #152 / PR5b. SERIAL/max1 and #38/#39 launch gates are unchanged.
+
 ## Alternatives and consequences
 
 Keeping text in Git preserves revision history but requires deployments to
