@@ -34,12 +34,17 @@ export function isDatastoreUnavailable(error: unknown): boolean {
   const { code, message, meta } = error as {
     code?: unknown;
     message?: unknown;
-    meta?: { code?: unknown };
+    meta?: {
+      code?: unknown;
+      driverAdapterError?: {
+        cause?: { code?: unknown; originalCode?: unknown };
+      };
+    };
   };
-  const databaseCode = meta?.code;
+  const adapterCause = meta?.driverAdapterError?.cause;
   return (
     message === DATABASE_CLOCK_UNAVAILABLE_MESSAGE ||
-    [code, databaseCode].some(
+    [code, meta?.code, adapterCause?.code, adapterCause?.originalCode].some(
       (candidate) =>
         typeof candidate === "string" &&
         (PRISMA_DATASTORE_UNAVAILABLE_CODES.has(candidate) ||

@@ -116,6 +116,14 @@ describe("legal documents helper functions", () => {
     expect(
       isDatastoreUnavailable({ code: "P2010", meta: { code: "53300" } }),
     ).toBe(true);
+    expect(
+      isDatastoreUnavailable({
+        code: "P2010",
+        meta: {
+          driverAdapterError: { cause: { originalCode: "57P01" } },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("recognizes only the identified publication NOWAIT guard conflict", () => {
