@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { IdempotencyStatus, LegalRevisionStatus, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
@@ -42,6 +43,26 @@ const PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT =
   "legal_document_publications_cancellation_boundary_check";
 const PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT =
   "legal_document_publications_archive_boundary_check";
+const PRISMA_DATASTORE_UNAVAILABLE_CODES = new Set([
+  "P1000",
+  "P1001",
+  "P1002",
+  "P1008",
+  "P1009",
+  "P1017",
+]);
+const POSTGRES_DATASTORE_UNAVAILABLE_CODES = new Set([
+  "08000",
+  "08001",
+  "08003",
+  "08004",
+  "08006",
+  "08007",
+  "08P01",
+  "57P01",
+  "57P02",
+  "57P03",
+]);
 const RFC3339_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
 
@@ -132,6 +153,18 @@ function isPublicationBoundaryError(
     constraint === constraintName ||
     (typeof record.message === "string" &&
       record.message.includes(constraintName))
+  );
+}
+
+function isDatastoreUnavailable(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientInitializationError) return true;
+  if (!error || typeof error !== "object") return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return (
+    message === "Database clock is unavailable" ||
+    (typeof code === "string" &&
+      (PRISMA_DATASTORE_UNAVAILABLE_CODES.has(code) ||
+        POSTGRES_DATASTORE_UNAVAILABLE_CODES.has(code)))
   );
 }
 
@@ -313,53 +346,62 @@ export class LegalDocumentsService {
     const idempotencyKey = requireIdempotencyKey(idempotencyKeyInput);
     const fingerprint = fingerprintFor(input);
 
-    return await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${namespace + ":" + idempotencyKey}, 0))::text`;
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${namespace + ":" + idempotencyKey}, 0))::text`;
 
-      const now = await databaseNow(tx);
-      const existing = await tx.idempotencyRecord.findFirst({
-        where: { namespace, idempotencyKey },
-        orderBy: { generation: "desc" },
+        const now = await databaseNow(tx);
+        const existing = await tx.idempotencyRecord.findFirst({
+          where: { namespace, idempotencyKey },
+          orderBy: { generation: "desc" },
+        });
+
+        if (existing && existing.expiresAt > now) {
+          if (existing.requestFingerprint !== fingerprint) {
+            throw new ConflictException(
+              "Idempotency key was already used with different input",
+            );
+          }
+          if (
+            existing.status !== IdempotencyStatus.COMPLETED ||
+            !existing.responseBody
+          ) {
+            throw new ConflictException("Idempotent command is incomplete");
+          }
+          return existing.responseBody as unknown as T;
+        }
+
+        const record = await tx.idempotencyRecord.create({
+          data: {
+            namespace,
+            idempotencyKey,
+            generation: (existing?.generation ?? 0) + 1,
+            requestFingerprint: fingerprint,
+            expiresAt: new Date(now.getTime() + 30 * 86_400_000),
+          },
+        });
+
+        const result = await execute(tx, idempotencyKey);
+
+        await tx.idempotencyRecord.update({
+          where: { id: record.id },
+          data: {
+            status: IdempotencyStatus.COMPLETED,
+            responseStatusCode: 200,
+            responseBody: result as unknown as Prisma.InputJsonObject,
+          },
+        });
+
+        return result;
       });
-
-      if (existing && existing.expiresAt > now) {
-        if (existing.requestFingerprint !== fingerprint) {
-          throw new ConflictException(
-            "Idempotency key was already used with different input",
-          );
-        }
-        if (
-          existing.status !== IdempotencyStatus.COMPLETED ||
-          !existing.responseBody
-        ) {
-          throw new ConflictException("Idempotent command is incomplete");
-        }
-        return existing.responseBody as unknown as T;
+    } catch (error) {
+      if (isDatastoreUnavailable(error)) {
+        throw new ServiceUnavailableException(
+          "Legal document datastore is unavailable",
+        );
       }
-
-      const record = await tx.idempotencyRecord.create({
-        data: {
-          namespace,
-          idempotencyKey,
-          generation: (existing?.generation ?? 0) + 1,
-          requestFingerprint: fingerprint,
-          expiresAt: new Date(now.getTime() + 30 * 86_400_000),
-        },
-      });
-
-      const result = await execute(tx, idempotencyKey);
-
-      await tx.idempotencyRecord.update({
-        where: { id: record.id },
-        data: {
-          status: IdempotencyStatus.COMPLETED,
-          responseStatusCode: 200,
-          responseBody: result as unknown as Prisma.InputJsonObject,
-        },
-      });
-
-      return result;
-    });
+      throw error;
+    }
   }
 
   async listDocuments(
@@ -910,6 +952,9 @@ export class LegalDocumentsService {
         if (revision.editVersion !== expectedEditVersion) {
           throw new ConflictException("Draft edit version mismatch");
         }
+        if (revision.contentHash !== expectedContentHash) {
+          throw new ConflictException("Revision content hash mismatch");
+        }
         const title = requireString(revision.title, "Draft title", {
           maxLength: 255,
         });
@@ -939,9 +984,6 @@ export class LegalDocumentsService {
           });
         }
 
-        if (contentHash !== expectedContentHash) {
-          throw new ConflictException("Revision content hash mismatch");
-        }
         if (
           !revision.title.trim() ||
           !revision.summary.trim() ||

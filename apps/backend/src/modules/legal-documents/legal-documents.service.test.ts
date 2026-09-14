@@ -1,12 +1,77 @@
-import { describe, expect, it } from "vitest";
+import { ServiceUnavailableException } from "@nestjs/common";
+import { describe, expect, it, vi } from "vitest";
 import {
   computeLegalRevisionContentHash,
+  LegalDocumentsService,
   MAX_LEGAL_PAYLOAD_BYTES,
   normalizeLegalSections,
   REVISION_CODE_PATTERN,
 } from "./legal-documents.service";
 
 describe("legal documents helper functions", () => {
+  it("maps an unavailable idempotent legal datastore to 503", async () => {
+    const service = new LegalDocumentsService(
+      {
+        $transaction: vi.fn().mockRejectedValue({ code: "P1001" }),
+      } as never,
+      {} as never,
+    );
+    const serviceWithIdempotency = service as unknown as {
+      executeWithIdempotency: <T>(
+        namespace: string,
+        idempotencyKey: string,
+        input: unknown,
+        execute: () => Promise<T>,
+      ) => Promise<T>;
+    };
+
+    const error = await serviceWithIdempotency
+      .executeWithIdempotency(
+        "legal-document",
+        "test-key",
+        {},
+        async () => "unreachable",
+      )
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+    expect((error as ServiceUnavailableException).message).toBe(
+      "Legal document datastore is unavailable",
+    );
+  });
+
+  it("maps a missing legal database decision time to 503", async () => {
+    const service = new LegalDocumentsService(
+      {
+        $transaction: vi
+          .fn()
+          .mockRejectedValue(new Error("Database clock is unavailable")),
+      } as never,
+      {} as never,
+    );
+    const serviceWithIdempotency = service as unknown as {
+      executeWithIdempotency: <T>(
+        namespace: string,
+        idempotencyKey: string,
+        input: unknown,
+        execute: () => Promise<T>,
+      ) => Promise<T>;
+    };
+
+    const error = await serviceWithIdempotency
+      .executeWithIdempotency(
+        "legal-document",
+        "test-key",
+        {},
+        async () => "unreachable",
+      )
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+  });
+
   it("normalizes and validates section content", () => {
     const raw = [
       {

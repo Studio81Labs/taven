@@ -536,17 +536,36 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(staleHashApproveRes.status).toBe(409);
 
-    // Direct imports cannot persist a draft whose content hash does not match
-    // the exact stored fields, including whitespace-padded values.
-    await expect(
-      prisma.$executeRaw`
-        UPDATE legal_document_revisions
-        SET
-          title = ${` ${updatedDraft.title} `},
-          summary = ${` ${updatedDraft.summary} `}
-        WHERE id = ${createdDraft.id}::uuid
-      `,
-    ).rejects.toThrow();
+    // An imported draft may retain whitespace while its stored content hash
+    // correctly describes those exact stored fields. Approval must validate
+    // that returned token before normalizing and persisting canonical content.
+    const paddedTitle = ` ${updatedDraft.title} `;
+    const paddedSummary = ` ${updatedDraft.summary} `;
+    const paddedRows = await prisma.$queryRaw<Array<{ contentHash: string }>>`
+      UPDATE legal_document_revisions
+      SET
+        title = ${paddedTitle},
+        summary = ${paddedSummary},
+        content_hash = legal_document_revision_content_hash(
+          content_version,
+          ${paddedTitle},
+          ${paddedSummary},
+          sections
+        )
+      WHERE id = ${createdDraft.id}::uuid
+      RETURNING content_hash AS "contentHash"
+    `;
+    expect(paddedRows).toHaveLength(1);
+
+    const paddedDetailRes = await fetch(
+      new URL("/admin/legal-documents/terms", baseUrl),
+      { headers: adminHeaders() },
+    );
+    expect(paddedDetailRes.status).toBe(200);
+    const paddedDetail = await paddedDetailRes.json();
+    expect(paddedDetail.latestDraft.contentHash).toBe(
+      paddedRows[0]!.contentHash,
+    );
 
     // Approve draft revision with correct expectedEditVersion
     const approveRes = await fetch(
@@ -559,7 +578,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         headers: adminHeaders(randomUUID()),
         body: JSON.stringify({
           expectedEditVersion: updatedDraft.editVersion,
-          expectedContentHash: updatedDraft.contentHash,
+          expectedContentHash: paddedDetail.latestDraft.contentHash,
           revisionCode: "terms-2026-09-e2e-v1",
           effectiveAt: "2026-09-13T00:30:00+02:00",
           approvalEvidence: "Právní posouzení č. 2026/09/LP-01",
