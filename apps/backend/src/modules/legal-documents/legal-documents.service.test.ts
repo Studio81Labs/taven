@@ -45,6 +45,14 @@ describe("legal documents helper functions", () => {
     );
   });
 
+  it("rejects unknown section fields", () => {
+    expect(() =>
+      normalizeLegalSections([
+        { title: "Section", note: "Content", sourceUrl: "https://test" },
+      ]),
+    ).toThrow("Section 0 contains an unknown field");
+  });
+
   it.each([
     { title: "\ud800", paragraphs: ["Content"] },
     { title: "Section", paragraphs: ["\udc00"] },

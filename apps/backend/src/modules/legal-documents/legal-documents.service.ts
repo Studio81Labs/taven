@@ -1479,6 +1479,13 @@ export function normalizeLegalSections(
       throw new BadRequestException(`Section ${idx} must be an object`);
     }
     const rawSection = s as Record<string, unknown>;
+    if (
+      Object.keys(rawSection).some(
+        (key) => !["title", "paragraphs", "items", "note"].includes(key),
+      )
+    ) {
+      throw new BadRequestException(`Section ${idx} contains an unknown field`);
+    }
     if (typeof rawSection.title !== "string" || !rawSection.title.trim()) {
       throw new BadRequestException("Section title must not be empty");
     }

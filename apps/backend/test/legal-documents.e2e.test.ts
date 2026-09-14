@@ -613,7 +613,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         SET created_at = clock_timestamp()
         WHERE id = ${createdDraft.id}::uuid
       `,
-    ).rejects.toThrow(/is immutable and cannot be modified/i);
+    ).rejects.toThrow(/immutable/i);
 
     await expect(
       prisma.$executeRaw`
@@ -1159,6 +1159,32 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         },
       }),
     ).rejects.toThrow();
+    const claimsDoc = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "claims" },
+    });
+    const ownershipLockedDraft = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: termsDoc.id,
+        sequence: 10_003,
+        editVersion: 1,
+        status: "DRAFT",
+        contentVersion: 1,
+        title: "Ownership-locked draft",
+        summary: "Ownership cannot change after creation",
+        sections: [{ title: "Section", paragraphs: ["Content"] }],
+        contentHash: legalContentHash(
+          "Ownership-locked draft",
+          "Ownership cannot change after creation",
+          [{ title: "Section", paragraphs: ["Content"] }],
+        ),
+      },
+    });
+    await expect(
+      prisma.legalDocumentRevision.update({
+        where: { id: ownershipLockedDraft.id },
+        data: { documentId: claimsDoc.id },
+      }),
+    ).rejects.toThrow(/identity and document ownership are immutable/i);
 
     // 11. Database trigger/check constraint rejects invalid cancellation state on insert
     const invalidDraft = await prisma.legalDocumentRevision.create({

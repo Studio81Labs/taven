@@ -552,6 +552,12 @@ BEGIN
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id
+           OR NEW.document_id IS DISTINCT FROM OLD.document_id
+           OR NEW.sequence IS DISTINCT FROM OLD.sequence
+           OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+            RAISE EXCEPTION 'Legal revision identity and document ownership are immutable';
+        END IF;
         IF OLD.status = 'APPROVED' THEN
             IF NEW.id IS DISTINCT FROM OLD.id
                OR NEW.status <> 'APPROVED'
