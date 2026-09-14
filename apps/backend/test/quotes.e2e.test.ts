@@ -1375,10 +1375,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
       created.requestId,
       key("mismatched-legal-terms-review"),
     );
-    await prisma.quoteRequest.update({
-      where: { id: created.requestId },
-      data: { status: "QUOTED" },
-    });
+    await issueOffer(
+      created.requestId,
+      key("mismatched-legal-terms-valid-offer"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
     const request = await prisma.quoteRequest.findUniqueOrThrow({
       where: { id: created.requestId },
       select: { customerId: true },
