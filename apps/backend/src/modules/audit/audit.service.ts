@@ -17,6 +17,14 @@ import type {
 } from "./audit.dto";
 
 type Transaction = Prisma.TransactionClient;
+type AuditEventRow = Awaited<
+  ReturnType<PrismaService["auditEvent"]["findMany"]>
+>[number];
+type LegalAuditPayloadReferences = Readonly<{
+  documentId: string;
+  revisionIds: ReadonlySet<string>;
+  publicationIds: ReadonlySet<string>;
+}>;
 export type LegalAuditFilters = Readonly<{
   eventType?: string;
   operatorIdentityId?: string;
@@ -199,9 +207,44 @@ export class AuditService {
       rows.length > limit && last
         ? encodeCursor({ createdAt: last.createdAt, id: last.id, filterHash })
         : undefined;
+    const payloadReferences = await this.legalPayloadReferences(docId, page);
     return {
-      items: page.map(toSummary),
+      items: page.map((row) => toSummary(row, payloadReferences)),
       ...(nextCursor ? { nextCursor } : {}),
+    };
+  }
+
+  private async legalPayloadReferences(
+    documentId: string,
+    rows: readonly AuditEventRow[],
+  ): Promise<LegalAuditPayloadReferences> {
+    const candidates = collectLegalPayloadCandidates(rows);
+    const revisions =
+      candidates.revisionIds.size > 0
+        ? await this.prisma.legalDocumentRevision.findMany({
+            where: {
+              documentId,
+              id: { in: [...candidates.revisionIds] },
+            },
+            select: { id: true },
+          })
+        : [];
+    const publications =
+      candidates.publicationIds.size > 0
+        ? await this.prisma.legalDocumentPublication.findMany({
+            where: {
+              id: { in: [...candidates.publicationIds] },
+              revision: { documentId },
+            },
+            select: { id: true },
+          })
+        : [];
+    return {
+      documentId,
+      revisionIds: new Set(revisions.map((revision) => revision.id)),
+      publicationIds: new Set(
+        publications.map((publication) => publication.id),
+      ),
     };
   }
 
@@ -261,7 +304,7 @@ export class AuditService {
         ? encodeCursor({ createdAt: last.createdAt, id: last.id, filterHash })
         : undefined;
     return {
-      items: page.map(toSummary),
+      items: page.map((row) => toSummary(row)),
       ...(nextCursor ? { nextCursor } : {}),
     };
   }
@@ -283,7 +326,8 @@ async function databaseNow(
 }
 
 function toSummary(
-  row: Awaited<ReturnType<PrismaService["auditEvent"]["findMany"]>>[number],
+  row: AuditEventRow,
+  legalPayloadReferences?: LegalAuditPayloadReferences,
 ): AuditEventSummaryDto {
   return {
     id: row.id,
@@ -305,10 +349,7 @@ function toSummary(
     ...(row.correlationId ? { correlationId: row.correlationId } : {}),
     ...(row.reasonCode ? { reasonCode: row.reasonCode } : {}),
     ...(row.reason ? { reason: row.reason } : {}),
-    payload: redactPayload(
-      row.payload,
-      row.schemaVersion === 3 && row.legalDocumentId !== null,
-    ),
+    payload: redactPayload(row.payload, legalPayloadReferences),
   };
 }
 
@@ -382,10 +423,12 @@ function operationalOrderScope(
 
 function redactPayload(
   value: Prisma.JsonValue,
-  includeLegalFields: boolean,
+  legalPayloadReferences?: LegalAuditPayloadReferences,
 ): Record<string, AuditPayloadValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  if (includeLegalFields) return redactLegalPayload(value);
+  if (legalPayloadReferences) {
+    return redactLegalPayload(value, legalPayloadReferences);
+  }
 
   const result: Record<string, AuditPayloadValue> = {};
   const allowedFields = [
@@ -427,25 +470,42 @@ const LEGAL_AUDIT_OPERATIONS = new Set([
   "publication_cancelled",
   "publication_archived",
 ]);
-const LEGAL_AUDIT_IDENTIFIER_FIELDS = [
-  "documentId",
+const LEGAL_AUDIT_REVISION_IDENTIFIER_FIELDS = [
   "revisionId",
   "previousRevisionId",
+] as const;
+const LEGAL_AUDIT_PUBLICATION_IDENTIFIER_FIELDS = [
   "publicationId",
   "previousPublicationId",
 ] as const;
 
 function redactLegalPayload(
   value: Prisma.JsonObject,
+  references: LegalAuditPayloadReferences,
 ): Record<string, AuditPayloadValue> {
   const result: Record<string, AuditPayloadValue> = {};
   const operation = value.operation;
   if (typeof operation === "string" && LEGAL_AUDIT_OPERATIONS.has(operation)) {
     result.operation = operation;
   }
-  for (const field of LEGAL_AUDIT_IDENTIFIER_FIELDS) {
+  if (value.documentId === references.documentId) {
+    result.documentId = references.documentId;
+  }
+  for (const field of LEGAL_AUDIT_REVISION_IDENTIFIER_FIELDS) {
     const identifier = value[field];
-    if (typeof identifier === "string" && UUID_PATTERN.test(identifier)) {
+    if (
+      typeof identifier === "string" &&
+      references.revisionIds.has(identifier)
+    ) {
+      result[field] = identifier;
+    }
+  }
+  for (const field of LEGAL_AUDIT_PUBLICATION_IDENTIFIER_FIELDS) {
+    const identifier = value[field];
+    if (
+      typeof identifier === "string" &&
+      references.publicationIds.has(identifier)
+    ) {
       result[field] = identifier;
     }
   }
@@ -456,6 +516,33 @@ function redactLegalPayload(
     result.contentHash = value.contentHash;
   }
   return result;
+}
+
+function collectLegalPayloadCandidates(
+  rows: readonly AuditEventRow[],
+): Readonly<{
+  revisionIds: Set<string>;
+  publicationIds: Set<string>;
+}> {
+  const revisionIds = new Set<string>();
+  const publicationIds = new Set<string>();
+  for (const row of rows) {
+    const payload = jsonObject(row.payload);
+    if (!payload) continue;
+    for (const field of LEGAL_AUDIT_REVISION_IDENTIFIER_FIELDS) {
+      const value = payload[field];
+      if (typeof value === "string" && UUID_PATTERN.test(value)) {
+        revisionIds.add(value);
+      }
+    }
+    for (const field of LEGAL_AUDIT_PUBLICATION_IDENTIFIER_FIELDS) {
+      const value = payload[field];
+      if (typeof value === "string" && UUID_PATTERN.test(value)) {
+        publicationIds.add(value);
+      }
+    }
+  }
+  return { revisionIds, publicationIds };
 }
 
 function jsonObject(

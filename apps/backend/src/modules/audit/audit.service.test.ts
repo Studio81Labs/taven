@@ -178,10 +178,10 @@ describe("AuditService legacy projection", () => {
           operation: "revision_approved",
           documentId: legalDocumentId,
           revisionId: "66666666-6666-4666-8666-666666666666",
-          previousRevisionId: "customer@example.com",
-          publicationId: "approval evidence reference",
+          previousRevisionId: refundTransactionId,
+          publicationId: refundTransactionId,
           contentHash: "a".repeat(64),
-          previousPublicationId: true,
+          previousPublicationId: "customer@example.com",
           photoAssetId: "operational-photo",
           response: {
             status: "ISSUED",
@@ -190,7 +190,18 @@ describe("AuditService legacy projection", () => {
         },
       },
     ]);
-    const service = new AuditService({ auditEvent: { findMany } } as never);
+    const revisionFindMany = vi.fn().mockResolvedValue([
+      {
+        id: "66666666-6666-4666-8666-666666666666",
+        contentHash: "a".repeat(64),
+      },
+    ]);
+    const publicationFindMany = vi.fn().mockResolvedValue([]);
+    const service = new AuditService({
+      auditEvent: { findMany },
+      legalDocumentRevision: { findMany: revisionFindMany },
+      legalDocumentPublication: { findMany: publicationFindMany },
+    } as never);
     const legalOperator: OperatorContext = {
       ...operator,
       nodeIds: [],
@@ -211,6 +222,13 @@ describe("AuditService legacy projection", () => {
       revisionId: "66666666-6666-4666-8666-666666666666",
       contentHash: "a".repeat(64),
     });
+    expect(publicationFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          revision: { documentId: legalDocumentId },
+        }),
+      }),
+    );
   });
 
   it("does not expose malformed legal audit operation values", async () => {
