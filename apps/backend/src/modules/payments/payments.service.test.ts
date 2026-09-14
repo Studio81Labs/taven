@@ -164,6 +164,23 @@ describe("checkout retry context", () => {
     const token = "a".repeat(43);
     const service = new PaymentsService(
       {
+        $transaction: vi.fn(async (callback) =>
+          callback({
+            $queryRaw: vi.fn().mockResolvedValue([{ observed_at: new Date() }]),
+            quoteSession: {
+              findUnique: vi.fn().mockResolvedValue(retrySession(token)),
+            },
+            payment: {
+              findMany: vi.fn().mockResolvedValue([
+                {
+                  orderPriceBindingId: "00000000-0000-4000-8000-000000000010",
+                  role: "FULL",
+                  status: "FAILED",
+                },
+              ]),
+            },
+          }),
+        ),
         $queryRaw: vi.fn().mockResolvedValue([{ observed_at: new Date() }]),
         quoteSession: {
           findUnique: vi.fn().mockResolvedValue(retrySession(token)),
@@ -213,6 +230,12 @@ describe("checkout retry context", () => {
     session.automaticOrderOrigin.order.legalAcceptances = [];
     const service = new PaymentsService(
       {
+        $transaction: vi.fn(async (callback) =>
+          callback({
+            quoteSession: { findUnique: vi.fn().mockResolvedValue(session) },
+            payment: { findMany: vi.fn().mockResolvedValue([]) },
+          }),
+        ),
         quoteSession: { findUnique: vi.fn().mockResolvedValue(session) },
         payment: { findMany: vi.fn().mockResolvedValue([]) },
       } as never,

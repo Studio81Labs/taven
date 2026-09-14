@@ -163,7 +163,22 @@ export class PaymentsService {
   ): Promise<CheckoutRetryContextDto> {
     const sessionId = normalizedUuid(sessionIdInput, "sessionId");
     const token = bearerCapability(authorization);
-    const context = await this.loadContext(sessionId);
+    let context: CheckoutContext;
+    let observedAt: Date;
+    try {
+      ({ context, observedAt } = await this.prisma.$transaction(
+        async (transaction) => ({
+          context: await this.loadContext(sessionId, transaction),
+          observedAt: await databaseNow(transaction),
+        }),
+        { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+      ));
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      throw new ServiceUnavailableException(
+        "Checkout retry evidence is temporarily unavailable",
+      );
+    }
     assertSessionCapability(context, token);
     const evidence = frozenCheckoutEvidence(
       context.order as CheckoutOrderEvidence,
@@ -172,14 +187,6 @@ export class PaymentsService {
       return { retryAllowed: false, methods: [], acceptedEvidence: null };
     }
 
-    let observedAt: Date;
-    try {
-      observedAt = await databaseNow(this.prisma);
-    } catch {
-      throw new ServiceUnavailableException(
-        "Checkout retry evidence is temporarily unavailable",
-      );
-    }
     try {
       assertCheckoutContext(context, token, observedAt);
       assertCheckoutPaymentFlowsEnabled();

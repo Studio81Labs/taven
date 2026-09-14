@@ -144,6 +144,12 @@ function legalRevisionLink(
     query: revision && contentHash ? { revision, contentHash } : undefined,
   };
 }
+
+function hasHistoricalRevision(
+  contentHash: string | null | undefined,
+): boolean {
+  return Boolean(contentHash);
+}
 const paymentMethods = computed(() =>
   retryMode.value
     ? retryContext.value!.methods
@@ -840,6 +846,7 @@ function compactBilling(
             retryEvidence.termsRevision
           }}) a reklamačního řádu ({{ retryEvidence.claimPolicyRevision }}).
           <NuxtLink
+            v-if="hasHistoricalRevision(retryEvidence.terms.contentHash)"
             class="underline"
             :to="
               legalRevisionLink(
@@ -850,8 +857,10 @@ function compactBilling(
             "
             >Zobrazit VOP</NuxtLink
           >
+          <span v-else>Historické znění VOP už není k dispozici</span>
           a
           <NuxtLink
+            v-if="hasHistoricalRevision(retryEvidence.claims.contentHash)"
             class="underline"
             :to="
               legalRevisionLink(
@@ -861,6 +870,9 @@ function compactBilling(
               )
             "
             >reklamační řád</NuxtLink
+          >
+          <span v-else
+            >historické znění reklamačního řádu už není k dispozici</span
           >. Reklamační lhůta je {{ retryEvidence.claimWindowDays }} dní.
           <template v-if="retryEvidence.withdrawalExceptionAcknowledged">
             Výjimku z odstoupení jste při přijetí nabídky výslovně potvrdil/a.
@@ -872,7 +884,10 @@ function compactBilling(
             Souhlas s pořízením a zveřejněním fotografií zůstává součástí
             přijaté nabídky podle
             <NuxtLink
-              v-if="retryEvidence.photoConsent"
+              v-if="
+                retryEvidence.photoConsent &&
+                hasHistoricalRevision(retryEvidence.photoConsent.contentHash)
+              "
               class="underline"
               :to="
                 legalRevisionLink(
@@ -884,7 +899,8 @@ function compactBilling(
               >pravidel fotografování ({{
                 retryEvidence.photoConsentRevision
               }})</NuxtLink
-            >.
+            >
+            <span v-else>historické znění pravidel už není k dispozici</span>.
           </template>
           <template v-else>
             Souhlas s pořízením a zveřejněním fotografií jste neudělil/a.

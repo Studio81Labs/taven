@@ -217,6 +217,31 @@ BEGIN
         RAISE EXCEPTION 'Accepted order with database-backed terms requires matching immutable legal acceptance evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'orders_legal_acceptance_evidence_check';
     END IF;
+
+    -- Individual offers freeze the Claim window on the originating Quote. An
+    -- Order scalar and matching ledger row alone cannot prove that window was
+    -- the one the customer accepted.
+    IF EXISTS (
+        SELECT 1
+        FROM "individual_order_origins" origin
+        WHERE origin."order_id" = target_order_id
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM "individual_order_origins" origin
+        JOIN "quotes" quote ON quote."id" = origin."quote_id"
+        JOIN "legal_acceptances" acceptance
+          ON acceptance."order_id" = target_order_id
+         AND acceptance."purpose" = 'CLAIM_POLICY_ACCEPTED'
+         AND acceptance."revision_id" = quote."legal_claims_revision_id"
+        JOIN "legal_document_revisions" revision ON revision."id" = acceptance."revision_id"
+        JOIN "orders" target ON target."id" = origin."order_id"
+        WHERE origin."order_id" = target_order_id
+          AND quote."claim_window_days" = target."accepted_claim_window_days"
+          AND revision."revision_code" = target."accepted_claim_policy_revision"
+    ) THEN
+        RAISE EXCEPTION 'Individual order Claim evidence must match its immutable Quote'
+            USING ERRCODE = '23514', CONSTRAINT = 'orders_individual_claim_evidence_check';
+    END IF;
     RETURN NULL;
 END;
 $$;
