@@ -9,7 +9,10 @@ import {
   normalizeLegalSections,
   REVISION_CODE_PATTERN,
 } from "./legal-documents.service";
-import { isDatastoreUnavailable } from "../../prisma/datastore-availability";
+import {
+  DATABASE_CLOCK_UNAVAILABLE_MESSAGE,
+  isDatastoreUnavailable,
+} from "../../prisma/datastore-availability";
 
 const legalReader: OperatorContext = {
   operatorId: "11111111-1111-4111-8111-111111111111",
@@ -61,7 +64,7 @@ describe("legal documents helper functions", () => {
       {
         $transaction: vi
           .fn()
-          .mockRejectedValue(new Error("Database clock is unavailable")),
+          .mockRejectedValue(new Error(DATABASE_CLOCK_UNAVAILABLE_MESSAGE)),
       } as never,
       {} as never,
     );
@@ -104,6 +107,9 @@ describe("legal documents helper functions", () => {
   });
 
   it("recognizes datastore connection exhaustion", () => {
+    expect(
+      isDatastoreUnavailable(new Error(DATABASE_CLOCK_UNAVAILABLE_MESSAGE)),
+    ).toBe(true);
     expect(isDatastoreUnavailable({ code: "P2037" })).toBe(true);
     expect(isDatastoreUnavailable({ code: "P2024" })).toBe(true);
     expect(

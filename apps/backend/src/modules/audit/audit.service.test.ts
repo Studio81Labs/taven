@@ -44,6 +44,24 @@ describe("AuditService legacy projection", () => {
     expect((error as ServiceUnavailableException).getStatus()).toBe(503);
   });
 
+  it("rejects blank legal audit filters instead of broadening the read", async () => {
+    const service = new AuditService({} as never);
+    const legalReader: OperatorContext = {
+      ...operator,
+      permissions: [
+        OPERATOR_PERMISSIONS.AUDIT_READ,
+        OPERATOR_PERMISSIONS.LEGAL_READ,
+      ],
+      nodeIds: [],
+    };
+
+    await expect(
+      service.listLegalDocumentAuditEvents(legalReader, legalDocumentId, {
+        operatorIdentityId: " ",
+      }),
+    ).rejects.toThrow("operatorIdentityId is invalid");
+  });
+
   it("shows a legacy order event only after its parent scope is proven", async () => {
     const findMany = vi.fn().mockResolvedValue([
       {

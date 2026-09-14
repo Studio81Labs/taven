@@ -23,7 +23,10 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
-import { withDatastoreAvailability } from "../../prisma/datastore-availability";
+import {
+  DATABASE_CLOCK_UNAVAILABLE_MESSAGE,
+  withDatastoreAvailability,
+} from "../../prisma/datastore-availability";
 import {
   readAdminAccessConfig,
   type AdminAccessConfig,
@@ -779,7 +782,7 @@ export class OperatorAuthService {
     `;
     const now = rows[0]?.now;
     if (!(now instanceof Date)) {
-      throw new Error("Database clock query did not return a timestamp");
+      throw new Error(DATABASE_CLOCK_UNAVAILABLE_MESSAGE);
     }
     return now;
   }

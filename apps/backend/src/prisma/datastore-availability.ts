@@ -25,6 +25,9 @@ const POSTGRES_DATASTORE_UNAVAILABLE_CODES = new Set([
   "53300",
 ]);
 
+export const DATABASE_CLOCK_UNAVAILABLE_MESSAGE =
+  "Database clock is unavailable";
+
 export function isDatastoreUnavailable(error: unknown): boolean {
   if (error instanceof Prisma.PrismaClientInitializationError) return true;
   if (!error || typeof error !== "object") return false;
@@ -35,7 +38,7 @@ export function isDatastoreUnavailable(error: unknown): boolean {
   };
   const databaseCode = meta?.code;
   return (
-    message === "Database clock is unavailable" ||
+    message === DATABASE_CLOCK_UNAVAILABLE_MESSAGE ||
     [code, databaseCode].some(
       (candidate) =>
         typeof candidate === "string" &&

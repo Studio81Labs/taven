@@ -7,7 +7,10 @@ import {
 import { AuditActorKind, Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
-import { withDatastoreAvailability } from "../../prisma/datastore-availability";
+import {
+  DATABASE_CLOCK_UNAVAILABLE_MESSAGE,
+  withDatastoreAvailability,
+} from "../../prisma/datastore-availability";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { requireOperatorPermission } from "../admin-access/operator-command";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
@@ -342,7 +345,7 @@ async function databaseNow(
     SELECT clock_timestamp() AS now
   `;
   const observedAt = rows[0]?.now;
-  if (!observedAt) throw new Error("Audit database clock is unavailable");
+  if (!observedAt) throw new Error(DATABASE_CLOCK_UNAVAILABLE_MESSAGE);
   return observedAt;
 }
 
@@ -737,12 +740,18 @@ function normalizeLegalAuditFilters(filters?: LegalAuditFilters): AuditFilters {
   ) {
     throw new BadRequestException("operatorIdentityId is invalid");
   }
+  const eventType = filters.eventType?.trim();
+  const operatorIdentityId = filters.operatorIdentityId?.trim();
+  if (filters.eventType !== undefined && !eventType) {
+    throw new BadRequestException("eventType is invalid");
+  }
+  if (filters.operatorIdentityId !== undefined && !operatorIdentityId) {
+    throw new BadRequestException("operatorIdentityId is invalid");
+  }
   return {
-    ...(filters.eventType?.trim()
-      ? { eventType: filters.eventType.trim() }
-      : {}),
-    ...(filters.operatorIdentityId?.trim()
-      ? { operatorIdentityId: canonicalUuid(filters.operatorIdentityId.trim()) }
+    ...(eventType ? { eventType } : {}),
+    ...(operatorIdentityId
+      ? { operatorIdentityId: canonicalUuid(operatorIdentityId) }
       : {}),
   };
 }
