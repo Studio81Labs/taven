@@ -534,6 +534,17 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(staleHashApproveRes.status).toBe(409);
 
+    // Imported drafts can store padded text with the canonical hash already
+    // calculated from the normalized content. Approval must persist that
+    // normalization before the approved-row database constraint is evaluated.
+    await prisma.$executeRaw`
+      UPDATE legal_document_revisions
+      SET
+        title = ${` ${updatedDraft.title} `},
+        summary = ${` ${updatedDraft.summary} `}
+      WHERE id = ${createdDraft.id}::uuid
+    `;
+
     // Approve draft revision with correct expectedEditVersion
     const approveRes = await fetch(
       new URL(
@@ -557,6 +568,8 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(approveRes.status).toBe(200);
     const approved = await approveRes.json();
     expect(approved.status).toBe("APPROVED");
+    expect(approved.title).toBe(updatedDraft.title);
+    expect(approved.summary).toBe(updatedDraft.summary);
     expect(approved.revisionCode).toBe("terms-2026-09-e2e-v1");
     expect(approved.effectiveAt).toBe("2026-09-12T22:30:00.000Z");
     expect(approved.approvalEvidence).toBe("Právní posouzení č. 2026/09/LP-01");
