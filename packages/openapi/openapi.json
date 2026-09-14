@@ -153,11 +153,15 @@
           },
           "expectedContentHash": {
             "description": "Expected SHA-256 content hash",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
           "expectedEditVersion": {
             "description": "Expected draft edit version",
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           },
           "reason": {
             "maxLength": 1000,
@@ -165,10 +169,12 @@
           },
           "reasonCode": {
             "maxLength": 100,
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
             "type": "string"
           },
           "revisionCode": {
             "maxLength": 100,
+            "pattern": "^[A-Za-z0-9_.-]{1,100}$",
             "type": "string"
           }
         },
@@ -186,7 +192,8 @@
       "ArchiveLegalPublicationDto": {
         "properties": {
           "expectedGeneration": {
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           },
           "reason": {
             "maxLength": 1000,
@@ -194,6 +201,7 @@
           },
           "reasonCode": {
             "maxLength": 100,
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
             "type": "string"
           }
         },
@@ -1465,7 +1473,8 @@
       "CancelLegalPublicationDto": {
         "properties": {
           "expectedGeneration": {
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           },
           "reason": {
             "maxLength": 1000,
@@ -1473,6 +1482,7 @@
           },
           "reasonCode": {
             "maxLength": 100,
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
             "type": "string"
           }
         },
@@ -2288,7 +2298,8 @@
       "CreateLegalDraftDto": {
         "properties": {
           "expectedGeneration": {
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           },
           "reason": {
             "maxLength": 1000,
@@ -2296,6 +2307,7 @@
           },
           "reasonCode": {
             "maxLength": 100,
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
             "type": "string"
           },
           "sections": {
@@ -4478,6 +4490,7 @@
             "type": "array"
           },
           "title": {
+            "maxLength": 255,
             "type": "string"
           }
         },
@@ -7206,7 +7219,8 @@
       "PublishLegalRevisionDto": {
         "properties": {
           "expectedGeneration": {
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           },
           "reason": {
             "maxLength": 1000,
@@ -7214,6 +7228,7 @@
           },
           "reasonCode": {
             "maxLength": 100,
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
             "type": "string"
           },
           "startsAt": {
@@ -8156,7 +8171,8 @@
       "UpdateLegalDraftDto": {
         "properties": {
           "expectedEditVersion": {
-            "type": "number"
+            "minimum": 1,
+            "type": "integer"
           },
           "reason": {
             "maxLength": 1000,
@@ -8164,6 +8180,7 @@
           },
           "reasonCode": {
             "maxLength": 100,
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
             "type": "string"
           },
           "sections": {

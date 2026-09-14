@@ -38,6 +38,8 @@ export const MAX_LEGAL_PAYLOAD_BYTES = 256 * 1024;
 export const REVISION_CODE_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
 const MIN_LEGAL_TIMESTAMP_YEAR = 1;
 const MAX_LEGAL_TIMESTAMP_YEAR = 9999;
+const PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT =
+  "legal_document_publications_cancellation_boundary_check";
 const RFC3339_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
 
@@ -60,10 +62,13 @@ function requireString(
   requireNoNul(val, fieldName);
   const trimmed = val.trim();
   const minLength = options?.minLength ?? 1;
-  if (trimmed.length < minLength) {
+  if (codePointLength(trimmed) < minLength) {
     throw new BadRequestException(`${fieldName} cannot be empty`);
   }
-  if (options?.maxLength !== undefined && trimmed.length > options.maxLength) {
+  if (
+    options?.maxLength !== undefined &&
+    codePointLength(trimmed) > options.maxLength
+  ) {
     throw new BadRequestException(
       `${fieldName} exceeds maximum length of ${options.maxLength}`,
     );
@@ -72,6 +77,24 @@ function requireString(
     throw new BadRequestException(`${fieldName} format is invalid`);
   }
   return trimmed;
+}
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
+function isPublicationCancellationBoundaryError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as {
+    message?: unknown;
+    meta?: { constraint?: unknown };
+  };
+  const constraint = record.meta?.constraint;
+  return (
+    constraint === PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT ||
+    (typeof record.message === "string" &&
+      record.message.includes(PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT))
+  );
 }
 
 function requireSafeInteger(val: unknown, fieldName: string, min = 1): number {
@@ -1168,10 +1191,7 @@ export class LegalDocumentsService {
             include: { revision: true },
           });
         } catch (error) {
-          if (
-            error instanceof Prisma.PrismaClientKnownRequestError &&
-            error.code === "P2039"
-          ) {
+          if (isPublicationCancellationBoundaryError(error)) {
             throw new ConflictException(
               "Cannot cancel a publication that has already started",
             );
@@ -1398,7 +1418,7 @@ export function normalizeLegalSections(
     }
     requireNoNul(rawSection.title, `Section ${idx} title`);
     const title = rawSection.title.trim();
-    if (title.length > 255) {
+    if (codePointLength(title) > 255) {
       throw new BadRequestException("Section title exceeds maximum length");
     }
 

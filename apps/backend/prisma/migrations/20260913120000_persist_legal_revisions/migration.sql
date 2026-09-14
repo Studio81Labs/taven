@@ -380,9 +380,11 @@ ALTER TABLE "audit_events"
 
 -- Earlier audit constraints treated newlines as non-whitespace. Clear these
 -- semantically empty legacy reason pairs before validating the stricter rule.
+ALTER TABLE "audit_events" DISABLE TRIGGER "audit_events_append_only";
 UPDATE "audit_events"
 SET "reason" = NULL, "reason_code" = NULL
 WHERE "reason" IS NOT NULL AND "reason" ~ '^[[:space:]]*$';
+ALTER TABLE "audit_events" ENABLE TRIGGER "audit_events_append_only";
 
 ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_reason_check";
 ALTER TABLE "audit_events"
@@ -451,6 +453,7 @@ BEGIN
                OR NEW.status <> 'APPROVED'
                OR NEW.document_id <> OLD.document_id
                OR NEW.sequence <> OLD.sequence
+               OR NEW.edit_version <> OLD.edit_version
                OR NEW.content_version <> OLD.content_version
                OR NEW.title <> OLD.title
                OR NEW.summary <> OLD.summary
@@ -460,7 +463,8 @@ BEGIN
                OR NEW.effective_at <> OLD.effective_at
                OR NEW.approval_evidence <> OLD.approval_evidence
                OR NEW.approved_by <> OLD.approved_by
-               OR NEW.approved_at <> OLD.approved_at THEN
+               OR NEW.approved_at <> OLD.approved_at
+               OR NEW.updated_at <> OLD.updated_at THEN
                 RAISE EXCEPTION 'Approved revision % is immutable and cannot be modified', OLD.id;
             END IF;
         END IF;
@@ -585,7 +589,8 @@ BEGIN
                 RAISE EXCEPTION 'Cannot modify ends_at while cancelling a publication';
             END IF;
             IF v_post_lock_now >= NEW."starts_at" THEN
-                RAISE EXCEPTION 'Cannot cancel a publication that has already started';
+                RAISE EXCEPTION 'Cannot cancel a publication that has already started'
+                    USING ERRCODE = '23514', CONSTRAINT = 'legal_document_publications_cancellation_boundary_check';
             END IF;
             IF NEW."cancelled_at" >= NEW."starts_at" THEN
                 RAISE EXCEPTION 'Cancellation must be strictly before starts_at';

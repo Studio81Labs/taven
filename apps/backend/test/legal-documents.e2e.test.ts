@@ -217,6 +217,26 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     const docBefore = await getRes.json();
     const gen = docBefore.generation;
 
+    const unicodeReasonValidationRes = await fetch(
+      new URL("/admin/legal-documents/terms/revisions", baseUrl),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedGeneration: 1.5,
+          title: "Unicode validation",
+          summary: "Unicode validation",
+          sections: [{ title: "Section", note: "Content" }],
+          reasonCode: "UNICODE_REASON",
+          reason: "🧵".repeat(600),
+        }),
+      },
+    );
+    expect(unicodeReasonValidationRes.status).toBe(400);
+    expect((await unicodeReasonValidationRes.json()).message).toContain(
+      "Expected generation must be a valid integer",
+    );
+
     // Missing Idempotency-Key is rejected with 400
     const missingKeyRes = await fetch(
       new URL("/admin/legal-documents/terms/revisions", baseUrl),
@@ -526,6 +546,22 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       prisma.$executeRaw`
         UPDATE legal_document_revisions
         SET title = 'Modifikace v DB'
+        WHERE id = ${createdDraft.id}::uuid
+      `,
+    ).rejects.toThrow(/is immutable and cannot be modified/i);
+
+    await expect(
+      prisma.$executeRaw`
+        UPDATE legal_document_revisions
+        SET edit_version = edit_version + 1
+        WHERE id = ${createdDraft.id}::uuid
+      `,
+    ).rejects.toThrow(/is immutable and cannot be modified/i);
+
+    await expect(
+      prisma.$executeRaw`
+        UPDATE legal_document_revisions
+        SET updated_at = clock_timestamp()
         WHERE id = ${createdDraft.id}::uuid
       `,
     ).rejects.toThrow(/is immutable and cannot be modified/i);

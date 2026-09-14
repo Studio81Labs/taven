@@ -2,9 +2,12 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 const MILLISECOND_RFC3339_PATTERN =
   "^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d{1,3})?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$";
+const REVISION_CODE_PATTERN = "^[A-Za-z0-9_.-]{1,100}$";
+const SHA256_PATTERN = "^[0-9a-f]{64}$";
+const REASON_CODE_PATTERN = "^[A-Z][A-Z0-9_]{0,99}$";
 
 export class LegalDocumentSectionDto {
-  @ApiProperty({ type: String })
+  @ApiProperty({ type: String, maxLength: 255 })
   title!: string;
 
   @ApiPropertyOptional({ type: [String] })
@@ -18,7 +21,7 @@ export class LegalDocumentSectionDto {
 }
 
 export class CreateLegalDraftDto {
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 1 })
   expectedGeneration!: number;
 
   @ApiProperty({ type: String, maxLength: 255 })
@@ -30,7 +33,7 @@ export class CreateLegalDraftDto {
   @ApiProperty({ type: [LegalDocumentSectionDto] })
   sections!: LegalDocumentSectionDto[];
 
-  @ApiProperty({ type: String, maxLength: 100 })
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
   @ApiProperty({ type: String, maxLength: 1000 })
@@ -38,7 +41,7 @@ export class CreateLegalDraftDto {
 }
 
 export class UpdateLegalDraftDto {
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 1 })
   expectedEditVersion!: number;
 
   @ApiProperty({ type: String, maxLength: 255 })
@@ -50,7 +53,7 @@ export class UpdateLegalDraftDto {
   @ApiProperty({ type: [LegalDocumentSectionDto] })
   sections!: LegalDocumentSectionDto[];
 
-  @ApiProperty({ type: String, maxLength: 100 })
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
   @ApiProperty({ type: String, maxLength: 1000 })
@@ -58,13 +61,23 @@ export class UpdateLegalDraftDto {
 }
 
 export class ApproveLegalRevisionDto {
-  @ApiProperty({ type: Number, description: "Expected draft edit version" })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    description: "Expected draft edit version",
+  })
   expectedEditVersion!: number;
 
-  @ApiProperty({ type: String, description: "Expected SHA-256 content hash" })
+  @ApiProperty({
+    type: String,
+    minLength: 64,
+    maxLength: 64,
+    pattern: SHA256_PATTERN,
+    description: "Expected SHA-256 content hash",
+  })
   expectedContentHash!: string;
 
-  @ApiProperty({ type: String, maxLength: 100 })
+  @ApiProperty({ type: String, maxLength: 100, pattern: REVISION_CODE_PATTERN })
   revisionCode!: string;
 
   @ApiProperty({
@@ -78,7 +91,7 @@ export class ApproveLegalRevisionDto {
   @ApiProperty({ type: String, maxLength: 5000 })
   approvalEvidence!: string;
 
-  @ApiProperty({ type: String, maxLength: 100 })
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
   @ApiProperty({ type: String, maxLength: 1000 })
@@ -86,7 +99,7 @@ export class ApproveLegalRevisionDto {
 }
 
 export class PublishLegalRevisionDto {
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 1 })
   expectedGeneration!: number;
 
   @ApiPropertyOptional({
@@ -97,7 +110,7 @@ export class PublishLegalRevisionDto {
   })
   startsAt?: string;
 
-  @ApiProperty({ type: String, maxLength: 100 })
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
   @ApiProperty({ type: String, maxLength: 1000 })
@@ -105,10 +118,10 @@ export class PublishLegalRevisionDto {
 }
 
 export class CancelLegalPublicationDto {
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 1 })
   expectedGeneration!: number;
 
-  @ApiProperty({ type: String, maxLength: 100 })
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
   @ApiProperty({ type: String, maxLength: 1000 })
@@ -116,10 +129,10 @@ export class CancelLegalPublicationDto {
 }
 
 export class ArchiveLegalPublicationDto {
-  @ApiProperty({ type: Number })
+  @ApiProperty({ type: "integer", minimum: 1 })
   expectedGeneration!: number;
 
-  @ApiProperty({ type: String, maxLength: 100 })
+  @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
   @ApiProperty({ type: String, maxLength: 1000 })
