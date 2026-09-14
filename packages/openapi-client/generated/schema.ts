@@ -4924,7 +4924,7 @@ export interface operations {
                 publicationLimit?: number;
                 publicationCursor?: string;
                 limit?: number;
-                cursor?: string;
+                cursor?: number;
             };
             header?: never;
             path: {

@@ -119,7 +119,13 @@ export class LegalDocumentsAdminController {
     description: "Legal document identifier key",
   })
   @ApiOkResponse({ type: LegalDocumentDetailDto })
-  @ApiQuery({ name: "cursor", required: false, type: String })
+  @ApiQuery({
+    name: "cursor",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   @ApiQuery({
     name: "limit",
     required: false,

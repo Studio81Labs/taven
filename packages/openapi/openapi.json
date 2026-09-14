@@ -9858,7 +9858,9 @@
             "name": "cursor",
             "required": false,
             "schema": {
-              "type": "string"
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
             }
           },
           {
