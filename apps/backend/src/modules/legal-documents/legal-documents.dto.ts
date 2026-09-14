@@ -1,4 +1,9 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  ApiSchema,
+  type ApiSchemaOptions,
+} from "@nestjs/swagger";
 
 const MILLISECOND_RFC3339_PATTERN =
   "^\\d{4}-\\d{2}-\\d{2}T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d{1,3})?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$";
@@ -6,7 +11,15 @@ const REVISION_CODE_PATTERN = "^[A-Za-z0-9_.-]{1,100}$";
 const SHA256_PATTERN = "^[0-9a-f]{64}$";
 const REASON_CODE_PATTERN = "^[A-Z][A-Z0-9_]{0,99}$";
 const NON_BLANK_STRING_PATTERN = ".*\\S.*";
+const LEGAL_DOCUMENT_SECTION_SCHEMA: ApiSchemaOptions & {
+  additionalProperties: false;
+  minProperties: 2;
+} = {
+  additionalProperties: false,
+  minProperties: 2,
+};
 
+@ApiSchema(LEGAL_DOCUMENT_SECTION_SCHEMA)
 export class LegalDocumentSectionDto {
   @ApiProperty({
     type: String,
@@ -15,13 +28,21 @@ export class LegalDocumentSectionDto {
   })
   title!: string;
 
-  @ApiPropertyOptional({ type: [String] })
+  @ApiPropertyOptional({
+    type: "array",
+    minItems: 1,
+    items: { type: "string", pattern: NON_BLANK_STRING_PATTERN },
+  })
   paragraphs?: string[];
 
-  @ApiPropertyOptional({ type: [String] })
+  @ApiPropertyOptional({
+    type: "array",
+    minItems: 1,
+    items: { type: "string", pattern: NON_BLANK_STRING_PATTERN },
+  })
   items?: string[];
 
-  @ApiPropertyOptional({ type: String })
+  @ApiPropertyOptional({ type: String, pattern: NON_BLANK_STRING_PATTERN })
   note?: string;
 }
 

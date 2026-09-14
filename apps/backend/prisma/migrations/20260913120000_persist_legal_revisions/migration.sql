@@ -392,7 +392,7 @@ ALTER TABLE "audit_events"
 ALTER TABLE "audit_events" DISABLE TRIGGER "audit_events_append_only";
 UPDATE "audit_events"
 SET "reason" = NULL, "reason_code" = NULL
-WHERE "reason" IS NOT NULL AND "reason" ~ '^[[:space:]]*$';
+WHERE "reason" IS NOT NULL AND NOT legal_document_text_is_nonblank("reason");
 ALTER TABLE "audit_events" ENABLE TRIGGER "audit_events_append_only";
 
 ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_reason_check";
@@ -401,8 +401,8 @@ ALTER TABLE "audit_events"
         ("reason" IS NULL AND "reason_code" IS NULL)
         OR (
             "reason" IS NOT NULL
-            AND length(btrim("reason")) BETWEEN 1 AND 1000
-            AND "reason" !~ '^[[:space:]]*$'
+            AND length("reason") <= 1000
+            AND legal_document_text_is_nonblank("reason")
             AND "reason_code" IS NOT NULL
             AND "reason_code" ~ '^[A-Z][A-Z0-9_]{0,99}$'
         )
@@ -613,7 +613,8 @@ BEGIN
            AND pg_trigger_depth() = 1 THEN
             IF OLD."starts_at" > v_post_lock_now
                OR OLD."ends_at" <= v_post_lock_now THEN
-                RAISE EXCEPTION 'Can only archive a currently active publication';
+                RAISE EXCEPTION 'Can only archive a currently active publication'
+                    USING ERRCODE = '23514', CONSTRAINT = 'legal_document_publications_archive_boundary_check';
             END IF;
             NEW."ends_at" := v_post_lock_now;
         END IF;
@@ -622,7 +623,8 @@ BEGIN
            AND NEW."ends_at" IS NOT NULL
            AND pg_trigger_depth() = 1 THEN
             IF OLD."starts_at" > v_post_lock_now THEN
-                RAISE EXCEPTION 'Can only archive a currently active publication';
+                RAISE EXCEPTION 'Can only archive a currently active publication'
+                    USING ERRCODE = '23514', CONSTRAINT = 'legal_document_publications_archive_boundary_check';
             END IF;
             NEW."ends_at" := v_post_lock_now;
         END IF;

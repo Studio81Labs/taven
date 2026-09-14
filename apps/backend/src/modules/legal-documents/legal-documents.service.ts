@@ -40,6 +40,8 @@ const MIN_LEGAL_TIMESTAMP_YEAR = 1;
 const MAX_LEGAL_TIMESTAMP_YEAR = 9999;
 const PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT =
   "legal_document_publications_cancellation_boundary_check";
+const PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT =
+  "legal_document_publications_archive_boundary_check";
 const RFC3339_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
 
@@ -84,6 +86,23 @@ function codePointLength(value: string): number {
 }
 
 function isPublicationCancellationBoundaryError(error: unknown): boolean {
+  return isPublicationBoundaryError(
+    error,
+    PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT,
+  );
+}
+
+function isPublicationArchiveBoundaryError(error: unknown): boolean {
+  return isPublicationBoundaryError(
+    error,
+    PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT,
+  );
+}
+
+function isPublicationBoundaryError(
+  error: unknown,
+  constraintName: string,
+): boolean {
   if (!error || typeof error !== "object") return false;
   const record = error as {
     message?: unknown;
@@ -91,9 +110,9 @@ function isPublicationCancellationBoundaryError(error: unknown): boolean {
   };
   const constraint = record.meta?.constraint;
   return (
-    constraint === PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT ||
+    constraint === constraintName ||
     (typeof record.message === "string" &&
-      record.message.includes(PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT))
+      record.message.includes(constraintName))
   );
 }
 
@@ -1291,11 +1310,19 @@ export class LegalDocumentsService {
           throw new ConflictException("Publication is not currently active");
         }
 
-        const updated = await tx.legalDocumentPublication.update({
-          where: { id: pub.id },
-          data: { endsAt: decisionNow },
-          include: { revision: true },
-        });
+        let updated;
+        try {
+          updated = await tx.legalDocumentPublication.update({
+            where: { id: pub.id },
+            data: { endsAt: decisionNow },
+            include: { revision: true },
+          });
+        } catch (error) {
+          if (isPublicationArchiveBoundaryError(error)) {
+            throw new ConflictException("Publication is not currently active");
+          }
+          throw error;
+        }
 
         await tx.legalDocument.update({
           where: { id: doc.id },

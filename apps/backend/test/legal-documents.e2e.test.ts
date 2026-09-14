@@ -1525,6 +1525,19 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       prisma.$executeRawUnsafe(`
         INSERT INTO audit_events (
           id, event_type, actor_kind, actor_id, operator_identity_id,
+          legal_document_id, schema_version, reason_code, reason, payload
+        ) VALUES (
+          gen_random_uuid(), 'legal_document.unicode_import', 'OPERATOR'::audit_actor_kind,
+          '${adminOperatorId}'::uuid, '${adminOperatorId}'::uuid,
+          '${termsDoc.id}'::uuid, 3, 'UNICODE_IMPORT', chr(160), '{}'::jsonb
+        )
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO audit_events (
+          id, event_type, actor_kind, actor_id, operator_identity_id,
           legal_document_id, schema_version, reason_code, reason, payload,
           created_at
         ) VALUES (

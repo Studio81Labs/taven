@@ -4481,20 +4481,27 @@
         "type": "object"
       },
       "LegalDocumentSectionDto": {
+        "additionalProperties": false,
+        "minProperties": 2,
         "properties": {
           "items": {
             "items": {
+              "pattern": ".*\\S.*",
               "type": "string"
             },
+            "minItems": 1,
             "type": "array"
           },
           "note": {
+            "pattern": ".*\\S.*",
             "type": "string"
           },
           "paragraphs": {
             "items": {
+              "pattern": ".*\\S.*",
               "type": "string"
             },
+            "minItems": 1,
             "type": "array"
           },
           "title": {
