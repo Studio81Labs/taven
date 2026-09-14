@@ -98,6 +98,16 @@ BEGIN
         RAISE EXCEPTION 'Quote legal terms revision must belong to terms'
             USING ERRCODE = '23514', CONSTRAINT = 'quotes_legal_terms_document_check';
     END IF;
+    IF NEW."legal_terms_revision_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "legal_document_revisions" revision
+           WHERE revision."id" = NEW."legal_terms_revision_id"
+             AND revision."revision_code" = NEW."terms_revision"
+       ) THEN
+        RAISE EXCEPTION 'Quote terms revision must match its legal terms revision'
+            USING ERRCODE = '23514', CONSTRAINT = 'quotes_legal_terms_revision_code_check';
+    END IF;
     IF NEW."legal_claims_revision_id" IS NOT NULL
        AND NOT taven_legal_revision_matches_document(NEW."legal_claims_revision_id", 'claims') THEN
         RAISE EXCEPTION 'Quote legal claims revision must belong to claims'

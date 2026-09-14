@@ -94,6 +94,10 @@ describe("quote capability expiry clock", () => {
           legalClaimsRevision: {
             id: "44444444-4444-4444-8444-444444444444",
             revisionCode: "claims-v1",
+            contentVersion: 1,
+            title: "Claims",
+            summary: "Claims policy",
+            sections: [{ heading: "Claims" }],
             contentHash: "b".repeat(64),
           },
           promisedDate: null,
@@ -148,6 +152,13 @@ describe("quote capability expiry clock", () => {
       taxRegime: "NON_VAT_PAYER",
       netAmountMinor: 1_000,
       vatAmountMinor: 0,
+      claimsSnapshot: {
+        contentVersion: 1,
+        title: "Claims",
+        summary: "Claims policy",
+        sections: [{ heading: "Claims" }],
+        contentHash: "b".repeat(64),
+      },
     });
   });
 });

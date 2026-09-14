@@ -5820,6 +5820,11 @@
           "claimPolicyRevision": {
             "type": "string"
           },
+          "claimsSnapshot": {
+            "additionalProperties": true,
+            "description": "Immutable claims document content for the pinned claim-policy revision.",
+            "type": "object"
+          },
           "claimWindowDays": {
             "minimum": 1,
             "type": "integer"
@@ -5938,6 +5943,7 @@
           "legalClaimsContentHash",
           "summary",
           "termsSnapshot",
+          "claimsSnapshot",
           "currency",
           "contractTotalMinor",
           "taxRegime",

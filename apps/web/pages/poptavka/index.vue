@@ -101,11 +101,25 @@ const photoConsentEffective = computed(() =>
     availability.value,
   ),
 );
-watch(privacyNoticeEffective, (effective) => {
-  if (!effective) privacyAcknowledged.value = false;
+const privacyNoticeEvidence = computed(() => {
+  const document = availability.value?.documents.privacy;
+  return privacyNoticeEffective.value && document
+    ? `${document.revision}:${document.contentHash}`
+    : null;
 });
-watch(photoConsentEffective, (effective) => {
-  if (!effective) photoPublicationConsent.value = false;
+const photoConsentEvidence = computed(() => {
+  const document = availability.value?.documents.photoConsent;
+  return photoConsentEffective.value && document
+    ? `${document.revision}:${document.contentHash}`
+    : null;
+});
+watch(privacyNoticeEvidence, (evidence, previousEvidence) => {
+  if (!evidence || (previousEvidence && evidence !== previousEvidence))
+    privacyAcknowledged.value = false;
+});
+watch(photoConsentEvidence, (evidence, previousEvidence) => {
+  if (!evidence || (previousEvidence && evidence !== previousEvidence))
+    photoPublicationConsent.value = false;
 });
 const hasDimensions = computed(() =>
   [widthMm.value, depthMm.value, heightMm.value].some(isPositiveDimension),

@@ -672,6 +672,14 @@ export class OfferPreviewDto {
   @ApiProperty({ type: "object", additionalProperties: true })
   termsSnapshot!: Record<string, unknown>;
 
+  @ApiProperty({
+    type: "object",
+    additionalProperties: true,
+    description:
+      "Immutable claims document content for the pinned claim-policy revision.",
+  })
+  claimsSnapshot!: Record<string, unknown>;
+
   @ApiProperty({ type: String })
   currency!: string;
 

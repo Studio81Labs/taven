@@ -3508,6 +3508,10 @@ export interface components {
         };
         OfferPreviewDto: {
             claimPolicyRevision: string;
+            /** @description Immutable claims document content for the pinned claim-policy revision. */
+            claimsSnapshot: {
+                [key: string]: unknown;
+            };
             claimWindowDays: number;
             components: components["schemas"]["OfferPreviewPriceComponentDto"][];
             contractTotalMinor: number;

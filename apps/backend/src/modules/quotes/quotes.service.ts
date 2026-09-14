@@ -1155,6 +1155,7 @@ export class QuotesService {
       legalClaimsContentHash: quote.legalClaimsRevision.contentHash,
       summary: quote.summary,
       termsSnapshot: jsonObject(quote.termsSnapshot),
+      claimsSnapshot: legalTermsSnapshot(quote.legalClaimsRevision),
       currency: snapshot.currency,
       contractTotalMinor: safeNumber(snapshot.contractTotalMinor),
       taxRegime: snapshot.taxRegime,
@@ -1719,7 +1720,15 @@ export class QuotesService {
           select: { id: true, revisionCode: true, contentHash: true },
         },
         legalClaimsRevision: {
-          select: { id: true, revisionCode: true, contentHash: true },
+          select: {
+            id: true,
+            revisionCode: true,
+            contentVersion: true,
+            title: true,
+            summary: true,
+            sections: true,
+            contentHash: true,
+          },
         },
       },
     });

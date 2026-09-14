@@ -40,6 +40,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let quotes: QuotesService;
   let priceListId: string;
   let termsSnapshot: Record<string, unknown>;
+  let claimsSnapshot: Record<string, unknown>;
   let defaultOfferItem: Record<string, unknown>;
   let operatorCookie: string;
   let operatorCsrfToken: string;
@@ -114,6 +115,23 @@ describe("QuoteRequest and tokenized individual offers", () => {
       summary: termsRevision.summary,
       sections: termsRevision.sections,
       contentHash: termsRevision.contentHash,
+    };
+    const claimsRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { revisionCode: e2eLegalRevisionCodes.claims },
+      select: {
+        contentVersion: true,
+        title: true,
+        summary: true,
+        sections: true,
+        contentHash: true,
+      },
+    });
+    claimsSnapshot = {
+      contentVersion: claimsRevision.contentVersion,
+      title: claimsRevision.title,
+      summary: claimsRevision.summary,
+      sections: claimsRevision.sections,
+      contentHash: claimsRevision.contentHash,
     };
     defaultOfferItem = (
       await createModelOfferItem("default-offer-item", "NONE")
@@ -725,6 +743,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const preview = await apiJson<{
       version: number;
       termsRevision: string;
+      claimPolicyRevision: string;
+      claimsSnapshot: Record<string, unknown>;
       contractTotalMinor: number;
       items: Array<Record<string, unknown>>;
       deliveryDestination: Record<string, unknown>;
@@ -738,12 +758,14 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(preview.body).toMatchObject({
       version: 1,
       termsRevision: issued.body.termsRevision,
+      claimPolicyRevision: e2eLegalRevisionCodes.claims,
       contractTotalMinor: 110_000,
       taxRegime: "NON_VAT_PAYER",
       vatRateBasisPoints: 0,
       netAmountMinor: 110_000,
       vatAmountMinor: 0,
     });
+    expect(preview.body.claimsSnapshot).toEqual(claimsSnapshot);
     expect(preview.body.items).toEqual([
       {
         ordinal: 0,
@@ -1340,6 +1362,54 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(issued.response.status).toBe(201);
     expect(issued.body.termsRevision).toBe(e2eLegalRevisionCodes.terms);
+  });
+
+  it("rejects a quote whose terms code differs from its bound legal revision", async () => {
+    const created = await quotes.createRequest(
+      requestInput("mismatched-legal-terms"),
+      "198.51.100.53",
+      key("mismatched-legal-terms-create"),
+    );
+    await quotes.beginReview(
+      operator,
+      created.requestId,
+      key("mismatched-legal-terms-review"),
+    );
+    const request = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: created.requestId },
+      select: { customerId: true },
+    });
+    const legalRevisions = await prisma.legalDocumentRevision.findMany({
+      where: {
+        revisionCode: {
+          in: [e2eLegalRevisionCodes.terms, e2eLegalRevisionCodes.claims],
+        },
+      },
+      select: { id: true, revisionCode: true },
+    });
+    const termsRevision = legalRevisions.find(
+      (revision) => revision.revisionCode === e2eLegalRevisionCodes.terms,
+    );
+    const claimsRevision = legalRevisions.find(
+      (revision) => revision.revisionCode === e2eLegalRevisionCodes.claims,
+    );
+    if (!termsRevision || !claimsRevision)
+      throw new Error("E2E legal revisions are unavailable");
+    await expect(
+      prisma.$executeRaw`
+        INSERT INTO "quotes" (
+          "id", "quote_request_id", "customer_id", "terms_revision",
+          "legal_terms_revision_id", "legal_claims_revision_id", "claim_window_days",
+          "expires_at", "issued_at", "created_at"
+        ) VALUES (
+          ${randomUUID()}::uuid, ${created.requestId}::uuid, ${request.customerId}::uuid,
+          'mismatched-terms-v1', ${termsRevision.id}::uuid, ${claimsRevision.id}::uuid, 30,
+          clock_timestamp() + interval '1 hour', clock_timestamp(), clock_timestamp()
+        )
+      `,
+    ).rejects.toThrow(
+      /Quote terms revision must match its legal terms revision/,
+    );
   });
 
   it("rejects a current offer idempotently and prevents later acceptance", async () => {
