@@ -19,10 +19,10 @@ import {
 import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import type { OperatorContext } from "../src/modules/admin-access/operator-context";
 import { Test } from "@nestjs/testing";
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppModule } from "../src/app.module";
-import { readAdminAccessConfig } from "../src/modules/admin-access/admin-access.config";
+import { passwordHash } from "../src/modules/admin-access/operator-auth.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 
 describe("Legal Documents & Node-Free Admin E2E", () => {
@@ -88,33 +88,35 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     await app.listen(0, "127.0.0.1");
     baseUrl = await app.getUrl();
 
-    // Create node-free ADMIN operator (0 node grants)
+    // Provision a node-free ADMIN operator (0 node grants), then authenticate
+    // through the actual development login endpoint.
+    const adminEmail = `node-free-admin-${randomUUID()}@example.test`;
+    const adminPassword = "node-free-admin-password";
     const adminIdentity = await prisma.operatorIdentity.create({
       data: {
-        email: `node-free-admin-${randomUUID()}@example.test`,
+        email: adminEmail,
         role: "ADMIN",
+        developmentCredential: {
+          create: { passwordHash: await passwordHash(adminPassword) },
+        },
       },
     });
     adminOperatorId = adminIdentity.id;
 
-    const token = randomBytes(32).toString("base64url");
-    const adminConfig = readAdminAccessConfig();
-    const csrfKey = adminConfig.csrfKey;
-    adminCsrfToken = createHmac("sha256", csrfKey)
-      .update(token)
-      .digest("base64url");
-
-    await prisma.operatorSession.create({
-      data: {
-        tokenHash: createHash("sha256").update(token).digest("hex"),
-        csrfHash: createHash("sha256").update(adminCsrfToken).digest("hex"),
-        operatorId: adminIdentity.id,
-        authenticationMethod: "DEVELOPMENT_PASSWORD",
-        credentialVersion: 1,
-        absoluteExpiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+    const loginRes = await fetch(new URL("/admin/auth/login", baseUrl), {
+      method: "POST",
+      headers: {
+        origin: "http://localhost:3002",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({ email: adminEmail, password: adminPassword }),
     });
-    adminCookie = `taven_admin=${token}`;
+    expect(loginRes.status).toBe(200);
+    const login = await loginRes.json();
+    adminCsrfToken = login.csrfToken;
+    const setCookie = loginRes.headers.get("set-cookie");
+    expect(setCookie).toBeDefined();
+    adminCookie = setCookie!.split(";", 1)[0]!;
   });
 
   afterAll(async () => {
@@ -997,7 +999,25 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       expect(response.status).toBe(400);
     }
 
-    // 10. Database trigger/check constraint rejects invalid cancellation state on insert
+    // 10. Database check constraint rejects a directly imported draft that the
+    // service could not later update or approve.
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 10_000,
+          editVersion: 0,
+          status: "DRAFT",
+          contentVersion: 1,
+          title: "Imported draft",
+          summary: "Imported draft",
+          sections: [],
+          contentHash: "0".repeat(64),
+        },
+      }),
+    ).rejects.toThrow(/legal_document_revisions_edit_version_check/);
+
+    // 11. Database trigger/check constraint rejects invalid cancellation state on insert
     const invalidDraft = await prisma.legalDocumentRevision.create({
       data: {
         documentId: termsDoc.id,
@@ -1032,7 +1052,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       }),
     ).rejects.toThrow(/Publication cannot be inserted cancelled/i);
 
-    // 11. AuditService.recordLegalOperator requires legal:write permission
+    // 12. AuditService.recordLegalOperator requires legal:write permission
     const readOnlyOperator: OperatorContext = {
       operatorId: adminOperatorId,
       role: "ADMIN",
@@ -1051,7 +1071,7 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       }),
     ).rejects.toThrow(ForbiddenException);
 
-    // 12. LegalDocumentsService document readers enforce legal:read permission
+    // 13. LegalDocumentsService document readers enforce legal:read permission
     const noReadOperator: OperatorContext = {
       operatorId: adminOperatorId,
       role: "ADMIN",
