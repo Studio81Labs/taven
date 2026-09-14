@@ -852,6 +852,7 @@ export class LegalDocumentsService {
             documentId: doc.id,
             status: LegalRevisionStatus.DRAFT,
             editVersion: expectedEditVersion,
+            contentHash: revision.contentHash,
           },
           data: {
             title,
@@ -1593,6 +1594,11 @@ export function normalizeLegalSections(
           return p.trim();
         })
         .filter((p) => p.length > 0);
+      if (paragraphs.length === 0) {
+        throw new BadRequestException(
+          `Section ${idx} paragraphs must contain at least one non-empty string`,
+        );
+      }
     }
 
     let items: string[] | undefined;
@@ -1616,6 +1622,11 @@ export function normalizeLegalSections(
           return i.trim();
         })
         .filter((i) => i.length > 0);
+      if (items.length === 0) {
+        throw new BadRequestException(
+          `Section ${idx} items must contain at least one non-empty string`,
+        );
+      }
     }
 
     let note: string | undefined;

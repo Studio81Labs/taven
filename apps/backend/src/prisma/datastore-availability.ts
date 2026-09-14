@@ -9,6 +9,7 @@ const PRISMA_DATASTORE_UNAVAILABLE_CODES = new Set([
   "P1009",
   "P1017",
   "P2037",
+  "P2024",
 ]);
 const POSTGRES_DATASTORE_UNAVAILABLE_CODES = new Set([
   "08000",

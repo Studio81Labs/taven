@@ -105,6 +105,7 @@ describe("legal documents helper functions", () => {
 
   it("recognizes datastore connection exhaustion", () => {
     expect(isDatastoreUnavailable({ code: "P2037" })).toBe(true);
+    expect(isDatastoreUnavailable({ code: "P2024" })).toBe(true);
     expect(
       isDatastoreUnavailable({ code: "P2010", meta: { code: "53300" } }),
     ).toBe(true);
@@ -143,9 +144,20 @@ describe("legal documents helper functions", () => {
   it("rejects a section with no paragraphs, items, or note", () => {
     expect(() =>
       normalizeLegalSections([{ title: "Prázdná sekce", paragraphs: ["  "] }]),
-    ).toThrow(
-      "Each section must contain at least one paragraph, item, or note",
-    );
+    ).toThrow("must contain at least one non-empty string");
+  });
+
+  it.each([
+    { paragraphs: [] },
+    { paragraphs: ["  "] },
+    { items: [] },
+    { items: ["  "] },
+  ])("rejects supplied empty section arrays", (content) => {
+    expect(() =>
+      normalizeLegalSections([
+        { title: "Section", note: "Content", ...content },
+      ]),
+    ).toThrow("must contain at least one non-empty string");
   });
 
   it("rejects unknown section fields", () => {
