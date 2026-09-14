@@ -2638,7 +2638,9 @@
         },
         "required": [
           "description",
-          "contact"
+          "contact",
+          "privacyNoticeRevision",
+          "privacyAcknowledged"
         ],
         "type": "object"
       },

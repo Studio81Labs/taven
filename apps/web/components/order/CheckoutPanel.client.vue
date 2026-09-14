@@ -100,6 +100,40 @@ const retryMode = computed(
   () =>
     retryContext.value?.retryAllowed === true && retryEvidence.value !== null,
 );
+type LegalEvidenceFingerprint = Readonly<{
+  contentHash: string | null | undefined;
+  revision: string | undefined;
+}>;
+
+const acknowledgedLegalEvidence = reactive<{
+  claims?: LegalEvidenceFingerprint;
+  photoConsent?: LegalEvidenceFingerprint;
+  terms?: LegalEvidenceFingerprint;
+}>({});
+
+function currentLegalEvidence(
+  key: "terms" | "claims" | "photoConsent",
+): LegalEvidenceFingerprint | undefined {
+  const document = availability.value?.documents[key];
+  if (!document) return undefined;
+  return {
+    revision: document.revision,
+    contentHash: document.contentHash,
+  };
+}
+
+function matchesLegalEvidence(
+  acknowledged: LegalEvidenceFingerprint | undefined,
+  current: LegalEvidenceFingerprint | undefined,
+): boolean {
+  return Boolean(
+    acknowledged &&
+    current &&
+    acknowledged.revision === current.revision &&
+    acknowledged.contentHash === current.contentHash,
+  );
+}
+
 function legalRevisionLink(
   key: "terms" | "claims" | "photoConsent",
   revision: string | undefined,
@@ -118,6 +152,71 @@ const paymentMethods = computed(() =>
 watch(approvedDocuments, (documents) => {
   if (!documents?.photoConsentRevision) draft.photoPublicationConsent = false;
 });
+watch(
+  [
+    () => draft.acceptTerms,
+    () => draft.acceptClaimPolicy,
+    () => draft.acknowledgeWithdrawalException,
+    () => draft.photoPublicationConsent,
+    () => availability.value?.documents.terms.revision,
+    () => availability.value?.documents.terms.contentHash,
+    () => availability.value?.documents.claims.revision,
+    () => availability.value?.documents.claims.contentHash,
+    () => availability.value?.documents.photoConsent.revision,
+    () => availability.value?.documents.photoConsent.contentHash,
+  ],
+  () => {
+    const terms = currentLegalEvidence("terms");
+    const claims = currentLegalEvidence("claims");
+    const photoConsent = currentLegalEvidence("photoConsent");
+
+    if (draft.acceptTerms || draft.acknowledgeWithdrawalException) {
+      if (
+        acknowledgedLegalEvidence.terms &&
+        !matchesLegalEvidence(acknowledgedLegalEvidence.terms, terms)
+      ) {
+        draft.acceptTerms = false;
+        draft.acknowledgeWithdrawalException = false;
+        acknowledgedLegalEvidence.terms = undefined;
+      } else if (terms) {
+        acknowledgedLegalEvidence.terms ??= terms;
+      }
+    } else {
+      acknowledgedLegalEvidence.terms = undefined;
+    }
+
+    if (draft.acceptClaimPolicy) {
+      if (
+        acknowledgedLegalEvidence.claims &&
+        !matchesLegalEvidence(acknowledgedLegalEvidence.claims, claims)
+      ) {
+        draft.acceptClaimPolicy = false;
+        acknowledgedLegalEvidence.claims = undefined;
+      } else if (claims) {
+        acknowledgedLegalEvidence.claims ??= claims;
+      }
+    } else {
+      acknowledgedLegalEvidence.claims = undefined;
+    }
+
+    if (draft.photoPublicationConsent) {
+      if (
+        acknowledgedLegalEvidence.photoConsent &&
+        !matchesLegalEvidence(
+          acknowledgedLegalEvidence.photoConsent,
+          photoConsent,
+        )
+      ) {
+        draft.photoPublicationConsent = false;
+        acknowledgedLegalEvidence.photoConsent = undefined;
+      } else if (photoConsent) {
+        acknowledgedLegalEvidence.photoConsent ??= photoConsent;
+      }
+    } else {
+      acknowledgedLegalEvidence.photoConsent = undefined;
+    }
+  },
+);
 const bindingPrice = computed(() => props.quote.bindingQuote ?? null);
 const selectedDestination = computed(
   () => props.quote.selectedDeliveryDestination ?? null,
@@ -450,6 +549,10 @@ async function continueFromPayment(value: CheckoutPayment): Promise<void> {
 
 async function startNewAttempt(): Promise<void> {
   await loadRetryContext();
+  if (!retryContext.value?.retryAllowed) {
+    errorMessage.value = "Předchozí platbu už nelze bezpečně opakovat.";
+    return;
+  }
   payment.value = undefined;
   command.value = undefined;
   errorMessage.value = undefined;

@@ -2568,8 +2568,8 @@ export interface components {
             };
             photoConsentRevision?: string;
             photoPublicationConsent?: boolean;
-            privacyAcknowledged?: boolean;
-            privacyNoticeRevision?: string;
+            privacyAcknowledged: boolean;
+            privacyNoticeRevision: string;
             purpose?: string;
             /** Format: date */
             requestedDate?: string;

@@ -56,11 +56,11 @@ export class CreateQuoteRequestDto {
   @ApiPropertyOptional({ type: Boolean })
   photoPublicationConsent?: boolean;
 
-  @ApiPropertyOptional({ type: String, maxLength: 100 })
-  privacyNoticeRevision?: string;
+  @ApiProperty({ type: String, maxLength: 100 })
+  privacyNoticeRevision!: string;
 
-  @ApiPropertyOptional({ type: Boolean })
-  privacyAcknowledged?: boolean;
+  @ApiProperty({ type: Boolean })
+  privacyAcknowledged!: boolean;
 
   @ApiPropertyOptional({ type: String, maxLength: 100 })
   photoConsentRevision?: string;

@@ -44,8 +44,6 @@ export function usePublicLegalDocument(
     }),
   );
   const effective = computed(() => {
-    const revision = pinnedRevision && toValue(pinnedRevision);
-    if (revision) return document.value.id === revision;
     return (
       availability.value?.documents[key].effective === true &&
       document.value.effectiveAt ===
