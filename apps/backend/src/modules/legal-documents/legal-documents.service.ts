@@ -900,7 +900,11 @@ export class LegalDocumentsService {
           sections,
         });
 
-        if (revision.contentHash !== contentHash) {
+        const contentNeedsNormalization =
+          revision.title !== title ||
+          revision.summary !== summary ||
+          JSON.stringify(revision.sections) !== JSON.stringify(sections);
+        if (revision.contentHash !== contentHash || contentNeedsNormalization) {
           revision = await tx.legalDocumentRevision.update({
             where: { id: revision.id },
             data: {
