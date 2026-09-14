@@ -1016,6 +1016,21 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
         },
       }),
     ).rejects.toThrow(/legal_document_revisions_edit_version_check/);
+    await expect(
+      prisma.legalDocumentRevision.create({
+        data: {
+          documentId: termsDoc.id,
+          sequence: 10_001,
+          editVersion: 1,
+          status: "DRAFT",
+          contentVersion: 2,
+          title: "Unsupported imported draft",
+          summary: "Unsupported imported draft",
+          sections: [],
+          contentHash: "0".repeat(64),
+        },
+      }),
+    ).rejects.toThrow(/legal_document_revisions_content_version_check/);
 
     // 11. Database trigger/check constraint rejects invalid cancellation state on insert
     const invalidDraft = await prisma.legalDocumentRevision.create({
