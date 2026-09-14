@@ -36,6 +36,7 @@ import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
+import { TranslateDatastoreAvailability } from "../admin-access/translate-datastore-availability.decorator";
 import { AuditEventPageDto } from "../audit/audit.dto";
 import { AuditService } from "../audit/audit.service";
 import {
@@ -92,6 +93,7 @@ function positiveIntegerQueryValue(name: string, value?: string): number {
 @ApiSecurity("operatorSession")
 @UseGuards(OperatorAccessGuard)
 @AllowNodeFreeAdmin()
+@TranslateDatastoreAvailability()
 @Controller("admin/legal-documents")
 export class LegalDocumentsAdminController {
   constructor(

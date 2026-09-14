@@ -1,4 +1,3 @@
-import { ServiceUnavailableException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OperatorAuthService } from "./operator-auth.service";
 
@@ -9,7 +8,7 @@ describe("OperatorAuthService expiry cleanup", () => {
     vi.unstubAllEnvs();
   });
 
-  it("maps an unavailable authenticated session store to 503", async () => {
+  it("leaves session-store failures for the route guard to translate", async () => {
     vi.stubEnv("TAVEN_ENVIRONMENT", "development");
     vi.stubEnv("TAVEN_ADMIN_CSRF_KEY", KEY);
     vi.stubEnv("TAVEN_ADMIN_CLIENT_HASH_KEY", KEY);
@@ -32,8 +31,7 @@ describe("OperatorAuthService expiry cleanup", () => {
       })
       .catch((reason: unknown) => reason);
 
-    expect(error).toBeInstanceOf(ServiceUnavailableException);
-    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+    expect(error).toMatchObject({ code: "P1001" });
   });
 
   it("removes expired auth records, retained sessions, and stale rate buckets within the batch limit", async () => {
