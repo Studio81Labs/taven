@@ -24,8 +24,8 @@ export class LegalDocumentsController {
   })
   @ApiParam({
     name: "key",
-    type: String,
     description: "Legal document identifier key",
+    schema: { type: "string", minLength: 1, maxLength: 50 },
   })
   @ApiParam({
     name: "revisionCode",
