@@ -5,9 +5,14 @@ const MILLISECOND_RFC3339_PATTERN =
 const REVISION_CODE_PATTERN = "^[A-Za-z0-9_.-]{1,100}$";
 const SHA256_PATTERN = "^[0-9a-f]{64}$";
 const REASON_CODE_PATTERN = "^[A-Z][A-Z0-9_]{0,99}$";
+const NON_BLANK_STRING_PATTERN = ".*\\S.*";
 
 export class LegalDocumentSectionDto {
-  @ApiProperty({ type: String, maxLength: 255 })
+  @ApiProperty({
+    type: String,
+    maxLength: 255,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   title!: string;
 
   @ApiPropertyOptional({ type: [String] })
@@ -24,10 +29,14 @@ export class CreateLegalDraftDto {
   @ApiProperty({ type: "integer", minimum: 1 })
   expectedGeneration!: number;
 
-  @ApiProperty({ type: String, maxLength: 255 })
+  @ApiProperty({
+    type: String,
+    maxLength: 255,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   title!: string;
 
-  @ApiProperty({ type: String })
+  @ApiProperty({ type: String, pattern: NON_BLANK_STRING_PATTERN })
   summary!: string;
 
   @ApiProperty({ type: [LegalDocumentSectionDto], minItems: 1 })
@@ -36,7 +45,11 @@ export class CreateLegalDraftDto {
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
-  @ApiProperty({ type: String, maxLength: 1000 })
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   reason!: string;
 }
 
@@ -44,10 +57,14 @@ export class UpdateLegalDraftDto {
   @ApiProperty({ type: "integer", minimum: 1 })
   expectedEditVersion!: number;
 
-  @ApiProperty({ type: String, maxLength: 255 })
+  @ApiProperty({
+    type: String,
+    maxLength: 255,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   title!: string;
 
-  @ApiProperty({ type: String })
+  @ApiProperty({ type: String, pattern: NON_BLANK_STRING_PATTERN })
   summary!: string;
 
   @ApiProperty({ type: [LegalDocumentSectionDto], minItems: 1 })
@@ -56,7 +73,11 @@ export class UpdateLegalDraftDto {
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
-  @ApiProperty({ type: String, maxLength: 1000 })
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   reason!: string;
 }
 
@@ -88,13 +109,21 @@ export class ApproveLegalRevisionDto {
   })
   effectiveAt!: string;
 
-  @ApiProperty({ type: String, maxLength: 5000 })
+  @ApiProperty({
+    type: String,
+    maxLength: 5000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   approvalEvidence!: string;
 
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
-  @ApiProperty({ type: String, maxLength: 1000 })
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   reason!: string;
 }
 
@@ -113,7 +142,11 @@ export class PublishLegalRevisionDto {
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
-  @ApiProperty({ type: String, maxLength: 1000 })
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   reason!: string;
 }
 
@@ -124,7 +157,11 @@ export class CancelLegalPublicationDto {
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
-  @ApiProperty({ type: String, maxLength: 1000 })
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   reason!: string;
 }
 
@@ -135,7 +172,11 @@ export class ArchiveLegalPublicationDto {
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
   reasonCode!: string;
 
-  @ApiProperty({ type: String, maxLength: 1000 })
+  @ApiProperty({
+    type: String,
+    maxLength: 1000,
+    pattern: NON_BLANK_STRING_PATTERN,
+  })
   reason!: string;
 }
 

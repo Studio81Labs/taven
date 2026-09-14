@@ -66,6 +66,12 @@ BEFORE INSERT OR UPDATE OR DELETE ON "legal_documents"
 FOR EACH ROW
 EXECUTE FUNCTION legal_documents_integrity_fn();
 
+CREATE OR REPLACE FUNCTION legal_document_text_is_nonblank(value text)
+RETURNS boolean AS $$
+    SELECT value IS NOT NULL
+        AND length(btrim(value, U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF')) > 0;
+$$ LANGUAGE sql IMMUTABLE;
+
 CREATE OR REPLACE FUNCTION legal_document_sections_are_valid(value jsonb)
 RETURNS boolean AS $$
 DECLARE
@@ -86,7 +92,7 @@ BEGIN
         IF jsonb_typeof(section) <> 'object'
            OR section - ARRAY['title', 'paragraphs', 'items', 'note'] <> '{}'::jsonb
            OR jsonb_typeof(section->'title') <> 'string'
-           OR coalesce(section->>'title', '') ~ '^[[:space:]]*$'
+           OR NOT legal_document_text_is_nonblank(section->>'title')
            OR length(btrim(section->>'title')) > 255 THEN
             RETURN false;
         END IF;
@@ -99,7 +105,7 @@ BEGIN
                 END IF;
                 FOR entry IN SELECT * FROM jsonb_array_elements(section->field_name) LOOP
                     IF jsonb_typeof(entry) <> 'string'
-                       OR (entry #>> '{}') ~ '^[[:space:]]*$' THEN
+                       OR NOT legal_document_text_is_nonblank(entry #>> '{}') THEN
                         RETURN false;
                     END IF;
                     has_content := true;
@@ -109,7 +115,7 @@ BEGIN
 
         IF section ? 'note' THEN
             IF jsonb_typeof(section->'note') <> 'string'
-               OR section->>'note' ~ '^[[:space:]]*$' THEN
+               OR NOT legal_document_text_is_nonblank(section->>'note') THEN
                 RETURN false;
             END IF;
             has_content := true;
@@ -249,11 +255,11 @@ CREATE TABLE "legal_document_revisions" (
             AND "effective_at" < '10000-01-01 00:00:00+00'::timestamptz
             AND "approval_evidence" IS NOT NULL
             AND length("approval_evidence") <= 5000
-            AND length(btrim("approval_evidence", U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF')) > 0
+            AND legal_document_text_is_nonblank("approval_evidence")
             AND "approved_by" IS NOT NULL
             AND "approved_at" IS NOT NULL
-            AND "title" !~ '^[[:space:]]*$'
-            AND "summary" !~ '^[[:space:]]*$'
+            AND legal_document_text_is_nonblank("title")
+            AND legal_document_text_is_nonblank("summary")
             AND legal_document_sections_are_valid("sections")
             AND legal_document_content_fits_size_limit("title", "summary", "sections")
             AND "content_hash" = legal_document_revision_content_hash("content_version", "title", "summary", "sections")

@@ -1437,6 +1437,41 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       `),
     ).rejects.toThrow();
 
+    // Database validation covers the same Unicode whitespace as JavaScript trim().
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_revisions (
+          document_id, sequence, edit_version, status, content_version,
+          revision_code, effective_at, approval_evidence, approved_by,
+          title, summary, sections, content_hash
+        ) VALUES (
+          '${termsDoc.id}'::uuid, 9003, 1, 'APPROVED'::legal_revision_status, 1,
+          'terms-nbsp-title-test', '2099-01-01'::timestamptz, 'evidence', '${adminOperatorId}'::uuid,
+          chr(160), 'Summary', '[{"title":"Section 1","paragraphs":["Content"]}]'::jsonb,
+          legal_document_revision_content_hash(
+            1, chr(160), 'Summary', '[{"title":"Section 1","paragraphs":["Content"]}]'::jsonb
+          )
+        )
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_revisions (
+          document_id, sequence, edit_version, status, content_version,
+          revision_code, effective_at, approval_evidence, approved_by,
+          title, summary, sections, content_hash
+        ) VALUES (
+          '${termsDoc.id}'::uuid, 9004, 1, 'APPROVED'::legal_revision_status, 1,
+          'terms-nbsp-note-test', '2099-01-01'::timestamptz, 'evidence', '${adminOperatorId}'::uuid,
+          'Title', 'Summary', jsonb_build_array(jsonb_build_object('title', 'Section 1', 'note', chr(160))),
+          legal_document_revision_content_hash(
+            1, 'Title', 'Summary', jsonb_build_array(jsonb_build_object('title', 'Section 1', 'note', chr(160)))
+          )
+        )
+      `),
+    ).rejects.toThrow();
+
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO legal_document_publications (

@@ -1026,20 +1026,6 @@ export class LegalDocumentsService {
           );
         }
 
-        // Check if a pending scheduled publication already exists
-        const pending = await tx.legalDocumentPublication.findFirst({
-          where: {
-            documentId: doc.id,
-            cancelledAt: null,
-            startsAt: { gte: decisionNow },
-          },
-        });
-        if (pending) {
-          throw new ConflictException(
-            "A scheduled publication is already pending for this document; cancel it first",
-          );
-        }
-
         // Check if this revision has ever had an uncancelled or already started publication
         const prior = await tx.legalDocumentPublication.findFirst({
           where: {
@@ -1068,6 +1054,24 @@ export class LegalDocumentsService {
             : baseStartsAt;
         if (effectiveStartsAt < decisionNow) {
           effectiveStartsAt = decisionNow;
+        }
+
+        // A publication at decisionNow is current, not pending. It conflicts only
+        // with an immediate replacement that would give it an empty interval.
+        const pending = await tx.legalDocumentPublication.findFirst({
+          where: {
+            documentId: doc.id,
+            cancelledAt: null,
+            startsAt:
+              effectiveStartsAt <= decisionNow
+                ? { gte: decisionNow }
+                : { gt: decisionNow },
+          },
+        });
+        if (pending) {
+          throw new ConflictException(
+            "A scheduled publication is already pending for this document; cancel it first",
+          );
         }
 
         const activePub = await tx.legalDocumentPublication.findFirst({
