@@ -223,7 +223,12 @@ export class LegalDocumentsAdminController {
   })
   @ApiOkResponse({ type: AuditEventPageDto })
   @ApiQuery({ name: "eventType", required: false, type: String })
-  @ApiQuery({ name: "operatorIdentityId", required: false, type: String })
+  @ApiQuery({
+    name: "operatorIdentityId",
+    required: false,
+    type: String,
+    format: "uuid",
+  })
   @ApiQuery({ name: "cursor", required: false, type: String })
   @ApiQuery({
     name: "limit",
