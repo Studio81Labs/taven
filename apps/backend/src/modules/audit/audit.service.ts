@@ -34,6 +34,7 @@ type AuditFilters = Readonly<{
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SHA_256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const POSTGRES_MIN_TIMESTAMP_YEAR = -4712;
 
 @Injectable()
@@ -384,25 +385,17 @@ function redactPayload(
   includeLegalFields: boolean,
 ): Record<string, AuditPayloadValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (includeLegalFields) return redactLegalPayload(value);
+
   const result: Record<string, AuditPayloadValue> = {};
-  const allowedFields = includeLegalFields
-    ? [
-        "operation",
-        "documentId",
-        "revisionId",
-        "previousRevisionId",
-        "publicationId",
-        "previousPublicationId",
-        "contentHash",
-      ]
-    : [
-        "operation",
-        "status",
-        "outcome",
-        "version",
-        "photoAssetId",
-        "deltaMilligrams",
-      ];
+  const allowedFields = [
+    "operation",
+    "status",
+    "outcome",
+    "version",
+    "photoAssetId",
+    "deltaMilligrams",
+  ];
   for (const key of allowedFields) {
     const field = value[key];
     if (
@@ -412,8 +405,6 @@ function redactPayload(
     )
       result[key] = field;
   }
-  if (includeLegalFields) return result;
-
   const response = jsonObject(value.response);
   const status = response?.status;
   if (
@@ -425,6 +416,45 @@ function redactPayload(
   }
   const targets = response ? jsonObject(response.targets) : undefined;
   if (targets) redactTargetIdentifiers(result, targets);
+  return result;
+}
+
+const LEGAL_AUDIT_OPERATIONS = new Set([
+  "draft_created",
+  "draft_updated",
+  "revision_approved",
+  "published",
+  "publication_cancelled",
+  "publication_archived",
+]);
+const LEGAL_AUDIT_IDENTIFIER_FIELDS = [
+  "documentId",
+  "revisionId",
+  "previousRevisionId",
+  "publicationId",
+  "previousPublicationId",
+] as const;
+
+function redactLegalPayload(
+  value: Prisma.JsonObject,
+): Record<string, AuditPayloadValue> {
+  const result: Record<string, AuditPayloadValue> = {};
+  const operation = value.operation;
+  if (typeof operation === "string" && LEGAL_AUDIT_OPERATIONS.has(operation)) {
+    result.operation = operation;
+  }
+  for (const field of LEGAL_AUDIT_IDENTIFIER_FIELDS) {
+    const identifier = value[field];
+    if (typeof identifier === "string" && UUID_PATTERN.test(identifier)) {
+      result[field] = identifier;
+    }
+  }
+  if (
+    typeof value.contentHash === "string" &&
+    SHA_256_HEX_PATTERN.test(value.contentHash)
+  ) {
+    result.contentHash = value.contentHash;
+  }
   return result;
 }
 

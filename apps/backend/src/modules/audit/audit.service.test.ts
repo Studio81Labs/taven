@@ -178,7 +178,10 @@ describe("AuditService legacy projection", () => {
           operation: "revision_approved",
           documentId: legalDocumentId,
           revisionId: "66666666-6666-4666-8666-666666666666",
+          previousRevisionId: "customer@example.com",
+          publicationId: "approval evidence reference",
           contentHash: "a".repeat(64),
+          previousPublicationId: true,
           photoAssetId: "operational-photo",
           response: {
             status: "ISSUED",
@@ -208,6 +211,48 @@ describe("AuditService legacy projection", () => {
       revisionId: "66666666-6666-4666-8666-666666666666",
       contentHash: "a".repeat(64),
     });
+  });
+
+  it("does not expose malformed legal audit operation values", async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: eventId,
+        eventType: "legal_document.revision_approved",
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        operatorIdentityId: operator.operatorId,
+        legalDocumentId,
+        nodeId: null,
+        schemaVersion: 3,
+        orderId: null,
+        paymentId: null,
+        refundTransactionId: null,
+        quoteRequestId: null,
+        quoteId: null,
+        correlationId: null,
+        reasonCode: "LEGAL_APPROVED",
+        reason: "Approved revision",
+        payload: {
+          operation: "approval evidence",
+          documentId: legalDocumentId,
+        },
+      },
+    ]);
+    const service = new AuditService({ auditEvent: { findMany } } as never);
+    const legalOperator: OperatorContext = {
+      ...operator,
+      nodeIds: [],
+      permissions: [
+        OPERATOR_PERMISSIONS.AUDIT_READ,
+        OPERATOR_PERMISSIONS.LEGAL_READ,
+      ],
+    };
+
+    const page = await service.listLegalDocumentAuditEvents(
+      legalOperator,
+      legalDocumentId,
+    );
+
+    expect(page.items[0]?.payload).toEqual({ documentId: legalDocumentId });
   });
 
   it("rejects malformed operator reason pairs before writing an audit event", async () => {
