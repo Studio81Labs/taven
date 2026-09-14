@@ -231,12 +231,13 @@ describe("UploadService confirmation response", () => {
       readObjectRange: async () => bytes,
       copyObject,
     });
+    const legalApprovals = approvedLegalApprovals();
     const service = new UploadService(
       prisma as never,
       storage,
       config,
       {} as never,
-      approvedLegalApprovals() as never,
+      legalApprovals as never,
     );
 
     await expect(
@@ -250,6 +251,11 @@ describe("UploadService confirmation response", () => {
     });
     expect(transaction.photoAsset.create).toHaveBeenCalledOnce();
     expect(copyObject).toHaveBeenCalledOnce();
+    expect(legalApprovals.lockAndRead).toHaveBeenCalledWith(transaction, [
+      "privacy",
+      "prohibitedContent",
+      "retention",
+    ]);
     expect(prisma.photoAsset.findUnique).toHaveBeenCalledWith({
       where: { id: photoId },
       select: { uploadedAt: true, photoDeleteAfter: true },
@@ -411,14 +417,16 @@ function storageWith(overrides: Partial<ObjectStorage>): ObjectStorage {
 }
 
 function approvedLegalApprovals() {
+  const approvals = {
+    documents: {
+      privacy: { effective: true },
+      prohibitedContent: { effective: true },
+      retention: { effective: true },
+    },
+  };
   return {
-    readAt: vi.fn(async () => ({
-      documents: {
-        privacy: { effective: true },
-        prohibitedContent: { effective: true },
-        retention: { effective: true },
-      },
-    })),
+    lockAndRead: vi.fn(async () => ({ approvals })),
+    readAt: vi.fn(async () => approvals),
   };
 }
 

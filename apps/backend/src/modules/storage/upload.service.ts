@@ -393,6 +393,10 @@ export class UploadService {
           photoMetadata.kind === PhotoAssetKind.QUOTE_REFERENCE &&
           photoMetadata.scopeKind === PhotoScopeKind.QUOTE_REQUEST
         ) {
+          const legal = await this.legalApprovals.lockAndRead(
+            transaction,
+            QUOTE_UPLOAD_LEGAL_DOCUMENTS,
+          );
           const scopeRows = await transaction.$queryRaw<
             Array<{
               session_status: string;
@@ -429,7 +433,7 @@ export class UploadService {
             throw new GoneException("Quote request no longer accepts photos");
           }
           assertEffectiveLegalDocuments(
-            await this.legalApprovals.readAt(transaction, scope.observed_at),
+            legal.approvals,
             QUOTE_UPLOAD_LEGAL_DOCUMENTS,
           );
         }

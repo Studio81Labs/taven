@@ -101,7 +101,7 @@ const retryMode = computed(
     retryContext.value?.retryAllowed === true && retryEvidence.value !== null,
 );
 function legalRevisionLink(
-  key: "terms" | "claims",
+  key: "terms" | "claims" | "photoConsent",
   revision: string | undefined,
   contentHash: string | undefined | null,
 ) {
@@ -293,6 +293,7 @@ async function submitCheckout(): Promise<void> {
         : {}),
     };
     persistCheckout();
+    if (result.data.status === "FAILED") await loadRetryContext();
     await continueFromPayment(result.data);
   } catch {
     errorMessage.value = checkoutErrorMessage(0);
@@ -369,6 +370,7 @@ async function refreshPayment(): Promise<void> {
       return;
     }
     payment.value = result.data;
+    if (result.data.status === "FAILED") await loadRetryContext();
     if (result.data.checkoutUrl) {
       command.value = {
         ...command.value!,
@@ -446,7 +448,8 @@ async function continueFromPayment(value: CheckoutPayment): Promise<void> {
   );
 }
 
-function startNewAttempt(): void {
+async function startNewAttempt(): Promise<void> {
+  await loadRetryContext();
   payment.value = undefined;
   command.value = undefined;
   errorMessage.value = undefined;
@@ -755,7 +758,35 @@ function compactBilling(
               )
             "
             >reklamační řád</NuxtLink
-          >. Tento záznam neměníme ani znovu neudělujete souhlas s fotografiemi.
+          >. Reklamační lhůta je {{ retryEvidence.claimWindowDays }} dní.
+          <template v-if="retryEvidence.withdrawalExceptionAcknowledged">
+            Výjimku z odstoupení jste při přijetí nabídky výslovně potvrdil/a.
+          </template>
+          <template v-else>
+            Výjimku z odstoupení jste při přijetí nabídky nepotvrdil/a.
+          </template>
+          <template v-if="retryEvidence.photoPublicationConsent">
+            Souhlas s pořízením a zveřejněním fotografií zůstává součástí
+            přijaté nabídky podle
+            <NuxtLink
+              v-if="retryEvidence.photoConsent"
+              class="underline"
+              :to="
+                legalRevisionLink(
+                  'photoConsent',
+                  retryEvidence.photoConsent.revision,
+                  retryEvidence.photoConsent.contentHash,
+                )
+              "
+              >pravidel fotografování ({{
+                retryEvidence.photoConsentRevision
+              }})</NuxtLink
+            >.
+          </template>
+          <template v-else>
+            Souhlas s pořízením a zveřejněním fotografií jste neudělil/a.
+          </template>
+          Tento záznam neměníme ani jej znovu nepotvrzujete.
         </p>
         <template v-else>
           <label class="flex items-start gap-3 text-sm leading-6"

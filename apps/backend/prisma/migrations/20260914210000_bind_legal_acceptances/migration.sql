@@ -520,11 +520,19 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    -- Pre-cutover bindings begin without this column and may receive their
-    -- first immutable reference during controlled migration. Once present it
-    -- cannot be replaced or cleared.
-    IF OLD."legal_terms_revision_id" IS NOT NULL
-       AND NEW."legal_terms_revision_id" IS DISTINCT FROM OLD."legal_terms_revision_id" THEN
+    -- An unaccepted pre-cutover binding may be initialized before its first
+    -- checkout acceptance. Accepted evidence must retain its legacy shape
+    -- unless a dedicated migration atomically adds the matching ledger rows.
+    IF NEW."legal_terms_revision_id" IS DISTINCT FROM OLD."legal_terms_revision_id"
+       AND (
+           OLD."legal_terms_revision_id" IS NOT NULL
+           OR NEW."legal_terms_revision_id" IS NULL
+           OR EXISTS (
+               SELECT 1
+               FROM "orders" target
+               WHERE target."accepted_order_price_binding_id" = OLD."id"
+           )
+       ) THEN
         RAISE EXCEPTION 'order price binding legal terms revision is immutable'
             USING ERRCODE = '23514', CONSTRAINT = 'order_price_binding_immutable_check';
     END IF;
