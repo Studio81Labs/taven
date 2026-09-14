@@ -385,24 +385,24 @@ function redactPayload(
 ): Record<string, AuditPayloadValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const result: Record<string, AuditPayloadValue> = {};
-  const allowedFields = [
-    "operation",
-    "status",
-    "outcome",
-    "version",
-    "photoAssetId",
-    "deltaMilligrams",
-    ...(includeLegalFields
-      ? [
-          "documentId",
-          "revisionId",
-          "previousRevisionId",
-          "publicationId",
-          "previousPublicationId",
-          "contentHash",
-        ]
-      : []),
-  ] as const;
+  const allowedFields = includeLegalFields
+    ? [
+        "operation",
+        "documentId",
+        "revisionId",
+        "previousRevisionId",
+        "publicationId",
+        "previousPublicationId",
+        "contentHash",
+      ]
+    : [
+        "operation",
+        "status",
+        "outcome",
+        "version",
+        "photoAssetId",
+        "deltaMilligrams",
+      ];
   for (const key of allowedFields) {
     const field = value[key];
     if (
@@ -412,6 +412,8 @@ function redactPayload(
     )
       result[key] = field;
   }
+  if (includeLegalFields) return result;
+
   const response = jsonObject(value.response);
   const status = response?.status;
   if (

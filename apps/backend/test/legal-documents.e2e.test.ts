@@ -553,6 +553,14 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     await expect(
       prisma.$executeRaw`
         UPDATE legal_document_revisions
+        SET created_at = clock_timestamp()
+        WHERE id = ${createdDraft.id}::uuid
+      `,
+    ).rejects.toThrow(/is immutable and cannot be modified/i);
+
+    await expect(
+      prisma.$executeRaw`
+        UPDATE legal_document_revisions
         SET edit_version = edit_version + 1
         WHERE id = ${createdDraft.id}::uuid
       `,

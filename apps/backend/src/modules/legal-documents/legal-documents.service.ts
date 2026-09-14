@@ -1031,7 +1031,7 @@ export class LegalDocumentsService {
           where: {
             documentId: doc.id,
             cancelledAt: null,
-            startsAt: { gt: decisionNow },
+            startsAt: { gte: decisionNow },
           },
         });
         if (pending) {

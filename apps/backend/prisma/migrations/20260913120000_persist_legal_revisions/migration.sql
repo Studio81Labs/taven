@@ -458,6 +458,7 @@ BEGIN
                OR NEW.sequence <> OLD.sequence
                OR NEW.edit_version <> OLD.edit_version
                OR NEW.content_version <> OLD.content_version
+               OR NEW.created_at <> OLD.created_at
                OR NEW.title <> OLD.title
                OR NEW.summary <> OLD.summary
                OR NEW.sections::text <> OLD.sections::text

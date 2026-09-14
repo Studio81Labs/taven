@@ -6,6 +6,7 @@ import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const orderId = "22222222-2222-4222-8222-222222222222";
 const eventId = "33333333-3333-4333-8333-333333333333";
+const legalDocumentId = "55555555-5555-4555-8555-555555555555";
 const quoteId = "66666666-6666-4666-8666-666666666666";
 const refundTransactionId = "77777777-7777-4777-8777-777777777777";
 
@@ -153,6 +154,60 @@ describe("AuditService legacy projection", () => {
     const page = await service.list(operator, {});
 
     expect(page.items[0]?.payload).toEqual({ operation: "quote_update" });
+  });
+
+  it("does not project operational payload fields from legal audit events", async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: eventId,
+        eventType: "legal_document.revision_approved",
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        operatorIdentityId: operator.operatorId,
+        legalDocumentId,
+        nodeId: null,
+        schemaVersion: 3,
+        orderId: null,
+        paymentId: null,
+        refundTransactionId: null,
+        quoteRequestId: null,
+        quoteId: null,
+        correlationId: null,
+        reasonCode: "LEGAL_APPROVED",
+        reason: "Approved revision",
+        payload: {
+          operation: "revision_approved",
+          documentId: legalDocumentId,
+          revisionId: "66666666-6666-4666-8666-666666666666",
+          contentHash: "a".repeat(64),
+          photoAssetId: "operational-photo",
+          response: {
+            status: "ISSUED",
+            targets: { shipmentId: "operational-shipment" },
+          },
+        },
+      },
+    ]);
+    const service = new AuditService({ auditEvent: { findMany } } as never);
+    const legalOperator: OperatorContext = {
+      ...operator,
+      nodeIds: [],
+      permissions: [
+        OPERATOR_PERMISSIONS.AUDIT_READ,
+        OPERATOR_PERMISSIONS.LEGAL_READ,
+      ],
+    };
+
+    const page = await service.listLegalDocumentAuditEvents(
+      legalOperator,
+      legalDocumentId,
+    );
+
+    expect(page.items[0]?.payload).toEqual({
+      operation: "revision_approved",
+      documentId: legalDocumentId,
+      revisionId: "66666666-6666-4666-8666-666666666666",
+      contentHash: "a".repeat(64),
+    });
   });
 
   it("rejects malformed operator reason pairs before writing an audit event", async () => {
