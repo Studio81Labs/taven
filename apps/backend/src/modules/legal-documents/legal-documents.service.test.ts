@@ -4,6 +4,7 @@ import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { describe, expect, it, vi } from "vitest";
 import {
   computeLegalRevisionContentHash,
+  isPublicationDocumentLockConflict,
   LegalDocumentsService,
   MAX_LEGAL_PAYLOAD_BYTES,
   normalizeLegalSections,
@@ -115,6 +116,41 @@ describe("legal documents helper functions", () => {
     expect(
       isDatastoreUnavailable({ code: "P2010", meta: { code: "53300" } }),
     ).toBe(true);
+  });
+
+  it("recognizes only the identified publication NOWAIT guard conflict", () => {
+    expect(
+      isPublicationDocumentLockConflict({
+        code: "P2010",
+        meta: {
+          driverAdapterError: {
+            message: "legal_document_publications_document_lock_conflict",
+            cause: {
+              originalCode: "55P03",
+              originalMessage:
+                "legal_document_publications_document_lock_conflict",
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isPublicationDocumentLockConflict({
+        code: "P2010",
+        meta: { driverAdapterError: { cause: { originalCode: "55P03" } } },
+      }),
+    ).toBe(false);
+    expect(
+      isPublicationDocumentLockConflict({
+        code: "P2010",
+        meta: {
+          driverAdapterError: {
+            message: "legal_document_publications_document_lock_conflict",
+            cause: { originalCode: "40P01" },
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("normalizes and validates section content", () => {

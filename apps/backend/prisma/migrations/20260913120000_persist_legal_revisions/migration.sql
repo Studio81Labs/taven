@@ -632,9 +632,13 @@ BEGIN
         RAISE EXCEPTION 'Publication history is append-only and cannot be deleted';
     END IF;
 
-    PERFORM 1 FROM "legal_documents" WHERE "id" = NEW."document_id" FOR UPDATE;
-    v_post_lock_now := date_trunc('milliseconds', clock_timestamp());
     IF TG_OP = 'INSERT' THEN
+        PERFORM 1 FROM "legal_documents" WHERE "id" = NEW."document_id" FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Legal document % does not exist', NEW."document_id";
+        END IF;
+        v_post_lock_now := date_trunc('milliseconds', clock_timestamp());
+
         SELECT "document_id", "status", "effective_at" INTO v_rev_doc_id, v_rev_status, v_rev_effective_at
         FROM "legal_document_revisions"
         WHERE "id" = NEW."revision_id";
@@ -705,6 +709,36 @@ BEGIN
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
+        -- PostgreSQL has already locked the publication row before this row
+        -- trigger runs. Reject immutable ownership changes before taking the
+        -- parent lock, then use NOWAIT so an unordered writer cannot wait on
+        -- a document lock while it holds the publication row its owner needs.
+        IF NEW."id" IS DISTINCT FROM OLD."id"
+           OR NEW."document_id" IS DISTINCT FROM OLD."document_id"
+           OR NEW."revision_id" IS DISTINCT FROM OLD."revision_id"
+           OR NEW."starts_at" IS DISTINCT FROM OLD."starts_at"
+           OR NEW."published_by" IS DISTINCT FROM OLD."published_by"
+           OR NEW."reason" IS DISTINCT FROM OLD."reason"
+           OR NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
+            RAISE EXCEPTION 'Cannot modify publication historical fields (id, document_id, revision_id, starts_at, published_by, reason, created_at)';
+        END IF;
+
+        BEGIN
+            PERFORM 1
+            FROM "legal_documents"
+            WHERE "id" = OLD."document_id"
+            FOR UPDATE NOWAIT;
+        EXCEPTION
+            WHEN lock_not_available THEN
+                RAISE EXCEPTION 'legal_document_publications_document_lock_conflict'
+                    USING ERRCODE = '55P03', CONSTRAINT = 'legal_document_publications_document_lock_conflict';
+        END;
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Legal document % does not exist', OLD."document_id";
+        END IF;
+        v_post_lock_now := date_trunc('milliseconds', clock_timestamp());
+
         IF OLD."cancelled_at" IS NOT NULL THEN
             IF NEW."cancelled_at" IS DISTINCT FROM OLD."cancelled_at"
                OR NEW."ends_at" IS DISTINCT FROM OLD."ends_at" THEN
@@ -745,16 +779,6 @@ BEGIN
                     USING ERRCODE = '23514', CONSTRAINT = 'legal_document_publications_archive_boundary_check';
             END IF;
             NEW."ends_at" := v_post_lock_now;
-        END IF;
-
-        IF NEW."id" IS DISTINCT FROM OLD."id"
-           OR NEW."document_id" IS DISTINCT FROM OLD."document_id"
-           OR NEW."revision_id" IS DISTINCT FROM OLD."revision_id"
-           OR NEW."starts_at" IS DISTINCT FROM OLD."starts_at"
-           OR NEW."published_by" IS DISTINCT FROM OLD."published_by"
-           OR NEW."reason" IS DISTINCT FROM OLD."reason"
-           OR NEW."created_at" IS DISTINCT FROM OLD."created_at" THEN
-            RAISE EXCEPTION 'Cannot modify publication historical fields (id, document_id, revision_id, starts_at, published_by, reason, created_at)';
         END IF;
 
         RETURN NEW;

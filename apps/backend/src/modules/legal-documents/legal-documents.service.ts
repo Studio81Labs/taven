@@ -46,6 +46,8 @@ const PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT =
   "legal_document_publications_cancellation_boundary_check";
 const PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT =
   "legal_document_publications_archive_boundary_check";
+const PUBLICATION_DOCUMENT_LOCK_CONFLICT =
+  "legal_document_publications_document_lock_conflict";
 const RFC3339_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i;
 
@@ -119,6 +121,51 @@ function isPublicationArchiveBoundaryError(error: unknown): boolean {
   return isPublicationBoundaryError(
     error,
     PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT,
+  );
+}
+
+export function isPublicationDocumentLockConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as {
+    code?: unknown;
+    message?: unknown;
+    meta?: {
+      code?: unknown;
+      constraint?: unknown;
+      driverAdapterError?: {
+        message?: unknown;
+        cause?: {
+          code?: unknown;
+          originalCode?: unknown;
+          message?: unknown;
+          originalMessage?: unknown;
+        };
+      };
+    };
+  };
+  const adapterError = record.meta?.driverAdapterError;
+  const adapterCause = adapterError?.cause;
+  const codes = [
+    record.code,
+    record.meta?.code,
+    adapterCause?.code,
+    adapterCause?.originalCode,
+  ];
+  const identifiers = [
+    record.meta?.constraint,
+    record.message,
+    adapterError?.message,
+    adapterCause?.message,
+    adapterCause?.originalMessage,
+  ];
+  return (
+    codes.includes("55P03") &&
+    identifiers.some(
+      (identifier) =>
+        identifier === PUBLICATION_DOCUMENT_LOCK_CONFLICT ||
+        (typeof identifier === "string" &&
+          identifier.includes(PUBLICATION_DOCUMENT_LOCK_CONFLICT)),
+    )
   );
 }
 
@@ -1313,6 +1360,11 @@ export class LegalDocumentsService {
             include: { revision: true },
           });
         } catch (error) {
+          if (isPublicationDocumentLockConflict(error)) {
+            throw new ConflictException(
+              "Legal publication update conflicts with a concurrent document command",
+            );
+          }
           if (isPublicationCancellationBoundaryError(error)) {
             throw new ConflictException(
               "Cannot cancel a publication that has already started",
@@ -1419,6 +1471,11 @@ export class LegalDocumentsService {
             include: { revision: true },
           });
         } catch (error) {
+          if (isPublicationDocumentLockConflict(error)) {
+            throw new ConflictException(
+              "Legal publication update conflicts with a concurrent document command",
+            );
+          }
           if (isPublicationArchiveBoundaryError(error)) {
             throw new ConflictException("Publication is not currently active");
           }

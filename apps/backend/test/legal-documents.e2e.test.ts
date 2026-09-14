@@ -2116,6 +2116,74 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects an unordered publication update without deadlocking its document owner", async () => {
+    const document = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "terms" },
+    });
+    const publication = await prisma.legalDocumentPublication.findFirstOrThrow({
+      where: { documentId: document.id },
+      orderBy: { createdAt: "asc" },
+    });
+    const lockHolder = new PrismaService();
+    await lockHolder.onModuleInit();
+    let releaseDocumentLock!: () => void;
+    let signalDocumentLocked!: () => void;
+    const documentLocked = new Promise<void>((resolve) => {
+      signalDocumentLocked = resolve;
+    });
+    const releaseLock = new Promise<void>((resolve) => {
+      releaseDocumentLock = resolve;
+    });
+
+    const holder = lockHolder.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT id
+        FROM legal_documents
+        WHERE id = ${document.id}::uuid
+        FOR UPDATE
+      `;
+      signalDocumentLocked();
+      await releaseLock;
+    });
+
+    await documentLocked;
+    try {
+      const error = await prisma.$executeRaw`
+        UPDATE legal_document_publications
+        SET ends_at = ends_at
+        WHERE id = ${publication.id}::uuid
+      `.catch((reason: unknown) => reason);
+
+      expect(error).toMatchObject({
+        code: "P2010",
+        meta: {
+          driverAdapterError: {
+            cause: { originalCode: "55P03" },
+          },
+        },
+      });
+      expect(
+        (
+          error as {
+            meta: { driverAdapterError: { message: string } };
+          }
+        ).meta.driverAdapterError.message,
+      ).toContain("legal_document_publications_document_lock_conflict");
+    } finally {
+      releaseDocumentLock();
+      await holder;
+      await lockHolder.onModuleDestroy();
+    }
+
+    await expect(
+      prisma.$executeRaw`
+        UPDATE legal_document_publications
+        SET ends_at = ends_at
+        WHERE id = ${publication.id}::uuid
+      `,
+    ).resolves.toBe(1);
+  });
+
   it("recomputes node-free GitHub sessions and revokes them on CSRF-protected logout", async () => {
     await prisma.operatorIdentity.update({
       where: { id: adminOperatorId },

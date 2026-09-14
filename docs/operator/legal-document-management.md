@@ -61,3 +61,21 @@ Archive an active publication without replacement using
 Both require the current `expectedGeneration`, a rationale, and a unique
 idempotency key. History is immutable; cancellation and archival only apply at
 their permitted lifecycle boundaries and otherwise return `409 Conflict`.
+
+## Controlled SQL maintenance and backfill
+
+Ordinary legal work must use the management API above. A controlled maintenance
+or backfill transaction must acquire any command identity first, then lock all
+affected `legal_documents` rows in canonical `key` order in a separate completed
+statement before it selects, inserts, or updates any publication row. After
+locking, revalidate the generation, lifecycle and database decision time, make
+the transition, and write its required actor, reason, audit and command evidence
+in the same transaction.
+
+Do not rely on CTE evaluation order, lock a publication before its document, or
+add document locks after publication work begins. The publication trigger uses a
+nonblocking guard as a final integrity boundary: an out-of-order update that
+conflicts with a document owner fails with SQLSTATE `55P03` and
+`legal_document_publications_document_lock_conflict`. Roll back the whole
+transaction and retry only by re-entering through this document-first protocol;
+never retry inside the failed transaction or treat that error as partial success.
