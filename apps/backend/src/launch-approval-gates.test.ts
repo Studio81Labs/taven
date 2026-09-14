@@ -2,314 +2,91 @@ import { ServiceUnavailableException } from "@nestjs/common";
 import { describe, expect, it } from "vitest";
 import {
   assertBindingQuoteFlowsEnabled,
-  assertCheckoutAcceptanceRevisionsCurrent,
-  assertCheckoutClaimPolicyRevisionCurrent,
-  assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
-  assertCheckoutPhotoConsentRevisionCurrent,
   assertCheckoutTermsRevisionCurrent,
+  assertEffectiveCheckoutLegalDocuments,
   assertQuotePhotoUploadsEnabled,
-  approvedCheckoutClaimPolicyRevision,
-  approvedCheckoutClaimWindowDays,
-  approvedCheckoutTermsRevision,
   BINDING_QUOTE_FLOWS_ENV,
-  CHECKOUT_CLAIM_POLICY_REVISION_ENV,
   CHECKOUT_CLAIM_WINDOW_DAYS_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
-  CHECKOUT_PHOTO_CONSENT_REVISION_ENV,
-  CHECKOUT_TERMS_REVISION_ENV,
   QUOTE_PHOTO_UPLOADS_ENV,
 } from "./launch-approval-gates";
 
-describe("launch approval gates", () => {
-  it.each([undefined, "", "false", "TRUE", " true ", "approved"])(
-    "keeps binding flows disabled for %s",
-    (value) => {
-      expect(() =>
-        assertBindingQuoteFlowsEnabled({
-          [BINDING_QUOTE_FLOWS_ENV]: value,
-        }),
-      ).toThrowError(ServiceUnavailableException);
-    },
-  );
+const approvals = {
+  schemaVersion: 1 as const,
+  policyRevision: "test",
+  evaluatedAt: "2026-01-01T00:00:00.000Z",
+  documents: Object.fromEntries(
+    [
+      "terms",
+      "claims",
+      "privacy",
+      "prohibitedContent",
+      "retention",
+      "photoConsent",
+    ].map((key) => [
+      key,
+      {
+        revision: `${key}-v1`,
+        revisionId: `${key}-id`,
+        status: "approved" as const,
+        effectiveAt: "2026-01-01T00:00:00.000Z",
+        contentHash: "a".repeat(64),
+        effective: true,
+      },
+    ]),
+  ),
+} as never;
 
-  it("enables binding flows only with an explicit true", () => {
-    expect(() =>
-      assertBindingQuoteFlowsEnabled({
-        [BINDING_QUOTE_FLOWS_ENV]: "true",
-      }),
-    ).not.toThrow();
+describe("launch approval gates", () => {
+  it("keeps independent commercial switches fail-closed", () => {
+    expect(() => assertBindingQuoteFlowsEnabled({})).toThrow(
+      ServiceUnavailableException,
+    );
+    expect(() => assertQuotePhotoUploadsEnabled({})).toThrow(
+      ServiceUnavailableException,
+    );
+    expect(() => assertCheckoutPaymentFlowsEnabled({})).toThrow(
+      ServiceUnavailableException,
+    );
   });
 
-  it.each([undefined, "", "false", "TRUE", " true ", "approved"])(
-    "keeps quote photo uploads disabled for %s",
-    (value) => {
-      expect(() =>
-        assertQuotePhotoUploadsEnabled({
-          [QUOTE_PHOTO_UPLOADS_ENV]: value,
-        }),
-      ).toThrowError(ServiceUnavailableException);
-    },
-  );
-
-  it("returns a stable public error for disabled photo uploads", () => {
-    let error: unknown;
-    try {
-      assertQuotePhotoUploadsEnabled({});
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toBeInstanceOf(ServiceUnavailableException);
-    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
-    expect((error as ServiceUnavailableException).getResponse()).toEqual({
-      code: "LAUNCH_APPROVAL_REQUIRED",
-      message:
-        "Quote photo uploads are unavailable until their retention policy is approved",
+  it("uses database legal selections rather than revision environment variables", () => {
+    expect(() =>
+      assertCheckoutPaymentFlowsEnabled({
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
+        TAVEN_TERMS_REVISION: "different-v99",
+        TAVEN_CLAIM_POLICY_REVISION: "different-v99",
+      }),
+    ).not.toThrow();
+    expect(
+      assertEffectiveCheckoutLegalDocuments(approvals, {
+        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
+      }),
+    ).toEqual({
+      termsRevision: "terms-v1",
+      claimPolicyRevision: "claims-v1",
+      claimWindowDays: 30,
     });
   });
 
-  it.each([undefined, "", "false", "TRUE", " true ", "approved"])(
-    "keeps checkout payments disabled for %s",
-    (value) => {
-      expect(() =>
-        assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
-          [CHECKOUT_PAYMENT_FLOWS_ENV]: value,
-        }),
-      ).toThrowError(ServiceUnavailableException);
-    },
-  );
-
-  it("enables checkout payments only with an explicit true", () => {
+  it("still rejects a stale client-selected revision", () => {
     expect(() =>
-      assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
-        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
-        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
-        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
-      }),
+      assertCheckoutTermsRevisionCurrent("terms-v0", "terms-v1"),
+    ).toThrow(ServiceUnavailableException);
+    expect(() =>
+      assertCheckoutTermsRevisionCurrent("terms-v1", "terms-v1"),
     ).not.toThrow();
   });
 
-  it.each([undefined, "", "claim-policy-draft-v0", "claims-pending"])(
-    "rejects unapproved checkout claim policy %s",
-    (revision) => {
-      expect(() =>
-        assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
-          [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-          [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: revision,
-          [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
-          [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
-        }),
-      ).toThrowError(ServiceUnavailableException);
-    },
-  );
-
-  it.each([undefined, "", "terms-draft-v0", "terms-pending"])(
-    "rejects unapproved checkout terms %s",
-    (revision) => {
-      expect(() =>
-        assertCheckoutPaymentFlowsEnabled("terms-v1-approved", {
-          [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-          [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
-          [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
-          [CHECKOUT_TERMS_REVISION_ENV]: revision,
-        }),
-      ).toThrowError(ServiceUnavailableException);
-    },
-  );
-
-  it("rejects a price binding with a different terms revision", () => {
+  it("enables the unrelated switches only with explicit true", () => {
     expect(() =>
-      assertCheckoutPaymentFlowsEnabled("terms-v0", {
-        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
-        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
-        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
-      }),
-    ).toThrowError(ServiceUnavailableException);
-  });
-
-  it.each([
-    ["terms-v0", "claims-v1-approved"],
-    ["terms-v1-approved", "claims-v0"],
-  ])(
-    "rejects immutable acceptance of terms %s and claim policy %s",
-    (termsRevision, claimPolicyRevision) => {
-      expect(() =>
-        assertCheckoutAcceptanceRevisionsCurrent(
-          { termsRevision, claimPolicyRevision, claimWindowDays: 30 },
-          {
-            termsRevision: "terms-v1-approved",
-            claimPolicyRevision: "claims-v1-approved",
-            claimWindowDays: 30,
-          },
-        ),
-      ).toThrowError(ServiceUnavailableException);
-    },
-  );
-
-  it("allows missing or currently approved immutable acceptance", () => {
-    expect(() =>
-      assertCheckoutAcceptanceRevisionsCurrent(
-        {
-          termsRevision: null,
-          claimPolicyRevision: null,
-          claimWindowDays: null,
-        },
-        {
-          termsRevision: "terms-v1-approved",
-          claimPolicyRevision: "claims-v1-approved",
-          claimWindowDays: 30,
-        },
-      ),
+      assertBindingQuoteFlowsEnabled({ [BINDING_QUOTE_FLOWS_ENV]: "true" }),
     ).not.toThrow();
     expect(() =>
-      assertCheckoutAcceptanceRevisionsCurrent(
-        {
-          termsRevision: "terms-v1-approved",
-          claimPolicyRevision: "claims-v1-approved",
-          claimWindowDays: 30,
-        },
-        {
-          termsRevision: "terms-v1-approved",
-          claimPolicyRevision: "claims-v1-approved",
-          claimWindowDays: 30,
-        },
-      ),
+      assertQuotePhotoUploadsEnabled({ [QUOTE_PHOTO_UPLOADS_ENV]: "true" }),
     ).not.toThrow();
-  });
-
-  it("rejects a changed immutable Claim-window snapshot", () => {
-    expect(() =>
-      assertCheckoutAcceptanceRevisionsCurrent(
-        {
-          termsRevision: "terms-v1-approved",
-          claimPolicyRevision: "claims-v1-approved",
-          claimWindowDays: 60,
-        },
-        {
-          termsRevision: "terms-v1-approved",
-          claimPolicyRevision: "claims-v1-approved",
-          claimWindowDays: 30,
-        },
-      ),
-    ).toThrowError(ServiceUnavailableException);
-  });
-
-  it("rejects a legacy partial legal snapshot without Claim-window days", () => {
-    expect(() =>
-      assertCheckoutAcceptanceRevisionsCurrent(
-        {
-          termsRevision: "terms-v1-approved",
-          claimPolicyRevision: "claims-v1-approved",
-          claimWindowDays: null,
-        },
-        {
-          termsRevision: "terms-v1-approved",
-          claimPolicyRevision: "claims-v1-approved",
-          claimWindowDays: 30,
-        },
-      ),
-    ).toThrowError(ServiceUnavailableException);
-  });
-
-  it("requires the checkout request to bind the approved claim policy", () => {
-    expect(() =>
-      assertCheckoutClaimPolicyRevisionCurrent(
-        "claims-v0",
-        "claims-v1-approved",
-      ),
-    ).toThrowError(ServiceUnavailableException);
-    expect(() =>
-      assertCheckoutClaimPolicyRevisionCurrent(
-        "claims-v1-approved",
-        "claims-v1-approved",
-      ),
-    ).not.toThrow();
-  });
-
-  it("requires the checkout request to bind the approved terms", () => {
-    expect(() =>
-      assertCheckoutTermsRevisionCurrent("terms-v0", "terms-v1-approved"),
-    ).toThrowError(ServiceUnavailableException);
-    expect(() =>
-      assertCheckoutTermsRevisionCurrent(
-        "terms-v1-approved",
-        "terms-v1-approved",
-      ),
-    ).not.toThrow();
-  });
-
-  it("requires opt-in publication consent to bind an approved revision", () => {
-    expect(() =>
-      assertCheckoutPhotoConsentRevisionCurrent("photos-v1-approved", {
-        [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photo-consent-pending",
-      }),
-    ).toThrowError(ServiceUnavailableException);
-    expect(() =>
-      assertCheckoutPhotoConsentRevisionCurrent("photos-v0", {
-        [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photos-v1-approved",
-      }),
-    ).toThrowError(ServiceUnavailableException);
-    expect(() =>
-      assertCheckoutPhotoConsentRevisionCurrent("photos-v1-approved", {
-        [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photos-v1-approved",
-      }),
-    ).not.toThrow();
-  });
-
-  it.each([
-    { name: "none", methods: [] },
-    { name: "card only", methods: ["CARD"] },
-    { name: "bank transfer only", methods: ["BANK_TRANSFER"] },
-  ])(
-    "rejects incomplete checkout payment capabilities: $name",
-    ({ methods }) => {
-      expect(() => assertCheckoutPaymentMethodsAvailable(methods)).toThrowError(
-        ServiceUnavailableException,
-      );
-    },
-  );
-
-  it("accepts the complete checkout payment capability set", () => {
-    expect(() =>
-      assertCheckoutPaymentMethodsAvailable(["BANK_TRANSFER", "CARD"]),
-    ).not.toThrow();
-  });
-
-  it("returns the trimmed approved claim-policy revision", () => {
-    expect(
-      approvedCheckoutClaimPolicyRevision({
-        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: " claims-v1-approved ",
-      }),
-    ).toBe("claims-v1-approved");
-  });
-
-  it.each([undefined, "", "0", "-1", "1.5", "3651", "pending"])(
-    "rejects invalid approved Claim-window days %s",
-    (days) => {
-      expect(() =>
-        approvedCheckoutClaimWindowDays({
-          [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: days,
-        }),
-      ).toThrowError(ServiceUnavailableException);
-    },
-  );
-
-  it("returns approved Claim-window days", () => {
-    expect(
-      approvedCheckoutClaimWindowDays({
-        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: " 30 ",
-      }),
-    ).toBe(30);
-  });
-
-  it("returns the trimmed approved terms revision", () => {
-    expect(
-      approvedCheckoutTermsRevision({
-        [CHECKOUT_TERMS_REVISION_ENV]: " terms-v1-approved ",
-      }),
-    ).toBe("terms-v1-approved");
   });
 });

@@ -7,6 +7,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { IdempotencyStatus, PaymentStatus, Prisma } from "@prisma/client";
@@ -43,6 +44,8 @@ import {
 import { ResourceReservationService } from "../resources/resource-reservation.service";
 import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
 import type {
+  AcceptedCheckoutEvidenceDto,
+  CheckoutRetryContextDto,
   CreateBalancePaymentDto,
   CreateCheckoutPaymentDto,
   CheckoutPaymentDto,
@@ -65,6 +68,39 @@ const IDEMPOTENCY_DAYS = 7;
 type Transaction = Prisma.TransactionClient;
 
 type CheckoutContext = Awaited<ReturnType<PaymentsService["loadContext"]>>;
+type FrozenCheckoutEvidence = AcceptedCheckoutEvidenceDto & {
+  retryAttemptExists: boolean;
+};
+type CheckoutOrderEvidence = {
+  acceptedOrderPriceBindingId: string | null;
+  acceptedTermsRevision: string | null;
+  acceptedClaimPolicyRevision: string | null;
+  acceptedClaimWindowDays: number | null;
+  withdrawalExceptionAcknowledgedAt: Date | null;
+  photoPublicationConsentGrantedAt: Date | null;
+  photoPublicationConsentRevision: string | null;
+  activePriceBinding: {
+    orderPriceBinding: {
+      id: string;
+      legalTermsRevisionId: string | null;
+      priceSnapshot: { priceList: { termsRevision: string } };
+    };
+  } | null;
+  legalAcceptances: Array<{
+    purpose: string;
+    revisionId: string;
+    revision: {
+      revisionCode: string | null;
+      contentHash: string;
+      document: { key: string };
+    };
+  }>;
+  payments: Array<{
+    orderPriceBindingId: string;
+    role: string;
+    status: PaymentStatus;
+  }>;
+};
 
 @Injectable()
 export class PaymentsService {
@@ -119,6 +155,65 @@ export class PaymentsService {
       throw new Error("Legal approvals service is unavailable");
     }
     return this.legalApprovals;
+  }
+
+  async checkoutRetryContext(
+    sessionIdInput: string,
+    authorization?: string,
+  ): Promise<CheckoutRetryContextDto> {
+    const sessionId = normalizedUuid(sessionIdInput, "sessionId");
+    const token = bearerCapability(authorization);
+    const context = await this.loadContext(sessionId);
+    assertSessionCapability(context, token);
+    const evidence = frozenCheckoutEvidence(
+      context.order as CheckoutOrderEvidence,
+    );
+    if (!evidence) {
+      return { retryAllowed: false, methods: [], acceptedEvidence: null };
+    }
+
+    let observedAt: Date;
+    try {
+      observedAt = await databaseNow(this.prisma);
+    } catch {
+      throw new ServiceUnavailableException(
+        "Checkout retry evidence is temporarily unavailable",
+      );
+    }
+    try {
+      assertCheckoutContext(context, token, observedAt);
+      assertCheckoutPaymentFlowsEnabled();
+    } catch (error) {
+      if (
+        error instanceof ConflictException ||
+        error instanceof GoneException ||
+        error instanceof ServiceUnavailableException
+      ) {
+        return {
+          retryAllowed: false,
+          methods: [],
+          acceptedEvidence: publicFrozenCheckoutEvidence(evidence),
+        };
+      }
+      throw new ServiceUnavailableException(
+        "Checkout retry evidence is temporarily unavailable",
+      );
+    }
+    try {
+      const capabilities = await this.provider.capabilities();
+      assertCheckoutPaymentMethodsAvailable(capabilities.methods);
+      return {
+        retryAllowed: evidence.retryAttemptExists,
+        methods: evidence.retryAttemptExists ? [...capabilities.methods] : [],
+        acceptedEvidence: publicFrozenCheckoutEvidence(evidence),
+      };
+    } catch {
+      return {
+        retryAllowed: false,
+        methods: [],
+        acceptedEvidence: publicFrozenCheckoutEvidence(evidence),
+      };
+    }
   }
 
   async createBalancePayment(
@@ -488,36 +583,30 @@ export class PaymentsService {
     );
     if (initialIdempotency.replay) return initialIdempotency.replay;
     assertCheckoutContext(initial, token, initialIdempotency.observedAt);
-    assertCheckoutPaymentFlowsEnabled(
-      initial.order.activePriceBinding!.orderPriceBinding.priceSnapshot
-        .priceList.termsRevision,
+    assertCheckoutPaymentFlowsEnabled();
+    const initialFrozenEvidence = frozenCheckoutEvidence(
+      initial.order as CheckoutOrderEvidence,
     );
-    const initialEffectiveLegalRevisions =
-      assertEffectiveCheckoutLegalDocuments(
-        this.requiredLegalApprovals().evaluateAt(initialIdempotency.observedAt),
+    if (initialFrozenEvidence) {
+      assertFrozenCheckoutInput(initialFrozenEvidence, input);
+      if (!initialFrozenEvidence.retryAttemptExists) {
+        throw new ConflictException("Checkout has no retryable failed attempt");
+      }
+    } else {
+      const initialLegal = await this.requiredLegalApprovals().readAt(
+        this.prisma,
+        initialIdempotency.observedAt,
       );
-    assertCheckoutTermsRevisionCurrent(
-      input.termsRevision,
-      initialEffectiveLegalRevisions.termsRevision,
-    );
-    assertCheckoutClaimPolicyRevisionCurrent(
-      input.claimPolicyRevision,
-      initialEffectiveLegalRevisions.claimPolicyRevision,
-    );
-    if (input.photoPublicationConsent) {
-      assertEffectiveCheckoutPhotoConsent(
-        this.requiredLegalApprovals().evaluateAt(initialIdempotency.observedAt),
-        input.photoConsentRevision!,
+      const initialEffectiveLegalRevisions =
+        assertEffectiveCheckoutLegalDocuments(initialLegal);
+      assertCurrentCheckoutInput(
+        initial.order.activePriceBinding!.orderPriceBinding,
+        input,
+        initialEffectiveLegalRevisions,
+        initialLegal,
+        initial.order,
       );
     }
-    assertCheckoutAcceptanceRevisionsCurrent(
-      {
-        termsRevision: initial.order.acceptedTermsRevision,
-        claimPolicyRevision: initial.order.acceptedClaimPolicyRevision,
-        claimWindowDays: initial.order.acceptedClaimWindowDays,
-      },
-      initialEffectiveLegalRevisions,
-    );
     assertCheckoutEvidenceMatches(initial.order, input);
 
     const capabilities = await this.provider.capabilities();
@@ -547,39 +636,49 @@ export class PaymentsService {
       );
       if (idempotency.replay) return { replay: idempotency.replay } as const;
 
+      const legal = await this.requiredLegalApprovals().lockAndRead(
+        transaction,
+        [
+          "terms",
+          "claims",
+          "privacy",
+          "prohibitedContent",
+          "retention",
+          "photoConsent",
+        ],
+      );
+      const observedAt = legal.observedAt;
       const context = await this.loadContext(sessionId, transaction, true);
-      const observedAt = await databaseNow(transaction);
       assertCheckoutContext(context, token, observedAt);
       assertDestinationStillCurrent(context, resolvedDestination);
       const binding = context.order.activePriceBinding!.orderPriceBinding;
-      assertCheckoutPaymentFlowsEnabled(
-        binding.priceSnapshot.priceList.termsRevision,
+      assertCheckoutPaymentFlowsEnabled();
+      const frozenEvidence = frozenCheckoutEvidence(
+        context.order as CheckoutOrderEvidence,
       );
-      const effectiveLegalRevisions = assertEffectiveCheckoutLegalDocuments(
-        this.requiredLegalApprovals().evaluateAt(observedAt),
-      );
-      assertCheckoutTermsRevisionCurrent(
-        input.termsRevision,
-        effectiveLegalRevisions.termsRevision,
-      );
-      assertCheckoutClaimPolicyRevisionCurrent(
-        input.claimPolicyRevision,
-        effectiveLegalRevisions.claimPolicyRevision,
-      );
-      if (input.photoPublicationConsent) {
-        assertEffectiveCheckoutPhotoConsent(
-          this.requiredLegalApprovals().evaluateAt(observedAt),
-          input.photoConsentRevision!,
+      const isRetry = frozenEvidence !== null;
+      let effectiveLegalRevisions: ReturnType<
+        typeof assertEffectiveCheckoutLegalDocuments
+      > | null = null;
+      if (frozenEvidence) {
+        assertFrozenCheckoutInput(frozenEvidence, input);
+        if (!frozenEvidence.retryAttemptExists) {
+          throw new ConflictException(
+            "Checkout has no retryable failed attempt",
+          );
+        }
+      } else {
+        effectiveLegalRevisions = assertEffectiveCheckoutLegalDocuments(
+          legal.approvals,
+        );
+        assertCurrentCheckoutInput(
+          binding,
+          input,
+          effectiveLegalRevisions,
+          legal.approvals,
+          context.order,
         );
       }
-      assertCheckoutAcceptanceRevisionsCurrent(
-        {
-          termsRevision: context.order.acceptedTermsRevision,
-          claimPolicyRevision: context.order.acceptedClaimPolicyRevision,
-          claimWindowDays: context.order.acceptedClaimWindowDays,
-        },
-        effectiveLegalRevisions,
-      );
       assertCheckoutEvidenceMatches(context.order, input);
       const schedule = binding.priceSnapshot.paymentSchedules.find(
         ({ role }) => role === "FULL",
@@ -674,24 +773,24 @@ export class PaymentsService {
           ...(context.order.acceptedOrderPriceBindingId
             ? {}
             : { acceptedOrderPriceBindingId: binding.id }),
-          ...(context.order.acceptedTermsRevision
+          ...(context.order.acceptedTermsRevision || isRetry
             ? {}
             : {
-                acceptedTermsRevision: effectiveLegalRevisions.termsRevision,
+                acceptedTermsRevision: effectiveLegalRevisions!.termsRevision,
               }),
-          ...(context.order.acceptedClaimPolicyRevision
+          ...(context.order.acceptedClaimPolicyRevision || isRetry
             ? {}
             : {
                 acceptedClaimPolicyRevision:
-                  effectiveLegalRevisions.claimPolicyRevision,
+                  effectiveLegalRevisions!.claimPolicyRevision,
               }),
-          ...(context.order.acceptedClaimWindowDays
+          ...(context.order.acceptedClaimWindowDays || isRetry
             ? {}
             : {
                 acceptedClaimWindowDays:
-                  effectiveLegalRevisions.claimWindowDays,
+                  effectiveLegalRevisions!.claimWindowDays,
               }),
-          ...(context.order.withdrawalExceptionAcknowledgedAt
+          ...(context.order.withdrawalExceptionAcknowledgedAt || isRetry
             ? {}
             : { withdrawalExceptionAcknowledgedAt: observedAt }),
           ...(input.photoPublicationConsent &&
@@ -703,6 +802,38 @@ export class PaymentsService {
             : {}),
         },
       });
+      if (!context.order.acceptedOrderPriceBindingId && !isRetry) {
+        await transaction.legalAcceptance.createMany({
+          data: [
+            {
+              orderId: context.order.id,
+              revisionId: legal.approvals.documents.terms.revisionId!,
+              purpose: "TERMS_ACCEPTED",
+              acceptedAt: observedAt,
+              commandIdentity: idempotencyKey,
+            },
+            {
+              orderId: context.order.id,
+              revisionId: legal.approvals.documents.claims.revisionId!,
+              purpose: "CLAIM_POLICY_ACCEPTED",
+              acceptedAt: observedAt,
+              commandIdentity: idempotencyKey,
+            },
+            ...(input.photoPublicationConsent
+              ? [
+                  {
+                    orderId: context.order.id,
+                    revisionId:
+                      legal.approvals.documents.photoConsent.revisionId!,
+                    purpose: "PHOTO_PUBLICATION_GRANTED" as const,
+                    acceptedAt: observedAt,
+                    commandIdentity: idempotencyKey,
+                  },
+                ]
+              : []),
+          ],
+        });
+      }
       const paymentId = randomUUID();
       const payment = await transaction.payment.create({
         data: {
@@ -1611,7 +1742,7 @@ export class PaymentsService {
           FOR UPDATE OF session, target_order
         `;
       }
-      return client.quoteSession.findUnique({
+      const session = await client.quoteSession.findUnique({
         where: { id: sessionId },
         include: {
           automaticOrderOrigin: {
@@ -1636,6 +1767,13 @@ export class PaymentsService {
                       },
                     },
                   },
+                  legalAcceptances: {
+                    include: {
+                      revision: {
+                        include: { document: { select: { key: true } } },
+                      },
+                    },
+                  },
                   phases: true,
                 },
               },
@@ -1643,6 +1781,22 @@ export class PaymentsService {
           },
         },
       });
+      if (!session?.automaticOrderOrigin) return session;
+      const payments = await client.payment.findMany({
+        where: { orderId: session.automaticOrderOrigin.order.id },
+        select: {
+          orderPriceBindingId: true,
+          role: true,
+          status: true,
+        },
+      });
+      return {
+        ...session,
+        automaticOrderOrigin: {
+          ...session.automaticOrderOrigin,
+          order: { ...session.automaticOrderOrigin.order, payments },
+        },
+      };
     };
     return read().then((session) => {
       if (!session?.automaticOrderOrigin?.order.automaticQuoteDraft) {
@@ -1695,6 +1849,219 @@ function assertCheckoutTopology(context: CheckoutContext): void {
       "Price binding changed after quote preparation",
     );
   }
+}
+
+function assertCheckoutBindingTermsCurrent(
+  binding: { legalTermsRevisionId: string | null },
+  revisionId: string,
+): void {
+  if (binding.legalTermsRevisionId !== revisionId) {
+    throw new ConflictException(
+      "Checkout price binding does not use the effective terms revision",
+    );
+  }
+}
+
+function assertCurrentCheckoutInput(
+  binding: { legalTermsRevisionId: string | null },
+  input: ReturnType<typeof checkoutInput>,
+  effective: ReturnType<typeof assertEffectiveCheckoutLegalDocuments>,
+  approvals: Awaited<ReturnType<LegalApprovalsService["readAt"]>>,
+  order: Readonly<{
+    acceptedTermsRevision: string | null;
+    acceptedClaimPolicyRevision: string | null;
+    acceptedClaimWindowDays: number | null;
+  }>,
+): void {
+  assertCheckoutTermsRevisionCurrent(
+    input.termsRevision,
+    effective.termsRevision,
+  );
+  assertCheckoutBindingTermsCurrent(
+    binding,
+    approvals.documents.terms.revisionId!,
+  );
+  assertCheckoutClaimPolicyRevisionCurrent(
+    input.claimPolicyRevision,
+    effective.claimPolicyRevision,
+  );
+  if (input.photoPublicationConsent) {
+    assertEffectiveCheckoutPhotoConsent(approvals, input.photoConsentRevision!);
+  }
+  assertCheckoutAcceptanceRevisionsCurrent(
+    {
+      termsRevision: order.acceptedTermsRevision,
+      claimPolicyRevision: order.acceptedClaimPolicyRevision,
+      claimWindowDays: order.acceptedClaimWindowDays,
+    },
+    effective,
+  );
+}
+
+function frozenCheckoutEvidence(
+  order: CheckoutOrderEvidence,
+): FrozenCheckoutEvidence | null {
+  const accepted = {
+    bindingId: order.acceptedOrderPriceBindingId,
+    termsRevision: order.acceptedTermsRevision,
+    claimsRevision: order.acceptedClaimPolicyRevision,
+    claimWindowDays: order.acceptedClaimWindowDays,
+    withdrawalAt: order.withdrawalExceptionAcknowledgedAt,
+  };
+  const hasAnyEvidence = Object.values(accepted).some(
+    (value) => value !== null,
+  );
+  if (!hasAnyEvidence) return null;
+  if (
+    !accepted.bindingId ||
+    !accepted.termsRevision ||
+    !accepted.claimsRevision ||
+    !accepted.claimWindowDays ||
+    !accepted.withdrawalAt
+  ) {
+    throw incompleteCheckoutEvidence();
+  }
+  const binding = order.activePriceBinding?.orderPriceBinding;
+  if (!binding || binding.id !== accepted.bindingId) {
+    throw incompleteCheckoutEvidence();
+  }
+  const legacy = binding.legalTermsRevisionId === null;
+  const acceptances = order.legalAcceptances;
+  const terms = acceptanceReference(
+    acceptances,
+    "TERMS_ACCEPTED",
+    accepted.termsRevision,
+    "terms",
+  );
+  const claims = acceptanceReference(
+    acceptances,
+    "CLAIM_POLICY_ACCEPTED",
+    accepted.claimsRevision,
+    "claims",
+  );
+  const photoGranted = order.photoPublicationConsentGrantedAt !== null;
+  const photo = photoGranted
+    ? acceptanceReference(
+        acceptances,
+        "PHOTO_PUBLICATION_GRANTED",
+        order.photoPublicationConsentRevision,
+        "photoConsent",
+      )
+    : null;
+  if (legacy) {
+    if (
+      binding.priceSnapshot.priceList.termsRevision !==
+        accepted.termsRevision ||
+      photoGranted !== (order.photoPublicationConsentRevision !== null)
+    ) {
+      throw incompleteCheckoutEvidence();
+    }
+  } else if (
+    !terms ||
+    !claims ||
+    terms.revision !== accepted.termsRevision ||
+    claims.revision !== accepted.claimsRevision ||
+    binding.legalTermsRevisionId !== terms.revisionId ||
+    (photoGranted && !photo)
+  ) {
+    throw incompleteCheckoutEvidence();
+  }
+  const retryAttemptExists = order.payments.some(
+    (payment) =>
+      payment.orderPriceBindingId === binding.id &&
+      payment.role === "FULL" &&
+      payment.status === PaymentStatus.FAILED,
+  );
+  return {
+    acceptedOrderPriceBindingId: accepted.bindingId,
+    termsRevision: accepted.termsRevision,
+    claimPolicyRevision: accepted.claimsRevision,
+    claimWindowDays: accepted.claimWindowDays,
+    withdrawalExceptionAcknowledged: true,
+    photoPublicationConsent: photoGranted,
+    photoConsentRevision: photoGranted
+      ? order.photoPublicationConsentRevision
+      : null,
+    legacy,
+    terms: publicAcceptanceReference(terms, "terms", accepted.termsRevision),
+    claims: publicAcceptanceReference(
+      claims,
+      "claims",
+      accepted.claimsRevision,
+    ),
+    photoConsent: photo
+      ? publicAcceptanceReference(photo, "photoConsent", photo.revision)
+      : null,
+    retryAttemptExists,
+  };
+}
+
+function acceptanceReference(
+  acceptances: CheckoutOrderEvidence["legalAcceptances"],
+  purpose:
+    "TERMS_ACCEPTED" | "CLAIM_POLICY_ACCEPTED" | "PHOTO_PUBLICATION_GRANTED",
+  expectedRevision: string | null,
+  expectedKey: "terms" | "claims" | "photoConsent",
+): (AcceptedCheckoutEvidenceDto["terms"] & { revisionId: string }) | null {
+  if (!expectedRevision) return null;
+  const acceptance = acceptances.find(
+    (candidate) =>
+      candidate.purpose === purpose &&
+      candidate.revision.revisionCode === expectedRevision &&
+      candidate.revision.document.key === expectedKey,
+  );
+  if (!acceptance || !acceptance.revision.revisionCode) return null;
+  return {
+    key: expectedKey,
+    revision: acceptance.revision.revisionCode,
+    contentHash: acceptance.revision.contentHash,
+    revisionId: acceptance.revisionId,
+  };
+}
+
+function publicAcceptanceReference(
+  reference:
+    (AcceptedCheckoutEvidenceDto["terms"] & { revisionId: string }) | null,
+  key: "terms" | "claims" | "photoConsent",
+  revision: string,
+): AcceptedCheckoutEvidenceDto["terms"] {
+  return reference
+    ? {
+        key: reference.key,
+        revision: reference.revision,
+        contentHash: reference.contentHash,
+      }
+    : { key, revision, contentHash: null };
+}
+
+function publicFrozenCheckoutEvidence(
+  evidence: FrozenCheckoutEvidence,
+): AcceptedCheckoutEvidenceDto {
+  const { retryAttemptExists: _retryAttemptExists, ...publicEvidence } =
+    evidence;
+  return publicEvidence;
+}
+
+function assertFrozenCheckoutInput(
+  evidence: FrozenCheckoutEvidence,
+  input: ReturnType<typeof checkoutInput>,
+): void {
+  if (
+    input.termsRevision !== evidence.termsRevision ||
+    input.claimPolicyRevision !== evidence.claimPolicyRevision ||
+    input.photoPublicationConsent !== evidence.photoPublicationConsent ||
+    input.photoConsentRevision !== evidence.photoConsentRevision
+  ) {
+    throw new ConflictException(
+      "Checkout input differs from accepted evidence",
+    );
+  }
+}
+
+function incompleteCheckoutEvidence(): ServiceUnavailableException {
+  return new ServiceUnavailableException(
+    "Checkout acceptance evidence is incomplete",
+  );
 }
 
 function assertDestinationStillCurrent(
@@ -1923,15 +2290,7 @@ function assertBalancePaymentLaunchApproved(order: {
       "Balance payment has no accepted price binding",
     );
   }
-  const legalRevisions = assertCheckoutPaymentFlowsEnabled(boundTermsRevision);
-  assertCheckoutAcceptanceRevisionsCurrent(
-    {
-      termsRevision: order.acceptedTermsRevision,
-      claimPolicyRevision: order.acceptedClaimPolicyRevision,
-      claimWindowDays: order.acceptedClaimWindowDays,
-    },
-    legalRevisions,
-  );
+  assertCheckoutPaymentFlowsEnabled();
 }
 
 async function balanceIdempotencyAfterLock(

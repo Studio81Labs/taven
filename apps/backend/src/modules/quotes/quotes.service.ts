@@ -35,6 +35,7 @@ import {
 import {
   assertBindingQuoteFlowsEnabled,
   assertEffectiveQuoteRequestLegalDocuments,
+  approvedCheckoutClaimWindowDays,
 } from "../../launch-approval-gates";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
@@ -208,14 +209,21 @@ export class QuotesService {
       commandKey,
       capabilityRequests.map(({ fingerprint }) => fingerprint),
       async (transaction, generation) => {
+        const legal = await this.requiredLegalApprovals().lockAndRead(
+          transaction,
+          request.photoPublicationConsent
+            ? ["privacy", "prohibitedContent", "retention", "photoConsent"]
+            : ["privacy", "prohibitedContent", "retention"],
+        );
+        const observedAt = legal.observedAt;
+        assertEffectiveQuoteRequestLegalDocuments(
+          legal.approvals,
+          request.photoPublicationConsent,
+        );
+        requireFreshQuoteRequestLegalEvidence(request, legal.approvals);
         await reserveAnonymousQuote(
           transaction,
           currentCapabilityRequest.clientSubjectHash,
-        );
-        const observedAt = await databaseNow(transaction);
-        assertEffectiveQuoteRequestLegalDocuments(
-          this.requiredLegalApprovals().evaluateAt(observedAt),
-          request.photoPublicationConsent,
         );
         const requestToken = capabilityToken(
           currentCapabilityRequest.capabilityKey.key,
@@ -275,6 +283,29 @@ export class QuotesService {
             createdAt: observedAt,
             updatedAt: observedAt,
           },
+        });
+        await transaction.legalAcceptance.createMany({
+          data: [
+            {
+              quoteRequestId: requestId,
+              revisionId: legal.approvals.documents.privacy.revisionId!,
+              purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
+              acceptedAt: observedAt,
+              commandIdentity: commandKey,
+            },
+            ...(request.photoPublicationConsent
+              ? [
+                  {
+                    quoteRequestId: requestId,
+                    revisionId:
+                      legal.approvals.documents.photoConsent.revisionId!,
+                    purpose: "PHOTO_PUBLICATION_GRANTED" as const,
+                    acceptedAt: observedAt,
+                    commandIdentity: commandKey,
+                  },
+                ]
+              : []),
+          ],
         });
         if (request.automaticQuoteHandoffToken) {
           await consumeAutomaticQuoteHandoff(
@@ -597,6 +628,54 @@ export class QuotesService {
       commandKey,
       fingerprint,
       async (transaction) => {
+        const legal = await this.requiredLegalApprovals().lockAndRead(
+          transaction,
+          ["terms", "claims"],
+        );
+        const observedAt = legal.observedAt;
+        assertEffectiveLegalDocuments(legal.approvals, ["terms", "claims"]);
+        const [terms, claims] =
+          await transaction.legalDocumentRevision.findMany({
+            where: {
+              id: {
+                in: [
+                  legal.approvals.documents.terms.revisionId!,
+                  legal.approvals.documents.claims.revisionId!,
+                ],
+              },
+            },
+            select: {
+              id: true,
+              revisionCode: true,
+              contentVersion: true,
+              title: true,
+              summary: true,
+              sections: true,
+              contentHash: true,
+            },
+            orderBy: { id: "asc" },
+          });
+        const termsRevisionRecord = [terms, claims].find(
+          (revision) =>
+            revision?.id === legal.approvals.documents.terms.revisionId,
+        );
+        const claimsRevisionRecord = [terms, claims].find(
+          (revision) =>
+            revision?.id === legal.approvals.documents.claims.revisionId,
+        );
+        if (!termsRevisionRecord || !claimsRevisionRecord) {
+          throw legalApprovalRequired("Legal approval metadata is unavailable");
+        }
+        const termsRevision = legal.approvals.documents.terms.revision;
+        const termsSnapshot = legalTermsSnapshot(termsRevisionRecord);
+        if (
+          offer.termsSnapshot !== undefined &&
+          canonicalJson(offer.termsSnapshot) !== canonicalJson(termsSnapshot)
+        ) {
+          throw new BadRequestException(
+            "termsSnapshot must match the current immutable terms revision",
+          );
+        }
         const request = await lockedRequest(transaction, requestId);
         if (!request)
           throw new NotFoundException("Quote request was not found");
@@ -608,7 +687,6 @@ export class QuotesService {
             "Quote request is not ready for an offer",
           );
         }
-        const observedAt = await databaseNow(transaction);
         if (offer.expiresAt.getTime() <= observedAt.getTime()) {
           throw new BadRequestException("expiresAt must be in the future");
         }
@@ -616,16 +694,6 @@ export class QuotesService {
           where: { id: offer.priceListId },
         });
         if (!priceList) throw new BadRequestException("priceListId is invalid");
-        const termsRevision = requiredText(
-          priceList.termsRevision,
-          "priceList.termsRevision",
-          100,
-        );
-        if (termsRevision !== priceList.termsRevision) {
-          throw new BadRequestException(
-            "priceListId has a non-canonical terms revision",
-          );
-        }
         if (priceList.currency !== "CZK") {
           throw new BadRequestException("Individual v0 offers must use CZK");
         }
@@ -728,7 +796,10 @@ export class QuotesService {
             version: 1,
             summary: offer.summary,
             termsRevision,
-            termsSnapshot: jsonInput(offer.termsSnapshot)!,
+            termsSnapshot: jsonInput(termsSnapshot)!,
+            legalTermsRevisionId: termsRevisionRecord.id,
+            legalClaimsRevisionId: claimsRevisionRecord.id,
+            claimWindowDays: approvedCheckoutClaimWindowDays(),
             promisedDate: offer.promisedDate ?? null,
             issuanceCommandKey: commandKey,
             issuanceResultId: resultId,
@@ -931,6 +1002,12 @@ export class QuotesService {
           quoteId,
           version: 1,
           termsRevision,
+          claimPolicyRevision: legal.approvals.documents.claims.revision,
+          claimWindowDays: approvedCheckoutClaimWindowDays(),
+          legalTermsRevisionId: termsRevisionRecord.id,
+          legalTermsContentHash: termsRevisionRecord.contentHash,
+          legalClaimsRevisionId: claimsRevisionRecord.id,
+          legalClaimsContentHash: claimsRevisionRecord.contentHash,
           offerToken,
           expiresAt: offer.expiresAt.toISOString(),
         } satisfies OfferIssuedDto;
@@ -942,6 +1019,12 @@ export class QuotesService {
             quoteId: response.quoteId,
             version: response.version,
             termsRevision: response.termsRevision,
+            claimPolicyRevision: response.claimPolicyRevision,
+            claimWindowDays: response.claimWindowDays,
+            legalTermsRevisionId: response.legalTermsRevisionId,
+            legalTermsContentHash: response.legalTermsContentHash,
+            legalClaimsRevisionId: response.legalClaimsRevisionId,
+            legalClaimsContentHash: response.legalClaimsContentHash,
             expiresAt: response.expiresAt,
             capabilityKeyId: offerCapabilityKey.id,
           }),
@@ -987,6 +1070,15 @@ export class QuotesService {
     }
     const snapshot = quote.priceBinding?.priceSnapshot;
     if (!snapshot) throw new ConflictException("Offer price is unavailable");
+    if (
+      !quote.legalTermsRevision ||
+      !quote.legalClaimsRevision ||
+      !quote.legalTermsRevision.revisionCode ||
+      !quote.legalClaimsRevision.revisionCode ||
+      !quote.claimWindowDays
+    ) {
+      throw new ConflictException("Offer legal evidence is unavailable");
+    }
     const itemOrdinals = new Map(
       quote.items.map((item) => [item.id, item.ordinal]),
     );
@@ -1055,6 +1147,12 @@ export class QuotesService {
       quoteId: quote.id,
       version: quote.version,
       termsRevision: quote.termsRevision,
+      claimPolicyRevision: quote.legalClaimsRevision.revisionCode,
+      claimWindowDays: quote.claimWindowDays,
+      legalTermsRevisionId: quote.legalTermsRevision.id,
+      legalTermsContentHash: quote.legalTermsRevision.contentHash,
+      legalClaimsRevisionId: quote.legalClaimsRevision.id,
+      legalClaimsContentHash: quote.legalClaimsRevision.contentHash,
       summary: quote.summary,
       termsSnapshot: jsonObject(quote.termsSnapshot),
       currency: snapshot.currency,
@@ -1109,7 +1207,7 @@ export class QuotesService {
   ): Promise<AcceptedOfferDto> {
     quoteId = normalizedUuid(quoteId, "quoteId");
     const token = bearerCapability(authorization);
-    const expected = validateExpectedOffer(input);
+    const expected = validateExpectedOffer(input, true);
     const commandKey = requireIdempotencyKey(idempotencyKey);
     await this.offerForToken(quoteId, token);
     assertBindingQuoteFlowsEnabled();
@@ -1118,6 +1216,10 @@ export class QuotesService {
       commandKey,
       fingerprintOf({ quoteId, ...expected }),
       async (transaction) => {
+        await this.requiredLegalApprovals().lockAndRead(transaction, [
+          "terms",
+          "claims",
+        ]);
         const quote = await lockedOffer(transaction, quoteId);
         assertOfferCapability(quote, token);
         assertExpectedOffer(quote, expected);
@@ -1133,6 +1235,7 @@ export class QuotesService {
         if (!quote.deliveryDestination || quote.shipmentPlans.length < 1) {
           throw new ConflictException("Offer shipment topology is unavailable");
         }
+        requireFreshWithdrawalAcknowledgement(expected);
 
         const orderId = randomUUID();
         const resultId = randomUUID();
@@ -1148,17 +1251,20 @@ export class QuotesService {
           return { kind: "expired" };
         }
         const observedAt = acceptance.accepted_at;
-        const approvals = this.requiredLegalApprovals().evaluateAt(observedAt);
-        assertEffectiveLegalDocuments(approvals, [
-          "terms",
-          "claims",
-          "privacy",
-          "prohibitedContent",
-          "retention",
-        ]);
-        if (quote.termsRevision !== approvals.documents.terms.revision) {
+        const approvals = await this.requiredLegalApprovals().readAt(
+          transaction,
+          observedAt,
+        );
+        assertEffectiveLegalDocuments(approvals, ["terms", "claims"]);
+        if (
+          quote.termsRevision !== approvals.documents.terms.revision ||
+          quote.legalTermsRevisionId !== approvals.documents.terms.revisionId ||
+          quote.legalClaimsRevisionId !==
+            approvals.documents.claims.revisionId ||
+          quote.claimWindowDays !== approvedCheckoutClaimWindowDays()
+        ) {
           throw legalApprovalRequired(
-            "Offer terms revision is no longer approved",
+            "Offer legal revisions are no longer approved",
           );
         }
         await applyAcceptanceTransition(quote, {
@@ -1282,6 +1388,7 @@ export class QuotesService {
             orderId,
             priceSnapshotId: quote.priceBinding.priceSnapshot.id,
             deliveryDestinationId,
+            legalTermsRevisionId: quote.legalTermsRevisionId,
             createdAt: observedAt,
           },
         });
@@ -1337,6 +1444,36 @@ export class QuotesService {
         }
         await transaction.orderActivePriceBinding.create({
           data: { orderId, orderPriceBindingId },
+        });
+        await transaction.order.update({
+          where: { id: orderId },
+          data: {
+            acceptedOrderPriceBindingId: orderPriceBindingId,
+            acceptedTermsRevision: quote.termsRevision,
+            acceptedClaimPolicyRevision: approvals.documents.claims.revision,
+            acceptedClaimWindowDays: quote.claimWindowDays,
+            withdrawalExceptionAcknowledgedAt: observedAt,
+            status: "QUOTED",
+            quotedAt: observedAt,
+          },
+        });
+        await transaction.legalAcceptance.createMany({
+          data: [
+            {
+              orderId,
+              revisionId: quote.legalTermsRevisionId!,
+              purpose: "TERMS_ACCEPTED",
+              acceptedAt: observedAt,
+              commandIdentity: commandKey,
+            },
+            {
+              orderId,
+              revisionId: quote.legalClaimsRevisionId!,
+              purpose: "CLAIM_POLICY_ACCEPTED",
+              acceptedAt: observedAt,
+              commandIdentity: commandKey,
+            },
+          ],
         });
         const sourceModelFileIds = [
           ...new Set(
@@ -1579,6 +1716,12 @@ export class QuotesService {
               },
             },
           },
+        },
+        legalTermsRevision: {
+          select: { id: true, revisionCode: true, contentHash: true },
+        },
+        legalClaimsRevision: {
+          select: { id: true, revisionCode: true, contentHash: true },
         },
       },
     });
@@ -1862,6 +2005,19 @@ async function lockedOffer(transaction: Transaction, quoteId: string) {
       deliveryDestination: true,
       shipmentPlans: { orderBy: { ordinal: "asc" } },
       priceBinding: { include: { priceSnapshot: true } },
+      legalTermsRevision: {
+        select: {
+          id: true,
+          revisionCode: true,
+          contentHash: true,
+          title: true,
+          summary: true,
+          sections: true,
+        },
+      },
+      legalClaimsRevision: {
+        select: { id: true, revisionCode: true, contentHash: true },
+      },
     },
   });
 }
@@ -2232,6 +2388,18 @@ function validateCreateRequest(input: CreateQuoteRequestDto) {
       input.photoPublicationConsent,
       "photoPublicationConsent",
     ),
+    privacyNoticeRevision: optionalRevisionCode(
+      input.privacyNoticeRevision,
+      "privacyNoticeRevision",
+    ),
+    privacyAcknowledged: optionalStrictBoolean(
+      input.privacyAcknowledged,
+      "privacyAcknowledged",
+    ),
+    photoConsentRevision: optionalRevisionCode(
+      input.photoConsentRevision,
+      "photoConsentRevision",
+    ),
     automaticQuoteHandoffToken: optionalCapabilityToken(
       input.automaticQuoteHandoffToken,
       "automaticQuoteHandoffToken",
@@ -2256,6 +2424,48 @@ function optionalBoolean(value: unknown, name: string): boolean {
   if (typeof value !== "boolean")
     throw new BadRequestException(`${name} is invalid`);
   return value;
+}
+
+function optionalStrictBoolean(
+  value: unknown,
+  name: string,
+): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean")
+    throw new BadRequestException(`${name} is invalid`);
+  return value;
+}
+
+function optionalRevisionCode(
+  value: unknown,
+  name: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  return requiredText(value, name, 100);
+}
+
+function requireFreshQuoteRequestLegalEvidence(
+  request: ReturnType<typeof validateCreateRequest>,
+  approvals: Awaited<
+    ReturnType<LegalApprovalsService["lockAndRead"]>
+  >["approvals"],
+): void {
+  if (
+    request.privacyAcknowledged !== true ||
+    request.privacyNoticeRevision !== approvals.documents.privacy.revision
+  ) {
+    throw legalApprovalRequired(
+      "Quote request requires acknowledgement of the effective privacy notice",
+    );
+  }
+  if (
+    request.photoPublicationConsent &&
+    request.photoConsentRevision !== approvals.documents.photoConsent.revision
+  ) {
+    throw legalApprovalRequired(
+      "Quote request does not use the effective photo-consent revision",
+    );
+  }
 }
 
 function validateContact(input: QuoteContactDto | undefined): QuoteContactDto {
@@ -2434,7 +2644,10 @@ function validateOffer(input: IssueOfferDto) {
   ];
   const expiresAt = requiredInstant(input.expiresAt, "expiresAt");
   const promisedDate = optionalDate(input.promisedDate, "promisedDate");
-  const termsSnapshot = requiredObject(input.termsSnapshot, "termsSnapshot");
+  const termsSnapshot =
+    input.termsSnapshot === undefined
+      ? undefined
+      : requiredObject(input.termsSnapshot, "termsSnapshot");
   const inputSnapshot = requiredObject(input.inputSnapshot, "inputSnapshot");
   const summary = requiredText(input.summary, "summary", 4_000, 3);
   return {
@@ -2460,7 +2673,7 @@ function validateOffer(input: IssueOfferDto) {
       contractTotalMinor,
       ...tax,
       depositMinor,
-      termsSnapshot,
+      ...(termsSnapshot === undefined ? {} : { termsSnapshot }),
       inputSnapshot,
       deliveryDestination,
       shipmentPlans,
@@ -2938,14 +3151,38 @@ function serializableItem(item: ReturnType<typeof validateOfferItem>) {
   );
 }
 
-function validateExpectedOffer(input: AcceptOfferDto) {
+function validateExpectedOffer(
+  input: AcceptOfferDto,
+  includeAcknowledgement = false,
+) {
   if (!input || typeof input !== "object") {
     throw new BadRequestException("Offer version evidence is required");
   }
-  return {
+  const expected = {
     version: positiveInteger(input.version, "version", POSTGRES_INTEGER_MAX),
     termsRevision: requiredText(input.termsRevision, "termsRevision", 100),
   };
+  if (!includeAcknowledgement) return expected;
+  return {
+    ...expected,
+    acknowledgeWithdrawalException: optionalStrictBoolean(
+      input.acknowledgeWithdrawalException,
+      "acknowledgeWithdrawalException",
+    ),
+  };
+}
+
+function requireFreshWithdrawalAcknowledgement(
+  expected: ReturnType<typeof validateExpectedOffer>,
+): void {
+  if (
+    !("acknowledgeWithdrawalException" in expected) ||
+    expected.acknowledgeWithdrawalException !== true
+  ) {
+    throw new BadRequestException(
+      "acknowledgeWithdrawalException must be explicitly true for a fresh offer acceptance",
+    );
+  }
 }
 
 function assertExpectedOffer(
@@ -3427,6 +3664,22 @@ function canonicalJson(value: unknown): string {
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
     .join(",")}}`;
+}
+
+function legalTermsSnapshot(revision: {
+  contentVersion: number;
+  title: string;
+  summary: string;
+  sections: Prisma.JsonValue;
+  contentHash: string;
+}): Record<string, unknown> {
+  return {
+    contentVersion: revision.contentVersion,
+    title: revision.title,
+    summary: revision.summary,
+    sections: revision.sections,
+    contentHash: revision.contentHash,
+  };
 }
 
 function batchesOf<T>(values: readonly T[]): T[][] {

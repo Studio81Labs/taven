@@ -3,10 +3,19 @@ import {
   LEGAL_PLACEHOLDER_BANNER,
   publicSite,
 } from "../../content/public-site";
-import type { LegalDocument } from "../../content/launch-manifest";
-
 defineProps<{
-  document: LegalDocument;
+  document: {
+    id: string;
+    title: string;
+    summary: string;
+    sections: readonly {
+      title: string;
+      paragraphs?: readonly string[];
+      items?: readonly string[];
+      note?: string;
+    }[];
+    effectiveAt: string | null;
+  };
   effective?: boolean;
   contact?: {
     label: string;
@@ -45,8 +54,8 @@ defineProps<{
           text schválený vlastníkem služby a českým právním poradcem.
         </template>
         <template v-else>
-          Účinné od {{ document.effectiveAt }}. Zdroj schválení:
-          {{ document.approvalEvidence }}.
+          Účinné od {{ document.effectiveAt }}. Zobrazená verze je načtena z
+          neměnné veřejné databázové revize.
         </template>
       </p>
     </div>

@@ -33,6 +33,7 @@ import { useLegalAvailability } from "../../composables/useLegalAvailability";
 type CheckoutPayment = components["schemas"]["CheckoutPaymentDto"];
 type CreateCheckoutPayment = components["schemas"]["CreateCheckoutPaymentDto"];
 type PaymentCapabilities = components["schemas"]["PaymentCapabilitiesDto"];
+type CheckoutRetryContext = components["schemas"]["CheckoutRetryContextDto"];
 const CHECKOUT_OBSERVATION_TIMEOUT_MS = 1_000;
 
 const props = defineProps<{
@@ -47,6 +48,7 @@ const form = ref<HTMLFormElement>();
 const credentials = shallowRef<StoredQuoteSession>();
 const capabilities = shallowRef<PaymentCapabilities>();
 const payment = shallowRef<CheckoutPayment>();
+const retryContext = shallowRef<CheckoutRetryContext>();
 const command = shallowRef<CheckoutCommandHandoff>();
 const loading = ref(true);
 const submitting = ref(false);
@@ -91,6 +93,18 @@ const approvedDocuments = computed(() =>
     availability.value,
   ),
 );
+const retryEvidence = computed(
+  () => retryContext.value?.acceptedEvidence ?? null,
+);
+const retryMode = computed(
+  () =>
+    retryContext.value?.retryAllowed === true && retryEvidence.value !== null,
+);
+const paymentMethods = computed(() =>
+  retryMode.value
+    ? retryContext.value!.methods
+    : (capabilities.value?.methods ?? []),
+);
 watch(approvedDocuments, (documents) => {
   if (!documents?.photoConsentRevision) draft.photoPublicationConsent = false;
 });
@@ -107,13 +121,14 @@ const restartMode = computed(() =>
 const canSubmit = computed(
   () =>
     Boolean(
-      approvedDocuments.value &&
+      (approvedDocuments.value || retryMode.value) &&
       bindingPrice.value?.kind === "BINDING" &&
       selectedDestination.value &&
-      draft.acceptTerms &&
-      draft.acceptClaimPolicy &&
-      draft.acknowledgeWithdrawalException &&
-      capabilities.value?.methods.includes(draft.method),
+      (retryMode.value ||
+        (draft.acceptTerms &&
+          draft.acceptClaimPolicy &&
+          draft.acknowledgeWithdrawalException)) &&
+      paymentMethods.value.includes(draft.method),
     ) &&
     !submitting.value &&
     !redirecting.value,
@@ -149,6 +164,7 @@ onMounted(async () => {
   }
   command.value = storedCheckout?.command;
   initialized.value = true;
+  await loadRetryContext();
   await loadCapabilities();
   await refreshLegalAvailability();
   if (command.value?.paymentId) await refreshPayment();
@@ -173,22 +189,34 @@ async function loadCapabilities(): Promise<void> {
         "Dostupné platební metody se nepodařilo bezpečně ověřit.";
       return;
     }
-    if (!response.data.methods.includes(draft.method)) {
-      draft.method = response.data.methods[0] ?? "CARD";
+    if (!paymentMethods.value.includes(draft.method)) {
+      draft.method = paymentMethods.value[0] ?? "CARD";
     }
   } catch {
-    errorMessage.value =
-      "Dostupné platební metody se nepodařilo bezpečně ověřit.";
+    if (!retryMode.value) {
+      errorMessage.value =
+        "Dostupné platební metody se nepodařilo bezpečně ověřit.";
+    }
   }
 }
 
 async function submitCheckout(): Promise<void> {
   if (!form.value?.reportValidity() || !canSubmit.value) return;
-  await refreshLegalAvailability();
+  if (retryMode.value) await loadRetryContext();
+  else await refreshLegalAvailability();
   const session = credentials.value;
   const documents = approvedDocuments.value;
-  if (!session || !documents) return;
-  if (draft.photoPublicationConsent && !documents.photoConsentRevision) {
+  const evidence = retryEvidence.value;
+  if (!session || (!documents && !evidence)) return;
+  if (retryMode.value && !retryContext.value?.retryAllowed) {
+    errorMessage.value = "Předchozí platbu už nelze bezpečně opakovat.";
+    return;
+  }
+  if (
+    !retryMode.value &&
+    draft.photoPublicationConsent &&
+    !documents?.photoConsentRevision
+  ) {
     errorMessage.value =
       "Dobrovolný souhlas s fotografiemi zatím nemá schválené znění.";
     return;
@@ -199,15 +227,20 @@ async function submitCheckout(): Promise<void> {
     fullName: draft.fullName,
     billing: compactBilling(draft.billing),
     method: draft.method,
-    acceptTerms: draft.acceptTerms,
-    acceptClaimPolicy: draft.acceptClaimPolicy,
-    acknowledgeWithdrawalException: draft.acknowledgeWithdrawalException,
-    termsRevision: documents.termsRevision,
-    claimPolicyRevision: documents.claimPolicyRevision,
-    photoPublicationConsent: draft.photoPublicationConsent,
-    photoConsentRevision: draft.photoPublicationConsent
-      ? documents.photoConsentRevision
-      : null,
+    acceptTerms: retryMode.value || draft.acceptTerms,
+    acceptClaimPolicy: retryMode.value || draft.acceptClaimPolicy,
+    acknowledgeWithdrawalException:
+      retryMode.value || draft.acknowledgeWithdrawalException,
+    termsRevision: evidence?.termsRevision ?? documents!.termsRevision,
+    claimPolicyRevision:
+      evidence?.claimPolicyRevision ?? documents!.claimPolicyRevision,
+    photoPublicationConsent:
+      evidence?.photoPublicationConsent ?? draft.photoPublicationConsent,
+    photoConsentRevision: evidence
+      ? evidence.photoConsentRevision
+      : draft.photoPublicationConsent
+        ? documents!.photoConsentRevision
+        : null,
   };
   const requestFingerprint = checkoutRequestFingerprint(body);
   const activeCommand =
@@ -255,6 +288,29 @@ async function submitCheckout(): Promise<void> {
     errorMessage.value = checkoutErrorMessage(0);
   } finally {
     submitting.value = false;
+  }
+}
+
+async function loadRetryContext(): Promise<void> {
+  const session = credentials.value;
+  if (!session) return;
+  try {
+    const result = await $api.GET(
+      "/automatic-quote-sessions/{sessionId}/checkout/retry-context",
+      {
+        headers: { Authorization: `Bearer ${session.sessionToken}` },
+        params: { path: { sessionId: session.sessionId } },
+      },
+    );
+    retryContext.value = result.data;
+    if (
+      result.data?.retryAllowed &&
+      !result.data.methods.includes(draft.method)
+    ) {
+      draft.method = result.data.methods[0] ?? "CARD";
+    }
+  } catch {
+    retryContext.value = undefined;
   }
 }
 
@@ -523,7 +579,7 @@ function compactBilling(
     </div>
 
     <div
-      v-else-if="!approvedDocuments"
+      v-else-if="!approvedDocuments && !retryMode"
       class="mt-6 border-l-4 border-[#925b10] bg-[#fff8eb] p-5"
       role="status"
     >
@@ -647,7 +703,7 @@ function compactBilling(
       <fieldset class="grid gap-3">
         <legend class="text-lg font-semibold">Způsob platby</legend>
         <label
-          v-for="method in capabilities?.methods"
+          v-for="method in paymentMethods"
           :key="method"
           class="flex min-h-11 items-center gap-3 border border-[#d9d9d2] px-4"
         >
@@ -660,65 +716,78 @@ function compactBilling(
 
       <fieldset class="grid gap-4">
         <legend class="text-lg font-semibold">Potvrzení</legend>
-        <label class="flex items-start gap-3 text-sm leading-6"
-          ><input
-            v-model="draft.acceptTerms"
-            class="mt-1"
-            required
-            type="checkbox"
-          /><span
-            >Souhlasím s
-            <NuxtLink class="underline" :to="legalDocuments.terms.path"
-              >VOP</NuxtLink
-            >
-            ve znění {{ approvedDocuments.termsRevision }}.</span
-          ></label
+        <p
+          v-if="retryMode && retryEvidence"
+          class="text-sm leading-6 text-[#54554c]"
         >
-        <label class="flex items-start gap-3 text-sm leading-6"
-          ><input
-            v-model="draft.acceptClaimPolicy"
-            class="mt-1"
-            required
-            type="checkbox"
-          /><span
-            >Seznámil/a jsem se s
-            <NuxtLink class="underline" :to="legalDocuments.claims.path"
-              >reklamačním řádem</NuxtLink
-            >
-            ve znění {{ approvedDocuments.claimPolicyRevision }}.</span
-          ></label
-        >
-        <label class="flex items-start gap-3 text-sm leading-6"
-          ><input
-            v-model="draft.acknowledgeWithdrawalException"
-            class="mt-1"
-            required
-            type="checkbox"
-          /><span
-            >Beru na vědomí, že výrobek je zhotoven podle mých požadavků a může
-            se na něj vztahovat zákonná výjimka z práva odstoupit do 14 dnů.
-            Práva z vadného plnění tím nejsou dotčena.</span
-          ></label
-        >
-        <label
-          class="flex items-start gap-3 text-sm leading-6"
-          :class="!approvedDocuments.photoConsentRevision && 'text-[#777870]'"
-          ><input
-            v-model="draft.photoPublicationConsent"
-            class="mt-1"
-            type="checkbox"
-            :disabled="!approvedDocuments.photoConsentRevision"
-          /><span
-            >Dobrovolně souhlasím s pořízením a zveřejněním fotografií výsledku
-            podle
-            <NuxtLink class="underline" :to="legalDocuments.photoConsent.path"
-              >pravidel fotografování</NuxtLink
-            >.
-            <span v-if="!approvedDocuments.photoConsentRevision"
-              >Tato volba čeká na schválené znění.</span
-            ></span
-          ></label
-        >
+          Opakujete neúspěšný platební pokus s dříve zaznamenaným zněním VOP ({{
+            retryEvidence.termsRevision
+          }}) a reklamačního řádu ({{ retryEvidence.claimPolicyRevision }}).
+          Tento záznam neměníme ani znovu neudělujete souhlas s fotografiemi.
+        </p>
+        <template v-else>
+          <label class="flex items-start gap-3 text-sm leading-6"
+            ><input
+              v-model="draft.acceptTerms"
+              class="mt-1"
+              required
+              type="checkbox"
+            /><span
+              >Souhlasím s
+              <NuxtLink class="underline" :to="legalDocuments.terms.path"
+                >VOP</NuxtLink
+              >
+              ve znění {{ approvedDocuments?.termsRevision }}.</span
+            ></label
+          >
+          <label class="flex items-start gap-3 text-sm leading-6"
+            ><input
+              v-model="draft.acceptClaimPolicy"
+              class="mt-1"
+              required
+              type="checkbox"
+            /><span
+              >Seznámil/a jsem se s
+              <NuxtLink class="underline" :to="legalDocuments.claims.path"
+                >reklamačním řádem</NuxtLink
+              >
+              ve znění {{ approvedDocuments?.claimPolicyRevision }}.</span
+            ></label
+          >
+          <label class="flex items-start gap-3 text-sm leading-6"
+            ><input
+              v-model="draft.acknowledgeWithdrawalException"
+              class="mt-1"
+              required
+              type="checkbox"
+            /><span
+              >Beru na vědomí, že výrobek je zhotoven podle mých požadavků a
+              může se na něj vztahovat zákonná výjimka z práva odstoupit do 14
+              dnů. Práva z vadného plnění tím nejsou dotčena.</span
+            ></label
+          >
+          <label
+            class="flex items-start gap-3 text-sm leading-6"
+            :class="
+              !approvedDocuments?.photoConsentRevision && 'text-[#777870]'
+            "
+            ><input
+              v-model="draft.photoPublicationConsent"
+              class="mt-1"
+              type="checkbox"
+              :disabled="!approvedDocuments?.photoConsentRevision"
+            /><span
+              >Dobrovolně souhlasím s pořízením a zveřejněním fotografií
+              výsledku podle
+              <NuxtLink class="underline" :to="legalDocuments.photoConsent.path"
+                >pravidel fotografování</NuxtLink
+              >.
+              <span v-if="!approvedDocuments?.photoConsentRevision"
+                >Tato volba čeká na schválené znění.</span
+              ></span
+            ></label
+          >
+        </template>
       </fieldset>
 
       <p

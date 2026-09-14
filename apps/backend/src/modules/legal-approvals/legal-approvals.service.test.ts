@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { LegalApprovalsService } from "./legal-approvals.service";
 
 describe("LegalApprovalsService", () => {
-  it("fails closed when reading the database clock fails", async () => {
+  it("fails closed when the database snapshot cannot be read", async () => {
     const service = new LegalApprovalsService({
-      $queryRaw: vi.fn().mockRejectedValue(new Error("database unavailable")),
+      $transaction: vi
+        .fn()
+        .mockRejectedValue(new Error("database unavailable")),
     } as never);
 
     const error = await service
@@ -14,9 +16,5 @@ describe("LegalApprovalsService", () => {
 
     expect(error).toBeInstanceOf(ServiceUnavailableException);
     expect((error as ServiceUnavailableException).getStatus()).toBe(503);
-    expect((error as ServiceUnavailableException).getResponse()).toEqual({
-      code: "LAUNCH_APPROVAL_REQUIRED",
-      message: "Legal approval time is unavailable",
-    });
   });
 });

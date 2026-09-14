@@ -29,8 +29,8 @@ export function approvedCheckoutDocuments(
     !capabilities?.available ||
     capabilities.methods.length === 0 ||
     !documents ||
-    documents.termsRevision !== local.terms.id ||
-    documents.claimPolicyRevision !== local.claims.id ||
+    documents.termsRevision !== availability?.documents.terms.revision ||
+    documents.claimPolicyRevision !== availability?.documents.claims.revision ||
     !hasServerVerifiedLegalDocuments(
       local,
       ["terms", "claims", "privacy", "prohibitedContent", "retention"],
@@ -43,7 +43,8 @@ export function approvedCheckoutDocuments(
     termsRevision: documents.termsRevision,
     claimPolicyRevision: documents.claimPolicyRevision,
     photoConsentRevision:
-      documents.photoConsentRevision === local.photoConsent.id &&
+      documents.photoConsentRevision ===
+        availability?.documents.photoConsent.revision &&
       isServerVerifiedLegalDocument(
         "photoConsent",
         local.photoConsent,

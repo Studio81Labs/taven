@@ -412,7 +412,7 @@ function storageWith(overrides: Partial<ObjectStorage>): ObjectStorage {
 
 function approvedLegalApprovals() {
   return {
-    evaluateAt: vi.fn(() => ({
+    readAt: vi.fn(async () => ({
       documents: {
         privacy: { effective: true },
         prohibitedContent: { effective: true },

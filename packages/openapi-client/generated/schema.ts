@@ -1461,6 +1461,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/automatic-quote-sessions/{sessionId}/checkout/retry-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read server-owned evidence for an initial-payment retry */
+        get: operations["PaymentsController_retryContext"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/automatic-quote-sessions/{sessionId}/configuration": {
         parameters: {
             query?: never;
@@ -1891,6 +1908,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptedCheckoutEvidenceDto: {
+            /** Format: uuid */
+            acceptedOrderPriceBindingId: string;
+            claimPolicyRevision: string;
+            claims: components["schemas"]["LegalVersionReferenceDto"];
+            claimWindowDays: number;
+            legacy: boolean;
+            photoConsent: components["schemas"]["LegalVersionReferenceDto"] | null;
+            photoConsentRevision: string | null;
+            photoPublicationConsent: boolean;
+            terms: components["schemas"]["LegalVersionReferenceDto"];
+            termsRevision: string;
+            withdrawalExceptionAcknowledged: boolean;
+        };
         AcceptedOfferDto: {
             /** Format: uuid */
             orderId: string;
@@ -1899,6 +1930,8 @@ export interface components {
             status: "DRAFT";
         };
         AcceptOfferDto: {
+            /** @description Required as true for a fresh acceptance; omitted only for completed legacy replay. */
+            acknowledgeWithdrawalException?: boolean;
             termsRevision: string;
             version: number;
         };
@@ -2327,6 +2360,11 @@ export interface components {
             /** @enum {string} */
             status: "CREATED" | "PENDING" | "CAPTURED" | "FAILED" | "VOIDED" | "REFUND_PENDING" | "PARTIALLY_REFUNDED" | "REFUNDED";
         };
+        CheckoutRetryContextDto: {
+            acceptedEvidence: components["schemas"]["AcceptedCheckoutEvidenceDto"] | null;
+            methods: ("CARD" | "BANK_TRANSFER")[];
+            retryAllowed: boolean;
+        };
         ClaimReprintJobDto: {
             /**
              * Format: uuid
@@ -2528,7 +2566,10 @@ export interface components {
             measurements?: {
                 [key: string]: unknown;
             };
+            photoConsentRevision?: string;
             photoPublicationConsent?: boolean;
+            privacyAcknowledged?: boolean;
+            privacyNoticeRevision?: string;
             purpose?: string;
             /** Format: date */
             requestedDate?: string;
@@ -3054,7 +3095,8 @@ export interface components {
             summary: string;
             /** @enum {string} */
             taxRegime: "NON_VAT_PAYER" | "VAT_PAYER";
-            termsSnapshot: {
+            /** @description Deprecated operator echo of terms text; new offers derive their immutable snapshot from the database revision. */
+            termsSnapshot?: {
                 [key: string]: unknown;
             };
             vatAmountMinor: number;
@@ -3095,6 +3137,7 @@ export interface components {
             schemaVersion: 1;
         };
         LegalDocumentAvailabilityRecordDto: {
+            contentHash: string | null;
             effective: boolean;
             /** Format: date-time */
             effectiveAt: string | null;
@@ -3212,6 +3255,11 @@ export interface components {
             title: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        LegalVersionReferenceDto: {
+            contentHash: string | null;
+            key: string;
+            revision: string;
         };
         MachineCalibrationPageDto: {
             items: components["schemas"]["MachineCalibrationReadDto"][];
@@ -3423,8 +3471,16 @@ export interface components {
             providerEndpointId: string;
         };
         OfferIssuedDto: {
+            claimPolicyRevision: string;
+            claimWindowDays: number;
             /** Format: date-time */
             expiresAt: string;
+            legalClaimsContentHash: string;
+            /** Format: uuid */
+            legalClaimsRevisionId: string;
+            legalTermsContentHash: string;
+            /** Format: uuid */
+            legalTermsRevisionId: string;
             offerToken: string;
             /** Format: uuid */
             quoteId: string;
@@ -3451,6 +3507,8 @@ export interface components {
             sequence: number;
         };
         OfferPreviewDto: {
+            claimPolicyRevision: string;
+            claimWindowDays: number;
             components: components["schemas"]["OfferPreviewPriceComponentDto"][];
             contractTotalMinor: number;
             currency: string;
@@ -3458,6 +3516,12 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
             items: components["schemas"]["OfferPreviewItemDto"][];
+            legalClaimsContentHash: string;
+            /** Format: uuid */
+            legalClaimsRevisionId: string;
+            legalTermsContentHash: string;
+            /** Format: uuid */
+            legalTermsRevisionId: string;
             netAmountMinor: number;
             paymentSchedules: components["schemas"]["OfferPaymentScheduleDto"][];
             /** Format: date */
@@ -7283,6 +7347,41 @@ export interface operations {
                 content?: never;
             };
             /** @description Checkout awaits launch approval or provider recovery */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    PaymentsController_retryContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutRetryContextDto"];
+                };
+            };
+            /** @description Session capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Accepted checkout evidence is incomplete or unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;

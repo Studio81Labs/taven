@@ -50,6 +50,8 @@ import { ResourceReservationService } from "../resources/resource-reservation.se
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import { reserveAnonymousQuote } from "../quotes/anonymous-quote-limit";
+import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
+import { assertEffectiveLegalDocuments } from "../legal-approvals/legal-approvals.catalog";
 import {
   deliveryValidationParcels,
   parseAutomaticQuotePricingParameters,
@@ -262,7 +264,15 @@ export class AutomaticQuotesService {
     private readonly resourceReservations: ResourceReservationService,
     @Inject(DELIVERY_CAPABILITY)
     private readonly deliveryCapabilities: DeliveryCapabilityPort,
+    private readonly legalApprovals?: LegalApprovalsService,
   ) {}
+
+  private requiredLegalApprovals(): LegalApprovalsService {
+    if (!this.legalApprovals) {
+      throw new Error("Legal approvals service is unavailable");
+    }
+    return this.legalApprovals;
+  }
 
   async createSession(
     input: CreateAutomaticQuoteSessionDto,
@@ -1587,6 +1597,11 @@ export class AutomaticQuotesService {
         });
       },
       async (transaction) => {
+        const legal = await this.requiredLegalApprovals().lockAndRead(
+          transaction,
+          ["terms"],
+        );
+        assertEffectiveLegalDocuments(legal.approvals, ["terms"]);
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const order = await transaction.order.findFirst({
@@ -1651,7 +1666,11 @@ export class AutomaticQuotesService {
           }
         }
         if (enqueued) return;
-        await this.stageOrFinalizeBinding(transaction, order.id);
+        await this.stageOrFinalizeBinding(
+          transaction,
+          order.id,
+          legal.approvals.documents.terms.revisionId!,
+        );
       },
     );
     await this.advanceEligibility(session.automaticOrderOrigin!.order.id);
@@ -2324,6 +2343,7 @@ export class AutomaticQuotesService {
   private async stageOrFinalizeBinding(
     transaction: Transaction,
     orderId: string,
+    legalTermsRevisionId: string,
   ): Promise<void> {
     if (!(await this.riskAllowsAutomaticQuote(transaction, orderId))) return;
     const draftOrder = await transaction.order.findUniqueOrThrow({
@@ -2478,6 +2498,7 @@ export class AutomaticQuotesService {
       orderPhaseId: topology.phaseId,
       bindingId,
       priceList,
+      legalTermsRevisionId,
       destinationId: destination.id,
       configurationRevision: draft.configurationRevision,
       expressRequested: draft.expressRequested,
@@ -3021,6 +3042,7 @@ export class AutomaticQuotesService {
         revision: string;
         currency: string;
       };
+      legalTermsRevisionId: string;
       destinationId: string;
       configurationRevision: number;
       expressRequested: boolean;
@@ -3039,6 +3061,7 @@ export class AutomaticQuotesService {
         orderId: input.orderId,
         configurationRevision: input.configurationRevision,
         deliveryDestinationId: input.destinationId,
+        legalTermsRevisionId: input.legalTermsRevisionId,
         expressRequested: input.expressRequested,
         priceListRevision: input.priceList.revision,
         expressEligibilityAtPricing: {
@@ -3072,6 +3095,7 @@ export class AutomaticQuotesService {
         orderId: input.orderId,
         priceSnapshotId: snapshotId,
         deliveryDestinationId: input.destinationId,
+        legalTermsRevisionId: input.legalTermsRevisionId,
         createdAt: observedAt,
       },
     });

@@ -190,6 +190,14 @@ export class UploadService {
     const finalKey = photoOriginalObjectKey(assetId);
 
     await this.prisma.$transaction(async (transaction) => {
+      const legal = await this.legalApprovals.lockAndRead(
+        transaction,
+        QUOTE_UPLOAD_LEGAL_DOCUMENTS,
+      );
+      assertEffectiveLegalDocuments(
+        legal.approvals,
+        QUOTE_UPLOAD_LEGAL_DOCUMENTS,
+      );
       const rows = await transaction.$queryRaw<
         Array<{
           customer_id: string | null;
@@ -232,10 +240,6 @@ export class UploadService {
         throw new UnauthorizedException("Quote-session capability is invalid");
       }
       assertQuotePhotoUploadsEnabled();
-      assertEffectiveLegalDocuments(
-        this.legalApprovals.evaluateAt(scope.observed_at),
-        QUOTE_UPLOAD_LEGAL_DOCUMENTS,
-      );
       const subjectHash = anonymousUploadSubject(
         this.storageConfig.uploadClientHashKey,
         "quote-photo-upload",
@@ -425,7 +429,7 @@ export class UploadService {
             throw new GoneException("Quote request no longer accepts photos");
           }
           assertEffectiveLegalDocuments(
-            this.legalApprovals.evaluateAt(scope.observed_at),
+            await this.legalApprovals.readAt(transaction, scope.observed_at),
             QUOTE_UPLOAD_LEGAL_DOCUMENTS,
           );
         }

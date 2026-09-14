@@ -85,7 +85,17 @@ describe("quote capability expiry clock", () => {
           version: 1,
           summary: "Valid offer",
           termsRevision: "terms-v1",
-          termsSnapshot: {},
+          claimWindowDays: 30,
+          legalTermsRevision: {
+            id: "33333333-3333-4333-8333-333333333333",
+            revisionCode: "terms-v1",
+            contentHash: "a".repeat(64),
+          },
+          legalClaimsRevision: {
+            id: "44444444-4444-4444-8444-444444444444",
+            revisionCode: "claims-v1",
+            contentHash: "b".repeat(64),
+          },
           promisedDate: null,
           expiresAt: future,
           quoteRequest: { status: "QUOTED" },

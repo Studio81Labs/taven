@@ -219,6 +219,14 @@ async function submitRequest(): Promise<void> {
     },
     description: description.value.trim(),
     photoPublicationConsent: photoPublicationConsent.value,
+    privacyAcknowledged: privacyAcknowledged.value,
+    privacyNoticeRevision: availability.value!.documents.privacy.revision,
+    ...(photoPublicationConsent.value
+      ? {
+          photoConsentRevision:
+            availability.value!.documents.photoConsent.revision,
+        }
+      : {}),
     ...(context?.handoffToken
       ? { automaticQuoteHandoffToken: context.handoffToken }
       : {}),

@@ -178,6 +178,63 @@ export class CheckoutPaymentDto {
   expiresAt!: string;
 }
 
+export class LegalVersionReferenceDto {
+  @ApiProperty({ type: String })
+  key!: string;
+
+  @ApiProperty({ type: String })
+  revision!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  contentHash!: string | null;
+}
+
+export class AcceptedCheckoutEvidenceDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  acceptedOrderPriceBindingId!: string;
+
+  @ApiProperty({ type: String })
+  termsRevision!: string;
+
+  @ApiProperty({ type: String })
+  claimPolicyRevision!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1 })
+  claimWindowDays!: number;
+
+  @ApiProperty({ type: Boolean })
+  withdrawalExceptionAcknowledged!: boolean;
+
+  @ApiProperty({ type: Boolean })
+  photoPublicationConsent!: boolean;
+
+  @ApiProperty({ type: String, nullable: true })
+  photoConsentRevision!: string | null;
+
+  @ApiProperty({ type: Boolean })
+  legacy!: boolean;
+
+  @ApiProperty({ type: LegalVersionReferenceDto })
+  terms!: LegalVersionReferenceDto;
+
+  @ApiProperty({ type: LegalVersionReferenceDto })
+  claims!: LegalVersionReferenceDto;
+
+  @ApiProperty({ type: LegalVersionReferenceDto, nullable: true })
+  photoConsent!: LegalVersionReferenceDto | null;
+}
+
+export class CheckoutRetryContextDto {
+  @ApiProperty({ type: Boolean })
+  retryAllowed!: boolean;
+
+  @ApiProperty({ type: [String], enum: ["CARD", "BANK_TRANSFER"] })
+  methods!: Array<"CARD" | "BANK_TRANSFER">;
+
+  @ApiProperty({ type: AcceptedCheckoutEvidenceDto, nullable: true })
+  acceptedEvidence!: AcceptedCheckoutEvidenceDto | null;
+}
+
 export class PaymentWebhookAcceptedDto {
   @ApiProperty({ type: String })
   outcome!: string;
