@@ -2314,6 +2314,7 @@
             "items": {
               "$ref": "#/components/schemas/LegalDocumentSectionDto"
             },
+            "minItems": 1,
             "type": "array"
           },
           "summary": {
@@ -8187,6 +8188,7 @@
             "items": {
               "$ref": "#/components/schemas/LegalDocumentSectionDto"
             },
+            "minItems": 1,
             "type": "array"
           },
           "summary": {

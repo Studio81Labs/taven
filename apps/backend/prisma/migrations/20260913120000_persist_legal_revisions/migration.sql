@@ -249,7 +249,7 @@ CREATE TABLE "legal_document_revisions" (
             AND "effective_at" < '10000-01-01 00:00:00+00'::timestamptz
             AND "approval_evidence" IS NOT NULL
             AND length("approval_evidence") <= 5000
-            AND "approval_evidence" !~ '^[[:space:]]*$'
+            AND length(btrim("approval_evidence", U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF')) > 0
             AND "approved_by" IS NOT NULL
             AND "approved_at" IS NOT NULL
             AND "title" !~ '^[[:space:]]*$'

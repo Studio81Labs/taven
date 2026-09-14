@@ -30,7 +30,7 @@ export class CreateLegalDraftDto {
   @ApiProperty({ type: String })
   summary!: string;
 
-  @ApiProperty({ type: [LegalDocumentSectionDto] })
+  @ApiProperty({ type: [LegalDocumentSectionDto], minItems: 1 })
   sections!: LegalDocumentSectionDto[];
 
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
@@ -50,7 +50,7 @@ export class UpdateLegalDraftDto {
   @ApiProperty({ type: String })
   summary!: string;
 
-  @ApiProperty({ type: [LegalDocumentSectionDto] })
+  @ApiProperty({ type: [LegalDocumentSectionDto], minItems: 1 })
   sections!: LegalDocumentSectionDto[];
 
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })

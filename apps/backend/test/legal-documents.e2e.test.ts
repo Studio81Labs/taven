@@ -1419,6 +1419,24 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
       `),
     ).rejects.toThrow();
 
+    // PostgreSQL approval-evidence validation matches JavaScript trim() whitespace.
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO legal_document_revisions (
+          document_id, sequence, edit_version, status, content_version,
+          revision_code, effective_at, approval_evidence, approved_by,
+          title, summary, sections, content_hash
+        ) VALUES (
+          '${termsDoc.id}'::uuid, 9002, 1, 'APPROVED'::legal_revision_status, 1,
+          'terms-nbsp-evidence-test', '2099-01-01'::timestamptz, chr(160), '${adminOperatorId}'::uuid,
+          'Title', 'Summary', '[{"title":"Section 1","paragraphs":["Content"]}]'::jsonb,
+          legal_document_revision_content_hash(
+            1, 'Title', 'Summary', '[{"title":"Section 1","paragraphs":["Content"]}]'::jsonb
+          )
+        )
+      `),
+    ).rejects.toThrow();
+
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO legal_document_publications (
