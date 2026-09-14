@@ -23,6 +23,7 @@ type AuditEventRow = Awaited<
 type LegalAuditPayloadReferences = Readonly<{
   documentId: string;
   revisionIds: ReadonlySet<string>;
+  revisionHashes: ReadonlyMap<string, string>;
   publicationIds: ReadonlySet<string>;
 }>;
 export type LegalAuditFilters = Readonly<{
@@ -42,7 +43,6 @@ type AuditFilters = Readonly<{
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SHA_256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const POSTGRES_MIN_TIMESTAMP_YEAR = -4712;
 
 @Injectable()
@@ -226,7 +226,7 @@ export class AuditService {
               documentId,
               id: { in: [...candidates.revisionIds] },
             },
-            select: { id: true },
+            select: { id: true, contentHash: true },
           })
         : [];
     const publications =
@@ -242,6 +242,9 @@ export class AuditService {
     return {
       documentId,
       revisionIds: new Set(revisions.map((revision) => revision.id)),
+      revisionHashes: new Map(
+        revisions.map((revision) => [revision.id, revision.contentHash]),
+      ),
       publicationIds: new Set(
         publications.map((publication) => publication.id),
       ),
@@ -511,7 +514,8 @@ function redactLegalPayload(
   }
   if (
     typeof value.contentHash === "string" &&
-    SHA_256_HEX_PATTERN.test(value.contentHash)
+    typeof value.revisionId === "string" &&
+    references.revisionHashes.get(value.revisionId) === value.contentHash
   ) {
     result.contentHash = value.contentHash;
   }

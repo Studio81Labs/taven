@@ -272,10 +272,12 @@ CREATE TABLE "legal_document_revisions" (
             AND legal_document_text_is_nonblank("summary")
             AND legal_document_sections_are_valid("sections")
             AND legal_document_content_fits_size_limit("title", "summary", "sections")
-            AND "content_hash" = legal_document_revision_content_hash("content_version", "title", "summary", "sections")
         )
     ),
-    CONSTRAINT "legal_document_revisions_content_hash_check" CHECK ("content_hash" ~ '^[0-9a-f]{64}$')
+    CONSTRAINT "legal_document_revisions_content_hash_check" CHECK (
+        "content_hash" ~ '^[0-9a-f]{64}$'
+        AND "content_hash" = legal_document_revision_content_hash("content_version", "title", "summary", "sections")
+    )
 );
 
 CREATE INDEX "legal_document_revisions_document_id_status_idx" ON "legal_document_revisions"("document_id", "status");
