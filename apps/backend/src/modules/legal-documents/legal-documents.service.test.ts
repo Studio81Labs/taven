@@ -171,6 +171,17 @@ describe("legal documents helper functions", () => {
     },
   );
 
+  it.each([
+    [{ note: " " }, "Section 0 note must not be empty"],
+    [{ note: null }, "Section 0 note must be a string"],
+  ])("rejects invalid supplied section notes", (content, error) => {
+    expect(() =>
+      normalizeLegalSections([
+        { title: "Section", paragraphs: ["Operative text"], ...content },
+      ]),
+    ).toThrow(error);
+  });
+
   it("rejects unknown section fields", () => {
     expect(() =>
       normalizeLegalSections([

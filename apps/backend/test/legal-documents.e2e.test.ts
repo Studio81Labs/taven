@@ -829,6 +829,24 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     );
     expect(invalidCalendarScheduleRes.status).toBe(400);
 
+    const nullStartsAtScheduleRes = await fetch(
+      new URL(
+        `/admin/legal-documents/terms/revisions/${approved3.id}/publish`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: adminHeaders(randomUUID()),
+        body: JSON.stringify({
+          expectedGeneration: docBeforeSchedule.generation,
+          startsAt: null,
+          reasonCode: "SCHEDULE_NULL",
+          reason: "Malformed null publication start",
+        }),
+      },
+    );
+    expect(nullStartsAtScheduleRes.status).toBe(400);
+
     const futureStartsAt = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
     const scheduleRes = await fetch(
       new URL(

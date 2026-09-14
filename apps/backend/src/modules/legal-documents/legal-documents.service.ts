@@ -1097,7 +1097,7 @@ export class LegalDocumentsService {
     });
 
     let parsedStartsAt: Date | undefined;
-    if (dto?.startsAt !== undefined && dto?.startsAt !== null) {
+    if (dto?.startsAt !== undefined) {
       const startsAtStr = requireString(dto.startsAt, "Publication startsAt");
       parsedStartsAt = parseLegalRfc3339Instant(
         startsAtStr,
@@ -1638,7 +1638,7 @@ export function normalizeLegalSections(
     }
 
     let note: string | undefined;
-    if (rawSection.note !== undefined && rawSection.note !== null) {
+    if (rawSection.note !== undefined) {
       if (typeof rawSection.note !== "string") {
         throw new BadRequestException(`Section ${idx} note must be a string`);
       }
@@ -1649,9 +1649,10 @@ export function normalizeLegalSections(
       }
       requireNoNul(rawSection.note, `Section ${idx} note`);
       const trimmedNote = rawSection.note.trim();
-      if (trimmedNote.length > 0) {
-        note = trimmedNote;
+      if (!trimmedNote) {
+        throw new BadRequestException(`Section ${idx} note must not be empty`);
       }
+      note = trimmedNote;
     }
 
     if (
