@@ -47,7 +47,11 @@ export class LegalDocumentSectionDto {
 }
 
 export class CreateLegalDraftDto {
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   expectedGeneration!: number;
 
   @ApiProperty({
@@ -75,7 +79,11 @@ export class CreateLegalDraftDto {
 }
 
 export class UpdateLegalDraftDto {
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   expectedEditVersion!: number;
 
   @ApiProperty({
@@ -106,6 +114,7 @@ export class ApproveLegalRevisionDto {
   @ApiProperty({
     type: "integer",
     minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
     description: "Expected draft edit version",
   })
   expectedEditVersion!: number;
@@ -149,7 +158,11 @@ export class ApproveLegalRevisionDto {
 }
 
 export class PublishLegalRevisionDto {
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   expectedGeneration!: number;
 
   @ApiPropertyOptional({
@@ -172,7 +185,11 @@ export class PublishLegalRevisionDto {
 }
 
 export class CancelLegalPublicationDto {
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   expectedGeneration!: number;
 
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })
@@ -187,7 +204,11 @@ export class CancelLegalPublicationDto {
 }
 
 export class ArchiveLegalPublicationDto {
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   expectedGeneration!: number;
 
   @ApiProperty({ type: String, maxLength: 100, pattern: REASON_CODE_PATTERN })

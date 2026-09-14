@@ -161,6 +161,7 @@
           },
           "expectedEditVersion": {
             "description": "Expected draft edit version",
+            "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
           },
@@ -194,6 +195,7 @@
       "ArchiveLegalPublicationDto": {
         "properties": {
           "expectedGeneration": {
+            "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
           },
@@ -1476,6 +1478,7 @@
       "CancelLegalPublicationDto": {
         "properties": {
           "expectedGeneration": {
+            "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
           },
@@ -2302,6 +2305,7 @@
       "CreateLegalDraftDto": {
         "properties": {
           "expectedGeneration": {
+            "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
           },
@@ -7235,6 +7239,7 @@
       "PublishLegalRevisionDto": {
         "properties": {
           "expectedGeneration": {
+            "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
           },
@@ -8188,6 +8193,7 @@
       "UpdateLegalDraftDto": {
         "properties": {
           "expectedEditVersion": {
+            "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
           },
