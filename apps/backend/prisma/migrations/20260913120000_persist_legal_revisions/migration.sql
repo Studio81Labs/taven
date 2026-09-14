@@ -375,6 +375,9 @@ ALTER TABLE "audit_events"
             AND "refund_transaction_id" IS NULL
             AND "reason" IS NOT NULL
             AND "reason_code" IS NOT NULL
+            AND isfinite("created_at")
+            AND "created_at" >= '0001-01-01 00:00:00+00'::timestamptz
+            AND "created_at" < '10000-01-01 00:00:00+00'::timestamptz
         )
     );
 

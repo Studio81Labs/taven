@@ -120,9 +120,21 @@ export class LegalDocumentsAdminController {
   })
   @ApiOkResponse({ type: LegalDocumentDetailDto })
   @ApiQuery({ name: "cursor", required: false, type: String })
-  @ApiQuery({ name: "limit", required: false, type: Number })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   @ApiQuery({ name: "publicationCursor", required: false, type: String })
-  @ApiQuery({ name: "publicationLimit", required: false, type: Number })
+  @ApiQuery({
+    name: "publicationLimit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
@@ -170,7 +182,13 @@ export class LegalDocumentsAdminController {
   })
   @ApiOkResponse({ type: LegalPublicationPageDto })
   @ApiQuery({ name: "cursor", required: false, type: String })
-  @ApiQuery({ name: "limit", required: false, type: Number })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()
@@ -207,7 +225,13 @@ export class LegalDocumentsAdminController {
   @ApiQuery({ name: "eventType", required: false, type: String })
   @ApiQuery({ name: "operatorIdentityId", required: false, type: String })
   @ApiQuery({ name: "cursor", required: false, type: String })
-  @ApiQuery({ name: "limit", required: false, type: Number })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
   @ApiNotFoundResponse()
   @ApiUnauthorizedResponse()
   @ApiForbiddenResponse()

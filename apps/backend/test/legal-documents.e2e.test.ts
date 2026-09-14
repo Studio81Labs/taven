@@ -1462,6 +1462,21 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
 
     await expect(
       prisma.$executeRawUnsafe(`
+        INSERT INTO audit_events (
+          id, event_type, actor_kind, actor_id, operator_identity_id,
+          legal_document_id, schema_version, reason_code, reason, payload,
+          created_at
+        ) VALUES (
+          gen_random_uuid(), 'legal_document.out_of_range_import', 'OPERATOR'::audit_actor_kind,
+          '${adminOperatorId}'::uuid, '${adminOperatorId}'::uuid,
+          '${termsDoc.id}'::uuid, 3, 'OUT_OF_RANGE', 'Out-of-range audit timestamp', '{}'::jsonb,
+          '-infinity'::timestamptz
+        )
+      `),
+    ).rejects.toThrow();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
         UPDATE legal_documents
         SET created_at = '280000-01-01'::timestamptz
         WHERE id = '${termsDoc.id}'::uuid

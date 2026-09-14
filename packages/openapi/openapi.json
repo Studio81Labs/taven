@@ -9803,7 +9803,9 @@
             "name": "publicationLimit",
             "required": false,
             "schema": {
-              "type": "number"
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
             }
           },
           {
@@ -9819,7 +9821,9 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "type": "number"
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
             }
           },
           {
@@ -9881,7 +9885,9 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "type": "number"
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
             }
           },
           {
@@ -9959,7 +9965,9 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "type": "number"
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
             }
           },
           {
