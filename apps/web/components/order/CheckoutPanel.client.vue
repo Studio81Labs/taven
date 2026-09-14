@@ -136,7 +136,7 @@ function matchesLegalEvidence(
 
 function legalRevisionLink(
   key: "terms" | "claims" | "photoConsent",
-  revision: string | undefined,
+  revision: string | null | undefined,
   contentHash: string | undefined | null,
 ) {
   return {
@@ -977,7 +977,15 @@ function compactBilling(
             /><span
               >Dobrovolně souhlasím s pořízením a zveřejněním fotografií
               výsledku podle
-              <NuxtLink class="underline" :to="legalDocuments.photoConsent.path"
+              <NuxtLink
+                class="underline"
+                :to="
+                  legalRevisionLink(
+                    'photoConsent',
+                    approvedDocuments?.photoConsentRevision,
+                    availability?.documents.photoConsent.contentHash,
+                  )
+                "
                 >pravidel fotografování</NuxtLink
               >.
               <span v-if="!approvedDocuments?.photoConsentRevision"

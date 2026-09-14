@@ -43,6 +43,10 @@ export function usePublicLegalDocument(
       effectiveAt: null,
     }),
   );
+  const historical = useState<boolean>(
+    `legal-document-historical:${key}`,
+    () => false,
+  );
   const effective = computed(() => {
     return (
       availability.value?.documents[key].effective === true &&
@@ -69,6 +73,7 @@ export function usePublicLegalDocument(
         sections: fallback.sections,
         effectiveAt: null,
       };
+      historical.value = false;
       return;
     }
     try {
@@ -98,6 +103,12 @@ export function usePublicLegalDocument(
         sections: revision.sections,
         effectiveAt: revision.effectiveAt,
       };
+      historical.value =
+        Boolean(revisionCode) &&
+        (!record ||
+          !record.effective ||
+          record.revision !== revision.revisionCode ||
+          record.contentHash !== revision.contentHash);
     } catch {
       document.value = {
         id: fallback.id,
@@ -107,8 +118,9 @@ export function usePublicLegalDocument(
         sections: fallback.sections,
         effectiveAt: null,
       };
+      historical.value = false;
     }
   }
 
-  return { document: readonly(document), effective, refresh };
+  return { document: readonly(document), effective, historical, refresh };
 }

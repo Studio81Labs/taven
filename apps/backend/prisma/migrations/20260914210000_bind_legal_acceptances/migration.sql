@@ -229,17 +229,25 @@ BEGIN
         SELECT 1
         FROM "individual_order_origins" origin
         JOIN "quotes" quote ON quote."id" = origin."quote_id"
+        JOIN "orders" target ON target."id" = origin."order_id"
+        JOIN "order_price_bindings" binding
+          ON binding."id" = target."accepted_order_price_binding_id"
+        JOIN "legal_acceptances" terms_acceptance
+          ON terms_acceptance."order_id" = target_order_id
+         AND terms_acceptance."purpose" = 'TERMS_ACCEPTED'
+         AND terms_acceptance."revision_id" = quote."legal_terms_revision_id"
         JOIN "legal_acceptances" acceptance
           ON acceptance."order_id" = target_order_id
          AND acceptance."purpose" = 'CLAIM_POLICY_ACCEPTED'
          AND acceptance."revision_id" = quote."legal_claims_revision_id"
         JOIN "legal_document_revisions" revision ON revision."id" = acceptance."revision_id"
-        JOIN "orders" target ON target."id" = origin."order_id"
         WHERE origin."order_id" = target_order_id
+          AND binding."legal_terms_revision_id" = quote."legal_terms_revision_id"
+          AND target."accepted_terms_revision" = quote."terms_revision"
           AND quote."claim_window_days" = target."accepted_claim_window_days"
           AND revision."revision_code" = target."accepted_claim_policy_revision"
     ) THEN
-        RAISE EXCEPTION 'Individual order Claim evidence must match its immutable Quote'
+        RAISE EXCEPTION 'Individual order legal evidence must match its immutable Quote'
             USING ERRCODE = '23514', CONSTRAINT = 'orders_individual_claim_evidence_check';
     END IF;
     RETURN NULL;

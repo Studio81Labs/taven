@@ -11,7 +11,7 @@ const pinnedRevision = computed(() =>
 const pinnedContentHash = computed(() =>
   typeof route.query.contentHash === "string" ? route.query.contentHash : null,
 );
-const { document, effective, refresh } = usePublicLegalDocument(
+const { document, effective, historical, refresh } = usePublicLegalDocument(
   "terms",
   pinnedRevision,
   pinnedContentHash,
@@ -31,6 +31,7 @@ usePublicPageMeta({
   <PublicLegalPlaceholderPage
     :document="document"
     :effective="effective"
+    :historical="historical"
     :contact="{
       label: 'Zákaznický kontakt',
       email: contacts.customer.email,
