@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from "@nestjs/common";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OperatorAuthService } from "./operator-auth.service";
 
@@ -6,6 +7,33 @@ const KEY = Buffer.alloc(32, 7).toString("base64url");
 describe("OperatorAuthService expiry cleanup", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("maps an unavailable authenticated session store to 503", async () => {
+    vi.stubEnv("TAVEN_ENVIRONMENT", "development");
+    vi.stubEnv("TAVEN_ADMIN_CSRF_KEY", KEY);
+    vi.stubEnv("TAVEN_ADMIN_CLIENT_HASH_KEY", KEY);
+    const service = new OperatorAuthService(
+      {
+        operatorSession: {
+          findUnique: vi.fn().mockRejectedValue({ code: "P1001" }),
+        },
+      } as never,
+      {
+        exchangeCode: async () => {
+          throw new Error("GitHub must not be used during authentication");
+        },
+      },
+    );
+
+    const error = await service
+      .authenticateRequest({
+        headers: { cookie: `taven_admin=${"a".repeat(20)}` },
+      })
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
   });
 
   it("removes expired auth records, retained sessions, and stale rate buckets within the batch limit", async () => {

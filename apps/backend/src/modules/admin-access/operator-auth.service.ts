@@ -23,6 +23,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
+import { withDatastoreAvailability } from "../../prisma/datastore-availability";
 import {
   readAdminAccessConfig,
   type AdminAccessConfig,
@@ -288,6 +289,15 @@ export class OperatorAuthService {
   }
 
   async authenticateRequest(request: AdminRequest): Promise<OperatorContext> {
+    return await withDatastoreAvailability(
+      () => this.authenticateRequestFromStore(request),
+      "Operator authentication datastore is unavailable",
+    );
+  }
+
+  private async authenticateRequestFromStore(
+    request: AdminRequest,
+  ): Promise<OperatorContext> {
     const token = readCookie(
       request,
       sessionCookieName(this.config.environment),

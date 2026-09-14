@@ -960,14 +960,26 @@ export class LegalDocumentsService {
           revision.summary !== summary ||
           JSON.stringify(revision.sections) !== JSON.stringify(sections);
         if (revision.contentHash !== contentHash || contentNeedsNormalization) {
-          revision = await tx.legalDocumentRevision.update({
-            where: { id: revision.id },
+          const normalized = await tx.legalDocumentRevision.updateMany({
+            where: {
+              id: revision.id,
+              documentId: doc.id,
+              status: LegalRevisionStatus.DRAFT,
+              editVersion: expectedEditVersion,
+              contentHash: expectedContentHash,
+            },
             data: {
               title,
               summary,
               sections: sections as unknown as Prisma.InputJsonValue,
               contentHash,
             },
+          });
+          if (normalized.count !== 1) {
+            throw new ConflictException("Draft changed during approval");
+          }
+          revision = await tx.legalDocumentRevision.findUniqueOrThrow({
+            where: { id: revision.id },
           });
         }
 
@@ -992,8 +1004,14 @@ export class LegalDocumentsService {
         const now = await databaseNow(tx);
         let approved;
         try {
-          approved = await tx.legalDocumentRevision.update({
-            where: { id: revision.id },
+          const approval = await tx.legalDocumentRevision.updateMany({
+            where: {
+              id: revision.id,
+              documentId: doc.id,
+              status: LegalRevisionStatus.DRAFT,
+              editVersion: expectedEditVersion,
+              contentHash,
+            },
             data: {
               status: LegalRevisionStatus.APPROVED,
               revisionCode,
@@ -1002,6 +1020,12 @@ export class LegalDocumentsService {
               approvedBy: operator.operatorId,
               approvedAt: now,
             },
+          });
+          if (approval.count !== 1) {
+            throw new ConflictException("Draft changed during approval");
+          }
+          approved = await tx.legalDocumentRevision.findUniqueOrThrow({
+            where: { id: revision.id },
           });
         } catch (error) {
           if (
