@@ -7678,6 +7678,12 @@ export interface operations {
                     "application/json": components["schemas"]["PublicLegalRevisionDto"];
                 };
             };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             404: {
                 headers: {
                     [name: string]: unknown;

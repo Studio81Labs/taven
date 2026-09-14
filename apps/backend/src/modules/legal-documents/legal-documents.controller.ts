@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Res } from "@nestjs/common";
 import {
+  ApiBadRequestResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -26,7 +27,7 @@ export class LegalDocumentsController {
   @ApiParam({
     name: "key",
     description: "Legal document identifier key",
-    schema: { type: "string", minLength: 1, maxLength: 50 },
+    schema: { type: "string", minLength: 1, maxLength: 50, pattern: "\\S" },
   })
   @ApiParam({
     name: "revisionCode",
@@ -38,6 +39,7 @@ export class LegalDocumentsController {
     },
   })
   @ApiOkResponse({ type: PublicLegalRevisionDto })
+  @ApiBadRequestResponse()
   @ApiNotFoundResponse()
   @ApiServiceUnavailableResponse({
     description: "Legal document datastore is unavailable",
