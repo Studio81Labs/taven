@@ -461,7 +461,11 @@ describe("secure object storage and retention", () => {
       },
     });
     await prisma.quoteRequest.create({
-      data: { id: scopeId, quoteSessionId: quoteSession.id },
+      data: {
+        id: scopeId,
+        quoteSessionId: quoteSession.id,
+        currentStateCommandKey: "storage-e2e-reference-photo",
+      },
     });
     const requestBody = JSON.stringify({
       kind: "QUOTE_REFERENCE",
@@ -554,7 +558,11 @@ describe("secure object storage and retention", () => {
       },
     });
     await prisma.quoteRequest.create({
-      data: { id: scopeId, quoteSessionId: quoteSession.id },
+      data: {
+        id: scopeId,
+        quoteSessionId: quoteSession.id,
+        currentStateCommandKey: "storage-e2e-photo-fail-closed",
+      },
     });
     const request = {
       method: "POST",
