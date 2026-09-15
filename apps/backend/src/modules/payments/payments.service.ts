@@ -655,19 +655,21 @@ export class PaymentsService {
       );
       if (idempotency.replay) return { replay: idempotency.replay } as const;
 
-      const legal = await this.requiredLegalApprovals().lockAndRead(
-        transaction,
-        [
-          "terms",
-          "claims",
-          "privacy",
-          "prohibitedContent",
-          "retention",
-          "photoConsent",
-        ],
-      );
-      const observedAt = legal.observedAt;
+      const legalApprovals = this.requiredLegalApprovals();
+      await legalApprovals.lock(transaction, [
+        "terms",
+        "claims",
+        "privacy",
+        "prohibitedContent",
+        "retention",
+        "photoConsent",
+      ]);
       const context = await this.loadContext(sessionId, transaction, true);
+      const observedAt = await databaseNow(transaction);
+      const legal = {
+        observedAt,
+        approvals: await legalApprovals.readAt(transaction, observedAt),
+      };
       assertCheckoutContext(context, token, observedAt);
       assertDestinationStillCurrent(context, resolvedDestination);
       const binding = context.order.activePriceBinding!.orderPriceBinding;

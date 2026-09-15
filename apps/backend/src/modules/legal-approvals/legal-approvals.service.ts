@@ -37,9 +37,22 @@ export class LegalApprovalsService {
     requiredKeys: readonly LegalDocumentKey[],
   ): Promise<{ observedAt: Date; approvals: EvaluatedLegalApprovals }> {
     try {
-      await lockLegalDocuments(tx, requiredKeys);
+      await this.lock(tx, requiredKeys);
       const observedAt = await databaseNow(tx);
       return { observedAt, approvals: await this.readAt(tx, observedAt) };
+    } catch (error) {
+      if (isApprovalError(error)) throw error;
+      throw legalApprovalRequired("Legal approval metadata is unavailable");
+    }
+  }
+
+  /** Acquire the legal locks without choosing a decision instant yet. */
+  async lock(
+    tx: Prisma.TransactionClient,
+    requiredKeys: readonly LegalDocumentKey[],
+  ): Promise<void> {
+    try {
+      await lockLegalDocuments(tx, requiredKeys);
     } catch (error) {
       if (isApprovalError(error)) throw error;
       throw legalApprovalRequired("Legal approval metadata is unavailable");

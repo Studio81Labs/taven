@@ -345,7 +345,17 @@ export class UploadService {
     }
 
     const confirmedIntentId = intent.id;
+    const requiresQuotePhotoLegalLock =
+      intent.assetKind === UploadAssetKind.PHOTO_ASSET &&
+      intent.photoKind === PhotoAssetKind.QUOTE_REFERENCE &&
+      intent.photoScopeKind === PhotoScopeKind.QUOTE_REQUEST;
     intent = await this.prisma.$transaction(async (transaction) => {
+      const legal = requiresQuotePhotoLegalLock
+        ? await this.legalApprovals.lockAndRead(
+            transaction,
+            QUOTE_UPLOAD_LEGAL_DOCUMENTS,
+          )
+        : undefined;
       const rows = await transaction.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM upload_intents WHERE id = ${confirmedIntentId}::uuid FOR UPDATE
       `;
@@ -393,10 +403,9 @@ export class UploadService {
           photoMetadata.kind === PhotoAssetKind.QUOTE_REFERENCE &&
           photoMetadata.scopeKind === PhotoScopeKind.QUOTE_REQUEST
         ) {
-          const legal = await this.legalApprovals.lockAndRead(
-            transaction,
-            QUOTE_UPLOAD_LEGAL_DOCUMENTS,
-          );
+          if (!legal) {
+            throw new ConflictException("Photo upload legal state unavailable");
+          }
           const scopeRows = await transaction.$queryRaw<
             Array<{
               session_status: string;
