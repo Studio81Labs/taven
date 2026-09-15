@@ -209,22 +209,30 @@ export class QuotesService {
       commandKey,
       capabilityRequests.map(({ fingerprint }) => fingerprint),
       async (transaction, generation) => {
-        const legal = await this.requiredLegalApprovals().lockAndRead(
+        const legalApprovals = this.requiredLegalApprovals();
+        const requiredLegalKeys = request.photoPublicationConsent
+          ? ([
+              "privacy",
+              "prohibitedContent",
+              "retention",
+              "photoConsent",
+            ] as const)
+          : (["privacy", "prohibitedContent", "retention"] as const);
+        await legalApprovals.lock(transaction, requiredLegalKeys);
+        await reserveAnonymousQuote(
           transaction,
-          request.photoPublicationConsent
-            ? ["privacy", "prohibitedContent", "retention", "photoConsent"]
-            : ["privacy", "prohibitedContent", "retention"],
+          currentCapabilityRequest.clientSubjectHash,
         );
-        const observedAt = legal.observedAt;
+        const observedAt = await databaseNow(transaction);
+        const legal = {
+          observedAt,
+          approvals: await legalApprovals.readAt(transaction, observedAt),
+        };
         assertEffectiveQuoteRequestLegalDocuments(
           legal.approvals,
           request.photoPublicationConsent,
         );
         requireFreshQuoteRequestLegalEvidence(request, legal.approvals);
-        await reserveAnonymousQuote(
-          transaction,
-          currentCapabilityRequest.clientSubjectHash,
-        );
         const requestToken = capabilityToken(
           currentCapabilityRequest.capabilityKey.key,
           "quote-request",
@@ -628,11 +636,16 @@ export class QuotesService {
       commandKey,
       fingerprint,
       async (transaction) => {
-        const legal = await this.requiredLegalApprovals().lockAndRead(
-          transaction,
-          ["terms", "claims"],
-        );
-        const observedAt = legal.observedAt;
+        const legalApprovals = this.requiredLegalApprovals();
+        await legalApprovals.lock(transaction, ["terms", "claims"]);
+        const request = await lockedRequest(transaction, requestId);
+        if (!request)
+          throw new NotFoundException("Quote request was not found");
+        const observedAt = await databaseNow(transaction);
+        const legal = {
+          observedAt,
+          approvals: await legalApprovals.readAt(transaction, observedAt),
+        };
         assertEffectiveLegalDocuments(legal.approvals, ["terms", "claims"]);
         const [terms, claims] =
           await transaction.legalDocumentRevision.findMany({
@@ -676,9 +689,6 @@ export class QuotesService {
             "termsSnapshot must match the current immutable terms revision",
           );
         }
-        const request = await lockedRequest(transaction, requestId);
-        if (!request)
-          throw new NotFoundException("Quote request was not found");
         if (
           request.status !== QuoteRequestStatus.IN_REVIEW ||
           !request.customerId
