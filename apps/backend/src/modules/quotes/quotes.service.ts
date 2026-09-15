@@ -1226,12 +1226,12 @@ export class QuotesService {
     const expected = validateExpectedOffer(input, true);
     const commandKey = requireIdempotencyKey(idempotencyKey);
     await this.offerForToken(quoteId, token);
-    assertBindingQuoteFlowsEnabled();
     const result = await this.idempotent<ExpiringResult<AcceptedOfferDto>>(
       "quote-offer.accept",
       commandKey,
       fingerprintOf({ quoteId, ...expected }),
       async (transaction) => {
+        assertBindingQuoteFlowsEnabled();
         await this.requiredLegalApprovals().lockAndRead(transaction, [
           "terms",
           "claims",

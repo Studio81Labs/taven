@@ -350,12 +350,12 @@ export class UploadService {
       intent.photoKind === PhotoAssetKind.QUOTE_REFERENCE &&
       intent.photoScopeKind === PhotoScopeKind.QUOTE_REQUEST;
     intent = await this.prisma.$transaction(async (transaction) => {
-      const legal = requiresQuotePhotoLegalLock
-        ? await this.legalApprovals.lockAndRead(
-            transaction,
-            QUOTE_UPLOAD_LEGAL_DOCUMENTS,
-          )
-        : undefined;
+      if (requiresQuotePhotoLegalLock) {
+        await this.legalApprovals.lock(
+          transaction,
+          QUOTE_UPLOAD_LEGAL_DOCUMENTS,
+        );
+      }
       const rows = await transaction.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM upload_intents WHERE id = ${confirmedIntentId}::uuid FOR UPDATE
       `;
@@ -403,7 +403,7 @@ export class UploadService {
           photoMetadata.kind === PhotoAssetKind.QUOTE_REFERENCE &&
           photoMetadata.scopeKind === PhotoScopeKind.QUOTE_REQUEST
         ) {
-          if (!legal) {
+          if (!requiresQuotePhotoLegalLock) {
             throw new ConflictException("Photo upload legal state unavailable");
           }
           const scopeRows = await transaction.$queryRaw<
@@ -427,6 +427,13 @@ export class UploadService {
             FOR UPDATE OF request
           `;
           const scope = scopeRows[0];
+          if (!scope) {
+            throw new GoneException("Quote request no longer accepts photos");
+          }
+          const legal = await this.legalApprovals.readAt(
+            transaction,
+            scope.observed_at,
+          );
           const requestAcceptsPhotos =
             scope?.request_status === "NEW" ||
             scope?.request_status === "IN_REVIEW" ||
@@ -434,17 +441,13 @@ export class UploadService {
               scope.offer_expires_at !== null &&
               scope.offer_expires_at.getTime() > scope.observed_at.getTime());
           if (
-            !scope ||
             scope.session_status !== "OPEN" ||
             !requestAcceptsPhotos ||
             scope.session_expires_at.getTime() <= scope.observed_at.getTime()
           ) {
             throw new GoneException("Quote request no longer accepts photos");
           }
-          assertEffectiveLegalDocuments(
-            legal.approvals,
-            QUOTE_UPLOAD_LEGAL_DOCUMENTS,
-          );
+          assertEffectiveLegalDocuments(legal, QUOTE_UPLOAD_LEGAL_DOCUMENTS);
         }
       }
 

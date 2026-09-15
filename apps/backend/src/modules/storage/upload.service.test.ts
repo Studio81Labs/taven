@@ -257,7 +257,7 @@ describe("UploadService confirmation response", () => {
     });
     expect(transaction.photoAsset.create).toHaveBeenCalledOnce();
     expect(copyObject).toHaveBeenCalledOnce();
-    expect(legalApprovals.lockAndRead).toHaveBeenCalledWith(transaction, [
+    expect(legalApprovals.lock).toHaveBeenCalledWith(transaction, [
       "privacy",
       "prohibitedContent",
       "retention",
@@ -431,6 +431,7 @@ function approvedLegalApprovals() {
     },
   };
   return {
+    lock: vi.fn(async () => undefined),
     lockAndRead: vi.fn(async () => ({ approvals })),
     readAt: vi.fn(async () => approvals),
   };
