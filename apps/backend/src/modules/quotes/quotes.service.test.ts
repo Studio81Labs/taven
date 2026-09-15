@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addBusinessHours,
   applyTransition,
+  isCurrentStoredOfferIssuedResponse,
   QuotesService,
 } from "./quotes.service";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
@@ -25,6 +26,35 @@ describe("quote-request SLA", () => {
     expect(
       addBusinessHours(new Date("2026-08-30T23:59:59.999Z"), 24).toISOString(),
     ).toBe("2026-09-01T00:00:00.000Z");
+  });
+});
+
+describe("offer issuance idempotency compatibility", () => {
+  const current = {
+    quoteId: "11111111-1111-4111-8111-111111111111",
+    version: 1,
+    termsRevision: "terms-v1",
+    claimPolicyRevision: "claims-v1",
+    claimWindowDays: 30,
+    legalTermsRevisionId: "22222222-2222-4222-8222-222222222222",
+    legalTermsContentHash: "a".repeat(64),
+    legalClaimsRevisionId: "33333333-3333-4333-8333-333333333333",
+    legalClaimsContentHash: "b".repeat(64),
+    expiresAt: "2026-09-15T12:00:00.000Z",
+    capabilityKeyId: "quote-key-v1",
+  };
+
+  it("rejects legacy stored responses missing legal evidence", () => {
+    expect(
+      isCurrentStoredOfferIssuedResponse({
+        quoteId: current.quoteId,
+        version: current.version,
+        termsRevision: current.termsRevision,
+        expiresAt: current.expiresAt,
+        capabilityKeyId: current.capabilityKeyId,
+      }),
+    ).toBe(false);
+    expect(isCurrentStoredOfferIssuedResponse(current)).toBe(true);
   });
 });
 

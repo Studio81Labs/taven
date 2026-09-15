@@ -1029,6 +1029,11 @@ export class QuotesService {
             capabilityKeyId: offerCapabilityKey.id,
           }),
           fromStoredResponse: (stored) => {
+            if (!isCurrentStoredOfferIssuedResponse(stored)) {
+              throw new ConflictException(
+                "Offer issuance replay is incompatible with the current legal evidence contract; retry with a new idempotency key",
+              );
+            }
             const { capabilityKeyId, ...response } =
               stored as unknown as StoredOfferIssuedResponse;
             return {
@@ -1938,6 +1943,32 @@ export class QuotesService {
       return response;
     });
   }
+}
+
+export function isCurrentStoredOfferIssuedResponse(
+  stored: unknown,
+): stored is StoredOfferIssuedResponse {
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+    return false;
+  }
+  const response = stored as Record<string, unknown>;
+  return (
+    typeof response.quoteId === "string" &&
+    typeof response.version === "number" &&
+    Number.isSafeInteger(response.version) &&
+    response.version >= 1 &&
+    typeof response.termsRevision === "string" &&
+    typeof response.claimPolicyRevision === "string" &&
+    typeof response.claimWindowDays === "number" &&
+    Number.isSafeInteger(response.claimWindowDays) &&
+    response.claimWindowDays >= 1 &&
+    typeof response.legalTermsRevisionId === "string" &&
+    typeof response.legalTermsContentHash === "string" &&
+    typeof response.legalClaimsRevisionId === "string" &&
+    typeof response.legalClaimsContentHash === "string" &&
+    typeof response.expiresAt === "string" &&
+    typeof response.capabilityKeyId === "string"
+  );
 }
 
 async function lockedRequest(transaction: Transaction, requestId: string) {
