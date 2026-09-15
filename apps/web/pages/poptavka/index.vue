@@ -38,11 +38,9 @@ const presentedLegalDocuments = {
 };
 async function refreshLegalAvailability(): Promise<void> {
   const selected = await refreshAvailability();
-  await Promise.all(
-    Object.values(presentedLegalDocuments).map(({ refresh }) =>
-      refresh(selected),
-    ),
-  );
+  for (const { refresh } of Object.values(presentedLegalDocuments)) {
+    await refresh(selected);
+  }
 }
 onMounted(() => void refreshLegalAvailability());
 const source = normalizeAssistedQuoteSource(route.query.source);
