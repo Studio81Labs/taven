@@ -119,10 +119,10 @@ const approvedDocuments = computed(() =>
 const retryEvidence = computed(
   () => retryContext.value?.acceptedEvidence ?? null,
 );
-const retryMode = computed(
-  () =>
-    retryContext.value?.retryAllowed === true && retryEvidence.value !== null,
-);
+// Historical evidence controls the read-only retry presentation. Whether a
+// new payment attempt may actually be submitted is a separate server decision
+// exposed by retryAllowed.
+const retryMode = computed(() => retryEvidence.value !== null);
 type LegalEvidenceFingerprint = Readonly<{
   contentHash: string | null | undefined;
   revision: string | undefined;
@@ -262,6 +262,7 @@ const canSubmit = computed(
       (approvedDocuments.value || retryMode.value) &&
       bindingPrice.value?.kind === "BINDING" &&
       selectedDestination.value &&
+      (!retryMode.value || retryContext.value?.retryAllowed === true) &&
       (retryMode.value ||
         (draft.acceptTerms &&
           draft.acceptClaimPolicy &&
