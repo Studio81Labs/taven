@@ -2,6 +2,7 @@ import { ServiceUnavailableException } from "@nestjs/common";
 import { describe, expect, it } from "vitest";
 import {
   assertBindingQuoteFlowsEnabled,
+  assertCheckoutPaymentFlowEnabled,
   assertCheckoutPaymentFlowsEnabled,
   assertCheckoutTermsRevisionCurrent,
   assertEffectiveCheckoutLegalDocuments,
@@ -47,6 +48,19 @@ describe("launch approval gates", () => {
       ServiceUnavailableException,
     );
     expect(() => assertCheckoutPaymentFlowsEnabled({})).toThrow(
+      ServiceUnavailableException,
+    );
+  });
+
+  it("does not make immutable checkout retries depend on the current Claim window", () => {
+    const retryEnvironment = {
+      [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
+    };
+
+    expect(() =>
+      assertCheckoutPaymentFlowEnabled(retryEnvironment),
+    ).not.toThrow();
+    expect(() => assertCheckoutPaymentFlowsEnabled(retryEnvironment)).toThrow(
       ServiceUnavailableException,
     );
   });

@@ -55,14 +55,21 @@ export function assertQuotePhotoUploadsEnabled(
 export function assertCheckoutPaymentFlowsEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): Readonly<{ claimWindowDays: number }> {
+  assertCheckoutPaymentFlowEnabled(env);
+  return {
+    claimWindowDays: approvedCheckoutClaimWindowDays(env),
+  };
+}
+
+/** Retries use their immutable accepted Claim window, not the current setting. */
+export function assertCheckoutPaymentFlowEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
   if (!isExplicitlyEnabled(env, CHECKOUT_PAYMENT_FLOWS_ENV)) {
     throw launchApprovalRequired(
       "Checkout payment flows are unavailable until legal documents and provider launch inputs are approved",
     );
   }
-  return {
-    claimWindowDays: approvedCheckoutClaimWindowDays(env),
-  };
 }
 
 export function assertCheckoutAcceptanceRevisionsCurrent(

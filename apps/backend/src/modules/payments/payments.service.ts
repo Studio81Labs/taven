@@ -14,6 +14,7 @@ import { IdempotencyStatus, PaymentStatus, Prisma } from "@prisma/client";
 import {
   assertCheckoutAcceptanceRevisionsCurrent,
   assertCheckoutClaimPolicyRevisionCurrent,
+  assertCheckoutPaymentFlowEnabled,
   assertCheckoutPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
   assertEffectiveCheckoutPhotoConsent,
@@ -189,7 +190,7 @@ export class PaymentsService {
 
     try {
       assertCheckoutContext(context, token, observedAt);
-      assertCheckoutPaymentFlowsEnabled();
+      assertCheckoutPaymentFlowEnabled();
     } catch (error) {
       if (
         error instanceof ConflictException ||
@@ -590,16 +591,17 @@ export class PaymentsService {
     );
     if (initialIdempotency.replay) return initialIdempotency.replay;
     assertCheckoutContext(initial, token, initialIdempotency.observedAt);
-    assertCheckoutPaymentFlowsEnabled();
     const initialFrozenEvidence = frozenCheckoutEvidence(
       initial.order as CheckoutOrderEvidence,
     );
     if (initialFrozenEvidence) {
+      assertCheckoutPaymentFlowEnabled();
       assertFrozenCheckoutInput(initialFrozenEvidence, input);
       if (!initialFrozenEvidence.retryAttemptExists) {
         throw new ConflictException("Checkout has no retryable failed attempt");
       }
     } else {
+      assertCheckoutPaymentFlowsEnabled();
       const initialLegal = await this.requiredLegalApprovals().readAt(
         this.prisma,
         initialIdempotency.observedAt,
@@ -659,7 +661,6 @@ export class PaymentsService {
       assertCheckoutContext(context, token, observedAt);
       assertDestinationStillCurrent(context, resolvedDestination);
       const binding = context.order.activePriceBinding!.orderPriceBinding;
-      assertCheckoutPaymentFlowsEnabled();
       const frozenEvidence = frozenCheckoutEvidence(
         context.order as CheckoutOrderEvidence,
       );
@@ -668,6 +669,7 @@ export class PaymentsService {
         typeof assertEffectiveCheckoutLegalDocuments
       > | null = null;
       if (frozenEvidence) {
+        assertCheckoutPaymentFlowEnabled();
         assertFrozenCheckoutInput(frozenEvidence, input);
         if (!frozenEvidence.retryAttemptExists) {
           throw new ConflictException(
@@ -675,6 +677,7 @@ export class PaymentsService {
           );
         }
       } else {
+        assertCheckoutPaymentFlowsEnabled();
         effectiveLegalRevisions = assertEffectiveCheckoutLegalDocuments(
           legal.approvals,
         );
