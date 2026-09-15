@@ -93,6 +93,14 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    IF NEW."issuance_command_key" <> 'legacy-import'
+       AND NEW."legal_terms_revision_id" IS NULL
+       AND NEW."legal_claims_revision_id" IS NULL
+       AND NEW."claim_window_days" IS NULL THEN
+        RAISE EXCEPTION 'New Quote requires database-backed legal evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'quotes_legal_revisions_required_check';
+    END IF;
+
     IF NEW."legal_terms_revision_id" IS NOT NULL
        AND NOT taven_legal_revision_matches_document(NEW."legal_terms_revision_id", 'terms') THEN
         RAISE EXCEPTION 'Quote legal terms revision must belong to terms'
