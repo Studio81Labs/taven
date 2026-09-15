@@ -34,8 +34,13 @@ export function usePublicLegalDocument(
   const { $api } = useNuxtApp();
   const { availability, refresh: refreshAvailability } = useLegalAvailability();
   const fallback = legalDocuments[key];
+  const initialPinnedRevision = pinnedRevision ? toValue(pinnedRevision) : null;
+  const initialPinnedContentHash = pinnedContentHash
+    ? toValue(pinnedContentHash)
+    : null;
+  const stateIdentity = `${initialPinnedRevision ?? "current"}:${initialPinnedContentHash ?? ""}`;
   const document = useState<PublicLegalDocument>(
-    `legal-document:${key}`,
+    `legal-document:${key}:${stateIdentity}`,
     () => ({
       id: fallback.id,
       path: fallback.path,
@@ -47,7 +52,7 @@ export function usePublicLegalDocument(
     }),
   );
   const historical = useState<boolean>(
-    `legal-document-historical:${key}`,
+    `legal-document-historical:${key}:${stateIdentity}`,
     () => false,
   );
   const effective = computed(() => {
@@ -163,6 +168,16 @@ export function usePublicLegalDocument(
       ],
       ([revision, contentHash], previous) => {
         if (revision === previous[0] && contentHash === previous[1]) return;
+        document.value = {
+          id: fallback.id,
+          path: fallback.path,
+          title: fallback.title,
+          summary: fallback.summary,
+          sections: fallback.sections,
+          effectiveAt: null,
+          contentHash: null,
+        };
+        historical.value = false;
         void refresh();
       },
     );
