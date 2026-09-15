@@ -622,7 +622,6 @@ export class QuotesService {
     input: IssueOfferDto,
     idempotencyKey: string | undefined,
   ): Promise<OfferIssuedDto> {
-    assertBindingQuoteFlowsEnabled();
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
     const nodeId = operatorNode(operator);
     requestId = normalizedUuid(requestId, "requestId");
@@ -636,6 +635,9 @@ export class QuotesService {
       commandKey,
       fingerprint,
       async (transaction) => {
+        // Keep completed idempotent replays available even when new issuance
+        // is disabled; this gate applies only to a fresh operation.
+        assertBindingQuoteFlowsEnabled();
         const legalApprovals = this.requiredLegalApprovals();
         await legalApprovals.lock(transaction, ["terms", "claims"]);
         const request = await lockedRequest(transaction, requestId);

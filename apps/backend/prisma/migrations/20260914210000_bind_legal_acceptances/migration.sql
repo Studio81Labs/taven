@@ -74,6 +74,9 @@ CREATE INDEX "legal_acceptances_revision_id_idx" ON "legal_acceptances"("revisio
 ALTER TABLE "quote_requests"
     ALTER COLUMN "current_state_command_key" DROP DEFAULT;
 
+ALTER TABLE "quotes"
+    ALTER COLUMN "issuance_command_key" DROP DEFAULT;
+
 CREATE OR REPLACE FUNCTION taven_legal_revision_matches_document(
     target_revision_id uuid,
     target_key text
@@ -97,6 +100,18 @@ BEGIN
                 USING ERRCODE = '23514', CONSTRAINT = 'order_price_bindings_legal_terms_document_check';
         END IF;
         RETURN NEW;
+    END IF;
+
+    -- Publication writers lock these rows FOR UPDATE. Lock both documents in
+    -- key order before reading either publication interval below so quote
+    -- provenance cannot race an archive or replacement transaction.
+    IF NEW."legal_terms_revision_id" IS NOT NULL
+       OR NEW."legal_claims_revision_id" IS NOT NULL THEN
+        PERFORM document."id"
+        FROM "legal_documents" document
+        WHERE document."key" IN ('claims', 'terms')
+        ORDER BY document."key"
+        FOR SHARE;
     END IF;
 
     IF NEW."issuance_command_key" <> 'legacy-import'

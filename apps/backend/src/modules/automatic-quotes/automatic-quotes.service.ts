@@ -1604,39 +1604,32 @@ export class AutomaticQuotesService {
     sessionId = normalizedUuid(sessionId, "sessionId");
     const sessionCapability = bearerCapability(authorization);
     const commandKey = requireIdempotencyKey(idempotencyKey);
-    const session = await this.loadSession(sessionId);
-    assertSessionCapability(session, sessionCapability);
-    const retainedEvidenceState = frozenCheckoutEvidenceState(
-      session.automaticOrderOrigin!.order,
-    );
-    if (retainedEvidenceState === "partial") {
-      throw new ConflictException(
-        "Automatic quote has incomplete checkout evidence",
-      );
-    }
-    if (retainedEvidenceState !== "complete") assertBindingQuoteFlowsEnabled();
+    let automaticOrderId: string | undefined;
     await this.idempotentEffect(
       "automatic-quote.prepare",
       commandKey,
       async (transaction) => {
-        await this.requiredLegalApprovals().lockAndRead(transaction, ["terms"]);
+        await this.requiredLegalApprovals().lock(transaction, ["terms"]);
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const draft = await transaction.automaticQuoteDraft.findFirst({
           where: { order: { automaticOrigin: { quoteSessionId: sessionId } } },
-          select: { configurationRevision: true },
+          select: {
+            configurationRevision: true,
+            order: { select: { id: true } },
+          },
         });
-        if (!draft) throw new ConflictException("Automatic order is missing");
+        if (!draft?.order)
+          throw new ConflictException("Automatic order is missing");
+        automaticOrderId = draft.order.id;
         return fingerprintOf({
           sessionId,
           configurationRevision: draft.configurationRevision,
         });
       },
       async (transaction) => {
-        const legal = await this.requiredLegalApprovals().lockAndRead(
-          transaction,
-          ["terms"],
-        );
+        const legalApprovals = this.requiredLegalApprovals();
+        await legalApprovals.lock(transaction, ["terms"]);
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const order = await transaction.order.findFirst({
@@ -1650,12 +1643,19 @@ export class AutomaticQuotesService {
         const draft = order?.automaticQuoteDraft;
         if (!order || !draft)
           throw new ConflictException("Automatic order is missing");
+        automaticOrderId = order.id;
+        const observedAt = await databaseNow(transaction);
+        const legal = {
+          observedAt,
+          approvals: await legalApprovals.readAt(transaction, observedAt),
+        };
         const evidenceState = frozenCheckoutEvidenceState(order);
         if (evidenceState === "partial") {
           throw new ConflictException(
             "Automatic quote has incomplete checkout evidence",
           );
         }
+        if (evidenceState !== "complete") assertBindingQuoteFlowsEnabled();
         if (evidenceState === "none") {
           assertEffectiveLegalDocuments(legal.approvals, ["terms"]);
         }
@@ -1719,7 +1719,7 @@ export class AutomaticQuotesService {
         }
       },
     );
-    await this.advanceEligibility(session.automaticOrderOrigin!.order.id);
+    if (automaticOrderId) await this.advanceEligibility(automaticOrderId);
     return this.getSession(sessionId, authorization);
   }
 

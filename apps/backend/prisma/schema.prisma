@@ -1812,7 +1812,7 @@ model Quote {
   claimWindowDays     Int?     @map("claim_window_days")
   termsSnapshot      Json      @default("{}") @map("terms_snapshot") @db.JsonB
   promisedDate       DateTime? @map("promised_date") @db.Date
-  issuanceCommandKey String    @default("legacy-import") @map("issuance_command_key") @db.VarChar(255)
+  issuanceCommandKey String    @map("issuance_command_key") @db.VarChar(255)
   issuanceResultId   String    @default(uuid()) @map("issuance_result_id") @db.Uuid
   expiresAt          DateTime  @map("expires_at") @db.Timestamptz(3)
   issuedAt           DateTime  @default(now()) @map("issued_at") @db.Timestamptz(3)
