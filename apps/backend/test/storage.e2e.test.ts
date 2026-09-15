@@ -464,7 +464,7 @@ describe("secure object storage and retention", () => {
       data: {
         id: scopeId,
         quoteSessionId: quoteSession.id,
-        currentStateCommandKey: "storage-e2e-reference-photo",
+        currentStateCommandKey: "legacy-import",
       },
     });
     const requestBody = JSON.stringify({
@@ -561,7 +561,7 @@ describe("secure object storage and retention", () => {
       data: {
         id: scopeId,
         quoteSessionId: quoteSession.id,
-        currentStateCommandKey: "storage-e2e-photo-fail-closed",
+        currentStateCommandKey: "legacy-import",
       },
     });
     const request = {
