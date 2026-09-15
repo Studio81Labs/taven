@@ -26,7 +26,7 @@ ALTER TABLE "quotes"
         REFERENCES "legal_document_revisions"("id") ON DELETE RESTRICT,
     ADD CONSTRAINT "quotes_legal_revisions_shape_check" CHECK (
         ("legal_terms_revision_id" IS NULL AND "legal_claims_revision_id" IS NULL AND "claim_window_days" IS NULL)
-        OR ("legal_terms_revision_id" IS NOT NULL AND "legal_claims_revision_id" IS NOT NULL AND "claim_window_days" > 0)
+        OR ("legal_terms_revision_id" IS NOT NULL AND "legal_claims_revision_id" IS NOT NULL AND "claim_window_days" BETWEEN 1 AND 3650)
     );
 
 ALTER TABLE "order_price_bindings"
@@ -107,6 +107,22 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'Quote terms revision must match its legal terms revision'
             USING ERRCODE = '23514', CONSTRAINT = 'quotes_legal_terms_revision_code_check';
+    END IF;
+    IF NEW."legal_terms_revision_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "legal_document_revisions" revision
+           WHERE revision."id" = NEW."legal_terms_revision_id"
+             AND jsonb_build_object(
+                 'contentVersion', revision."content_version",
+                 'title', revision."title",
+                 'summary', revision."summary",
+                 'sections', revision."sections",
+                 'contentHash', revision."content_hash"
+             ) = NEW."terms_snapshot"
+       ) THEN
+        RAISE EXCEPTION 'Quote terms snapshot must match its legal terms revision'
+            USING ERRCODE = '23514', CONSTRAINT = 'quotes_terms_snapshot_revision_check';
     END IF;
     IF NEW."legal_claims_revision_id" IS NOT NULL
        AND NOT taven_legal_revision_matches_document(NEW."legal_claims_revision_id", 'claims') THEN
