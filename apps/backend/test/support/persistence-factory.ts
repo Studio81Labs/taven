@@ -777,7 +777,7 @@ export class PersistenceFactory {
     );
     if (input.customerOwned) {
       await this.sql.query(
-        "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, created_at, updated_at) VALUES ($1,$2,$3,'NEW',$4,$4)",
+        "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at) VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)",
         [
           input.quoteRequestId,
           input.quoteSessionId,
