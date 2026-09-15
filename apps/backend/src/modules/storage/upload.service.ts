@@ -38,7 +38,10 @@ import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
 import { assertEffectiveLegalDocuments } from "../legal-approvals/legal-approvals.catalog";
-import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
+import {
+  databaseNow,
+  LegalApprovalsService,
+} from "../legal-approvals/legal-approvals.service";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import type {
   ConfirmedUploadResponseDto,
@@ -190,14 +193,7 @@ export class UploadService {
     const finalKey = photoOriginalObjectKey(assetId);
 
     await this.prisma.$transaction(async (transaction) => {
-      const legal = await this.legalApprovals.lockAndRead(
-        transaction,
-        QUOTE_UPLOAD_LEGAL_DOCUMENTS,
-      );
-      assertEffectiveLegalDocuments(
-        legal.approvals,
-        QUOTE_UPLOAD_LEGAL_DOCUMENTS,
-      );
+      await this.legalApprovals.lock(transaction, QUOTE_UPLOAD_LEGAL_DOCUMENTS);
       const rows = await transaction.$queryRaw<
         Array<{
           customer_id: string | null;
@@ -207,7 +203,6 @@ export class UploadService {
           request_status: string;
           offer_expires_at: Date | null;
           expires_at: Date;
-          observed_at: Date;
         }>
       >`
         SELECT request.customer_id, session.customer_id AS session_customer_id,
@@ -215,26 +210,28 @@ export class UploadService {
                session.status::text AS session_status,
                request.status::text AS request_status,
                quote.expires_at AS offer_expires_at,
-               session.expires_at,
-               clock_timestamp() AS observed_at
+               session.expires_at
         FROM quote_requests request
         JOIN quote_sessions session ON session.id = request.quote_session_id
         LEFT JOIN quotes quote ON quote.quote_request_id = request.id
         WHERE request.id = ${metadata.scopeId}::uuid
         FOR SHARE OF request, session
       `;
+      const observedAt = await databaseNow(transaction);
+      const legal = await this.legalApprovals.readAt(transaction, observedAt);
+      assertEffectiveLegalDocuments(legal, QUOTE_UPLOAD_LEGAL_DOCUMENTS);
       const scope = rows[0];
       const requestAcceptsPhotos =
         scope?.request_status === "NEW" ||
         scope?.request_status === "IN_REVIEW" ||
         (scope?.request_status === "QUOTED" &&
           scope.offer_expires_at !== null &&
-          scope.offer_expires_at.getTime() > scope.observed_at.getTime());
+          scope.offer_expires_at.getTime() > observedAt.getTime());
       if (
         !scope ||
         scope.session_status !== "OPEN" ||
         !requestAcceptsPhotos ||
-        scope.expires_at.getTime() <= scope.observed_at.getTime() ||
+        scope.expires_at.getTime() <= observedAt.getTime() ||
         !matchesTokenHash(scopeToken, scope.public_token_hash)
       ) {
         throw new UnauthorizedException("Quote-session capability is invalid");
