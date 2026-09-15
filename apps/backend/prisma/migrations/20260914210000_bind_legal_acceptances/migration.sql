@@ -177,6 +177,8 @@ DECLARE
     binding_terms_revision_id uuid;
     terms_code text;
     claims_code text;
+    photo_consent_granted_at timestamptz;
+    photo_consent_code text;
 BEGIN
     IF TG_TABLE_NAME = 'orders' THEN
         target_order_id := COALESCE(NEW."id", OLD."id");
@@ -187,8 +189,9 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    SELECT binding."legal_terms_revision_id", target."accepted_terms_revision", target."accepted_claim_policy_revision"
-      INTO binding_terms_revision_id, terms_code, claims_code
+    SELECT binding."legal_terms_revision_id", target."accepted_terms_revision", target."accepted_claim_policy_revision",
+           target."photo_publication_consent_granted_at", target."photo_publication_consent_revision"
+      INTO binding_terms_revision_id, terms_code, claims_code, photo_consent_granted_at, photo_consent_code
       FROM "orders" target
       LEFT JOIN "order_price_bindings" binding ON binding."id" = target."accepted_order_price_binding_id"
      WHERE target."id" = target_order_id;
@@ -216,6 +219,22 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'Accepted order with database-backed terms requires matching immutable legal acceptance evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'orders_legal_acceptance_evidence_check';
+    END IF;
+
+    IF (photo_consent_granted_at IS NULL AND photo_consent_code IS NOT NULL)
+       OR (photo_consent_granted_at IS NOT NULL AND (
+           photo_consent_code IS NULL
+           OR NOT EXISTS (
+               SELECT 1
+               FROM "legal_acceptances" acceptance
+               JOIN "legal_document_revisions" revision ON revision."id" = acceptance."revision_id"
+               WHERE acceptance."order_id" = target_order_id
+                 AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+                 AND revision."revision_code" = photo_consent_code
+           )
+       )) THEN
+        RAISE EXCEPTION 'Accepted photo consent requires matching immutable legal acceptance evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'orders_photo_consent_acceptance_evidence_check';
     END IF;
 
     -- Individual offers freeze the Claim window on the originating Quote. An
