@@ -8,6 +8,7 @@ import { useLegalAvailability } from "./useLegalAvailability";
 type PublicRevision = components["schemas"]["PublicLegalRevisionDto"];
 type LegalDocumentCache = Record<string, PublicLegalDocument>;
 type HistoricalCache = Record<string, boolean>;
+type RefreshGenerationCache = Record<string, number>;
 
 export type PublicLegalDocument = Readonly<{
   id: string;
@@ -65,6 +66,10 @@ export function usePublicLegalDocument(
     `legal-document-historical-cache:${key}`,
     () => ({ [initialIdentity]: false }),
   );
+  const refreshGenerations = useState<RefreshGenerationCache>(
+    `legal-document-refresh-generations:${key}`,
+    () => ({}),
+  );
   const document = computed<PublicLegalDocument>({
     get: () => documentCache.value[currentIdentity.value] ?? fallbackDocument(),
     set: (value) => {
@@ -93,18 +98,22 @@ export function usePublicLegalDocument(
         availability.value.documents[key].contentHash
     );
   });
-  let refreshGeneration = 0;
-
   async function refresh(
     selectedAvailability?: LegalAvailability | null,
   ): Promise<void> {
-    const generation = ++refreshGeneration;
+    const stateIdentity = currentIdentity.value;
+    const generation = (refreshGenerations.value[stateIdentity] ?? 0) + 1;
+    refreshGenerations.value = {
+      ...refreshGenerations.value,
+      [stateIdentity]: generation,
+    };
     const revisionCode = pinnedRevision ? toValue(pinnedRevision) : null;
     const contentHash = pinnedContentHash ? toValue(pinnedContentHash) : null;
     const selected = selectedAvailability ?? (await refreshAvailability());
     const record = selected?.documents[key];
     const isCurrent = () =>
-      generation === refreshGeneration &&
+      generation === refreshGenerations.value[stateIdentity] &&
+      stateIdentity === currentIdentity.value &&
       revisionCode === (pinnedRevision ? toValue(pinnedRevision) : null) &&
       contentHash === (pinnedContentHash ? toValue(pinnedContentHash) : null);
     if (
