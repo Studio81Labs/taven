@@ -47,20 +47,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # THE ONLY PER-REPO LINE in this workflow — even the Compare step's secret
-  # name (SIBLING_READ_TOKEN) is the same in every sibling. Everything else is
-  # identical too, which is what makes adding another family repository an edit
-  # rather than a fork. The script is compared byte-for-byte
-  # between repos by its own IDENTICAL manifest, so it must not carry the repo
-  # name either.
-  #
-  # SPACE-SEPARATED, and plural on purpose. Every repository watches every other
-  # family member; a single-valued variable would silently compare only one of
-  # them. Fewer rows looks exactly like convergence, which is the failure this
-  # whole workflow exists to prevent.
-  #
+  # Configured via GitHub Actions organization variable (vars.SIBLING_REPOS).
+  # SPACE-SEPARATED list of all repositories in the portfolio.
   # SIBLING_TOKEN must be able to read EVERY repo listed here.
-  SIBLING_REPOS: Studio81Labs/nexcue Studio81Labs/tarmoto Studio81Labs/tabletap Studio81Labs/poker-hero
+  SIBLING_REPOS: ${{ vars.SIBLING_REPOS }}
   ISSUE_LABEL: infra-drift
 
 jobs:
@@ -118,7 +108,12 @@ jobs:
           : > drift-report.md
           total=0
 
+          [ -n "$SIBLING_REPOS" ] || { echo "::error::SIBLING_REPOS variable is not set or empty"; exit 1; }
+
           for sib in $SIBLING_REPOS; do
+            if [ "$sib" = "$GITHUB_REPOSITORY" ]; then
+              continue
+            fi
             name="${sib##*/}"
 
             # GITHUB_OUTPUT is redirected per sibling. The script APPENDS
