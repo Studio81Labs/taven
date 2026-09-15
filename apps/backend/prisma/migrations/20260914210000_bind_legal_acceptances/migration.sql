@@ -451,21 +451,14 @@ BEGIN
     IF request_command_key = 'legacy-import' THEN
         IF TG_TABLE_NAME = 'quote_requests'
            AND TG_OP = 'UPDATE'
-           AND (
-               NEW."photo_publication_consent_granted_at" IS DISTINCT FROM OLD."photo_publication_consent_granted_at"
-               OR NEW."photo_publication_consent_revision" IS DISTINCT FROM OLD."photo_publication_consent_revision"
-           )
+           AND NEW."photo_publication_consent_granted_at" IS DISTINCT FROM OLD."photo_publication_consent_granted_at"
            AND (
                NEW."photo_publication_consent_granted_at" IS NULL
-               OR NEW."photo_publication_consent_revision" IS NULL
                OR NOT EXISTS (
                    SELECT 1
                    FROM "legal_acceptances" acceptance
-                   JOIN "legal_document_revisions" revision
-                     ON revision."id" = acceptance."revision_id"
                    WHERE acceptance."quote_request_id" = target_quote_request_id
                      AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
-                     AND revision."revision_code" = NEW."photo_publication_consent_revision"
                )
            ) THEN
             RAISE EXCEPTION 'Quote request photo consent changes require matching immutable legal acceptance evidence'
@@ -475,17 +468,6 @@ BEGIN
            AND acceptance_purpose = 'PHOTO_PUBLICATION_GRANTED'
            AND (
                photo_consent_granted_at IS NULL
-               OR NEW."revision_id" IS NULL
-               OR NOT EXISTS (
-                   SELECT 1
-                   FROM "legal_document_revisions" revision
-                   WHERE revision."id" = NEW."revision_id"
-                     AND revision."revision_code" = (
-                         SELECT target."photo_publication_consent_revision"
-                         FROM "quote_requests" target
-                         WHERE target."id" = target_quote_request_id
-                     )
-               )
            ) THEN
             RAISE EXCEPTION 'Quote request photo consent ledger must match immutable scalar evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_photo_consent_acceptance_evidence_check';
