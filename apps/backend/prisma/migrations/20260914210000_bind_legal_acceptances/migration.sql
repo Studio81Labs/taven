@@ -307,6 +307,7 @@ RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     target_quote_request_id uuid;
     photo_consent_granted_at timestamptz;
+    request_command_key text;
 BEGIN
     IF TG_TABLE_NAME = 'quote_requests' THEN
         target_quote_request_id := COALESCE(NEW."id", OLD."id");
@@ -317,10 +318,17 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    SELECT target."photo_publication_consent_granted_at"
-      INTO photo_consent_granted_at
+    SELECT target."photo_publication_consent_granted_at", target."current_state_command_key"
+      INTO photo_consent_granted_at, request_command_key
       FROM "quote_requests" target
      WHERE target."id" = target_quote_request_id;
+
+    -- The schema's legacy-import marker identifies pre-cutover/imported rows.
+    -- All supported request writers persist a command key and must provide the
+    -- ledger evidence below.
+    IF request_command_key = 'legacy-import' THEN
+        RETURN NULL;
+    END IF;
 
     IF NOT EXISTS (
         SELECT 1

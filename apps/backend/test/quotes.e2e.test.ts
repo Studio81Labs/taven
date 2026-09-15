@@ -2183,6 +2183,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         data: {
           publicReference: `mp-${randomUUID()}`,
           description: "Direct write without privacy evidence",
+          currentStateCommandKey: key("direct-without-privacy"),
         },
       }),
     ).rejects.toThrow(
@@ -2202,6 +2203,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
             publicReference: `mphoto-${randomUUID()}`,
             description: "Direct write without photo consent evidence",
             photoPublicationConsentGrantedAt: new Date(),
+            currentStateCommandKey: key("direct-photo-without-evidence"),
           },
         });
         await transaction.legalAcceptance.create({

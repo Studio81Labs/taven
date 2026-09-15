@@ -21770,7 +21770,7 @@ describe("commerce persistence foundations", () => {
           ),
         {
           code: "23514",
-          constraint: "individual_order_price_binding_invalidation_check",
+          constraint: "active_order_price_binding_invalidation_check",
         },
       );
 
