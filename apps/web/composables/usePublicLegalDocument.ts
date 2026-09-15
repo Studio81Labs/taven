@@ -60,18 +60,25 @@ export function usePublicLegalDocument(
         availability.value.documents[key].contentHash
     );
   });
+  let refreshGeneration = 0;
 
   async function refresh(
     selectedAvailability?: LegalAvailability | null,
   ): Promise<void> {
-    const selected = selectedAvailability ?? (await refreshAvailability());
-    const record = selected?.documents[key];
+    const generation = ++refreshGeneration;
     const revisionCode = pinnedRevision ? toValue(pinnedRevision) : null;
     const contentHash = pinnedContentHash ? toValue(pinnedContentHash) : null;
+    const selected = selectedAvailability ?? (await refreshAvailability());
+    const record = selected?.documents[key];
+    const isCurrent = () =>
+      generation === refreshGeneration &&
+      revisionCode === (pinnedRevision ? toValue(pinnedRevision) : null) &&
+      contentHash === (pinnedContentHash ? toValue(pinnedContentHash) : null);
     if (
       !revisionCode &&
       (!record?.effective || !record.contentHash || !record.effectiveAt)
     ) {
+      if (!isCurrent()) return;
       document.value = {
         id: fallback.id,
         path: fallback.path,
@@ -117,6 +124,7 @@ export function usePublicLegalDocument(
           throw new Error("legal document availability changed during fetch");
         }
       }
+      if (!isCurrent()) return;
       document.value = {
         id: revision.revisionCode,
         path: fallback.path,
@@ -133,6 +141,7 @@ export function usePublicLegalDocument(
           latestRecord.revision !== revision.revisionCode ||
           latestRecord.contentHash !== revision.contentHash);
     } catch {
+      if (!isCurrent()) return;
       document.value = {
         id: fallback.id,
         path: fallback.path,
