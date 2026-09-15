@@ -720,7 +720,10 @@ export class PersistenceFactory {
   }): Promise<void> {
     const t = createdAt;
     const quoteIssuedAt = new Date(
-      Math.min(t.getTime(), input.quoteExpiresAt.getTime() - 1),
+      Math.min(
+        input.orderOrigin === "INDIVIDUAL" ? Date.now() : t.getTime(),
+        input.quoteExpiresAt.getTime() - 1,
+      ),
     );
     const quoteRequestCreatedAt = quoteIssuedAt;
     const snapshotId = this.id(`${input.name}:price-snapshot`);
