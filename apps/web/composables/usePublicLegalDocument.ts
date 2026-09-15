@@ -6,6 +6,8 @@ import type { LegalAvailability } from "../utils/legal-availability";
 import { useLegalAvailability } from "./useLegalAvailability";
 
 type PublicRevision = components["schemas"]["PublicLegalRevisionDto"];
+type LegalDocumentCache = Record<string, PublicLegalDocument>;
+type HistoricalCache = Record<string, boolean>;
 
 export type PublicLegalDocument = Readonly<{
   id: string;
@@ -34,27 +36,53 @@ export function usePublicLegalDocument(
   const { $api } = useNuxtApp();
   const { availability, refresh: refreshAvailability } = useLegalAvailability();
   const fallback = legalDocuments[key];
-  const initialPinnedRevision = pinnedRevision ? toValue(pinnedRevision) : null;
-  const initialPinnedContentHash = pinnedContentHash
-    ? toValue(pinnedContentHash)
-    : null;
-  const stateIdentity = `${initialPinnedRevision ?? "current"}:${initialPinnedContentHash ?? ""}`;
-  const document = useState<PublicLegalDocument>(
-    `legal-document:${key}:${stateIdentity}`,
-    () => ({
-      id: fallback.id,
-      path: fallback.path,
-      title: fallback.title,
-      summary: fallback.summary,
-      sections: fallback.sections,
-      effectiveAt: null,
-      contentHash: null,
-    }),
+  const identity = (revision: string | null, contentHash: string | null) =>
+    `${revision ?? "current"}:${contentHash ?? ""}`;
+  const currentIdentity = computed(() =>
+    identity(
+      pinnedRevision ? toValue(pinnedRevision) : null,
+      pinnedContentHash ? toValue(pinnedContentHash) : null,
+    ),
   );
-  const historical = useState<boolean>(
-    `legal-document-historical:${key}:${stateIdentity}`,
-    () => false,
+  const initialIdentity = currentIdentity.value;
+  const fallbackDocument = (): PublicLegalDocument => ({
+    id: fallback.id,
+    path: fallback.path,
+    title: fallback.title,
+    summary: fallback.summary,
+    sections: fallback.sections,
+    effectiveAt: null,
+    contentHash: null,
+  });
+  // Keep each pinned revision/hash in its own cache entry. The active entry is
+  // selected reactively so reused page components cannot write revision B into
+  // revision A's state when navigation changes the pinned identity.
+  const documentCache = useState<LegalDocumentCache>(
+    `legal-document-cache:${key}`,
+    () => ({ [initialIdentity]: fallbackDocument() }),
   );
+  const historicalCache = useState<HistoricalCache>(
+    `legal-document-historical-cache:${key}`,
+    () => ({ [initialIdentity]: false }),
+  );
+  const document = computed<PublicLegalDocument>({
+    get: () => documentCache.value[currentIdentity.value] ?? fallbackDocument(),
+    set: (value) => {
+      documentCache.value = {
+        ...documentCache.value,
+        [currentIdentity.value]: value,
+      };
+    },
+  });
+  const historical = computed<boolean>({
+    get: () => historicalCache.value[currentIdentity.value] ?? false,
+    set: (value) => {
+      historicalCache.value = {
+        ...historicalCache.value,
+        [currentIdentity.value]: value,
+      };
+    },
+  });
   const effective = computed(() => {
     return (
       availability.value?.documents[key].effective === true &&
