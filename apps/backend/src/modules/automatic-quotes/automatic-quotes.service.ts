@@ -5313,8 +5313,12 @@ export class AutomaticQuotesService {
       order.acceptedClaimPolicyRevision !== null &&
       order.acceptedClaimWindowDays !== null &&
       order.withdrawalExceptionAcknowledgedAt !== null;
+    const canOtherwiseBeCheckoutReady =
+      !expired &&
+      order.status === OrderStatus.QUOTED &&
+      Boolean(active && currentPlan && currentReservation);
     let bindingUsesCurrentTerms = hasFrozenCheckoutEvidence;
-    if (!bindingUsesCurrentTerms) {
+    if (!bindingUsesCurrentTerms && canOtherwiseBeCheckoutReady) {
       const legal = await this.requiredLegalApprovals().availability();
       assertEffectiveLegalDocuments(legal, ["terms"]);
       bindingUsesCurrentTerms =

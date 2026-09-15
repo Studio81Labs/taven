@@ -113,6 +113,42 @@ BEGIN
         RAISE EXCEPTION 'Quote legal claims revision must belong to claims'
             USING ERRCODE = '23514', CONSTRAINT = 'quotes_legal_claims_document_check';
     END IF;
+    IF NEW."legal_terms_revision_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "legal_document_revisions" revision
+           JOIN "legal_documents" document ON document."id" = revision."document_id"
+           JOIN "legal_document_publications" publication
+             ON publication."revision_id" = revision."id"
+            AND publication."cancelled_at" IS NULL
+            AND publication."starts_at" <= NEW."issued_at"
+            AND (publication."ends_at" IS NULL OR publication."ends_at" > NEW."issued_at")
+           WHERE revision."id" = NEW."legal_terms_revision_id"
+             AND document."key" = 'terms'
+             AND revision."status" = 'APPROVED'
+             AND revision."effective_at" <= NEW."issued_at"
+       ) THEN
+        RAISE EXCEPTION 'Quote legal terms revision must be effective when issued'
+            USING ERRCODE = '23514', CONSTRAINT = 'quotes_legal_terms_effective_revision_check';
+    END IF;
+    IF NEW."legal_claims_revision_id" IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "legal_document_revisions" revision
+           JOIN "legal_documents" document ON document."id" = revision."document_id"
+           JOIN "legal_document_publications" publication
+             ON publication."revision_id" = revision."id"
+            AND publication."cancelled_at" IS NULL
+            AND publication."starts_at" <= NEW."issued_at"
+            AND (publication."ends_at" IS NULL OR publication."ends_at" > NEW."issued_at")
+           WHERE revision."id" = NEW."legal_claims_revision_id"
+             AND document."key" = 'claims'
+             AND revision."status" = 'APPROVED'
+             AND revision."effective_at" <= NEW."issued_at"
+       ) THEN
+        RAISE EXCEPTION 'Quote legal claims revision must be effective when issued'
+            USING ERRCODE = '23514', CONSTRAINT = 'quotes_legal_claims_effective_revision_check';
+    END IF;
     RETURN NEW;
 END;
 $$;
@@ -308,7 +344,7 @@ END;
 $$;
 
 CREATE CONSTRAINT TRIGGER "orders_legal_acceptance_evidence_valid"
-AFTER INSERT OR UPDATE OF "accepted_order_price_binding_id", "accepted_terms_revision", "accepted_claim_policy_revision"
+AFTER INSERT OR UPDATE OF "accepted_order_price_binding_id", "accepted_terms_revision", "accepted_claim_policy_revision", "photo_publication_consent_granted_at", "photo_publication_consent_revision"
 ON "orders" DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_legal_acceptance();
 
