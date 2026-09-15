@@ -85,14 +85,16 @@ export function usePublicLegalDocument(
       return;
     }
     try {
-      const response = await $api.GET(
-        "/legal-documents/{key}/revisions/{revisionCode}",
-        {
+      const response = await Promise.race([
+        $api.GET("/legal-documents/{key}/revisions/{revisionCode}", {
           params: {
             path: { key, revisionCode: revisionCode ?? record!.revision },
           },
-        },
-      );
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 1_000),
+        ),
+      ]);
       const revision = response.data as PublicRevision | undefined;
       if (
         !revision ||
@@ -102,6 +104,18 @@ export function usePublicLegalDocument(
         (!revisionCode && revision.effectiveAt !== record!.effectiveAt)
       ) {
         throw new Error("stale legal document response");
+      }
+      if (!revisionCode) {
+        const latest = await refreshAvailability();
+        const latestRecord = latest?.documents[key];
+        if (
+          !latestRecord?.effective ||
+          latestRecord.revision !== revision.revisionCode ||
+          latestRecord.contentHash !== revision.contentHash ||
+          latestRecord.effectiveAt !== revision.effectiveAt
+        ) {
+          throw new Error("legal document availability changed during fetch");
+        }
       }
       document.value = {
         id: revision.revisionCode,
