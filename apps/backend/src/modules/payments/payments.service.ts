@@ -2313,7 +2313,7 @@ function assertBalancePaymentLaunchApproved(order: {
       "Balance payment has no accepted price binding",
     );
   }
-  assertCheckoutPaymentFlowsEnabled();
+  assertCheckoutPaymentFlowEnabled();
 }
 
 async function balanceIdempotencyAfterLock(
