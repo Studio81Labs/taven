@@ -122,7 +122,12 @@ const retryEvidence = computed(
 // Historical evidence controls the read-only retry presentation. Whether a
 // new payment attempt may actually be submitted is a separate server decision
 // exposed by retryAllowed.
-const retryMode = computed(() => retryEvidence.value !== null);
+const acceptedCheckoutMode = computed(
+  () => props.quote.checkoutEvidenceAccepted === true,
+);
+const retryMode = computed(
+  () => acceptedCheckoutMode.value || retryEvidence.value !== null,
+);
 type LegalEvidenceFingerprint = Readonly<{
   contentHash: string | null | undefined;
   revision: string | undefined;
@@ -174,9 +179,11 @@ function hasHistoricalRevision(
   return Boolean(contentHash);
 }
 const paymentMethods = computed(() =>
-  retryMode.value
-    ? retryContext.value!.methods
-    : (capabilities.value?.methods ?? []),
+  retryMode.value && retryContext.value
+    ? retryContext.value.methods
+    : retryMode.value
+      ? []
+      : (capabilities.value?.methods ?? []),
 );
 watch(approvedDocuments, (documents) => {
   if (!documents?.photoConsentRevision) draft.photoPublicationConsent = false;
@@ -930,6 +937,15 @@ function compactBilling(
             Souhlas s pořízením a zveřejněním fotografií jste neudělil/a.
           </template>
           Tento záznam neměníme ani jej znovu nepotvrzujete.
+        </p>
+        <p
+          v-else-if="retryMode"
+          class="border-l-4 border-[#925b10] bg-[#fff8eb] p-4 text-sm leading-6"
+        >
+          Dříve zaznamenané právní souhlasy zůstávají součástí této objednávky a
+          tento krok je pouze pro opakování platby. Ověřený kontext opakování se
+          momentálně nepodařilo načíst, proto nelze souhlasy znovu měnit ani
+          opakovaný pokus o platbu bezpečně odeslat.
         </p>
         <template v-else>
           <label class="flex items-start gap-3 text-sm leading-6"

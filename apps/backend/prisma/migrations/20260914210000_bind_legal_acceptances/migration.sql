@@ -207,6 +207,13 @@ BEGIN
         WHEN 'PRIVACY_NOTICE_ACKNOWLEDGED' THEN 'privacy'
         WHEN 'PHOTO_PUBLICATION_GRANTED' THEN 'photoConsent'
     END;
+    -- Serialize acceptance validation with publication archival/replacement.
+    -- Writers update the same legal_documents row, so a share lock keeps the
+    -- publication interval read below consistent with the committed document.
+    PERFORM document."id"
+    FROM "legal_documents" document
+    WHERE document."key" = expected_key
+    FOR SHARE;
     IF NEW."order_id" IS NOT NULL
        AND NEW."purpose" NOT IN ('TERMS_ACCEPTED', 'CLAIM_POLICY_ACCEPTED', 'PHOTO_PUBLICATION_GRANTED') THEN
         RAISE EXCEPTION 'Legal acceptance purpose is incompatible with an Order subject'

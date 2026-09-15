@@ -10,6 +10,9 @@ export default defineNuxtRouteMiddleware(async (to) => {
     typeof to.query.sessionId === "string" &&
     to.query.sessionId.length > 0
   ) {
+    // Preserve the retry route during SSR. The client middleware performs the
+    // authenticated session/evidence check before allowing the retry flow.
+    if (import.meta.server) return;
     if (import.meta.client) {
       const storage = getSessionStorage(window);
       const stored = storage ? loadPaymentReturnSession(storage) : undefined;
