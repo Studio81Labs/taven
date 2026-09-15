@@ -1496,7 +1496,7 @@ describe("commerce persistence foundations", () => {
           () =>
             client.query(
               `INSERT INTO orders
-                 (id, customer_id, public_reference, status, created_at, updated_at)
+                 (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
                VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
               [
                 fixtures.id(name),
@@ -1598,7 +1598,7 @@ describe("commerce persistence foundations", () => {
         },
       );
       await client.query(
-        `INSERT INTO orders (id, public_reference, status, created_at, updated_at)
+        `INSERT INTO orders (id, public_reference, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,'DRAFT',$3,$3)`,
         [anonymousOrderId, `T-${randomUUID()}`, createdAt],
       );
@@ -1633,8 +1633,8 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `INSERT INTO quote_requests
-               (id, quote_session_id, customer_id, status, created_at, updated_at)
-             VALUES ($1,$2,$3,'NEW',$4,$4)`,
+               (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at)
+             VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)`,
             [
               fixtures.id("conflicting-request-after-order-claim"),
               anonymousSessionId,
@@ -1670,8 +1670,8 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `INSERT INTO quote_requests
-           (id, quote_session_id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,$3,'NEW',$4,$4)`,
+           (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at)
+         VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)`,
         [
           fixtures.id("request-first-request"),
           requestFirstSessionId,
@@ -1696,7 +1696,7 @@ describe("commerce persistence foundations", () => {
           );
           await client.query(
             `INSERT INTO orders
-               (id, customer_id, public_reference, status, created_at, updated_at)
+               (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
              VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
             [
               conflictingOrderId,
@@ -1743,8 +1743,8 @@ describe("commerce persistence foundations", () => {
       ) => {
         await client.query(
           `INSERT INTO quote_requests
-             (id, quote_session_id, customer_id, status, created_at, updated_at)
-           VALUES ($1,$2,$3,'NEW',$4,$4)`,
+             (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at)
+           VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)`,
           [
             fixtures.id(`${name}-request`),
             sessionId,
@@ -1781,7 +1781,7 @@ describe("commerce persistence foundations", () => {
         ],
       );
       await client.query(
-        `INSERT INTO orders (id, public_reference, status, created_at, updated_at)
+        `INSERT INTO orders (id, public_reference, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,'DRAFT',$3,$3)`,
         [topologyOrderId, `T-${randomUUID()}`, createdAt],
       );
@@ -1842,7 +1842,7 @@ describe("commerce persistence foundations", () => {
           ],
         );
         await client.query(
-          `INSERT INTO orders (id, public_reference, status, created_at, updated_at)
+          `INSERT INTO orders (id, public_reference, status, current_state_command_key, created_at, updated_at)
            VALUES ($1,$2,'DRAFT',$3,$3)`,
           [orderId, `T-${randomUUID()}`, createdAt],
         );
@@ -1862,8 +1862,8 @@ describe("commerce persistence foundations", () => {
         } else if (topology === "order-phase") {
           await client.query(
             `INSERT INTO order_phases
-               (id, order_id, kind, status, created_at, updated_at)
-             VALUES ($1,$2,'SINGLE','QUOTED',$3,$3)`,
+               (id, order_id, kind, status, current_state_command_key, created_at, updated_at)
+             VALUES ($1,$2,'SINGLE','QUOTED','legacy-import',$3,$3)`,
             [fixtures.id("ownership-phase"), orderId, createdAt],
           );
         } else {
@@ -1946,7 +1946,7 @@ describe("commerce persistence foundations", () => {
           );
           await client.query(
             `INSERT INTO orders
-               (id, public_reference, status, created_at, updated_at)
+               (id, public_reference, status, current_state_command_key, created_at, updated_at)
              VALUES ($1,$2,'DRAFT',$3,$3)`,
             [mismatchedOrderId, `T-${randomUUID()}`, createdAt],
           );
@@ -3723,8 +3723,8 @@ describe("commerce persistence foundations", () => {
       const quoteCreatedAt = new Date();
       await client.query(
         `INSERT INTO quote_requests
-           (id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,'NEW',$3,$3)`,
+           (id, customer_id, status, current_state_command_key, created_at, updated_at)
+         VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
         [mutableQuoteRequestId, foundation.customerId, quoteCreatedAt],
       );
       await advanceQuoteRequestToQuoted(
@@ -3763,7 +3763,7 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `INSERT INTO orders
-           (id, customer_id, public_reference, status, created_at, updated_at)
+           (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
         [
           mutableOrderId,
@@ -4326,7 +4326,7 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `INSERT INTO orders
-           (id, customer_id, public_reference, status, created_at, updated_at)
+           (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
         [
           mutableOrderId,
@@ -16720,7 +16720,7 @@ describe("commerce persistence foundations", () => {
           client.query(
             `INSERT INTO jobs
                (id, node_id, order_id, order_phase_id, shipment_plan_id,
-                phase_resource_plan_job_id, status, created_at, updated_at)
+                phase_resource_plan_job_id, status, current_state_command_key, created_at, updated_at)
              VALUES ($1,$2,$3,$4,$5,$6,'CREATED',
                      clock_timestamp() + interval '60 seconds',clock_timestamp())`,
             [
@@ -17738,7 +17738,7 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `INSERT INTO orders
-             (id, public_reference, status, created_at, updated_at)
+             (id, public_reference, status, current_state_command_key, created_at, updated_at)
              VALUES ($1,$2,'COMPLETED',$3,$3)`,
             [
               fixtures.id("terminal-order-insert"),
@@ -17937,8 +17937,8 @@ describe("commerce persistence foundations", () => {
           () =>
             client.query(
               `INSERT INTO quote_requests
-               (id, quote_session_id, customer_id, status, created_at, updated_at)
-               VALUES ($1,$2,$3,'NEW',$4,$4)`,
+               (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at)
+               VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)`,
               [
                 fixtures.id(`closed-request-${closedSession.name}`),
                 sessionId,
@@ -17955,7 +17955,7 @@ describe("commerce persistence foundations", () => {
             const orderId = fixtures.id(`closed-order-${closedSession.name}`);
             await client.query(
               `INSERT INTO orders
-               (id, customer_id, public_reference, status, created_at, updated_at)
+               (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
                VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
               [
                 orderId,
@@ -17979,8 +17979,8 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `INSERT INTO quote_requests
-             (id, quote_session_id, customer_id, status, created_at, updated_at)
-             VALUES ($1,$2,$3,'NEW',$4,$4)`,
+             (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at)
+             VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)`,
             [
               ownedRequestId,
               ownedSessionId,
@@ -17992,8 +17992,8 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `INSERT INTO quote_requests
-         (id, quote_session_id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,$3,'NEW',$4,$4)`,
+         (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at)
+         VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)`,
         [
           ownedRequestId,
           ownedSessionId,
@@ -18745,7 +18745,7 @@ describe("commerce persistence foundations", () => {
             client.query(
               `INSERT INTO refund_transactions
                  (id, payment_id, idempotency_key, amount_minor, reason,
-                  status, created_at, updated_at)
+                  status, current_state_command_key, created_at, updated_at)
                VALUES ($1,$2,$3,1,'CUSTOMER_CANCELLATION','PENDING',$4,$4)`,
               [
                 fixtures.id("invalid-refund-idempotency-key"),
@@ -18922,7 +18922,7 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `INSERT INTO refund_transactions (id, payment_id, idempotency_key,
-                                             amount_minor, reason, status, created_at, updated_at)
+                                             amount_minor, reason, status, current_state_command_key, created_at, updated_at)
              VALUES ($1,$2,$3,500,'CUSTOMER_CANCELLATION','PENDING',$4,$4)`,
             [
               fixtures.id("refund-over-cap"),
@@ -19618,7 +19618,7 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `INSERT INTO orders
-           (id, public_reference, status, created_at, updated_at)
+           (id, public_reference, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,'DRAFT',clock_timestamp(),clock_timestamp())`,
         [anonymousOrderId, `T-${randomUUID()}`],
       );
@@ -19729,13 +19729,13 @@ describe("commerce persistence foundations", () => {
       );
       await client.query(
         `INSERT INTO quote_requests
-           (id, quote_session_id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,$3,'NEW',clock_timestamp(),clock_timestamp())`,
+           (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at)
+         VALUES ($1,$2,$3,'NEW','legacy-import',clock_timestamp(),clock_timestamp())`,
         [expiringRequestId, expiringSessionId, cancelledDraft.customerId],
       );
       await client.query(
         `INSERT INTO orders
-           (id, customer_id, public_reference, status, created_at, updated_at)
+           (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,$3,'DRAFT',clock_timestamp(),clock_timestamp())`,
         [expiringOrderId, cancelledDraft.customerId, `T-${randomUUID()}`],
       );
@@ -21019,8 +21019,8 @@ describe("commerce persistence foundations", () => {
         () =>
           client.query(
             `INSERT INTO quote_requests
-               (id, customer_id, status, created_at, updated_at)
-             VALUES ($1,$2,'QUOTED',$3,$3)`,
+               (id, customer_id, status, current_state_command_key, created_at, updated_at)
+             VALUES ($1,$2,'QUOTED','legacy-import',$3,$3)`,
             [fixtures.id("direct-quoted-request"), foundation.customerId, now],
           ),
         {
@@ -21031,8 +21031,8 @@ describe("commerce persistence foundations", () => {
 
       await client.query(
         `INSERT INTO quote_requests
-           (id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,'NEW',$3,$3)`,
+           (id, customer_id, status, current_state_command_key, created_at, updated_at)
+         VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
         [requestId, foundation.customerId, now],
       );
       await expectQueryError(
@@ -21325,8 +21325,8 @@ describe("commerce persistence foundations", () => {
       );
       await setup.query(
         `INSERT INTO quote_requests
-           (id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,'NEW',$3,$3)`,
+           (id, customer_id, status, current_state_command_key, created_at, updated_at)
+         VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
         [requestId, foundation.customerId, createdAt],
       );
       await setup.query(
@@ -21451,8 +21451,8 @@ describe("commerce persistence foundations", () => {
           const contractTotal = includeItem ? 0 : 1;
           await client.query(
             `INSERT INTO quote_requests
-             (id, customer_id, status, created_at, updated_at)
-           VALUES ($1,$2,'NEW',$3,$3)`,
+             (id, customer_id, status, current_state_command_key, created_at, updated_at)
+           VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
             [requestId, foundation.customerId, issuedAt],
           );
           await advanceQuoteRequestToQuoted(client, requestId, issuedAt);
@@ -21636,8 +21636,8 @@ describe("commerce persistence foundations", () => {
         const toleratedQuoteId = fixtures.id("tolerated-future-offer:quote");
         await client.query(
           `INSERT INTO quote_requests
-             (id, customer_id, status, created_at, updated_at)
-           VALUES ($1,$2,'NEW',clock_timestamp(),clock_timestamp())`,
+             (id, customer_id, status, current_state_command_key, created_at, updated_at)
+           VALUES ($1,$2,'NEW','legacy-import',clock_timestamp(),clock_timestamp())`,
           [toleratedRequestId, foundation.customerId],
         );
         await advanceQuoteRequestToQuoted(client, toleratedRequestId, now);
@@ -21678,8 +21678,8 @@ describe("commerce persistence foundations", () => {
         const historicalRequestId = fixtures.id("historical-offer:request");
         await client.query(
           `INSERT INTO quote_requests
-             (id, customer_id, status, created_at, updated_at)
-           VALUES ($1,$2,'NEW',clock_timestamp(),clock_timestamp())`,
+             (id, customer_id, status, current_state_command_key, created_at, updated_at)
+           VALUES ($1,$2,'NEW','legacy-import',clock_timestamp(),clock_timestamp())`,
           [historicalRequestId, foundation.customerId],
         );
         await advanceQuoteRequestToQuoted(client, historicalRequestId, now);
@@ -21709,8 +21709,8 @@ describe("commerce persistence foundations", () => {
         const futureRequestId = fixtures.id("future-offer:request");
         await client.query(
           `INSERT INTO quote_requests
-             (id, customer_id, status, created_at, updated_at)
-           VALUES ($1,$2,'NEW',clock_timestamp(),clock_timestamp())`,
+             (id, customer_id, status, current_state_command_key, created_at, updated_at)
+           VALUES ($1,$2,'NEW','legacy-import',clock_timestamp(),clock_timestamp())`,
           [futureRequestId, foundation.customerId],
         );
         await advanceQuoteRequestToQuoted(client, futureRequestId, now);
@@ -21843,8 +21843,8 @@ describe("commerce persistence foundations", () => {
       const secondOrderItemId = fixtures.id("custom-order-item-2");
       const now = new Date();
       await client.query(
-        `INSERT INTO quote_requests (id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,'NEW',$3,$3)`,
+        `INSERT INTO quote_requests (id, customer_id, status, current_state_command_key, created_at, updated_at)
+         VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
         [quoteRequestId, foundation.customerId, now],
       );
       await advanceQuoteRequestToQuoted(client, quoteRequestId, now);
@@ -22016,8 +22016,8 @@ describe("commerce persistence foundations", () => {
       const closedQuoteId = fixtures.id("closed-custom-quote");
       const closedSnapshotId = fixtures.id("closed-custom-snapshot");
       await client.query(
-        `INSERT INTO quote_requests (id, customer_id, status, created_at, updated_at)
-         VALUES ($1,$2,'NEW',$3,$3)`,
+        `INSERT INTO quote_requests (id, customer_id, status, current_state_command_key, created_at, updated_at)
+         VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
         [closedRequestId, foundation.customerId, now],
       );
       await advanceQuoteRequestToQuoted(client, closedRequestId, now);
@@ -22098,7 +22098,7 @@ describe("commerce persistence foundations", () => {
           );
           await client.query(
             `INSERT INTO orders
-               (id, customer_id, public_reference, status, created_at, updated_at)
+               (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
              VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
             [
               mismatchedOrderId,
@@ -22158,7 +22158,7 @@ describe("commerce persistence foundations", () => {
           );
           await client.query(
             `INSERT INTO orders
-               (id, customer_id, public_reference, status, created_at, updated_at)
+               (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
              VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
             [
               invalidatedOrderId,
@@ -22209,7 +22209,7 @@ describe("commerce persistence foundations", () => {
       );
 
       await client.query(
-        `INSERT INTO orders (id, customer_id, public_reference, status, created_at, updated_at)
+        `INSERT INTO orders (id, customer_id, public_reference, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,$3,'DRAFT',$4,$4)`,
         [orderId, foundation.customerId, `I-${randomUUID()}`, now],
       );
@@ -22275,8 +22275,8 @@ describe("commerce persistence foundations", () => {
         );
         await client.query(
           `INSERT INTO order_phases
-             (id, order_id, kind, status, created_at, updated_at)
-           VALUES ($1,$2,'SINGLE','QUOTED',$3,$3)`,
+             (id, order_id, kind, status, current_state_command_key, created_at, updated_at)
+           VALUES ($1,$2,'SINGLE','QUOTED','legacy-import',$3,$3)`,
           [phaseId, orderId, now],
         );
         if (includeFulfilmentMoney) {
