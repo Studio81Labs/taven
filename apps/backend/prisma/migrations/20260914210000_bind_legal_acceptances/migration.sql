@@ -179,9 +179,16 @@ DECLARE
     claims_code text;
     photo_consent_granted_at timestamptz;
     photo_consent_code text;
+    accepted_before_update boolean := false;
 BEGIN
     IF TG_TABLE_NAME = 'orders' THEN
         target_order_id := COALESCE(NEW."id", OLD."id");
+        accepted_before_update := TG_OP = 'UPDATE'
+            AND OLD."accepted_order_price_binding_id" IS NOT NULL
+            AND OLD."accepted_terms_revision" IS NOT NULL
+            AND OLD."accepted_claim_policy_revision" IS NOT NULL
+            AND OLD."accepted_claim_window_days" IS NOT NULL
+            AND OLD."withdrawal_exception_acknowledged_at" IS NOT NULL;
     ELSE
         target_order_id := COALESCE(NEW."order_id", OLD."order_id");
     END IF;
@@ -196,9 +203,8 @@ BEGIN
       LEFT JOIN "order_price_bindings" binding ON binding."id" = target."accepted_order_price_binding_id"
      WHERE target."id" = target_order_id;
 
-    -- Imported legacy orders may retain their scalar evidence. Individual
-    -- orders, however, have always been created from an immutable Quote, so a
-    -- newly written individual origin must never use that legacy exception.
+    -- The nullable revision field preserves only already-accepted pre-cutover
+    -- orders. It cannot authorize a first acceptance after this migration.
     IF binding_terms_revision_id IS NULL THEN
         IF EXISTS (
             SELECT 1
@@ -207,6 +213,10 @@ BEGIN
         ) THEN
             RAISE EXCEPTION 'Individual order requires database-backed legal evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'orders_individual_legal_evidence_check';
+        END IF;
+        IF NOT accepted_before_update THEN
+            RAISE EXCEPTION 'New order acceptance requires database-backed legal evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'orders_legacy_legal_evidence_check';
         END IF;
         RETURN NULL;
     END IF;

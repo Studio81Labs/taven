@@ -5307,10 +5307,19 @@ export class AutomaticQuotesService {
         handoffReasons.push(reason);
       }
     }
-    const legal = await this.requiredLegalApprovals().availability();
-    assertEffectiveLegalDocuments(legal, ["terms"]);
-    const bindingUsesCurrentTerms =
-      active?.legalTermsRevisionId === legal.documents.terms.revisionId;
+    const hasFrozenCheckoutEvidence =
+      order.acceptedOrderPriceBindingId !== null &&
+      order.acceptedTermsRevision !== null &&
+      order.acceptedClaimPolicyRevision !== null &&
+      order.acceptedClaimWindowDays !== null &&
+      order.withdrawalExceptionAcknowledgedAt !== null;
+    let bindingUsesCurrentTerms = hasFrozenCheckoutEvidence;
+    if (!bindingUsesCurrentTerms) {
+      const legal = await this.requiredLegalApprovals().availability();
+      assertEffectiveLegalDocuments(legal, ["terms"]);
+      bindingUsesCurrentTerms =
+        active?.legalTermsRevisionId === legal.documents.terms.revisionId;
+    }
     const checkoutReady =
       !expired &&
       order.status === OrderStatus.QUOTED &&
