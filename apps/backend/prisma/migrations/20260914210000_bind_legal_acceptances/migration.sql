@@ -246,6 +246,7 @@ DECLARE
     target_order_id uuid;
     binding_terms_revision_id uuid;
     has_current_acceptance boolean;
+    legacy_complete_acceptance boolean;
     terms_code text;
     claims_code text;
     photo_consent_granted_at timestamptz;
@@ -273,12 +274,28 @@ BEGIN
              OR target."accepted_claim_policy_revision" IS NOT NULL
              OR target."accepted_claim_window_days" IS NOT NULL
              OR target."withdrawal_exception_acknowledged_at" IS NOT NULL,
+           target."accepted_order_price_binding_id" IS NOT NULL
+             AND target."accepted_terms_revision" IS NOT NULL
+             AND target."accepted_claim_policy_revision" IS NOT NULL
+             AND target."accepted_claim_window_days" IS NOT NULL
+             AND target."withdrawal_exception_acknowledged_at" IS NOT NULL,
            target."accepted_terms_revision", target."accepted_claim_policy_revision",
            target."photo_publication_consent_granted_at", target."photo_publication_consent_revision"
-      INTO binding_terms_revision_id, has_current_acceptance, terms_code, claims_code, photo_consent_granted_at, photo_consent_code
+      INTO binding_terms_revision_id, has_current_acceptance, legacy_complete_acceptance,
+           terms_code, claims_code, photo_consent_granted_at, photo_consent_code
       FROM "orders" target
       LEFT JOIN "order_price_bindings" binding ON binding."id" = target."accepted_order_price_binding_id"
      WHERE target."id" = target_order_id;
+
+    -- A legacy Order may add its v2 photo fields and the matching immutable
+    -- photo grant in one transaction. The ledger trigger must recognize that
+    -- the pre-existing scalar acceptance is the authorized legacy state.
+    IF TG_TABLE_NAME = 'legal_acceptances'
+       AND NEW."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+       AND binding_terms_revision_id IS NULL
+       AND legacy_complete_acceptance THEN
+        accepted_before_update := true;
+    END IF;
 
     IF (photo_consent_granted_at IS NULL AND (
            photo_consent_code IS NOT NULL
@@ -317,6 +334,11 @@ BEGIN
         IF has_current_acceptance AND NOT accepted_before_update THEN
             RAISE EXCEPTION 'New order acceptance requires database-backed legal evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'orders_legacy_legal_evidence_check';
+        END IF;
+        IF TG_TABLE_NAME = 'legal_acceptances'
+           AND NEW."purpose" IN ('TERMS_ACCEPTED', 'CLAIM_POLICY_ACCEPTED') THEN
+            RAISE EXCEPTION 'Order terms and claim acceptance require matching accepted order evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'orders_orphaned_legal_acceptance_check';
         END IF;
         RETURN NULL;
     END IF;

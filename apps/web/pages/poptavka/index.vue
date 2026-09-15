@@ -101,6 +101,27 @@ const photoConsentEvidence = computed(() => {
     ? `${document.revision}:${document.contentHash}`
     : null;
 });
+function legalDocumentLink(
+  key: "privacy" | "photoConsent",
+  isEffective: boolean,
+) {
+  const record = availability.value?.documents[key];
+  return isEffective && record?.revision && record.contentHash
+    ? {
+        path: legalDocuments[key].path,
+        query: {
+          revision: record.revision,
+          contentHash: record.contentHash,
+        },
+      }
+    : { path: legalDocuments[key].path };
+}
+const privacyDocumentLink = computed(() =>
+  legalDocumentLink("privacy", privacyNoticeEffective.value),
+);
+const photoConsentDocumentLink = computed(() =>
+  legalDocumentLink("photoConsent", photoConsentEffective.value),
+);
 watch(privacyNoticeEvidence, (evidence, previousEvidence) => {
   if (!evidence || (previousEvidence && evidence !== previousEvidence))
     privacyAcknowledged.value = false;
@@ -468,7 +489,7 @@ function isPositiveDimension(value: number | ""): value is number {
               <span>
                 Beru na vědomí, že kontaktní údaje a podklady použijeme k
                 posouzení poptávky a komunikaci o nabídce podle
-                <NuxtLink class="underline" :to="legalDocuments.privacy.path"
+                <NuxtLink class="underline" :to="privacyDocumentLink"
                   >zásad zpracování osobních údajů</NuxtLink
                 >. Fotografie dostanou při nahrání vlastní termín smazání. *
                 <template v-if="!privacyNoticeEffective">
@@ -485,9 +506,7 @@ function isPositiveDimension(value: number | ""): value is number {
               <span>
                 Souhlasím s případným zveřejněním výsledných fotografií jako
                 ukázky práce podle
-                <NuxtLink
-                  class="underline"
-                  :to="legalDocuments.photoConsent.path"
+                <NuxtLink class="underline" :to="photoConsentDocumentLink"
                   >pravidel fotografování</NuxtLink
                 >. Tento souhlas je nepovinný a lze jej odmítnout.
                 <template v-if="!photoConsentEffective">
