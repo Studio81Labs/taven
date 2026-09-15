@@ -146,5 +146,18 @@ export function usePublicLegalDocument(
     }
   }
 
+  if (pinnedRevision || pinnedContentHash) {
+    watch(
+      [
+        () => (pinnedRevision ? toValue(pinnedRevision) : null),
+        () => (pinnedContentHash ? toValue(pinnedContentHash) : null),
+      ],
+      ([revision, contentHash], previous) => {
+        if (revision === previous[0] && contentHash === previous[1]) return;
+        void refresh();
+      },
+    );
+  }
+
   return { document: readonly(document), effective, historical, refresh };
 }
