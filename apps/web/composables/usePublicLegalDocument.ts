@@ -2,6 +2,7 @@ import type { components } from "@taven/openapi-client";
 import { toValue, type MaybeRefOrGetter } from "vue";
 import { legalDocuments } from "../content/public-site";
 import type { LegalDocumentKey } from "../content/launch-manifest";
+import type { LegalAvailability } from "../utils/legal-availability";
 import { useLegalAvailability } from "./useLegalAvailability";
 
 type PublicRevision = components["schemas"]["PublicLegalRevisionDto"];
@@ -18,6 +19,7 @@ export type PublicLegalDocument = Readonly<{
     note?: string;
   }[];
   effectiveAt: string | null;
+  contentHash: string | null;
 }>;
 
 /**
@@ -41,6 +43,7 @@ export function usePublicLegalDocument(
       summary: fallback.summary,
       sections: fallback.sections,
       effectiveAt: null,
+      contentHash: null,
     }),
   );
   const historical = useState<boolean>(
@@ -52,12 +55,16 @@ export function usePublicLegalDocument(
       availability.value?.documents[key].effective === true &&
       document.value.effectiveAt ===
         availability.value.documents[key].effectiveAt &&
-      document.value.id === availability.value.documents[key].revision
+      document.value.id === availability.value.documents[key].revision &&
+      document.value.contentHash ===
+        availability.value.documents[key].contentHash
     );
   });
 
-  async function refresh(): Promise<void> {
-    const selected = await refreshAvailability();
+  async function refresh(
+    selectedAvailability?: LegalAvailability | null,
+  ): Promise<void> {
+    const selected = selectedAvailability ?? (await refreshAvailability());
     const record = selected?.documents[key];
     const revisionCode = pinnedRevision ? toValue(pinnedRevision) : null;
     const contentHash = pinnedContentHash ? toValue(pinnedContentHash) : null;
@@ -72,6 +79,7 @@ export function usePublicLegalDocument(
         summary: fallback.summary,
         sections: fallback.sections,
         effectiveAt: null,
+        contentHash: null,
       };
       historical.value = false;
       return;
@@ -102,6 +110,7 @@ export function usePublicLegalDocument(
         summary: revision.summary,
         sections: revision.sections,
         effectiveAt: revision.effectiveAt,
+        contentHash: revision.contentHash,
       };
       historical.value =
         Boolean(revisionCode) &&
@@ -117,6 +126,7 @@ export function usePublicLegalDocument(
         summary: fallback.summary,
         sections: fallback.sections,
         effectiveAt: null,
+        contentHash: null,
       };
       historical.value = false;
     }

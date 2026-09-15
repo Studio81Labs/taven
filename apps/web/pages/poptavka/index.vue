@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
 import { legalDocuments } from "../../content/public-site";
-import { isServerVerifiedLegalDocument } from "../../utils/legal-availability";
 import { useLegalAvailability } from "../../composables/useLegalAvailability";
+import { usePublicLegalDocument } from "../../composables/usePublicLegalDocument";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -29,8 +29,21 @@ usePublicPageMeta({
 
 const route = useRoute();
 const automaticQuoteEnabled = useAutomaticQuoteEnabled();
-const { availability, refresh: refreshLegalAvailability } =
-  useLegalAvailability();
+const { availability, refresh: refreshAvailability } = useLegalAvailability();
+const presentedLegalDocuments = {
+  privacy: usePublicLegalDocument("privacy"),
+  retention: usePublicLegalDocument("retention"),
+  prohibitedContent: usePublicLegalDocument("prohibitedContent"),
+  photoConsent: usePublicLegalDocument("photoConsent"),
+};
+async function refreshLegalAvailability(): Promise<void> {
+  const selected = await refreshAvailability();
+  await Promise.all(
+    Object.values(presentedLegalDocuments).map(({ refresh }) =>
+      refresh(selected),
+    ),
+  );
+}
 onMounted(() => void refreshLegalAvailability());
 const source = normalizeAssistedQuoteSource(route.query.source);
 const initialPrefill = assistedQuotePrefill(source);
@@ -73,34 +86,11 @@ const requestFieldsLocked = computed(() => submitted.value);
 const photoFieldsLocked = computed(
   () => submitted.value && !attachmentsEditable.value,
 );
-const privacyNoticeEffective = computed(() =>
-  isServerVerifiedLegalDocument(
-    "privacy",
-    legalDocuments.privacy,
-    availability.value,
-  ),
-);
-const retentionPolicyEffective = computed(() =>
-  isServerVerifiedLegalDocument(
-    "retention",
-    legalDocuments.retention,
-    availability.value,
-  ),
-);
-const prohibitedContentPolicyEffective = computed(() =>
-  isServerVerifiedLegalDocument(
-    "prohibitedContent",
-    legalDocuments.prohibitedContent,
-    availability.value,
-  ),
-);
-const photoConsentEffective = computed(() =>
-  isServerVerifiedLegalDocument(
-    "photoConsent",
-    legalDocuments.photoConsent,
-    availability.value,
-  ),
-);
+const privacyNoticeEffective = presentedLegalDocuments.privacy.effective;
+const retentionPolicyEffective = presentedLegalDocuments.retention.effective;
+const prohibitedContentPolicyEffective =
+  presentedLegalDocuments.prohibitedContent.effective;
+const photoConsentEffective = presentedLegalDocuments.photoConsent.effective;
 const privacyNoticeEvidence = computed(() => {
   const document = availability.value?.documents.privacy;
   return privacyNoticeEffective.value && document

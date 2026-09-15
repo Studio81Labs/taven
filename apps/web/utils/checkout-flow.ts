@@ -18,11 +18,15 @@ type CheckoutLegalDocuments = Readonly<
     LegalDocument
   >
 >;
+type VerifiedCheckoutLegalDocuments = Readonly<
+  Record<keyof CheckoutLegalDocuments, boolean>
+>;
 
 export function approvedCheckoutDocuments(
   capabilities: PaymentCapabilities | undefined,
   local: CheckoutLegalDocuments,
   availability: LegalAvailability | null | undefined,
+  verified: VerifiedCheckoutLegalDocuments,
 ) {
   const documents = capabilities?.legalDocuments;
   if (
@@ -35,6 +39,9 @@ export function approvedCheckoutDocuments(
       local,
       ["terms", "claims", "privacy", "prohibitedContent", "retention"],
       availability,
+    ) ||
+    !["terms", "claims", "privacy", "prohibitedContent", "retention"].every(
+      (key) => verified[key as keyof CheckoutLegalDocuments],
     )
   ) {
     return null;
@@ -49,7 +56,8 @@ export function approvedCheckoutDocuments(
         "photoConsent",
         local.photoConsent,
         availability,
-      )
+      ) &&
+      verified.photoConsent
         ? documents.photoConsentRevision
         : null,
   } as const;

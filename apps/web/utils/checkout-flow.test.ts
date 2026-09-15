@@ -89,11 +89,19 @@ const availability: LegalAvailability = {
     },
   },
 };
+const verified = {
+  terms: true,
+  claims: true,
+  privacy: true,
+  prohibitedContent: true,
+  retention: true,
+  photoConsent: true,
+};
 
 describe("checkout flow", () => {
   it("keeps checkout disabled for unavailable, mismatched, or draft documents", () => {
     expect(
-      approvedCheckoutDocuments(undefined, local, availability),
+      approvedCheckoutDocuments(undefined, local, availability, verified),
     ).toBeNull();
     expect(
       approvedCheckoutDocuments(
@@ -109,6 +117,7 @@ describe("checkout flow", () => {
         },
         local,
         availability,
+        verified,
       ),
     ).toBeNull();
     expect(
@@ -125,6 +134,7 @@ describe("checkout flow", () => {
         },
         { ...local, terms: document("terms-pending", "draft") },
         availability,
+        verified,
       ),
     ).toBeNull();
   });
@@ -141,12 +151,18 @@ describe("checkout flow", () => {
       },
     };
     expect(
-      approvedCheckoutDocuments(capabilities, local, availability),
+      approvedCheckoutDocuments(capabilities, local, availability, verified),
     ).toEqual({
       termsRevision: "terms-v1",
       claimPolicyRevision: "claims-v1",
       photoConsentRevision: null,
     });
+    expect(
+      approvedCheckoutDocuments(capabilities, local, availability, {
+        ...verified,
+        privacy: false,
+      }),
+    ).toBeNull();
   });
 
   it("rejects approved terms before their effective date", () => {
@@ -170,6 +186,7 @@ describe("checkout flow", () => {
             terms: { ...availability.documents.terms, effective: false },
           },
         },
+        verified,
       ),
     ).toBeNull();
   });
@@ -198,6 +215,7 @@ describe("checkout flow", () => {
             },
           },
         },
+        verified,
       ),
     ).toBeNull();
   });

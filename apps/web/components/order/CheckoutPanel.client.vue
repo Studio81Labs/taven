@@ -29,6 +29,7 @@ import {
   paymentReturnPresentation,
 } from "../../utils/payment-return";
 import { useLegalAvailability } from "../../composables/useLegalAvailability";
+import { usePublicLegalDocument } from "../../composables/usePublicLegalDocument";
 
 type CheckoutPayment = components["schemas"]["CheckoutPaymentDto"];
 type CreateCheckoutPayment = components["schemas"]["CreateCheckoutPaymentDto"];
@@ -42,8 +43,7 @@ const props = defineProps<{
   onRestart: () => void;
 }>();
 const { $api } = useNuxtApp();
-const { availability, refresh: refreshLegalAvailability } =
-  useLegalAvailability();
+const { availability, refresh: refreshAvailability } = useLegalAvailability();
 const form = ref<HTMLFormElement>();
 const credentials = shallowRef<StoredQuoteSession>();
 const capabilities = shallowRef<PaymentCapabilities>();
@@ -86,11 +86,36 @@ const localDocumentIds = {
   retention: legalDocuments.retention,
   photoConsent: legalDocuments.photoConsent,
 };
+const presentedLegalDocuments = {
+  terms: usePublicLegalDocument("terms"),
+  claims: usePublicLegalDocument("claims"),
+  privacy: usePublicLegalDocument("privacy"),
+  prohibitedContent: usePublicLegalDocument("prohibitedContent"),
+  retention: usePublicLegalDocument("retention"),
+  photoConsent: usePublicLegalDocument("photoConsent"),
+};
+const verifiedLegalDocuments = computed(() => ({
+  terms: presentedLegalDocuments.terms.effective.value,
+  claims: presentedLegalDocuments.claims.effective.value,
+  privacy: presentedLegalDocuments.privacy.effective.value,
+  prohibitedContent: presentedLegalDocuments.prohibitedContent.effective.value,
+  retention: presentedLegalDocuments.retention.effective.value,
+  photoConsent: presentedLegalDocuments.photoConsent.effective.value,
+}));
+async function refreshLegalAvailability(): Promise<void> {
+  const selected = await refreshAvailability();
+  await Promise.all(
+    Object.values(presentedLegalDocuments).map(({ refresh }) =>
+      refresh(selected),
+    ),
+  );
+}
 const approvedDocuments = computed(() =>
   approvedCheckoutDocuments(
     capabilities.value,
     localDocumentIds,
     availability.value,
+    verifiedLegalDocuments.value,
   ),
 );
 const retryEvidence = computed(
