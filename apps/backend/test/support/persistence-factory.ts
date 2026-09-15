@@ -796,10 +796,11 @@ export class PersistenceFactory {
       await this.sql.query(
         `INSERT INTO quotes
            (id, quote_request_id, customer_id, terms_revision,
+            issuance_command_key,
             legal_terms_revision_id, legal_claims_revision_id,
             claim_window_days, terms_snapshot, expires_at, issued_at, created_at)
          VALUES
-          ($1,$2,$3,'terms-v1',
+          ($1,$2,$3,'terms-v1','legacy-import',
             CASE WHEN $6 THEN (SELECT revision.id
                                FROM legal_document_revisions revision
                                JOIN legal_documents document ON document.id = revision.document_id
