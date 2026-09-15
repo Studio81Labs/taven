@@ -230,6 +230,22 @@ export function isCarrierValidationReady(input: {
   return input.deliverySelector.mode !== "PACKETA" || input.allReferenceSliced;
 }
 
+export function hasFrozenCheckoutEvidence(order: {
+  acceptedOrderPriceBindingId: string | null;
+  acceptedTermsRevision: string | null;
+  acceptedClaimPolicyRevision: string | null;
+  acceptedClaimWindowDays: number | null;
+  withdrawalExceptionAcknowledgedAt: Date | null;
+}): boolean {
+  return (
+    order.acceptedOrderPriceBindingId !== null &&
+    order.acceptedTermsRevision !== null &&
+    order.acceptedClaimPolicyRevision !== null &&
+    order.acceptedClaimWindowDays !== null &&
+    order.withdrawalExceptionAcknowledgedAt !== null
+  );
+}
+
 export async function parcelConfigurationChange(
   transaction: Transaction,
   orderId: string,
@@ -1602,7 +1618,6 @@ export class AutomaticQuotesService {
           transaction,
           ["terms"],
         );
-        assertEffectiveLegalDocuments(legal.approvals, ["terms"]);
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const order = await transaction.order.findFirst({
@@ -1616,6 +1631,10 @@ export class AutomaticQuotesService {
         const draft = order?.automaticQuoteDraft;
         if (!order || !draft)
           throw new ConflictException("Automatic order is missing");
+        const hasAcceptedEvidence = hasFrozenCheckoutEvidence(order);
+        if (!hasAcceptedEvidence) {
+          assertEffectiveLegalDocuments(legal.approvals, ["terms"]);
+        }
         if (draft.items.length === 0) return;
         let enqueued = false;
         for (const item of draft.items) {
@@ -1667,11 +1686,13 @@ export class AutomaticQuotesService {
           }
         }
         if (enqueued) return;
-        await this.stageOrFinalizeBinding(
-          transaction,
-          order.id,
-          legal.approvals.documents.terms.revisionId!,
-        );
+        if (!hasAcceptedEvidence) {
+          await this.stageOrFinalizeBinding(
+            transaction,
+            order.id,
+            legal.approvals.documents.terms.revisionId!,
+          );
+        }
       },
     );
     await this.advanceEligibility(session.automaticOrderOrigin!.order.id);
@@ -5307,17 +5328,12 @@ export class AutomaticQuotesService {
         handoffReasons.push(reason);
       }
     }
-    const hasFrozenCheckoutEvidence =
-      order.acceptedOrderPriceBindingId !== null &&
-      order.acceptedTermsRevision !== null &&
-      order.acceptedClaimPolicyRevision !== null &&
-      order.acceptedClaimWindowDays !== null &&
-      order.withdrawalExceptionAcknowledgedAt !== null;
+    const hasFrozenEvidence = hasFrozenCheckoutEvidence(order);
     const canOtherwiseBeCheckoutReady =
       !expired &&
       order.status === OrderStatus.QUOTED &&
       Boolean(active && currentPlan && currentReservation);
-    let bindingUsesCurrentTerms = hasFrozenCheckoutEvidence;
+    let bindingUsesCurrentTerms = hasFrozenEvidence;
     if (!bindingUsesCurrentTerms && canOtherwiseBeCheckoutReady) {
       const legal = await this.requiredLegalApprovals().availability();
       assertEffectiveLegalDocuments(legal, ["terms"]);
