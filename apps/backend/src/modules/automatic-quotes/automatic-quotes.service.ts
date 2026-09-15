@@ -1604,6 +1604,10 @@ export class AutomaticQuotesService {
     sessionId = normalizedUuid(sessionId, "sessionId");
     const sessionCapability = bearerCapability(authorization);
     const commandKey = requireIdempotencyKey(idempotencyKey);
+    // Validate the capability before entering the idempotent transaction;
+    // all mutable/legal state used for preparation is read again after locks.
+    const session = await this.loadSession(sessionId);
+    assertSessionCapability(session, sessionCapability);
     let automaticOrderId: string | undefined;
     await this.idempotentEffect(
       "automatic-quote.prepare",
