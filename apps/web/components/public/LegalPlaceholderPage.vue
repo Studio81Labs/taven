@@ -3,11 +3,21 @@ import {
   LEGAL_PLACEHOLDER_BANNER,
   publicSite,
 } from "../../content/public-site";
-import type { LegalDocument } from "../../content/launch-manifest";
-
 defineProps<{
-  document: LegalDocument;
+  document: {
+    id: string;
+    title: string;
+    summary: string;
+    sections: readonly {
+      title: string;
+      paragraphs?: readonly string[];
+      items?: readonly string[];
+      note?: string;
+    }[];
+    effectiveAt: string | null;
+  };
   effective?: boolean;
+  historical?: boolean;
   contact?: {
     label: string;
     email: string;
@@ -19,7 +29,7 @@ defineProps<{
 <template>
   <article class="mx-auto max-w-3xl px-5 py-14 sm:px-8 sm:py-20">
     <p
-      v-if="!effective"
+      v-if="!effective && !historical"
       class="border-2 border-[#b4441a] bg-white px-4 py-3 font-mono text-sm font-semibold text-[#8c3213]"
       role="alert"
     >
@@ -36,24 +46,34 @@ defineProps<{
     </p>
     <div class="mt-10 border border-[#d9d9d2] bg-white p-6 leading-7">
       <h2 class="text-xl font-semibold">
-        {{ !effective ? "Tato stránka není právní dokument" : "Účinné znění" }}
+        {{
+          historical
+            ? "Historické znění"
+            : !effective
+              ? "Tato stránka není právní dokument"
+              : "Účinné znění"
+        }}
       </h2>
       <p class="mt-3 text-[#54554c]">
-        <template v-if="!effective">
+        <template v-if="historical">
+          Toto je schválené historické znění načtené z neměnné veřejné
+          databázové revize. Už nemusí být účinné pro nové objednávky.
+        </template>
+        <template v-else-if="!effective">
           Neobsahuje účinné znění, datum účinnosti ani souhlas, který by bylo
           možné přijmout. Před veřejným spuštěním ji musí nahradit verzovaný
           text schválený vlastníkem služby a českým právním poradcem.
         </template>
         <template v-else>
-          Účinné od {{ document.effectiveAt }}. Zdroj schválení:
-          {{ document.approvalEvidence }}.
+          Účinné od {{ document.effectiveAt }}. Zobrazená verze je načtena z
+          neměnné veřejné databázové revize.
         </template>
       </p>
     </div>
     <section class="mt-10 border-t border-[#d9d9d2] pt-8">
       <h2 class="text-xl font-semibold">
         {{
-          effective
+          effective || historical
             ? "Identifikace provozovatele"
             : "Identifikace budoucího provozovatele"
         }}
@@ -81,18 +101,26 @@ defineProps<{
     >
       <div class="border border-[#d9d9d2] bg-[#efefea] p-5">
         <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-          {{ effective ? "SCHVÁLENO" : "NÁVRH" }}
+          {{ historical ? "HISTORICKÉ" : effective ? "SCHVÁLENO" : "NÁVRH" }}
           ·
           {{ document.id }}
         </p>
         <h2 id="legal-draft-heading" class="mt-3 text-2xl font-semibold">
-          {{ !effective ? "Pracovní návrh textu" : "Text dokumentu" }}
+          {{
+            historical
+              ? "Historické znění dokumentu"
+              : !effective
+                ? "Pracovní návrh textu"
+                : "Text dokumentu"
+          }}
         </h2>
         <p class="mt-3 leading-7 text-[#54554c]">
           {{
-            !effective
-              ? "Následující text slouží pouze k vývoji a připomínkování. Nemá datum účinnosti, nelze jej přijmout a nesmí být použit při produkční objednávce."
-              : "Text se vykresluje jako prostý obsah manifestu; nespouští ani nevkládá neověřený HTML obsah."
+            historical
+              ? "Toto archivní znění zachovává přijatou evidenci, ale nelze je použít pro novou objednávku."
+              : !effective
+                ? "Následující text slouží pouze k vývoji a připomínkování. Nemá datum účinnosti, nelze jej přijmout a nesmí být použit při produkční objednávce."
+                : "Text se vykresluje jako prostý obsah manifestu; nespouští ani nevkládá neověřený HTML obsah."
           }}
         </p>
       </div>

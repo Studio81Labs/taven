@@ -339,6 +339,54 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- 1. Legal Document Availability ---
+    const legalRevisionMatch = pathname.match(
+      /^\/legal-documents\/(terms|claims|privacy|prohibitedContent|retention|photoConsent)\/revisions\/([A-Za-z0-9_.-]+)$/,
+    );
+    if (legalRevisionMatch && method === "GET") {
+      const [, key, revisionCode] = legalRevisionMatch;
+      const expectedRevision =
+        key === "prohibitedContent"
+          ? "prohibited-content-test-v1"
+          : key === "photoConsent"
+            ? "photo-consent-test-v1"
+            : `${key}-test-v1`;
+      const contentHash = {
+        terms: "a",
+        claims: "b",
+        privacy: "c",
+        prohibitedContent: "d",
+        retention: "e",
+        photoConsent: "f",
+      }[key].repeat(64);
+      if (
+        testState.legalStatus !== "approved" ||
+        revisionCode !== expectedRevision
+      ) {
+        sendJson(res, 404, {
+          statusCode: 404,
+          message: "Revision unavailable",
+        });
+        return;
+      }
+      sendJson(res, 200, {
+        documentId: `legal-${key}`,
+        key,
+        revisionCode,
+        contentVersion: 1,
+        contentHash,
+        title: `Test ${key}`,
+        summary: "Testovací neměnné znění.",
+        sections: [
+          {
+            title: "Testovací znění",
+            paragraphs: ["Obsah testovacího znění."],
+          },
+        ],
+        effectiveAt: "2000-01-01T00:00:00.000Z",
+      });
+      return;
+    }
+
     if (pathname === "/legal-documents/availability" && method === "GET") {
       if (testState.legalStatus === "error503") {
         sendJson(res, 503, {
@@ -360,6 +408,7 @@ const server = http.createServer(async (req, res) => {
             revision: "terms-test-v1",
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
+            contentHash: "a".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
@@ -367,6 +416,7 @@ const server = http.createServer(async (req, res) => {
             revision: "claims-test-v1",
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
+            contentHash: "b".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
@@ -374,6 +424,7 @@ const server = http.createServer(async (req, res) => {
             revision: "privacy-test-v1",
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
+            contentHash: "c".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
@@ -381,6 +432,7 @@ const server = http.createServer(async (req, res) => {
             revision: "prohibited-content-test-v1",
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
+            contentHash: "d".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
@@ -388,6 +440,7 @@ const server = http.createServer(async (req, res) => {
             revision: "retention-test-v1",
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
+            contentHash: "e".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
@@ -395,6 +448,7 @@ const server = http.createServer(async (req, res) => {
             revision: "photo-consent-test-v1",
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
+            contentHash: "f".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
@@ -404,6 +458,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- Payments capabilities ---
+    if (
+      /^\/automatic-quote-sessions\/[^/]+\/checkout\/retry-context$/.test(
+        pathname,
+      ) &&
+      method === "GET"
+    ) {
+      sendJson(res, 200, {
+        retryAllowed: false,
+        methods: [],
+        acceptedEvidence: null,
+      });
+      return;
+    }
+
     if (pathname === "/payments/capabilities" && method === "GET") {
       if (testState.legalStatus === "error503") {
         sendJson(res, 503, {

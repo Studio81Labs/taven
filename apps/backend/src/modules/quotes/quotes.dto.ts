@@ -56,6 +56,15 @@ export class CreateQuoteRequestDto {
   @ApiPropertyOptional({ type: Boolean })
   photoPublicationConsent?: boolean;
 
+  @ApiProperty({ type: String, maxLength: 100 })
+  privacyNoticeRevision!: string;
+
+  @ApiProperty({ type: Boolean })
+  privacyAcknowledged!: boolean;
+
+  @ApiPropertyOptional({ type: String, maxLength: 100 })
+  photoConsentRevision?: string;
+
   @ApiPropertyOptional({
     type: String,
     minLength: 43,
@@ -441,8 +450,13 @@ export class IssueOfferDto {
   })
   depositMinor!: number;
 
-  @ApiProperty({ type: "object", additionalProperties: true })
-  termsSnapshot!: Record<string, unknown>;
+  @ApiPropertyOptional({
+    type: "object",
+    additionalProperties: true,
+    description:
+      "Deprecated operator echo of terms text; new offers derive their immutable snapshot from the database revision.",
+  })
+  termsSnapshot?: Record<string, unknown>;
 
   @ApiProperty({ type: "object", additionalProperties: true })
   inputSnapshot!: Record<string, unknown>;
@@ -476,6 +490,24 @@ export class OfferIssuedDto {
 
   @ApiProperty({ type: String })
   termsRevision!: string;
+
+  @ApiProperty({ type: String })
+  claimPolicyRevision!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1 })
+  claimWindowDays!: number;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  legalTermsRevisionId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalTermsContentHash!: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  legalClaimsRevisionId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalClaimsContentHash!: string;
 
   @ApiProperty({ type: String })
   offerToken!: string;
@@ -617,10 +649,36 @@ export class OfferPreviewDto {
   termsRevision!: string;
 
   @ApiProperty({ type: String })
+  claimPolicyRevision!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1 })
+  claimWindowDays!: number;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  legalTermsRevisionId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalTermsContentHash!: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  legalClaimsRevisionId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalClaimsContentHash!: string;
+
+  @ApiProperty({ type: String })
   summary!: string;
 
   @ApiProperty({ type: "object", additionalProperties: true })
   termsSnapshot!: Record<string, unknown>;
+
+  @ApiProperty({
+    type: "object",
+    additionalProperties: true,
+    description:
+      "Immutable claims document content for the pinned claim-policy revision.",
+  })
+  claimsSnapshot!: Record<string, unknown>;
 
   @ApiProperty({ type: String })
   currency!: string;
@@ -674,7 +732,7 @@ export class OfferPreviewDto {
   promisedDate!: string | null;
 }
 
-export class AcceptOfferDto {
+class ExpectedOfferDto {
   @ApiProperty({
     type: "integer",
     minimum: 1,
@@ -691,7 +749,16 @@ export class AcceptOfferDto {
   termsRevision!: string;
 }
 
-export class RejectOfferDto extends AcceptOfferDto {
+export class AcceptOfferDto extends ExpectedOfferDto {
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      "Required as true for a fresh acceptance; omitted only for completed legacy replay.",
+  })
+  acknowledgeWithdrawalException?: boolean;
+}
+
+export class RejectOfferDto extends ExpectedOfferDto {
   @ApiPropertyOptional({
     type: String,
     maxLength: 2_000,

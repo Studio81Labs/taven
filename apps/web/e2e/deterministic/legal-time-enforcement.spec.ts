@@ -10,10 +10,10 @@ test.describe("Legal Time & Availability Enforcement", () => {
     page,
   }) => {
     await page.goto("/vop");
-    // Verify title and content rendered
-    await expect(page).toHaveTitle(/Obchodní podmínky/);
+    // Verify the immutable server-selected revision, not the bundled fallback.
+    await expect(page).toHaveTitle(/Test terms/);
     const heading = page.getByRole("heading", {
-      name: "Obchodní podmínky",
+      name: "Test terms",
       level: 1,
     });
     await expect(heading).toBeVisible();
@@ -74,15 +74,12 @@ test.describe("Legal Time & Availability Enforcement", () => {
     page,
   }) => {
     const routes = [
-      { path: "/vop", title: "Obchodní podmínky" },
-      { path: "/reklamace", title: "Reklamační řád" },
-      { path: "/ochrana-soukromi", title: "Zásady ochrany soukromí" },
-      { path: "/zakazany-obsah", title: "Pravidla pro zakázaný obsah" },
-      { path: "/uchovani-dat", title: "Pravidla uchování dat" },
-      {
-        path: "/fotografie-a-duvernost",
-        title: "Fotografie a důvěrnost modelů",
-      },
+      { path: "/vop", title: "Test terms" },
+      { path: "/reklamace", title: "Test claims" },
+      { path: "/ochrana-soukromi", title: "Test privacy" },
+      { path: "/zakazany-obsah", title: "Test prohibitedContent" },
+      { path: "/uchovani-dat", title: "Test retention" },
+      { path: "/fotografie-a-duvernost", title: "Test photoConsent" },
     ];
 
     for (const route of routes) {

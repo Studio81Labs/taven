@@ -6,6 +6,8 @@ export class LegalDocumentAvailabilityRecordDto {
     "draft" | "approved";
   @ApiProperty({ type: String, nullable: true, format: "date-time" })
   effectiveAt!: string | null;
+  @ApiProperty({ type: String, nullable: true, pattern: "^[a-f0-9]{64}$" })
+  contentHash!: string | null;
   @ApiProperty({ type: Boolean }) effective!: boolean;
 }
 

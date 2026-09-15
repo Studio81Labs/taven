@@ -10,13 +10,8 @@ export const QUOTE_PHOTO_UPLOADS_ENV =
   "TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED" as const;
 export const CHECKOUT_PAYMENT_FLOWS_ENV =
   "TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED" as const;
-export const CHECKOUT_CLAIM_POLICY_REVISION_ENV =
-  "TAVEN_CLAIM_POLICY_REVISION" as const;
 export const CHECKOUT_CLAIM_WINDOW_DAYS_ENV =
   "TAVEN_CLAIM_WINDOW_DAYS" as const;
-export const CHECKOUT_TERMS_REVISION_ENV = "TAVEN_TERMS_REVISION" as const;
-export const CHECKOUT_PHOTO_CONSENT_REVISION_ENV =
-  "TAVEN_PHOTO_CONSENT_REVISION" as const;
 
 const LAUNCH_APPROVAL_REQUIRED = "LAUNCH_APPROVAL_REQUIRED";
 
@@ -58,29 +53,23 @@ export function assertQuotePhotoUploadsEnabled(
 }
 
 export function assertCheckoutPaymentFlowsEnabled(
-  boundTermsRevision: string,
   env: NodeJS.ProcessEnv = process.env,
-): Readonly<{
-  claimPolicyRevision: string;
-  claimWindowDays: number;
-  termsRevision: string;
-}> {
+): Readonly<{ claimWindowDays: number }> {
+  assertCheckoutPaymentFlowEnabled(env);
+  return {
+    claimWindowDays: approvedCheckoutClaimWindowDays(env),
+  };
+}
+
+/** Retries use their immutable accepted Claim window, not the current setting. */
+export function assertCheckoutPaymentFlowEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
   if (!isExplicitlyEnabled(env, CHECKOUT_PAYMENT_FLOWS_ENV)) {
     throw launchApprovalRequired(
       "Checkout payment flows are unavailable until legal documents and provider launch inputs are approved",
     );
   }
-  const termsRevision = approvedCheckoutTermsRevision(env);
-  if (boundTermsRevision !== termsRevision) {
-    throw launchApprovalRequired(
-      "Checkout price binding does not use the approved terms revision",
-    );
-  }
-  return {
-    claimPolicyRevision: approvedCheckoutClaimPolicyRevision(env),
-    claimWindowDays: approvedCheckoutClaimWindowDays(env),
-    termsRevision,
-  };
 }
 
 export function assertCheckoutAcceptanceRevisionsCurrent(
@@ -157,9 +146,6 @@ export function checkoutPaymentLaunchInputsApproved(
 ): boolean {
   return (
     isExplicitlyEnabled(env, CHECKOUT_PAYMENT_FLOWS_ENV) &&
-    approvedCheckoutRevision(env[CHECKOUT_TERMS_REVISION_ENV]) !== null &&
-    approvedCheckoutRevision(env[CHECKOUT_CLAIM_POLICY_REVISION_ENV]) !==
-      null &&
     approvedCheckoutClaimWindowDaysOrNull(env) !== null
   );
 }
@@ -184,20 +170,12 @@ export function checkoutPaymentLegalDocuments(
   } catch {
     return null;
   }
-  const termsRevision = approvedCheckoutTermsRevision(env);
-  const claimPolicyRevision = approvedCheckoutClaimPolicyRevision(env);
-  if (
-    approvals.documents.terms.revision !== termsRevision ||
-    approvals.documents.claims.revision !== claimPolicyRevision
-  )
-    return null;
   return {
-    termsRevision,
-    claimPolicyRevision,
+    termsRevision: approvals.documents.terms.revision,
+    claimPolicyRevision: approvals.documents.claims.revision,
     photoConsentRevision:
       approvals.documents.photoConsent.effective &&
-      approvals.documents.photoConsent.revision ===
-        approvedCheckoutRevision(env[CHECKOUT_PHOTO_CONSENT_REVISION_ENV])
+      approvals.documents.photoConsent.revisionId !== null
         ? approvals.documents.photoConsent.revision
         : null,
   };
@@ -240,55 +218,13 @@ export function assertEffectiveQuoteRequestLegalDocuments(
 export function assertEffectiveCheckoutPhotoConsent(
   approvals: EvaluatedLegalApprovals,
   requestedRevision: string,
-  env: NodeJS.ProcessEnv = process.env,
 ): void {
   assertEffectiveLegalDocuments(approvals, ["photoConsent"]);
-  assertCheckoutPhotoConsentRevisionCurrent(requestedRevision, env);
   if (approvals.documents.photoConsent.revision !== requestedRevision) {
     throw launchApprovalRequired(
       "Checkout request does not use the effective photo-consent revision",
     );
   }
-}
-
-export function assertCheckoutPhotoConsentRevisionCurrent(
-  requestedRevision: string,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  const approvedRevision = approvedCheckoutRevision(
-    env[CHECKOUT_PHOTO_CONSENT_REVISION_ENV],
-  );
-  if (!approvedRevision || requestedRevision !== approvedRevision) {
-    throw launchApprovalRequired(
-      "Checkout request does not use the currently approved photo-consent revision",
-    );
-  }
-}
-
-export function approvedCheckoutTermsRevision(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const revision = approvedCheckoutRevision(env[CHECKOUT_TERMS_REVISION_ENV]);
-  if (!revision) {
-    throw launchApprovalRequired(
-      "Checkout payment flows require an explicit approved terms revision",
-    );
-  }
-  return revision;
-}
-
-export function approvedCheckoutClaimPolicyRevision(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const revision = approvedCheckoutRevision(
-    env[CHECKOUT_CLAIM_POLICY_REVISION_ENV],
-  );
-  if (!revision) {
-    throw launchApprovalRequired(
-      "Checkout payment flows require an explicit approved claim-policy revision",
-    );
-  }
-  return revision;
 }
 
 export function approvedCheckoutClaimWindowDays(
@@ -310,16 +246,4 @@ function approvedCheckoutClaimWindowDaysOrNull(
   if (!raw || !/^\d+$/.test(raw)) return null;
   const days = Number(raw);
   return Number.isSafeInteger(days) && days > 0 && days <= 3_650 ? days : null;
-}
-
-function approvedCheckoutRevision(value: string | undefined): string | null {
-  const revision = value?.trim();
-  if (
-    !revision ||
-    revision.length > 100 ||
-    /(?:^|[-_.\s])(draft|pending)(?:$|[-_.\s])/i.test(revision)
-  ) {
-    return null;
-  }
-  return revision;
 }

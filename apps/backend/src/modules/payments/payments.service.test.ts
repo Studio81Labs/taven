@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import {
-  CHECKOUT_CLAIM_POLICY_REVISION_ENV,
   CHECKOUT_CLAIM_WINDOW_DAYS_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
-  CHECKOUT_PHOTO_CONSENT_REVISION_ENV,
-  CHECKOUT_TERMS_REVISION_ENV,
 } from "../../launch-approval-gates";
 import {
   checkoutContactSnapshotMatches,
+  assertBalancePaymentLaunchApproved,
   PaymentsService,
   publicSiteUrl,
 } from "./payments.service";
@@ -46,6 +46,40 @@ describe("checkout contact snapshot compatibility", () => {
   });
 });
 
+describe("balance payment evidence", () => {
+  const accepted = {
+    acceptedOrderPriceBindingId: "binding-id",
+    acceptedTermsRevision: "terms-v1",
+    acceptedClaimPolicyRevision: "claims-v1",
+    acceptedClaimWindowDays: 30,
+    withdrawalExceptionAcknowledgedAt: new Date(),
+    acceptedPriceBinding: {
+      id: "binding-id",
+      legalTermsRevisionId: "terms-id",
+      legalTermsRevision: { revisionCode: "terms-v1" },
+      priceSnapshot: { priceList: { termsRevision: "legacy-terms-v0" } },
+    },
+  };
+
+  it("rejects incomplete accepted claim evidence", () => {
+    expect(() =>
+      assertBalancePaymentLaunchApproved({
+        ...accepted,
+        acceptedClaimPolicyRevision: null,
+      }),
+    ).toThrow(ConflictException);
+  });
+
+  it("rejects terms evidence that does not match the accepted binding", () => {
+    expect(() =>
+      assertBalancePaymentLaunchApproved({
+        ...accepted,
+        acceptedTermsRevision: "terms-v2",
+      }),
+    ).toThrow("accepted terms do not match the accepted binding");
+  });
+});
+
 describe("payment capabilities", () => {
   it("hides provider methods while checkout is disabled", async () => {
     const capabilities = vi.fn().mockResolvedValue({
@@ -74,14 +108,6 @@ describe("payment capabilities", () => {
       { [CHECKOUT_PAYMENT_FLOWS_ENV]: "true" },
       {
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-        [CHECKOUT_TERMS_REVISION_ENV]: "terms-pending",
-        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
-        [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
-      },
-      {
-        [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
-        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-draft-v1",
       },
     ]) {
       await expect(service.capabilities(env)).resolves.toEqual({
@@ -96,8 +122,6 @@ describe("payment capabilities", () => {
     await expect(
       service.capabilities({
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
-        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
         [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
       }),
     ).resolves.toEqual({
@@ -106,7 +130,7 @@ describe("payment capabilities", () => {
       methods: ["CARD", "BANK_TRANSFER"],
       legalDocuments: {
         claimPolicyRevision: "claims-v1-approved",
-        photoConsentRevision: null,
+        photoConsentRevision: "photos-v1-approved",
         termsRevision: "terms-v1-approved",
       },
     });
@@ -131,8 +155,6 @@ describe("payment capabilities", () => {
     await expect(
       service.capabilities({
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
-        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
         [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
       }),
     ).resolves.toEqual({
@@ -162,16 +184,189 @@ describe("payment capabilities", () => {
     await expect(
       service.capabilities({
         [CHECKOUT_PAYMENT_FLOWS_ENV]: "true",
-        [CHECKOUT_TERMS_REVISION_ENV]: "terms-v1-approved",
-        [CHECKOUT_CLAIM_POLICY_REVISION_ENV]: "claims-v1-approved",
         [CHECKOUT_CLAIM_WINDOW_DAYS_ENV]: "30",
-        [CHECKOUT_PHOTO_CONSENT_REVISION_ENV]: "photos-v1-approved",
       }),
     ).resolves.toMatchObject({
       legalDocuments: { photoConsentRevision: "photos-v1-approved" },
     });
   });
 });
+
+describe("checkout retry context", () => {
+  it("uses frozen accepted evidence after current publications rotate", async () => {
+    vi.stubEnv(CHECKOUT_PAYMENT_FLOWS_ENV, "true");
+    vi.stubEnv(CHECKOUT_CLAIM_WINDOW_DAYS_ENV, "30");
+    const token = "a".repeat(43);
+    const service = new PaymentsService(
+      {
+        $transaction: vi.fn(async (callback) =>
+          callback({
+            $queryRaw: vi.fn().mockResolvedValue([{ observed_at: new Date() }]),
+            quoteSession: {
+              findUnique: vi.fn().mockResolvedValue(retrySession(token)),
+            },
+            payment: {
+              findMany: vi.fn().mockResolvedValue([
+                {
+                  orderPriceBindingId: "00000000-0000-4000-8000-000000000010",
+                  role: "FULL",
+                  status: "FAILED",
+                },
+              ]),
+            },
+          }),
+        ),
+        $queryRaw: vi.fn().mockResolvedValue([{ observed_at: new Date() }]),
+        quoteSession: {
+          findUnique: vi.fn().mockResolvedValue(retrySession(token)),
+        },
+        payment: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              orderPriceBindingId: "00000000-0000-4000-8000-000000000010",
+              role: "FULL",
+              status: "FAILED",
+            },
+          ]),
+        },
+      } as never,
+      {
+        capabilities: vi.fn().mockResolvedValue({
+          provider: "sandbox",
+          methods: ["CARD", "BANK_TRANSFER"],
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      undefined,
+    );
+
+    await expect(
+      service.checkoutRetryContext(
+        "00000000-0000-4000-8000-000000000001",
+        `Bearer ${token}`,
+      ),
+    ).resolves.toMatchObject({
+      retryAllowed: true,
+      methods: ["CARD", "BANK_TRANSFER"],
+      acceptedEvidence: {
+        termsRevision: "terms-v1",
+        claimPolicyRevision: "claims-v1",
+        legacy: false,
+      },
+    });
+  });
+
+  it("fails closed when an accepted database-backed order lacks its ledger", async () => {
+    const token = "b".repeat(43);
+    const session = retrySession(token);
+    session.automaticOrderOrigin.order.legalAcceptances = [];
+    const service = new PaymentsService(
+      {
+        $transaction: vi.fn(async (callback) =>
+          callback({
+            quoteSession: { findUnique: vi.fn().mockResolvedValue(session) },
+            payment: { findMany: vi.fn().mockResolvedValue([]) },
+          }),
+        ),
+        quoteSession: { findUnique: vi.fn().mockResolvedValue(session) },
+        payment: { findMany: vi.fn().mockResolvedValue([]) },
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      undefined,
+    );
+
+    const error = await service
+      .checkoutRetryContext(
+        "00000000-0000-4000-8000-000000000001",
+        `Bearer ${token}`,
+      )
+      .catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect((error as ServiceUnavailableException).getStatus()).toBe(503);
+  });
+});
+
+function retrySession(token: string) {
+  const now = new Date(Date.now() + 60_000);
+  const bindingId = "00000000-0000-4000-8000-000000000010";
+  return {
+    publicTokenHash: createHash("sha256").update(token).digest("hex"),
+    status: "CONVERTED",
+    expiresAt: now,
+    automaticOrderOrigin: {
+      order: {
+        id: "00000000-0000-4000-8000-000000000020",
+        status: "QUOTED",
+        acceptedOrderPriceBindingId: bindingId,
+        acceptedTermsRevision: "terms-v1",
+        acceptedClaimPolicyRevision: "claims-v1",
+        acceptedClaimWindowDays: 30,
+        withdrawalExceptionAcknowledgedAt: new Date(),
+        photoPublicationConsentGrantedAt: null,
+        photoPublicationConsentRevision: null,
+        automaticQuoteDraft: {
+          configurationRevision: 1,
+          expressRequested: false,
+          selectedDeliveryDestinationId: "destination-1",
+          selectedDeliveryDestination: { id: "destination-1" },
+        },
+        activePriceBinding: {
+          orderPriceBinding: {
+            id: bindingId,
+            legalTermsRevisionId: "terms-revision-id",
+            invalidatedAt: null,
+            deliveryDestinationId: "destination-1",
+            shipmentPlans: [],
+            priceSnapshot: {
+              inputSnapshot: {
+                automaticQuote: {
+                  configurationRevision: 1,
+                  expressRequested: false,
+                },
+              },
+              priceList: { termsRevision: "legacy-terms-v0" },
+            },
+          },
+        },
+        legalAcceptances: [
+          {
+            purpose: "TERMS_ACCEPTED",
+            revisionId: "terms-revision-id",
+            revision: {
+              revisionCode: "terms-v1",
+              contentHash: "a".repeat(64),
+              document: { key: "terms" },
+            },
+          },
+          {
+            purpose: "CLAIM_POLICY_ACCEPTED",
+            revisionId: "claims-revision-id",
+            revision: {
+              revisionCode: "claims-v1",
+              contentHash: "b".repeat(64),
+              document: { key: "claims" },
+            },
+          },
+        ],
+        payments: [
+          {
+            orderPriceBindingId: bindingId,
+            role: "FULL",
+            status: "FAILED",
+          },
+        ],
+        phases: [{ status: "QUOTED" }],
+      },
+    },
+  };
+}
 
 function legalApprovals() {
   const documents = Object.fromEntries(
@@ -186,8 +381,10 @@ function legalApprovals() {
       key,
       {
         revision,
+        revisionId: `${key}-id`,
         status: "approved" as const,
         effectiveAt: "2026-01-01T00:00:00.000Z",
+        contentHash: "a".repeat(64),
         effective: true,
       },
     ]),

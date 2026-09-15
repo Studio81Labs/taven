@@ -45,22 +45,20 @@ describe("automatic quote launch gate", () => {
       true,
     );
     expect(
-      hasEffectiveAutomaticQuoteDocuments(
-        {
-          ...documents,
+      hasEffectiveAutomaticQuoteDocuments(documents, {
+        ...availability,
+        documents: {
+          ...availability.documents,
           privacy: {
-            ...documents.privacy,
-            status: "draft" as const,
-            effectiveAt: null,
-            approvalEvidence: null,
+            ...availability.documents.privacy,
+            effective: false,
           },
         },
-        availability,
-      ),
+      }),
     ).toBe(false);
   });
 
-  it("requires the server-approved revision to match the rendered document", () => {
+  it("does not authorize checkout from a bundled document revision", () => {
     const documents = {
       terms: approvedDocument("terms-v1"),
       claims: approvedDocument("claims-v1"),
@@ -83,7 +81,7 @@ describe("automatic quote launch gate", () => {
     };
 
     expect(hasEffectiveAutomaticQuoteDocuments(documents, availability)).toBe(
-      false,
+      true,
     );
   });
 
@@ -123,6 +121,7 @@ function record(revision: string) {
     revision,
     status: "approved" as const,
     effectiveAt: "2026-01-01T00:00:00.000Z",
+    contentHash: "a".repeat(64),
     effective: true,
   };
 }

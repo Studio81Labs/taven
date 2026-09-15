@@ -720,7 +720,10 @@ export class PersistenceFactory {
   }): Promise<void> {
     const t = createdAt;
     const quoteIssuedAt = new Date(
-      Math.min(t.getTime(), input.quoteExpiresAt.getTime() - 1),
+      Math.min(
+        input.orderOrigin === "INDIVIDUAL" ? Date.now() : t.getTime(),
+        input.quoteExpiresAt.getTime() - 1,
+      ),
     );
     const quoteRequestCreatedAt = quoteIssuedAt;
     const snapshotId = this.id(`${input.name}:price-snapshot`);
@@ -774,7 +777,7 @@ export class PersistenceFactory {
     );
     if (input.customerOwned) {
       await this.sql.query(
-        "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, created_at, updated_at) VALUES ($1,$2,$3,'NEW',$4,$4)",
+        "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at) VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)",
         [
           input.quoteRequestId,
           input.quoteSessionId,
@@ -791,13 +794,39 @@ export class PersistenceFactory {
         [input.quoteRequestId, t],
       );
       await this.sql.query(
-        "INSERT INTO quotes (id, quote_request_id, customer_id, expires_at, issued_at, created_at) VALUES ($1,$2,$3,$4,$5,$5)",
+        `INSERT INTO quotes
+           (id, quote_request_id, customer_id, terms_revision,
+            issuance_command_key,
+            legal_terms_revision_id, legal_claims_revision_id,
+            claim_window_days, terms_snapshot, expires_at, issued_at, created_at)
+         VALUES
+          ($1,$2,$3,'terms-v1','legacy-import',
+            CASE WHEN $6 THEN (SELECT revision.id
+                               FROM legal_document_revisions revision
+                               JOIN legal_documents document ON document.id = revision.document_id
+                               WHERE document.key = 'terms' AND revision.revision_code = 'terms-v1') END,
+            CASE WHEN $6 THEN (SELECT revision.id
+                               FROM legal_document_revisions revision
+                               JOIN legal_documents document ON document.id = revision.document_id
+                               WHERE document.key = 'claims' AND revision.revision_code = 'claim-policy-v1') END,
+            CASE WHEN $6 THEN 30 END,
+            CASE WHEN $6 THEN (SELECT jsonb_build_object(
+              'contentVersion', revision.content_version,
+              'title', revision.title,
+              'summary', revision.summary,
+              'sections', revision.sections,
+              'contentHash', revision.content_hash
+            ) FROM legal_document_revisions revision
+            JOIN legal_documents document ON document.id = revision.document_id
+            WHERE document.key = 'terms' AND revision.revision_code = 'terms-v1') ELSE '{}'::jsonb END,
+            $4,$5,$5)`,
         [
           input.quoteId,
           input.quoteRequestId,
           input.customerId,
           input.quoteExpiresAt,
           quoteIssuedAt,
+          input.orderOrigin === "INDIVIDUAL",
         ],
       );
       for (const [index, item] of input.resolvedItems.entries()) {
@@ -918,7 +947,16 @@ export class PersistenceFactory {
     }
     await input.beforeOrderPricing?.();
     await this.sql.query(
-      "INSERT INTO order_price_bindings (id, order_id, price_snapshot_id, delivery_destination_id, created_at) VALUES ($1,$2,$3,$4,$5)",
+      `INSERT INTO order_price_bindings
+         (id, order_id, price_snapshot_id, delivery_destination_id,
+          legal_terms_revision_id, created_at)
+       VALUES
+         ($1,$2,$3,$4,
+          (SELECT revision.id
+           FROM legal_document_revisions revision
+           JOIN legal_documents document ON document.id = revision.document_id
+           WHERE document.key = 'terms' AND revision.revision_code = 'terms-v1'),
+          $5)`,
       [
         input.orderPriceBindingId,
         input.orderId,
@@ -927,7 +965,7 @@ export class PersistenceFactory {
         t,
       ],
     );
-    if (input.includeActivePriceBinding) {
+    if (input.includeActivePriceBinding || input.orderOrigin === "INDIVIDUAL") {
       await this.sql.query(
         "INSERT INTO order_active_price_bindings (order_id, order_price_binding_id) VALUES ($1,$2)",
         [input.orderId, input.orderPriceBindingId],
@@ -1150,6 +1188,35 @@ export class PersistenceFactory {
         "INSERT INTO individual_order_origins (order_id, quote_id) VALUES ($1,$2)",
         [input.orderId, input.quoteId],
       );
+      await this.sql.query(
+        `UPDATE orders
+         SET accepted_order_price_binding_id = $2,
+             accepted_terms_revision = 'terms-v1',
+             accepted_claim_policy_revision = 'claim-policy-v1',
+             accepted_claim_window_days = 30,
+             withdrawal_exception_acknowledged_at = $3,
+             updated_at = $3
+         WHERE id = $1`,
+        [input.orderId, input.orderPriceBindingId, t],
+      );
+      await this.sql.query(
+        `INSERT INTO legal_acceptances
+           (id, order_id, revision_id, purpose, accepted_at, command_identity)
+         SELECT gen_random_uuid(), $1, revision.id, purpose, clock_timestamp(), $2
+         FROM (
+           VALUES
+             ('terms'::text, 'TERMS_ACCEPTED'::legal_acceptance_purpose),
+             ('claims'::text, 'CLAIM_POLICY_ACCEPTED'::legal_acceptance_purpose)
+         ) AS evidence(document_key, purpose)
+         JOIN legal_documents document ON document.key = evidence.document_key
+         JOIN legal_document_revisions revision
+           ON revision.document_id = document.id
+          AND revision.revision_code = CASE evidence.document_key
+            WHEN 'terms' THEN 'terms-v1'
+            WHEN 'claims' THEN 'claim-policy-v1'
+          END`,
+        [input.orderId, `${input.name}:individual-acceptance`],
+      );
       for (const [index] of input.orderItemIds.entries()) {
         await this.sql.query(
           "INSERT INTO individual_order_item_sources (order_item_id, quote_item_id) VALUES ($1,$2)",
@@ -1215,6 +1282,7 @@ export class PersistenceFactory {
                accepted_claim_window_days = 30,
                withdrawal_exception_acknowledged_at = $2,
                checkout_contact_snapshot = jsonb_build_object(
+                 'version', 2,
                  'email', $4::text,
                  'fullName', 'Test customer'
                ),
@@ -1226,6 +1294,10 @@ export class PersistenceFactory {
             input.orderPriceBindingId,
             `${this.hash(input.name).slice(0, 24)}@example.test`,
           ],
+        );
+        await this.recordOrderLegalAcceptance(
+          input.orderId,
+          `${input.name}:checkout-acceptance`,
         );
       }
       await this.sql.query(
@@ -1315,6 +1387,7 @@ export class PersistenceFactory {
            accepted_claim_window_days = 30,
            withdrawal_exception_acknowledged_at = $2,
            checkout_contact_snapshot = jsonb_build_object(
+             'version', 2,
              'email', 'test@example.test',
              'fullName', 'Test customer'
            ),
@@ -1327,6 +1400,36 @@ export class PersistenceFactory {
          AND accepted_claim_window_days IS NULL
          AND withdrawal_exception_acknowledged_at IS NULL`,
       [foundation.orderId, acknowledgedAt, foundation.orderPriceBindingId],
+    );
+    await this.recordOrderLegalAcceptance(
+      foundation.orderId,
+      `fixture:${foundation.orderId}:checkout-acceptance`,
+    );
+  }
+
+  private async recordOrderLegalAcceptance(
+    orderId: string,
+    commandIdentity: string,
+  ): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO legal_acceptances
+         (id, order_id, revision_id, purpose, accepted_at, command_identity)
+       SELECT gen_random_uuid(), $1, revision.id, evidence.purpose, clock_timestamp(), $2
+       FROM (
+         VALUES
+           ('terms'::text, 'TERMS_ACCEPTED'::legal_acceptance_purpose),
+           ('claims'::text, 'CLAIM_POLICY_ACCEPTED'::legal_acceptance_purpose)
+       ) AS evidence(document_key, purpose)
+       JOIN legal_documents document ON document.key = evidence.document_key
+       JOIN legal_document_revisions revision
+         ON revision.document_id = document.id
+        AND revision.revision_code = CASE evidence.document_key
+          WHEN 'terms' THEN 'terms-v1'
+          WHEN 'claims' THEN 'claim-policy-v1'
+        END
+       ON CONFLICT ("order_id", "purpose") WHERE "order_id" IS NOT NULL
+       DO NOTHING`,
+      [orderId, commandIdentity],
     );
   }
 

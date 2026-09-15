@@ -23,6 +23,7 @@ export type LegalAvailability = Readonly<{
         revision: string;
         status: "draft" | "approved";
         effectiveAt: string | null;
+        contentHash?: string | null;
         effective: boolean;
       }>
     >
@@ -45,6 +46,8 @@ export function isLegalAvailability(
       (document.status === "draft" || document.status === "approved") &&
       (typeof document.effectiveAt === "string" ||
         document.effectiveAt === null) &&
+      (typeof document.contentHash === "string" ||
+        document.contentHash === null) &&
       typeof document.effective === "boolean"
     );
   });
@@ -52,17 +55,16 @@ export function isLegalAvailability(
 
 export function isServerVerifiedLegalDocument(
   key: LegalDocumentKey,
-  local: LegalDocument,
+  _local: LegalDocument,
   availability: LegalAvailability | null | undefined,
 ): boolean {
-  if (!availability || local.status !== "approved") return false;
+  if (!availability) return false;
   const record = availability.documents[key];
   return Boolean(
     record &&
-    record.revision === local.id &&
     record.status === "approved" &&
     record.effective &&
-    record.effectiveAt === local.effectiveAt,
+    record.contentHash,
   );
 }
 

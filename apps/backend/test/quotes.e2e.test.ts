@@ -14,6 +14,7 @@ import type { IssueOfferDto } from "../src/modules/quotes/quotes.dto";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
 
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 const quoteCapabilityKey =
@@ -38,6 +39,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let prisma: PrismaService;
   let quotes: QuotesService;
   let priceListId: string;
+  let termsSnapshot: Record<string, unknown>;
+  let claimsSnapshot: Record<string, unknown>;
   let defaultOfferItem: Record<string, unknown>;
   let operatorCookie: string;
   let operatorCsrfToken: string;
@@ -96,6 +99,40 @@ describe("QuoteRequest and tokenized individual offers", () => {
       orderBy: { createdAt: "asc" },
     });
     priceListId = priceList.id;
+    const termsRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { revisionCode: e2eLegalRevisionCodes.terms },
+      select: {
+        contentVersion: true,
+        title: true,
+        summary: true,
+        sections: true,
+        contentHash: true,
+      },
+    });
+    termsSnapshot = {
+      contentVersion: termsRevision.contentVersion,
+      title: termsRevision.title,
+      summary: termsRevision.summary,
+      sections: termsRevision.sections,
+      contentHash: termsRevision.contentHash,
+    };
+    const claimsRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { revisionCode: e2eLegalRevisionCodes.claims },
+      select: {
+        contentVersion: true,
+        title: true,
+        summary: true,
+        sections: true,
+        contentHash: true,
+      },
+    });
+    claimsSnapshot = {
+      contentVersion: claimsRevision.contentVersion,
+      title: claimsRevision.title,
+      summary: claimsRevision.summary,
+      sections: claimsRevision.sections,
+      contentHash: claimsRevision.contentHash,
+    };
     defaultOfferItem = (
       await createModelOfferItem("default-offer-item", "NONE")
     ).item;
@@ -150,10 +187,36 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(issued.response.status).toBe(201);
 
+    for (const acknowledgeWithdrawalException of [undefined, false]) {
+      const rejected = await apiJson(`offers/${issued.body.quoteId}/accept`, {
+        method: "POST",
+        headers: {
+          ...bearer(issued.body.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": key(
+            `launch-gate-withdrawal-${String(acknowledgeWithdrawalException)}`,
+          ),
+        },
+        body: JSON.stringify({
+          version: issued.body.version,
+          termsRevision: issued.body.termsRevision,
+          ...(acknowledgeWithdrawalException === undefined
+            ? {}
+            : { acknowledgeWithdrawalException }),
+        }),
+      });
+      expect(rejected.response.status).toBe(400);
+    }
+    expect(
+      await prisma.individualOrderOrigin.count({
+        where: { quoteId: issued.body.quoteId },
+      }),
+    ).toBe(0);
+
     const configuredTermsRevision = process.env.TAVEN_TERMS_REVISION;
     process.env.TAVEN_TERMS_REVISION = `${issued.body.termsRevision}-next`;
     try {
-      const refused = await apiJson(`offers/${issued.body.quoteId}/accept`, {
+      const accepted = await apiJson(`offers/${issued.body.quoteId}/accept`, {
         method: "POST",
         headers: {
           ...bearer(issued.body.offerToken),
@@ -163,12 +226,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
         body: JSON.stringify({
           version: issued.body.version,
           termsRevision: issued.body.termsRevision,
+          acknowledgeWithdrawalException: true,
         }),
       });
-      expect(refused.response.status).toBe(503);
-      expect(refused.body).toMatchObject({
-        code: "LAUNCH_APPROVAL_REQUIRED",
-      });
+      expect(accepted.response.status).toBe(200);
     } finally {
       if (configuredTermsRevision === undefined) {
         delete process.env.TAVEN_TERMS_REVISION;
@@ -191,7 +252,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         await prisma.individualOrderOrigin.count({
           where: { quoteId: issued.body.quoteId },
         }),
-      ).toBe(0);
+      ).toBe(1);
     } finally {
       process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = configured ?? "true";
     }
@@ -682,6 +743,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const preview = await apiJson<{
       version: number;
       termsRevision: string;
+      claimPolicyRevision: string;
+      claimsSnapshot: Record<string, unknown>;
       contractTotalMinor: number;
       items: Array<Record<string, unknown>>;
       deliveryDestination: Record<string, unknown>;
@@ -695,12 +758,14 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(preview.body).toMatchObject({
       version: 1,
       termsRevision: issued.body.termsRevision,
+      claimPolicyRevision: e2eLegalRevisionCodes.claims,
       contractTotalMinor: 110_000,
       taxRegime: "NON_VAT_PAYER",
       vatRateBasisPoints: 0,
       netAmountMinor: 110_000,
       vatAmountMinor: 0,
     });
+    expect(preview.body.claimsSnapshot).toEqual(claimsSnapshot);
     expect(preview.body.items).toEqual([
       {
         ordinal: 0,
@@ -1093,6 +1158,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         body: JSON.stringify({
           version: issued.body.version,
           termsRevision: issued.body.termsRevision,
+          acknowledgeWithdrawalException: true,
         }),
       },
     );
@@ -1259,13 +1325,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).resolves.toBe(itemCount);
   });
 
-  it("rejects a non-canonical price-list terms revision", async () => {
+  it("uses the effective legal revision instead of price-list terms metadata", async () => {
     const selectedPriceList = await prisma.priceList.create({
       data: {
         revision: `quote-e2e-spaced-terms-${randomUUID()}`,
         termsRevision: "  terms-spaced-v1  ",
         currency: "CZK",
         parameters: {
+          sellerTaxPolicy: {
+            regime: "NON_VAT_PAYER",
+            vatRateBasisPoints: 0,
+          },
           balance_payment_days: 7,
           balance_timeout_earned_component_kinds: ["ITEM_PRODUCTION"],
         },
@@ -1290,13 +1360,61 @@ describe("QuoteRequest and tokenized individual offers", () => {
       defaultItems(),
       selectedPriceList.id,
     );
-    expect(issued.response.status).toBe(400);
-    expect(issued.body).toMatchObject({
-      message: "priceListId has a non-canonical terms revision",
+    expect(issued.response.status).toBe(201);
+    expect(issued.body.termsRevision).toBe(e2eLegalRevisionCodes.terms);
+  });
+
+  it("rejects a quote whose terms code differs from its bound legal revision", async () => {
+    const created = await quotes.createRequest(
+      requestInput("mismatched-legal-terms"),
+      "198.51.100.53",
+      key("mismatched-legal-terms-create"),
+    );
+    await quotes.beginReview(
+      operator,
+      created.requestId,
+      key("mismatched-legal-terms-review"),
+    );
+    await issueOffer(
+      created.requestId,
+      key("mismatched-legal-terms-valid-offer"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
+    const request = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: created.requestId },
+      select: { customerId: true },
     });
+    const legalRevisions = await prisma.legalDocumentRevision.findMany({
+      where: {
+        revisionCode: {
+          in: [e2eLegalRevisionCodes.terms, e2eLegalRevisionCodes.claims],
+        },
+      },
+      select: { id: true, revisionCode: true },
+    });
+    const termsRevision = legalRevisions.find(
+      (revision) => revision.revisionCode === e2eLegalRevisionCodes.terms,
+    );
+    const claimsRevision = legalRevisions.find(
+      (revision) => revision.revisionCode === e2eLegalRevisionCodes.claims,
+    );
+    if (!termsRevision || !claimsRevision)
+      throw new Error("E2E legal revisions are unavailable");
     await expect(
-      prisma.quote.count({ where: { quoteRequestId: created.requestId } }),
-    ).resolves.toBe(0);
+      prisma.$executeRaw`
+        INSERT INTO "quotes" (
+          "id", "quote_request_id", "customer_id", "terms_revision",
+          "legal_terms_revision_id", "legal_claims_revision_id", "claim_window_days",
+          "expires_at", "issued_at", "created_at"
+        ) VALUES (
+          ${randomUUID()}::uuid, ${created.requestId}::uuid, ${request.customerId}::uuid,
+          'mismatched-terms-v1', ${termsRevision.id}::uuid, ${claimsRevision.id}::uuid, 30,
+          clock_timestamp() + interval '1 hour', clock_timestamp(), clock_timestamp()
+        )
+      `,
+    ).rejects.toThrow(
+      /Quote terms revision must match its legal terms revision/,
+    );
   });
 
   it("rejects a current offer idempotently and prevents later acceptance", async () => {
@@ -1449,7 +1567,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         netAmountMinor: 110_000,
         vatAmountMinor: 0,
         depositMinor: 33_000,
-        termsSnapshot: { revisionAcceptedByOffer: true },
+        termsSnapshot,
         inputSnapshot: { operatorEstimate: "manual-v0" },
         deliveryDestination: defaultDeliveryDestination(),
         shipmentPlans: defaultShipmentPlans(),
@@ -2059,6 +2177,50 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
+  it("requires immutable legal evidence for direct quote-request writes", async () => {
+    await expect(
+      prisma.quoteRequest.create({
+        data: {
+          publicReference: `mp-${randomUUID()}`,
+          description: "Direct write without privacy evidence",
+          currentStateCommandKey: key("direct-without-privacy"),
+        },
+      }),
+    ).rejects.toThrow(
+      "Quote request requires immutable privacy acknowledgement evidence",
+    );
+
+    const privacyRevision = await prisma.legalDocumentRevision.findFirstOrThrow(
+      {
+        where: { revisionCode: e2eLegalRevisionCodes.privacy },
+        select: { id: true },
+      },
+    );
+    await expect(
+      prisma.$transaction(async (transaction) => {
+        const request = await transaction.quoteRequest.create({
+          data: {
+            publicReference: `mphoto-${randomUUID()}`,
+            description: "Direct write without photo consent evidence",
+            photoPublicationConsentGrantedAt: new Date(),
+            currentStateCommandKey: key("direct-photo-without-evidence"),
+          },
+        });
+        await transaction.legalAcceptance.create({
+          data: {
+            quoteRequestId: request.id,
+            revisionId: privacyRevision.id,
+            purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
+            acceptedAt: new Date(),
+            commandIdentity: key("direct-photo-without-evidence"),
+          },
+        });
+      }),
+    ).rejects.toThrow(
+      "Quote request photo consent requires matching immutable legal acceptance evidence",
+    );
+  });
+
   function requestInput(scope: string) {
     return {
       description: `A detailed individual quote request for ${scope}`,
@@ -2071,6 +2233,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
         phone: "+420123456789",
       },
       attribution: { channel: "unknown", source: "e2e" },
+      privacyAcknowledged: true,
+      privacyNoticeRevision: e2eLegalRevisionCodes.privacy,
     };
   }
 
@@ -2214,7 +2378,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
           options.netAmountMinor ?? options.contractTotalMinor ?? 110_000,
         vatAmountMinor: options.vatAmountMinor ?? 0,
         depositMinor: options.depositMinor ?? 33_000,
-        termsSnapshot: { revisionAcceptedByOffer: true },
+        termsSnapshot,
         inputSnapshot: { operatorEstimate: "manual-v0" },
         deliveryDestination:
           options.deliveryDestination ?? defaultDeliveryDestination(),
@@ -2344,6 +2508,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       body: JSON.stringify({
         version: issued.version,
         termsRevision: issued.termsRevision,
+        acknowledgeWithdrawalException: true,
       }),
     });
   }

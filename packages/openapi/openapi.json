@@ -1,6 +1,66 @@
 {
   "components": {
     "schemas": {
+      "AcceptedCheckoutEvidenceDto": {
+        "properties": {
+          "acceptedOrderPriceBindingId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "claimPolicyRevision": {
+            "type": "string"
+          },
+          "claims": {
+            "$ref": "#/components/schemas/LegalVersionReferenceDto"
+          },
+          "claimWindowDays": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "legacy": {
+            "type": "boolean"
+          },
+          "photoConsent": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalVersionReferenceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "photoConsentRevision": {
+            "nullable": true,
+            "type": "string"
+          },
+          "photoPublicationConsent": {
+            "type": "boolean"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/LegalVersionReferenceDto"
+          },
+          "termsRevision": {
+            "type": "string"
+          },
+          "withdrawalExceptionAcknowledged": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acceptedOrderPriceBindingId",
+          "termsRevision",
+          "claimPolicyRevision",
+          "claimWindowDays",
+          "withdrawalExceptionAcknowledged",
+          "photoPublicationConsent",
+          "photoConsentRevision",
+          "legacy",
+          "terms",
+          "claims",
+          "photoConsent"
+        ],
+        "type": "object"
+      },
       "AcceptedOfferDto": {
         "properties": {
           "orderId": {
@@ -26,6 +86,10 @@
       },
       "AcceptOfferDto": {
         "properties": {
+          "acknowledgeWithdrawalException": {
+            "description": "Required as true for a fresh acceptance; omitted only for completed legacy replay.",
+            "type": "boolean"
+          },
           "termsRevision": {
             "maxLength": 100,
             "minLength": 1,
@@ -1744,6 +1808,38 @@
         ],
         "type": "object"
       },
+      "CheckoutRetryContextDto": {
+        "properties": {
+          "acceptedEvidence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AcceptedCheckoutEvidenceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "methods": {
+            "items": {
+              "enum": [
+                "CARD",
+                "BANK_TRANSFER"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "retryAllowed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "retryAllowed",
+          "methods",
+          "acceptedEvidence"
+        ],
+        "type": "object"
+      },
       "ClaimReprintJobDto": {
         "properties": {
           "candidateResourceEstimateId": {
@@ -2516,8 +2612,19 @@
             "additionalProperties": true,
             "type": "object"
           },
+          "photoConsentRevision": {
+            "maxLength": 100,
+            "type": "string"
+          },
           "photoPublicationConsent": {
             "type": "boolean"
+          },
+          "privacyAcknowledged": {
+            "type": "boolean"
+          },
+          "privacyNoticeRevision": {
+            "maxLength": 100,
+            "type": "string"
           },
           "purpose": {
             "maxLength": 2000,
@@ -2531,7 +2638,9 @@
         },
         "required": [
           "description",
-          "contact"
+          "contact",
+          "privacyNoticeRevision",
+          "privacyAcknowledged"
         ],
         "type": "object"
       },
@@ -4226,6 +4335,7 @@
           },
           "termsSnapshot": {
             "additionalProperties": true,
+            "description": "Deprecated operator echo of terms text; new offers derive their immutable snapshot from the database revision.",
             "type": "object"
           },
           "vatAmountMinor": {
@@ -4249,7 +4359,6 @@
           "netAmountMinor",
           "vatAmountMinor",
           "depositMinor",
-          "termsSnapshot",
           "inputSnapshot",
           "deliveryDestination",
           "shipmentPlans",
@@ -4390,6 +4499,11 @@
       },
       "LegalDocumentAvailabilityRecordDto": {
         "properties": {
+          "contentHash": {
+            "nullable": true,
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
           "effective": {
             "type": "boolean"
           },
@@ -4413,6 +4527,7 @@
           "revision",
           "status",
           "effectiveAt",
+          "contentHash",
           "effective"
         ],
         "type": "object"
@@ -4778,6 +4893,26 @@
           "contentHash",
           "createdAt",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "LegalVersionReferenceDto": {
+        "properties": {
+          "contentHash": {
+            "nullable": true,
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "revision",
+          "contentHash"
         ],
         "type": "object"
       },
@@ -5548,8 +5683,31 @@
       },
       "OfferIssuedDto": {
         "properties": {
+          "claimPolicyRevision": {
+            "type": "string"
+          },
+          "claimWindowDays": {
+            "minimum": 1,
+            "type": "integer"
+          },
           "expiresAt": {
             "format": "date-time",
+            "type": "string"
+          },
+          "legalClaimsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalClaimsRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "legalTermsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalTermsRevisionId": {
+            "format": "uuid",
             "type": "string"
           },
           "offerToken": {
@@ -5572,6 +5730,12 @@
           "quoteId",
           "version",
           "termsRevision",
+          "claimPolicyRevision",
+          "claimWindowDays",
+          "legalTermsRevisionId",
+          "legalTermsContentHash",
+          "legalClaimsRevisionId",
+          "legalClaimsContentHash",
           "offerToken",
           "expiresAt"
         ],
@@ -5655,6 +5819,18 @@
       },
       "OfferPreviewDto": {
         "properties": {
+          "claimPolicyRevision": {
+            "type": "string"
+          },
+          "claimsSnapshot": {
+            "additionalProperties": true,
+            "description": "Immutable claims document content for the pinned claim-policy revision.",
+            "type": "object"
+          },
+          "claimWindowDays": {
+            "minimum": 1,
+            "type": "integer"
+          },
           "components": {
             "items": {
               "$ref": "#/components/schemas/OfferPreviewPriceComponentDto"
@@ -5681,6 +5857,22 @@
               "$ref": "#/components/schemas/OfferPreviewItemDto"
             },
             "type": "array"
+          },
+          "legalClaimsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalClaimsRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "legalTermsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalTermsRevisionId": {
+            "format": "uuid",
+            "type": "string"
           },
           "netAmountMinor": {
             "maximum": 9007199254740991,
@@ -5745,8 +5937,15 @@
           "quoteId",
           "version",
           "termsRevision",
+          "claimPolicyRevision",
+          "claimWindowDays",
+          "legalTermsRevisionId",
+          "legalTermsContentHash",
+          "legalClaimsRevisionId",
+          "legalClaimsContentHash",
           "summary",
           "termsSnapshot",
+          "claimsSnapshot",
           "currency",
           "contractTotalMinor",
           "taxRegime",
@@ -14614,6 +14813,49 @@
           }
         ],
         "summary": "Create the initial checkout payment intent",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/checkout/retry-context": {
+      "get": {
+        "operationId": "PaymentsController_retryContext",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutRetryContextDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Session capability is invalid"
+          },
+          "503": {
+            "description": "Accepted checkout evidence is incomplete or unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read server-owned evidence for an initial-payment retry",
         "tags": [
           "payments"
         ]

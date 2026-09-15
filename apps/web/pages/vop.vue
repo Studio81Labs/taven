@@ -1,23 +1,28 @@
 <script setup lang="ts">
-import { legalDocuments } from "../content/public-site";
-import { isServerVerifiedLegalDocument } from "../utils/legal-availability";
-import { useLegalAvailability } from "../composables/useLegalAvailability";
+import { usePublicLegalDocument } from "../composables/usePublicLegalDocument";
 
 definePageMeta({ layout: "public" });
 
-const document = legalDocuments.terms;
 const contacts = usePublicContacts();
-const { availability, refresh } = useLegalAvailability();
+const route = useRoute();
+const pinnedRevision = computed(() =>
+  typeof route.query.revision === "string" ? route.query.revision : null,
+);
+const pinnedContentHash = computed(() =>
+  typeof route.query.contentHash === "string" ? route.query.contentHash : null,
+);
+const { document, effective, historical, refresh } = usePublicLegalDocument(
+  "terms",
+  pinnedRevision,
+  pinnedContentHash,
+);
 if (import.meta.server) await refresh();
 else onMounted(() => void refresh());
-const effective = computed(() =>
-  isServerVerifiedLegalDocument("terms", document, availability.value),
-);
 
 usePublicPageMeta({
-  path: document.path,
-  title: document.title,
-  description: document.summary,
+  path: "/vop",
+  title: document.value.title,
+  description: document.value.summary,
   noindex: computed(() => !effective.value),
 });
 </script>
@@ -26,6 +31,7 @@ usePublicPageMeta({
   <PublicLegalPlaceholderPage
     :document="document"
     :effective="effective"
+    :historical="historical"
     :contact="{
       label: 'Zákaznický kontakt',
       email: contacts.customer.email,

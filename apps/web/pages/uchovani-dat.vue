@@ -1,23 +1,17 @@
 <script setup lang="ts">
-import { legalDocuments } from "../content/public-site";
-import { isServerVerifiedLegalDocument } from "../utils/legal-availability";
-import { useLegalAvailability } from "../composables/useLegalAvailability";
+import { usePublicLegalDocument } from "../composables/usePublicLegalDocument";
 
 definePageMeta({ layout: "public" });
 
-const document = legalDocuments.retention;
 const contacts = usePublicContacts();
-const { availability, refresh } = useLegalAvailability();
+const { document, effective, refresh } = usePublicLegalDocument("retention");
 if (import.meta.server) await refresh();
 else onMounted(() => void refresh());
-const effective = computed(() =>
-  isServerVerifiedLegalDocument("retention", document, availability.value),
-);
 
 usePublicPageMeta({
-  path: document.path,
-  title: document.title,
-  description: document.summary,
+  path: "/uchovani-dat",
+  title: document.value.title,
+  description: document.value.summary,
   noindex: computed(() => !effective.value),
 });
 </script>
