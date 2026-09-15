@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { ServiceUnavailableException } from "@nestjs/common";
+import { ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import {
   CHECKOUT_CLAIM_WINDOW_DAYS_ENV,
   CHECKOUT_PAYMENT_FLOWS_ENV,
 } from "../../launch-approval-gates";
 import {
   checkoutContactSnapshotMatches,
+  assertBalancePaymentLaunchApproved,
   PaymentsService,
   publicSiteUrl,
 } from "./payments.service";
@@ -42,6 +43,40 @@ describe("checkout contact snapshot compatibility", () => {
         billing: { ...input.billing, city: "Praha" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("balance payment evidence", () => {
+  const accepted = {
+    acceptedOrderPriceBindingId: "binding-id",
+    acceptedTermsRevision: "terms-v1",
+    acceptedClaimPolicyRevision: "claims-v1",
+    acceptedClaimWindowDays: 30,
+    withdrawalExceptionAcknowledgedAt: new Date(),
+    acceptedPriceBinding: {
+      id: "binding-id",
+      legalTermsRevisionId: "terms-id",
+      legalTermsRevision: { revisionCode: "terms-v1" },
+      priceSnapshot: { priceList: { termsRevision: "legacy-terms-v0" } },
+    },
+  };
+
+  it("rejects incomplete accepted claim evidence", () => {
+    expect(() =>
+      assertBalancePaymentLaunchApproved({
+        ...accepted,
+        acceptedClaimPolicyRevision: null,
+      }),
+    ).toThrow(ConflictException);
+  });
+
+  it("rejects terms evidence that does not match the accepted binding", () => {
+    expect(() =>
+      assertBalancePaymentLaunchApproved({
+        ...accepted,
+        acceptedTermsRevision: "terms-v2",
+      }),
+    ).toThrow("accepted terms do not match the accepted binding");
   });
 });
 

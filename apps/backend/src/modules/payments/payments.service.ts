@@ -253,11 +253,16 @@ export class PaymentsService {
     const initialOrder = await this.prisma.order.findUnique({
       where: { id: orderId },
       select: {
+        acceptedOrderPriceBindingId: true,
         acceptedTermsRevision: true,
         acceptedClaimPolicyRevision: true,
         acceptedClaimWindowDays: true,
+        withdrawalExceptionAcknowledgedAt: true,
         acceptedPriceBinding: {
           select: {
+            id: true,
+            legalTermsRevisionId: true,
+            legalTermsRevision: { select: { revisionCode: true } },
             priceSnapshot: {
               select: { priceList: { select: { termsRevision: true } } },
             },
@@ -298,11 +303,16 @@ export class PaymentsService {
           publicReference: true,
           status: true,
           checkoutContactSnapshot: true,
+          acceptedOrderPriceBindingId: true,
           acceptedTermsRevision: true,
           acceptedClaimPolicyRevision: true,
           acceptedClaimWindowDays: true,
+          withdrawalExceptionAcknowledgedAt: true,
           acceptedPriceBinding: {
             select: {
+              id: true,
+              legalTermsRevisionId: true,
+              legalTermsRevision: { select: { revisionCode: true } },
               priceSnapshot: {
                 select: { priceList: { select: { termsRevision: true } } },
               },
@@ -2298,19 +2308,43 @@ function paymentDto(payment: {
   };
 }
 
-function assertBalancePaymentLaunchApproved(order: {
+export function assertBalancePaymentLaunchApproved(order: {
+  acceptedOrderPriceBindingId: string | null;
   acceptedTermsRevision: string | null;
   acceptedClaimPolicyRevision: string | null;
   acceptedClaimWindowDays: number | null;
+  withdrawalExceptionAcknowledgedAt: Date | null;
   acceptedPriceBinding: {
+    id: string;
+    legalTermsRevisionId: string | null;
+    legalTermsRevision: { revisionCode: string | null } | null;
     priceSnapshot: { priceList: { termsRevision: string } };
   } | null;
 }): void {
+  if (
+    !order.acceptedOrderPriceBindingId ||
+    !order.acceptedTermsRevision ||
+    !order.acceptedClaimPolicyRevision ||
+    !order.acceptedClaimWindowDays ||
+    !order.withdrawalExceptionAcknowledgedAt ||
+    !order.acceptedPriceBinding ||
+    order.acceptedPriceBinding.id !== order.acceptedOrderPriceBindingId
+  ) {
+    throw new ConflictException("Order has incomplete checkout evidence");
+  }
   const boundTermsRevision =
     order.acceptedPriceBinding?.priceSnapshot.priceList.termsRevision;
   if (!boundTermsRevision) {
     throw new ConflictException(
       "Balance payment has no accepted price binding",
+    );
+  }
+  const acceptedBindingTermsRevision =
+    order.acceptedPriceBinding.legalTermsRevision?.revisionCode ??
+    boundTermsRevision;
+  if (order.acceptedTermsRevision !== acceptedBindingTermsRevision) {
+    throw new ConflictException(
+      "Balance payment accepted terms do not match the accepted binding",
     );
   }
   assertCheckoutPaymentFlowEnabled();
