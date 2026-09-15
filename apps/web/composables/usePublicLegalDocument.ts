@@ -105,9 +105,9 @@ export function usePublicLegalDocument(
       ) {
         throw new Error("stale legal document response");
       }
+      const latest = await refreshAvailability();
+      const latestRecord = latest?.documents[key];
       if (!revisionCode) {
-        const latest = await refreshAvailability();
-        const latestRecord = latest?.documents[key];
         if (
           !latestRecord?.effective ||
           latestRecord.revision !== revision.revisionCode ||
@@ -128,10 +128,10 @@ export function usePublicLegalDocument(
       };
       historical.value =
         Boolean(revisionCode) &&
-        (!record ||
-          !record.effective ||
-          record.revision !== revision.revisionCode ||
-          record.contentHash !== revision.contentHash);
+        (!latestRecord ||
+          !latestRecord.effective ||
+          latestRecord.revision !== revision.revisionCode ||
+          latestRecord.contentHash !== revision.contentHash);
     } catch {
       document.value = {
         id: fallback.id,
