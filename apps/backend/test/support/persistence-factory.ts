@@ -794,9 +794,9 @@ export class PersistenceFactory {
         `INSERT INTO quotes
            (id, quote_request_id, customer_id, terms_revision,
             legal_terms_revision_id, legal_claims_revision_id,
-            claim_window_days, expires_at, issued_at, created_at)
+            claim_window_days, terms_snapshot, expires_at, issued_at, created_at)
          VALUES
-           ($1,$2,$3,'terms-v1',
+          ($1,$2,$3,'terms-v1',
             CASE WHEN $6 THEN (SELECT revision.id
                                FROM legal_document_revisions revision
                                JOIN legal_documents document ON document.id = revision.document_id
@@ -805,7 +805,17 @@ export class PersistenceFactory {
                                FROM legal_document_revisions revision
                                JOIN legal_documents document ON document.id = revision.document_id
                                WHERE document.key = 'claims' AND revision.revision_code = 'claim-policy-v1') END,
-            CASE WHEN $6 THEN 30 END,$4,$5,$5)`,
+            CASE WHEN $6 THEN 30 END,
+            CASE WHEN $6 THEN (SELECT jsonb_build_object(
+              'contentVersion', revision.content_version,
+              'title', revision.title,
+              'summary', revision.summary,
+              'sections', revision.sections,
+              'contentHash', revision.content_hash
+            ) FROM legal_document_revisions revision
+            JOIN legal_documents document ON document.id = revision.document_id
+            WHERE document.key = 'terms' AND revision.revision_code = 'terms-v1') ELSE '{}'::jsonb END,
+            $4,$5,$5)`,
         [
           input.quoteId,
           input.quoteRequestId,
