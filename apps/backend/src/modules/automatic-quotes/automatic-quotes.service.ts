@@ -5307,10 +5307,16 @@ export class AutomaticQuotesService {
         handoffReasons.push(reason);
       }
     }
+    const legal = await this.requiredLegalApprovals().availability();
+    assertEffectiveLegalDocuments(legal, ["terms"]);
+    const bindingUsesCurrentTerms =
+      active?.legalTermsRevisionId === legal.documents.terms.revisionId;
     const checkoutReady =
       !expired &&
       order.status === OrderStatus.QUOTED &&
-      Boolean(active && currentPlan && currentReservation);
+      Boolean(
+        active && currentPlan && currentReservation && bindingUsesCurrentTerms,
+      );
     if (
       requiresShipmentHandoff({
         readyItems,

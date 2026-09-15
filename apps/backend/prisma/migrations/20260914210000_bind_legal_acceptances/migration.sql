@@ -231,7 +231,14 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'orders_legal_acceptance_evidence_check';
     END IF;
 
-    IF (photo_consent_granted_at IS NULL AND photo_consent_code IS NOT NULL)
+    IF (photo_consent_granted_at IS NULL AND (
+           photo_consent_code IS NOT NULL
+           OR EXISTS (
+               SELECT 1 FROM "legal_acceptances" acceptance
+               WHERE acceptance."order_id" = target_order_id
+                 AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+           )
+       ))
        OR (photo_consent_granted_at IS NOT NULL AND (
            photo_consent_code IS NULL
            OR NOT EXISTS (
@@ -340,12 +347,17 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_privacy_acceptance_evidence_check';
     END IF;
 
-    IF photo_consent_granted_at IS NOT NULL AND NOT EXISTS (
-        SELECT 1
-        FROM "legal_acceptances" acceptance
-        WHERE acceptance."quote_request_id" = target_quote_request_id
-          AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
-    ) THEN
+    IF (photo_consent_granted_at IS NULL AND EXISTS (
+            SELECT 1
+            FROM "legal_acceptances" acceptance
+            WHERE acceptance."quote_request_id" = target_quote_request_id
+              AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+        )) OR (photo_consent_granted_at IS NOT NULL AND NOT EXISTS (
+            SELECT 1
+            FROM "legal_acceptances" acceptance
+            WHERE acceptance."quote_request_id" = target_quote_request_id
+              AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+        )) THEN
         RAISE EXCEPTION 'Quote request photo consent requires matching immutable legal acceptance evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_photo_consent_acceptance_evidence_check';
     END IF;

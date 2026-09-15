@@ -131,10 +131,12 @@ export class LegalApprovalsService {
         .digest("hex"),
       evaluatedAt: observedAt.toISOString(),
       documents: Object.fromEntries(
-        selected.map(({ publicationId: _publicationId, ...document }) => [
-          document.key,
-          document,
-        ]),
+        selected.map(
+          ({ key, revision, status, effectiveAt, contentHash, effective }) => [
+            key,
+            { key, revision, status, effectiveAt, contentHash, effective },
+          ],
+        ),
       ) as unknown as EvaluatedLegalApprovals["documents"],
     };
   }
