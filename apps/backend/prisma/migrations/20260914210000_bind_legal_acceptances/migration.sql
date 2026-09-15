@@ -175,6 +175,7 @@ RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     target_order_id uuid;
     binding_terms_revision_id uuid;
+    has_current_acceptance boolean;
     terms_code text;
     claims_code text;
     photo_consent_granted_at timestamptz;
@@ -196,9 +197,15 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    SELECT binding."legal_terms_revision_id", target."accepted_terms_revision", target."accepted_claim_policy_revision",
+    SELECT binding."legal_terms_revision_id",
+           target."accepted_order_price_binding_id" IS NOT NULL
+             OR target."accepted_terms_revision" IS NOT NULL
+             OR target."accepted_claim_policy_revision" IS NOT NULL
+             OR target."accepted_claim_window_days" IS NOT NULL
+             OR target."withdrawal_exception_acknowledged_at" IS NOT NULL,
+           target."accepted_terms_revision", target."accepted_claim_policy_revision",
            target."photo_publication_consent_granted_at", target."photo_publication_consent_revision"
-      INTO binding_terms_revision_id, terms_code, claims_code, photo_consent_granted_at, photo_consent_code
+      INTO binding_terms_revision_id, has_current_acceptance, terms_code, claims_code, photo_consent_granted_at, photo_consent_code
       FROM "orders" target
       LEFT JOIN "order_price_bindings" binding ON binding."id" = target."accepted_order_price_binding_id"
      WHERE target."id" = target_order_id;
@@ -214,7 +221,7 @@ BEGIN
             RAISE EXCEPTION 'Individual order requires database-backed legal evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'orders_individual_legal_evidence_check';
         END IF;
-        IF NOT accepted_before_update THEN
+        IF has_current_acceptance AND NOT accepted_before_update THEN
             RAISE EXCEPTION 'New order acceptance requires database-backed legal evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'orders_legacy_legal_evidence_check';
         END IF;

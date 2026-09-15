@@ -132,9 +132,25 @@ export class LegalApprovalsService {
       evaluatedAt: observedAt.toISOString(),
       documents: Object.fromEntries(
         selected.map(
-          ({ key, revision, status, effectiveAt, contentHash, effective }) => [
+          ({
             key,
-            { key, revision, status, effectiveAt, contentHash, effective },
+            revision,
+            revisionId,
+            status,
+            effectiveAt,
+            contentHash,
+            effective,
+          }) => [
+            key,
+            {
+              key,
+              revision,
+              revisionId,
+              status,
+              effectiveAt,
+              contentHash,
+              effective,
+            },
           ],
         ),
       ) as unknown as EvaluatedLegalApprovals["documents"],
