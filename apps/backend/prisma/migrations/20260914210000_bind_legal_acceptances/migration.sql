@@ -68,6 +68,12 @@ CREATE UNIQUE INDEX "legal_acceptances_quote_request_purpose_key"
     ON "legal_acceptances"("quote_request_id", "purpose") WHERE "quote_request_id" IS NOT NULL;
 CREATE INDEX "legal_acceptances_revision_id_idx" ON "legal_acceptances"("revision_id");
 
+-- Historical QuoteRequests retain their explicit legacy marker, but new
+-- controlled writes must identify legacy provenance deliberately rather than
+-- receiving it from a column default.
+ALTER TABLE "quote_requests"
+    ALTER COLUMN "current_state_command_key" DROP DEFAULT;
+
 CREATE OR REPLACE FUNCTION taven_legal_revision_matches_document(
     target_revision_id uuid,
     target_key text

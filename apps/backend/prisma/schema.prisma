@@ -1776,7 +1776,7 @@ model QuoteRequest {
   attribution            Json?              @db.JsonB
   slaDueAt               DateTime           @default(now()) @map("sla_due_at") @db.Timestamptz(3)
   slaRespondedAt         DateTime?          @map("sla_responded_at") @db.Timestamptz(3)
-  currentStateCommandKey String             @default("legacy-import") @map("current_state_command_key") @db.VarChar(255)
+  currentStateCommandKey String             @map("current_state_command_key") @db.VarChar(255)
   currentStateResultId   String             @default(uuid()) @map("current_state_result_id") @db.Uuid
   acceptedAt             DateTime?          @map("accepted_at") @db.Timestamptz(3)
   rejectedAt             DateTime?          @map("rejected_at") @db.Timestamptz(3)
