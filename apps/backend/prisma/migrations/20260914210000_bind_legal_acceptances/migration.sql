@@ -251,6 +251,7 @@ DECLARE
     claims_code text;
     photo_consent_granted_at timestamptz;
     photo_consent_code text;
+    acceptance_purpose legal_acceptance_purpose;
     accepted_before_update boolean := false;
 BEGIN
     IF TG_TABLE_NAME = 'orders' THEN
@@ -261,6 +262,9 @@ BEGIN
             AND OLD."accepted_claim_policy_revision" IS NOT NULL
             AND OLD."accepted_claim_window_days" IS NOT NULL
             AND OLD."withdrawal_exception_acknowledged_at" IS NOT NULL;
+    ELSIF TG_TABLE_NAME = 'legal_acceptances' THEN
+        target_order_id := COALESCE(NEW."order_id", OLD."order_id");
+        acceptance_purpose := NEW."purpose";
     ELSE
         target_order_id := COALESCE(NEW."order_id", OLD."order_id");
     END IF;
@@ -291,7 +295,7 @@ BEGIN
     -- photo grant in one transaction. The ledger trigger must recognize that
     -- the pre-existing scalar acceptance is the authorized legacy state.
     IF TG_TABLE_NAME = 'legal_acceptances'
-       AND NEW."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+       AND acceptance_purpose = 'PHOTO_PUBLICATION_GRANTED'
        AND binding_terms_revision_id IS NULL
        AND legacy_complete_acceptance THEN
         accepted_before_update := true;
@@ -336,7 +340,7 @@ BEGIN
                 USING ERRCODE = '23514', CONSTRAINT = 'orders_legacy_legal_evidence_check';
         END IF;
         IF TG_TABLE_NAME = 'legal_acceptances'
-           AND NEW."purpose" IN ('TERMS_ACCEPTED', 'CLAIM_POLICY_ACCEPTED') THEN
+           AND acceptance_purpose IN ('TERMS_ACCEPTED', 'CLAIM_POLICY_ACCEPTED') THEN
             RAISE EXCEPTION 'Order terms and claim acceptance require matching accepted order evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'orders_orphaned_legal_acceptance_check';
         END IF;
