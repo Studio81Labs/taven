@@ -6,6 +6,7 @@ import {
   AutomaticQuotesService,
   conservativePartsPerPlate,
   decimalToInteger,
+  frozenCheckoutEvidenceState,
   hasFrozenCheckoutEvidence,
   isCarrierValidationReady,
   parcelConfigurationChange,
@@ -26,6 +27,22 @@ describe("AutomaticQuotesService", () => {
     expect(
       hasFrozenCheckoutEvidence({ ...accepted, acceptedClaimWindowDays: null }),
     ).toBe(false);
+    expect(frozenCheckoutEvidenceState(accepted)).toBe("complete");
+    expect(
+      frozenCheckoutEvidenceState({
+        ...accepted,
+        acceptedClaimWindowDays: null,
+      }),
+    ).toBe("partial");
+    expect(
+      frozenCheckoutEvidenceState({
+        acceptedOrderPriceBindingId: null,
+        acceptedTermsRevision: null,
+        acceptedClaimPolicyRevision: null,
+        acceptedClaimWindowDays: null,
+        withdrawalExceptionAcknowledgedAt: null,
+      }),
+    ).toBe("none");
   });
 
   it("converts API-valid volumes beyond JavaScript's safe integer range", () => {

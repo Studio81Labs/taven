@@ -237,13 +237,24 @@ export function hasFrozenCheckoutEvidence(order: {
   acceptedClaimWindowDays: number | null;
   withdrawalExceptionAcknowledgedAt: Date | null;
 }): boolean {
-  return (
-    order.acceptedOrderPriceBindingId !== null &&
-    order.acceptedTermsRevision !== null &&
-    order.acceptedClaimPolicyRevision !== null &&
-    order.acceptedClaimWindowDays !== null &&
-    order.withdrawalExceptionAcknowledgedAt !== null
-  );
+  return frozenCheckoutEvidenceState(order) === "complete";
+}
+
+export function frozenCheckoutEvidenceState(order: {
+  acceptedOrderPriceBindingId: string | null;
+  acceptedTermsRevision: string | null;
+  acceptedClaimPolicyRevision: string | null;
+  acceptedClaimWindowDays: number | null;
+  withdrawalExceptionAcknowledgedAt: Date | null;
+}): "none" | "complete" | "partial" {
+  const present = [
+    order.acceptedOrderPriceBindingId,
+    order.acceptedTermsRevision,
+    order.acceptedClaimPolicyRevision,
+    order.acceptedClaimWindowDays,
+    order.withdrawalExceptionAcknowledgedAt,
+  ].filter((value) => value !== null).length;
+  return present === 0 ? "none" : present === 5 ? "complete" : "partial";
 }
 
 export async function parcelConfigurationChange(
@@ -1595,7 +1606,15 @@ export class AutomaticQuotesService {
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const session = await this.loadSession(sessionId);
     assertSessionCapability(session, sessionCapability);
-    assertBindingQuoteFlowsEnabled();
+    const retainedEvidenceState = frozenCheckoutEvidenceState(
+      session.automaticOrderOrigin!.order,
+    );
+    if (retainedEvidenceState === "partial") {
+      throw new ConflictException(
+        "Automatic quote has incomplete checkout evidence",
+      );
+    }
+    if (retainedEvidenceState !== "complete") assertBindingQuoteFlowsEnabled();
     await this.idempotentEffect(
       "automatic-quote.prepare",
       commandKey,
@@ -1631,8 +1650,13 @@ export class AutomaticQuotesService {
         const draft = order?.automaticQuoteDraft;
         if (!order || !draft)
           throw new ConflictException("Automatic order is missing");
-        const hasAcceptedEvidence = hasFrozenCheckoutEvidence(order);
-        if (!hasAcceptedEvidence) {
+        const evidenceState = frozenCheckoutEvidenceState(order);
+        if (evidenceState === "partial") {
+          throw new ConflictException(
+            "Automatic quote has incomplete checkout evidence",
+          );
+        }
+        if (evidenceState === "none") {
           assertEffectiveLegalDocuments(legal.approvals, ["terms"]);
         }
         if (draft.items.length === 0) return;
@@ -1686,7 +1710,7 @@ export class AutomaticQuotesService {
           }
         }
         if (enqueued) return;
-        if (!hasAcceptedEvidence) {
+        if (evidenceState === "none") {
           await this.stageOrFinalizeBinding(
             transaction,
             order.id,
@@ -5095,6 +5119,12 @@ export class AutomaticQuotesService {
     const deliverySelector = this.deliveryCapabilities.selectionPolicy();
     const order = session.automaticOrderOrigin!.order;
     const draft = order.automaticQuoteDraft!;
+    const frozenEvidenceState = frozenCheckoutEvidenceState(order);
+    if (frozenEvidenceState === "partial") {
+      throw new ConflictException(
+        "Automatic quote has incomplete checkout evidence",
+      );
+    }
     const expired =
       session.status === QuoteSessionStatus.EXPIRED ||
       session.expiresAt.getTime() <= Date.now();
