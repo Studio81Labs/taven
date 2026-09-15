@@ -2177,6 +2177,48 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
+  it("requires immutable legal evidence for direct quote-request writes", async () => {
+    await expect(
+      prisma.quoteRequest.create({
+        data: {
+          publicReference: `mp-${randomUUID()}`,
+          description: "Direct write without privacy evidence",
+        },
+      }),
+    ).rejects.toThrow(
+      "Quote request requires immutable privacy acknowledgement evidence",
+    );
+
+    const privacyRevision = await prisma.legalDocumentRevision.findFirstOrThrow(
+      {
+        where: { revisionCode: e2eLegalRevisionCodes.privacy },
+        select: { id: true },
+      },
+    );
+    await expect(
+      prisma.$transaction(async (transaction) => {
+        const request = await transaction.quoteRequest.create({
+          data: {
+            publicReference: `mphoto-${randomUUID()}`,
+            description: "Direct write without photo consent evidence",
+            photoPublicationConsentGrantedAt: new Date(),
+          },
+        });
+        await transaction.legalAcceptance.create({
+          data: {
+            quoteRequestId: request.id,
+            revisionId: privacyRevision.id,
+            purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
+            acceptedAt: new Date(),
+            commandIdentity: key("direct-photo-without-evidence"),
+          },
+        });
+      }),
+    ).rejects.toThrow(
+      "Quote request photo consent requires matching immutable legal acceptance evidence",
+    );
+  });
+
   function requestInput(scope: string) {
     return {
       description: `A detailed individual quote request for ${scope}`,

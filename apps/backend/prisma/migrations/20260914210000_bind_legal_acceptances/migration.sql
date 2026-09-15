@@ -196,8 +196,18 @@ BEGIN
       LEFT JOIN "order_price_bindings" binding ON binding."id" = target."accepted_order_price_binding_id"
      WHERE target."id" = target_order_id;
 
-    -- No new binding reference means pre-cutover evidence.  Preserve it as-is.
+    -- Imported legacy orders may retain their scalar evidence. Individual
+    -- orders, however, have always been created from an immutable Quote, so a
+    -- newly written individual origin must never use that legacy exception.
     IF binding_terms_revision_id IS NULL THEN
+        IF EXISTS (
+            SELECT 1
+            FROM "individual_order_origins" origin
+            WHERE origin."order_id" = target_order_id
+        ) THEN
+            RAISE EXCEPTION 'Individual order requires database-backed legal evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'orders_individual_legal_evidence_check';
+        END IF;
         RETURN NULL;
     END IF;
 
@@ -281,6 +291,68 @@ FOR EACH ROW EXECUTE FUNCTION taven_validate_order_legal_acceptance();
 CREATE CONSTRAINT TRIGGER "legal_acceptances_order_evidence_valid"
 AFTER INSERT ON "legal_acceptances" DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_order_legal_acceptance();
+
+CREATE CONSTRAINT TRIGGER "individual_order_origins_legal_evidence_valid"
+AFTER INSERT OR UPDATE OF "order_id" ON "individual_order_origins"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_order_legal_acceptance();
+
+-- Each new QuoteRequest is an acceptance event, rather than an imported
+-- historical record. Require its privacy acknowledgement in the immutable
+-- ledger and, when requested, require the matching photo-publication grant.
+-- The companion acceptance trigger lets the service insert the request and
+-- both ledger rows in one deferred transaction.
+CREATE OR REPLACE FUNCTION taven_validate_quote_request_legal_acceptance()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    target_quote_request_id uuid;
+    photo_consent_granted_at timestamptz;
+BEGIN
+    IF TG_TABLE_NAME = 'quote_requests' THEN
+        target_quote_request_id := COALESCE(NEW."id", OLD."id");
+    ELSE
+        target_quote_request_id := COALESCE(NEW."quote_request_id", OLD."quote_request_id");
+    END IF;
+    IF target_quote_request_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT target."photo_publication_consent_granted_at"
+      INTO photo_consent_granted_at
+      FROM "quote_requests" target
+     WHERE target."id" = target_quote_request_id;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "legal_acceptances" acceptance
+        WHERE acceptance."quote_request_id" = target_quote_request_id
+          AND acceptance."purpose" = 'PRIVACY_NOTICE_ACKNOWLEDGED'
+    ) THEN
+        RAISE EXCEPTION 'Quote request requires immutable privacy acknowledgement evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_privacy_acceptance_evidence_check';
+    END IF;
+
+    IF photo_consent_granted_at IS NOT NULL AND NOT EXISTS (
+        SELECT 1
+        FROM "legal_acceptances" acceptance
+        WHERE acceptance."quote_request_id" = target_quote_request_id
+          AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+    ) THEN
+        RAISE EXCEPTION 'Quote request photo consent requires matching immutable legal acceptance evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_photo_consent_acceptance_evidence_check';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "quote_requests_legal_acceptance_evidence_valid"
+AFTER INSERT OR UPDATE OF "photo_publication_consent_granted_at"
+ON "quote_requests" DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_quote_request_legal_acceptance();
+
+CREATE CONSTRAINT TRIGGER "legal_acceptances_quote_request_evidence_valid"
+AFTER INSERT ON "legal_acceptances" DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_quote_request_legal_acceptance();
 
 -- Individual offers record withdrawal acknowledgement before the order becomes
 -- QUOTED. The order-level trigger below restricts that DRAFT exception to its
