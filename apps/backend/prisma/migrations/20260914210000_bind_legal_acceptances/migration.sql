@@ -177,6 +177,16 @@ BEGIN
         WHEN 'PRIVACY_NOTICE_ACKNOWLEDGED' THEN 'privacy'
         WHEN 'PHOTO_PUBLICATION_GRANTED' THEN 'photoConsent'
     END;
+    IF NEW."order_id" IS NOT NULL
+       AND NEW."purpose" NOT IN ('TERMS_ACCEPTED', 'CLAIM_POLICY_ACCEPTED', 'PHOTO_PUBLICATION_GRANTED') THEN
+        RAISE EXCEPTION 'Legal acceptance purpose is incompatible with an Order subject'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptances_order_purpose_check';
+    END IF;
+    IF NEW."quote_request_id" IS NOT NULL
+       AND NEW."purpose" NOT IN ('PRIVACY_NOTICE_ACKNOWLEDGED', 'PHOTO_PUBLICATION_GRANTED') THEN
+        RAISE EXCEPTION 'Legal acceptance purpose is incompatible with a QuoteRequest subject'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptances_quote_request_purpose_check';
+    END IF;
     IF NOT EXISTS (
         SELECT 1
         FROM "legal_document_revisions" revision
@@ -246,6 +256,29 @@ BEGIN
       LEFT JOIN "order_price_bindings" binding ON binding."id" = target."accepted_order_price_binding_id"
      WHERE target."id" = target_order_id;
 
+    IF (photo_consent_granted_at IS NULL AND (
+           photo_consent_code IS NOT NULL
+           OR EXISTS (
+               SELECT 1 FROM "legal_acceptances" acceptance
+               WHERE acceptance."order_id" = target_order_id
+                 AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+           )
+       ))
+       OR (photo_consent_granted_at IS NOT NULL AND (
+           photo_consent_code IS NULL
+           OR NOT EXISTS (
+               SELECT 1
+               FROM "legal_acceptances" acceptance
+               JOIN "legal_document_revisions" revision ON revision."id" = acceptance."revision_id"
+               WHERE acceptance."order_id" = target_order_id
+                 AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+                 AND revision."revision_code" = photo_consent_code
+           )
+       )) THEN
+        RAISE EXCEPTION 'Accepted photo consent requires matching immutable legal acceptance evidence'
+            USING ERRCODE = '23514', CONSTRAINT = 'orders_photo_consent_acceptance_evidence_check';
+    END IF;
+
     -- The nullable revision field preserves only already-accepted pre-cutover
     -- orders. It cannot authorize a first acceptance after this migration.
     IF binding_terms_revision_id IS NULL THEN
@@ -282,29 +315,6 @@ BEGIN
        ) THEN
         RAISE EXCEPTION 'Accepted order with database-backed terms requires matching immutable legal acceptance evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'orders_legal_acceptance_evidence_check';
-    END IF;
-
-    IF (photo_consent_granted_at IS NULL AND (
-           photo_consent_code IS NOT NULL
-           OR EXISTS (
-               SELECT 1 FROM "legal_acceptances" acceptance
-               WHERE acceptance."order_id" = target_order_id
-                 AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
-           )
-       ))
-       OR (photo_consent_granted_at IS NOT NULL AND (
-           photo_consent_code IS NULL
-           OR NOT EXISTS (
-               SELECT 1
-               FROM "legal_acceptances" acceptance
-               JOIN "legal_document_revisions" revision ON revision."id" = acceptance."revision_id"
-               WHERE acceptance."order_id" = target_order_id
-                 AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
-                 AND revision."revision_code" = photo_consent_code
-           )
-       )) THEN
-        RAISE EXCEPTION 'Accepted photo consent requires matching immutable legal acceptance evidence'
-            USING ERRCODE = '23514', CONSTRAINT = 'orders_photo_consent_acceptance_evidence_check';
     END IF;
 
     -- Individual offers freeze the Claim window on the originating Quote. An
