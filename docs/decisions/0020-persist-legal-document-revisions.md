@@ -19,6 +19,17 @@ records the approved database and contract decisions; it does not migrate data,
 create production approvals, or authorize launch. PR4/#144 can finish on the
 existing merged mechanism before the two new implementation increments.
 
+## Subsequent acceptance and reissue decisions
+
+[ADR 0021](0021-own-legal-acceptance-decision-time.md) / #159 replaces the
+implicit timestamp-provenance assumption with a DB-owned first-acceptance
+decision shared by the subject and ledger. It also replaces the independent
+individual statement clock while preserving one authoritative instant.
+[ADR 0022](0022-version-individual-offers-for-reissue.md) / #161 makes the
+previously assumed reissue path executable through immutable Quote versions
+and a current pointer. These amendments belong to #152 / PR #158 before merge.
+All other approval, settlement and launch constraints below remain binding.
+
 ## Decision
 
 **Owner-approved amendment:** legal text, immutable approved revisions and publication history move to PostgreSQL. This replaces ADR 0019/#150's checked-in catalog and web-text ownership decision, while preserving trusted server time, fail-closed approval, exact acceptance, and settlement/replay guarantees. Baseline: merged PR #149, `e0f9a75`. ADR 0020 records the new decision. Existing PR4/#144 continues unchanged; the following two serial implementation increments precede final #143 content import. No legal approval is conferred by this architecture change.
