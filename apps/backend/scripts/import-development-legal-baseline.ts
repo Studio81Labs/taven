@@ -11,6 +11,8 @@ export const BASELINE_SOURCE_PATH = "apps/web/content/legal-drafts.ts";
 export const BASELINE_MANIFEST_PATH = "apps/web/content/launch-manifest.ts";
 const BASELINE_SOURCE_HASH =
   "d295c84a2a54f59aca65bd7d9d756264aa0c14126a6de3e54fc9a9c85b9788cf";
+const BASELINE_PACKAGE_HASH =
+  "f77dc21040b14699b112f31093171e5ccf4ce3d018ee4cb923227b261e0a184d";
 
 const BASELINE_KEYS = [
   "terms",
@@ -84,6 +86,8 @@ export type BaselineTargetConfig = Readonly<{
   origin: string;
   allowBaselineImport: true;
 }>;
+
+type TrustedBaselineTarget = Omit<BaselineTargetConfig, "allowBaselineImport">;
 
 type Arguments = Readonly<Record<string, string | true>>;
 
@@ -213,6 +217,49 @@ export function parseTargetConfig(value: unknown): BaselineTargetConfig {
   };
 }
 
+export function parseTrustedTargetAllowlist(
+  value: unknown,
+): readonly TrustedBaselineTarget[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Trusted target allowlist must be a JSON object");
+  }
+  const entries = (value as Record<string, unknown>).targets;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new Error("Trusted target allowlist must contain targets");
+  }
+  return entries.map((entry, index) => {
+    const target = parseTargetConfig({
+      ...(entry as Record<string, unknown>),
+      allowBaselineImport: true,
+    });
+    if (!target) throw new Error(`Invalid trusted target at index ${index}`);
+    return {
+      targetId: target.targetId,
+      environment: target.environment,
+      baseUrl: target.baseUrl,
+      origin: target.origin,
+    };
+  });
+}
+
+function assertTrustedTarget(
+  target: BaselineTargetConfig,
+  allowlist: readonly TrustedBaselineTarget[],
+): void {
+  const trusted = allowlist.some(
+    (entry) =>
+      entry.targetId === target.targetId &&
+      entry.environment === target.environment &&
+      entry.baseUrl === target.baseUrl &&
+      entry.origin === target.origin,
+  );
+  if (!trusted) {
+    throw new Error(
+      `Target ${target.targetId} is not present in the trusted non-production allowlist`,
+    );
+  }
+}
+
 function parseUrl(value: unknown, name: string): string {
   const raw = requiredString(value, name);
   let parsed: URL;
@@ -310,6 +357,11 @@ export async function loadBaselinePackage(
       documents,
     }),
   );
+  if (packageHash !== BASELINE_PACKAGE_HASH) {
+    throw new Error(
+      `Baseline package differs from the pinned v0.1 package hash ${BASELINE_PACKAGE_HASH}`,
+    );
+  }
   return {
     sourceCommit: BASELINE_SOURCE_COMMIT,
     sourcePath: BASELINE_SOURCE_PATH,
@@ -545,7 +597,7 @@ async function reconcileDocument(
   receiptPath: string,
 ): Promise<void> {
   const state = receipt.documents[document.key];
-  if (state?.status === "published" || state?.status === "scheduled") return;
+  if (state?.status === "published") return;
   const detail = await api.json<LegalDocumentDetail>(
     `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
   );
@@ -695,10 +747,7 @@ async function reconcileDocument(
       contentHash: revision.contentHash,
       effectiveAt: current?.effectiveAt ?? revision.effectiveAt!,
       publicationId: published.id,
-      status:
-        new Date(published.startsAt).getTime() <= Date.now()
-          ? "published"
-          : "scheduled",
+      status: "scheduled",
       auditEventIds: [],
     };
   } else {
@@ -707,14 +756,29 @@ async function reconcileDocument(
       contentHash: revision.contentHash,
       effectiveAt: current?.effectiveAt ?? revision.effectiveAt!,
       publicationId: selectedPublication.id,
-      status:
-        new Date(selectedPublication.startsAt).getTime() <= Date.now()
-          ? "published"
-          : "scheduled",
+      status: "scheduled",
       auditEventIds: current?.auditEventIds ?? [],
     };
   }
   const finalState = receipt.documents[document.key]!;
+  const availability = await api.json<{
+    documents: Record<
+      BaselineKey,
+      { revision: string; contentHash: string | null; effective: boolean }
+    >;
+  }>("/legal-documents/availability");
+  const record = availability.documents[document.key];
+  if (
+    record?.effective &&
+    record.revision === document.revisionCode &&
+    record.contentHash === revision.contentHash
+  ) {
+    finalState.status = "published";
+  } else if (record?.effective && record.revision === document.revisionCode) {
+    throw new Error(
+      `${document.key} availability hash does not match the imported revision`,
+    );
+  }
   finalState.auditEventIds = await auditIds(
     api,
     document.key,
@@ -771,7 +835,7 @@ async function verifyBaseline(
           `${document.key} public revision does not match the package`,
         );
       }
-    } else if (record?.effective) {
+    } else if (record?.effective && record.revision === document.revisionCode) {
       throw new Error(
         `${document.key} receipt is scheduled but availability is effective`,
       );
@@ -788,6 +852,14 @@ async function main(): Promise<void> {
   }).trim();
   const targetFile = readJsonFile(path.resolve(targetConfigPath));
   const target = parseTargetConfig(targetFile.value);
+  const trustedTargetsPath = requiredString(
+    process.env.TAVEN_LEGAL_IMPORT_TRUSTED_TARGETS,
+    "TAVEN_LEGAL_IMPORT_TRUSTED_TARGETS",
+  );
+  const trustedTargets = parseTrustedTargetAllowlist(
+    readJsonFile(path.resolve(trustedTargetsPath)).value,
+  );
+  assertTrustedTarget(target, trustedTargets);
   const baseline = await loadBaselinePackage(repoRoot);
   const existing = readReceipt(path.resolve(receiptPath));
   const effectiveAt = normalizeEffectiveAt(

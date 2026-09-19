@@ -4,6 +4,7 @@ import {
   canonicalJson,
   loadBaselinePackage,
   parseTargetConfig,
+  parseTrustedTargetAllowlist,
 } from "./import-development-legal-baseline";
 
 describe("development legal baseline importer", () => {
@@ -59,6 +60,28 @@ describe("development legal baseline importer", () => {
     );
   });
 
+  it("requires an exact match in the trusted target allowlist", () => {
+    expect(
+      parseTrustedTargetAllowlist({
+        targets: [
+          {
+            targetId: "local-dev",
+            environment: "development",
+            baseUrl: "http://localhost:3001",
+            origin: "http://localhost:3002",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        targetId: "local-dev",
+        environment: "development",
+        baseUrl: "http://localhost:3001",
+        origin: "http://localhost:3002",
+      },
+    ]);
+  });
+
   it("loads the six pinned v0.1 documents from the approved source commit", async () => {
     const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
       encoding: "utf8",
@@ -76,7 +99,9 @@ describe("development legal baseline importer", () => {
       ],
     );
     expect(baseline.sourceHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(baseline.packageHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(baseline.packageHash).toBe(
+      "f77dc21040b14699b112f31093171e5ccf4ce3d018ee4cb923227b261e0a184d",
+    );
     expect(
       baseline.documents.every((document) => document.sections.length > 0),
     ).toBe(true);

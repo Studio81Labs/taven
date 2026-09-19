@@ -75,8 +75,11 @@ descriptor. Start from `docs/operator/legal-baseline-target.example.json`, copy
 it outside the repository, and set the real target URL and stable target ID.
 The descriptor must identify `development` or `staging`, set
 `allowBaselineImport` to `true`, and use an exact allowed admin origin; a
-production target is rejected before any request is sent. The importer does
-not classify a target from `NODE_ENV`.
+production target is rejected before any request is sent. The descriptor must
+also exactly match a separately managed trusted target allowlist supplied via
+`TAVEN_LEGAL_IMPORT_TRUSTED_TARGETS`; this binds the target label to an
+operator-controlled URL/environment pair rather than trusting the descriptor
+alone. The importer does not classify a target from `NODE_ENV`.
 
 Supply an existing authenticated ADMIN session and its CSRF token through
 `TAVEN_LEGAL_IMPORT_SESSION_COOKIE` and `TAVEN_LEGAL_IMPORT_CSRF_TOKEN`. These
@@ -88,6 +91,7 @@ actor and audit trail remain real operator evidence.
 cp docs/operator/legal-baseline-target.example.json /tmp/taven-baseline-target.json
 TAVEN_LEGAL_IMPORT_SESSION_COOKIE='taven_admin=…' \
 TAVEN_LEGAL_IMPORT_CSRF_TOKEN='…' \
+TAVEN_LEGAL_IMPORT_TRUSTED_TARGETS=/secure/taven-legal-baseline-targets.json \
   pnpm -C apps/backend legal:baseline:import \
     --target-config /tmp/taven-baseline-target.json \
     --receipt /tmp/taven-legal-baseline-receipt.json
