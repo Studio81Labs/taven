@@ -375,18 +375,24 @@ export async function loadBaselinePackage(
   };
 }
 
-function parseArguments(argv: readonly string[]): Arguments {
+const IMPORT_ARGUMENTS = new Set(["target-config", "receipt", "effective-at"]);
+
+export function parseArguments(argv: readonly string[]): Arguments {
   const result: Record<string, string | true> = {};
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (!value?.startsWith("--")) throw new Error(`Unknown argument ${value}`);
     const name = value.slice(2);
     if (!name) throw new Error("Argument name is empty");
+    if (!IMPORT_ARGUMENTS.has(name)) {
+      throw new Error(`Unknown argument --${name}`);
+    }
     const next = argv[index + 1];
-    if (next && !next.startsWith("--")) {
-      result[name] = next;
-      index += 1;
-    } else result[name] = true;
+    if (!next || next.startsWith("--")) {
+      throw new Error(`Argument --${name} requires a value`);
+    }
+    result[name] = next;
+    index += 1;
   }
   return result;
 }
@@ -734,7 +740,7 @@ async function reconcileDocument(
     );
   }
 
-  const current = receipt.documents[document.key];
+  let current = receipt.documents[document.key];
   if (revision.status === "APPROVED") {
     const approvedEffectiveAt = revision.effectiveAt ?? current?.effectiveAt;
     if (!approvedEffectiveAt || !revision.approvedBy || !revision.approvedAt) {
@@ -755,7 +761,9 @@ async function reconcileDocument(
       approvedAt: revision.approvedAt,
     };
     writeReceipt(receiptPath, receipt);
+    current = receipt.documents[document.key];
   }
+  if (!current) throw new Error(`${document.key} has no receipt state`);
   const publication = detail.publications.find(
     (candidate) =>
       candidate.revisionId === revision.id &&
@@ -791,22 +799,29 @@ async function reconcileDocument(
       },
       true,
     );
+    if (published.cancelledAt !== undefined) {
+      throw new Error(
+        `${document.key} publish idempotency record refers to a cancelled publication`,
+      );
+    }
     receipt.documents[document.key] = {
+      ...current,
       revisionId: revision.id,
       contentHash: revision.contentHash,
-      effectiveAt: current?.effectiveAt ?? revision.effectiveAt!,
+      effectiveAt: current.effectiveAt,
       publicationId: published.id,
       status: "scheduled",
       auditEventIds: [],
     };
   } else {
     receipt.documents[document.key] = {
+      ...current,
       revisionId: revision.id,
       contentHash: revision.contentHash,
-      effectiveAt: current?.effectiveAt ?? revision.effectiveAt!,
+      effectiveAt: current.effectiveAt,
       publicationId: selectedPublication.id,
       status: "scheduled",
-      auditEventIds: current?.auditEventIds ?? [],
+      auditEventIds: current.auditEventIds,
     };
   }
   const finalState = receipt.documents[document.key]!;

@@ -4,6 +4,7 @@ import {
   canonicalJson,
   loadBaselinePackage,
   normalizeEffectiveAt,
+  parseArguments,
   parseTargetConfig,
   parseTrustedTargetAllowlist,
 } from "./import-development-legal-baseline";
@@ -53,6 +54,15 @@ describe("development legal baseline importer", () => {
         allowBaselineImport: true,
       }),
     ).toThrow(/credentials or a fragment/);
+  });
+
+  it("rejects valueless and unknown command-line options", () => {
+    expect(() => parseArguments(["--effective-at"])).toThrow(
+      /requires a value/,
+    );
+    expect(() => parseArguments(["--unexpected", "value"])).toThrow(
+      /Unknown argument/,
+    );
   });
 
   it("serializes package values deterministically", () => {
