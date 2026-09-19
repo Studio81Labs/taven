@@ -259,8 +259,8 @@ $$;
 
 -- Record the exact request/Quote pairs that were present at cutover. This is
 -- immutable migration evidence for the narrowly retained legacy branch; a
--- post-cutover writer cannot manufacture provenance by choosing the marker
--- string or by adding another Quote to an old request.
+-- post-cutover writer cannot manufacture provenance by adding another Quote
+-- to an old request.
 CREATE TABLE "legacy_quote_request_imports" (
     "quote_request_id" UUID NOT NULL,
     "quote_id" UUID NOT NULL,
@@ -274,8 +274,7 @@ CREATE TABLE "legacy_quote_request_imports" (
 );
 INSERT INTO "legacy_quote_request_imports" ("quote_request_id", "quote_id")
 SELECT quote."quote_request_id", quote."id"
-FROM "quotes" quote
-WHERE quote."issuance_command_key" = 'legacy-import';
+FROM "quotes" quote;
 
 CREATE FUNCTION taven_protect_legacy_quote_request_imports()
 RETURNS trigger
@@ -1027,7 +1026,6 @@ BEGIN
               ON quote."id" = imported."quote_id"
              AND quote."quote_request_id" = imported."quote_request_id"
             WHERE imported."quote_request_id" = target_quote_request_id
-              AND quote."issuance_command_key" = 'legacy-import'
         ) THEN
             RAISE EXCEPTION 'Quote request requires immutable privacy acknowledgement evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_privacy_acceptance_evidence_check';
