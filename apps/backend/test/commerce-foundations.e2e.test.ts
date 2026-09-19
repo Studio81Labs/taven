@@ -3721,11 +3721,41 @@ describe("commerce persistence foundations", () => {
       );
       const mutableQuoteId = fixtures.id("reference-inputs:quote");
       const quoteCreatedAt = new Date();
+      const mutableRequestDecisionId = fixtures.id(
+        "reference-inputs:request-decision",
+      );
+      await client.query(
+        `INSERT INTO legal_acceptance_decisions
+           (id, quote_request_id, command_identity, decided_at, originating_xid)
+         VALUES ($1,$2,$3,$4,'test')`,
+        [
+          mutableRequestDecisionId,
+          mutableQuoteRequestId,
+          "reference-inputs:request-privacy",
+          quoteCreatedAt,
+        ],
+      );
       await client.query(
         `INSERT INTO quote_requests
            (id, customer_id, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
         [mutableQuoteRequestId, foundation.customerId, quoteCreatedAt],
+      );
+      await client.query(
+        `INSERT INTO legal_acceptances
+           (id, quote_request_id, revision_id, purpose, accepted_at,
+            command_identity, decision_id)
+         SELECT gen_random_uuid(), $1, revision.id,
+                'PRIVACY_NOTICE_ACKNOWLEDGED', $3, $4, $2
+         FROM legal_document_revisions revision
+         JOIN legal_documents document ON document.id = revision.document_id
+         WHERE document.key = 'privacy' AND revision.revision_code = 'privacy-v1'`,
+        [
+          mutableQuoteRequestId,
+          mutableRequestDecisionId,
+          quoteCreatedAt,
+          "reference-inputs:request-privacy",
+        ],
       );
       await advanceQuoteRequestToQuoted(
         client,
@@ -4051,6 +4081,10 @@ describe("commerce persistence foundations", () => {
         `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id)
          VALUES ($1,$2)`,
         [mutableQuoteId, mutableSnapshotId],
+      );
+      await client.query(
+        `UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1`,
+        [mutableQuoteRequestId, mutableQuoteId],
       );
       await forceQuoteIssuanceConstraints(client);
     });
@@ -21036,11 +21070,47 @@ describe("commerce persistence foundations", () => {
         },
       );
 
+      const requestDecision = await client.query<{
+        id: string;
+        decided_at: Date;
+      }>(
+        `INSERT INTO legal_acceptance_decisions
+           (id, quote_request_id, command_identity, decided_at, originating_xid)
+         VALUES ($1,$2,$3,$4,'test')
+         RETURNING id, decided_at`,
+        [
+          fixtures.id("quote-issuance-request-decision"),
+          requestId,
+          "quote-issuance-request-privacy",
+          now,
+        ],
+      );
+      const requestDecisionId = requestDecision.rows[0]?.id;
+      const requestDecisionAt = requestDecision.rows[0]?.decided_at;
+      if (!requestDecisionId || !requestDecisionAt) {
+        throw new Error("request decision is missing");
+      }
       await client.query(
         `INSERT INTO quote_requests
            (id, customer_id, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
-        [requestId, foundation.customerId, now],
+        [requestId, foundation.customerId, requestDecisionAt],
+      );
+      await client.query(
+        `INSERT INTO legal_acceptances
+           (id, quote_request_id, revision_id, purpose, accepted_at,
+            command_identity, decision_id)
+         SELECT gen_random_uuid(), $1, revision.id,
+                'PRIVACY_NOTICE_ACKNOWLEDGED', $3, $4, $2
+         FROM legal_document_revisions revision
+         JOIN legal_documents document ON document.id = revision.document_id
+         WHERE document.key = 'privacy' AND revision.revision_code = 'privacy-v1'`,
+        [
+          requestId,
+          requestDecisionId,
+          requestDecisionAt,
+          "quote-issuance-request-privacy",
+        ],
       );
       await expectQueryError(
         client,
@@ -21183,6 +21253,10 @@ describe("commerce persistence foundations", () => {
         `INSERT INTO quote_price_bindings (quote_id, price_snapshot_id)
          VALUES ($1,$2)`,
         [quoteId, snapshotId],
+      );
+      await client.query(
+        `UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1`,
+        [requestId, quoteId],
       );
       await forceQuoteIssuanceConstraints(client);
       const issuedPhotoDeadlines = (
@@ -21386,6 +21460,10 @@ describe("commerce persistence foundations", () => {
             expires_at, issued_at, created_at)
          VALUES ($1,$2,$3,'legacy-import',$4,$5,$5)`,
         [quoteId, requestId, foundation.customerId, quoteExpiresAt, issuedAt],
+      );
+      await issuing.query(
+        `UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1`,
+        [requestId, quoteId],
       );
       await issuing.query(
         `INSERT INTO price_snapshots

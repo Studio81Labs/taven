@@ -26,6 +26,39 @@ SET "current_quote_id" = quote."id"
 FROM "quotes" quote
 WHERE quote."quote_request_id" = request."id";
 
+-- Record the exact request/Quote pairs that were present at cutover. This is
+-- immutable migration evidence for the narrowly retained legacy branch; a
+-- post-cutover writer cannot manufacture provenance by choosing the marker
+-- string or by adding another Quote to an old request.
+CREATE TABLE "legacy_quote_request_imports" (
+    "quote_request_id" UUID NOT NULL,
+    "quote_id" UUID NOT NULL,
+    CONSTRAINT "legacy_quote_request_imports_pkey"
+        PRIMARY KEY ("quote_request_id", "quote_id"),
+    CONSTRAINT "legacy_quote_request_imports_request_fkey"
+        FOREIGN KEY ("quote_request_id") REFERENCES "quote_requests"("id") ON DELETE RESTRICT,
+    CONSTRAINT "legacy_quote_request_imports_quote_fkey"
+        FOREIGN KEY ("quote_id", "quote_request_id")
+        REFERENCES "quotes"("id", "quote_request_id") ON DELETE RESTRICT
+);
+INSERT INTO "legacy_quote_request_imports" ("quote_request_id", "quote_id")
+SELECT quote."quote_request_id", quote."id"
+FROM "quotes" quote
+WHERE quote."issuance_command_key" = 'legacy-import';
+
+CREATE FUNCTION taven_protect_legacy_quote_request_imports()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'legacy quote import evidence is immutable'
+        USING ERRCODE = '23514', CONSTRAINT = 'legacy_quote_request_imports_immutable_check';
+END;
+$$;
+CREATE TRIGGER "legacy_quote_request_imports_immutable"
+BEFORE INSERT OR UPDATE OR DELETE ON "legacy_quote_request_imports"
+FOR EACH ROW EXECUTE FUNCTION taven_protect_legacy_quote_request_imports();
+
 -- Reconcile the versioned offer pointer at commit.  The composite foreign key
 -- proves request ownership, while this deferred check proves that the
 -- selected offer is the newest sealed version and that every newly inserted
@@ -60,6 +93,22 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    IF TG_TABLE_NAME = 'quotes' AND TG_OP = 'INSERT' THEN
+        IF request_row."current_quote_id" IS DISTINCT FROM NEW."id" THEN
+            RAISE EXCEPTION 'every inserted Quote must become the current offer'
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_request_inserted_offer_current_check';
+        END IF;
+        SELECT coalesce(max(quote."version"), 0)
+          INTO latest_version
+          FROM "quotes" quote
+         WHERE quote."quote_request_id" = request_row."id"
+           AND quote."id" <> NEW."id";
+        IF NEW."version" IS DISTINCT FROM latest_version + 1 THEN
+            RAISE EXCEPTION 'inserted Quote version must immediately follow the current offer'
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_request_inserted_offer_version_check';
+        END IF;
+    END IF;
+
     IF TG_TABLE_NAME = 'quote_requests' AND TG_OP = 'UPDATE' THEN
         IF NEW."current_quote_id" IS DISTINCT FROM OLD."current_quote_id"
            AND (
@@ -74,26 +123,6 @@ BEGIN
     IF request_row."current_quote_id" IS NULL THEN
         IF request_row."status" IN ('QUOTED', 'ACCEPTED', 'REJECTED', 'EXPIRED')
            OR TG_TABLE_NAME = 'quotes' THEN
-            -- Pre-cutover imports do not have a pointer until the migration
-            -- backfill (or an explicit reissue) supplies one. Preserve their
-            -- historical atomic-issuance contract while requiring the pointer
-            -- for every newly issued offer.
-            IF EXISTS (
-                SELECT 1
-                FROM "quotes" quote
-                JOIN "quote_price_bindings" binding ON binding."quote_id" = quote."id"
-                  WHERE quote."quote_request_id" = request_row."id"
-                  AND quote."issuance_command_key" = 'legacy-import'
-                  AND quote."customer_id" = request_row."customer_id"
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM "quotes" newer_quote
-                      WHERE newer_quote."quote_request_id" = request_row."id"
-                        AND newer_quote."issuance_command_key" <> 'legacy-import'
-                  )
-            ) THEN
-                RETURN NULL;
-            END IF;
             RAISE EXCEPTION 'quoted or closed request requires its current offer'
                 USING ERRCODE = '23514', CONSTRAINT = 'quote_request_issuance_atomic_check';
         END IF;
@@ -762,8 +791,11 @@ BEGIN
         -- replacement offer impossible to accept.
         IF NOT EXISTS (
             SELECT 1
-            FROM "quotes" quote
-            WHERE quote."quote_request_id" = target_quote_request_id
+            FROM "legacy_quote_request_imports" imported
+            JOIN "quotes" quote
+              ON quote."id" = imported."quote_id"
+             AND quote."quote_request_id" = imported."quote_request_id"
+            WHERE imported."quote_request_id" = target_quote_request_id
               AND quote."issuance_command_key" = 'legacy-import'
         ) THEN
             RAISE EXCEPTION 'Quote request requires immutable privacy acknowledgement evidence'
