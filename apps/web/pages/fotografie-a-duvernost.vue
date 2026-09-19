@@ -21,8 +21,8 @@ else onMounted(() => void refresh());
 
 usePublicPageMeta({
   path: "/fotografie-a-duvernost",
-  title: document.value.title,
-  description: document.value.summary,
+  title: () => document.value.title,
+  description: () => document.value.summary,
   noindex: computed(() => !effective.value),
 });
 </script>

@@ -11,8 +11,8 @@ else onMounted(() => void refresh());
 
 usePublicPageMeta({
   path: "/zakazany-obsah",
-  title: document.value.title,
-  description: document.value.summary,
+  title: () => document.value.title,
+  description: () => document.value.summary,
   noindex: computed(() => !effective.value),
 });
 </script>
