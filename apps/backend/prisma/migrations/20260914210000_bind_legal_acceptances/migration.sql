@@ -479,10 +479,11 @@ BEGIN
     IF request_command_key = 'legacy-import' THEN
         IF TG_TABLE_NAME = 'quote_requests'
            AND TG_OP = 'UPDATE'
-           AND NEW."photo_publication_consent_granted_at" IS DISTINCT FROM OLD."photo_publication_consent_granted_at"
+           AND (to_jsonb(NEW) -> 'photo_publication_consent_granted_at') IS DISTINCT FROM
+               (to_jsonb(OLD) -> 'photo_publication_consent_granted_at')
            AND (
-               NEW."photo_publication_consent_granted_at" IS NULL
-               OR OLD."photo_publication_consent_granted_at" IS NOT NULL
+               (to_jsonb(NEW) -> 'photo_publication_consent_granted_at') IS NULL
+               OR (to_jsonb(OLD) -> 'photo_publication_consent_granted_at') IS NOT NULL
                OR NOT EXISTS (
                    SELECT 1
                    FROM "legal_acceptances" acceptance
