@@ -11661,7 +11661,12 @@ describe("commerce persistence foundations", () => {
               await fixtures.capturePayment(foundation, undefined, capturedAt);
               await forceCaptureActivationConstraints(client);
             },
-            { code: "23514", constraint: "payment_capture_activation_check" },
+            {
+              code: "23514",
+              constraint: staleOrder
+                ? "order_checkout_acceptance_check"
+                : "payment_capture_activation_check",
+            },
           );
         }
 
@@ -11679,8 +11684,9 @@ describe("commerce persistence foundations", () => {
           tolerated,
           toleratedProductions,
         );
+        await fixtures.acceptCheckoutTerms(tolerated);
         const capturedAt = new Date();
-        const toleratedActivationAt = new Date(capturedAt.getTime() - 2_000);
+        const toleratedActivationAt = capturedAt;
         await client.query(
           `UPDATE orders
            SET status = 'CONFIRMED', confirmed_at = $2, updated_at = $2
@@ -17506,7 +17512,7 @@ describe("commerce persistence foundations", () => {
       await client.query(
         `UPDATE orders
          SET status = 'QUOTED',
-             quoted_at = clock_timestamp() + interval '2 seconds',
+             quoted_at = clock_timestamp() - interval '2 seconds',
              updated_at = clock_timestamp()
          WHERE id = $1`,
         [order.orderId],
@@ -21324,20 +21330,51 @@ describe("commerce persistence foundations", () => {
       const foundation = await fixtures.createFoundation(
         "quote-photo-issuance-concurrency",
       );
+      const requestDecision = await setup.query<{
+        id: string;
+        decided_at: Date;
+      }>(
+        `INSERT INTO legal_acceptance_decisions
+           (id, quote_request_id, command_identity, decided_at, originating_xid)
+         VALUES ($1, $2, $3, clock_timestamp(), pg_current_xact_id()::text)
+         RETURNING id, decided_at`,
+        [
+          fixtures.id("concurrent-reference-request-decision"),
+          requestId,
+          "concurrent-reference-request-privacy",
+        ],
+      );
+      const requestDecisionRow = requestDecision.rows[0];
+      if (!requestDecisionRow) throw new Error("request decision is missing");
+      const requestCreatedAt = requestDecisionRow.decided_at;
       await setup.query(
         `INSERT INTO quote_requests
            (id, customer_id, status, current_state_command_key, created_at, updated_at)
          VALUES ($1,$2,'NEW','legacy-import',$3,$3)`,
-        [requestId, foundation.customerId, createdAt],
+        [requestId, foundation.customerId, requestCreatedAt],
+      );
+      await setup.query(
+        `INSERT INTO legal_acceptances
+           (id, quote_request_id, revision_id, purpose, accepted_at,
+            command_identity, decision_id)
+         SELECT gen_random_uuid(), $1, revision.id,
+                'PRIVACY_NOTICE_ACKNOWLEDGED', decision.decided_at,
+                decision.command_identity, decision.id
+         FROM legal_document_revisions revision
+         JOIN legal_documents document ON document.id = revision.document_id
+         JOIN legal_acceptance_decisions decision ON decision.id = $2
+         WHERE document.key = 'privacy' AND revision.revision_code = 'privacy-v1'`,
+        [requestId, requestDecisionRow.id],
       );
       await setup.query(
         `UPDATE quote_requests SET status = 'IN_REVIEW', updated_at = $2
          WHERE id = $1`,
-        [requestId, createdAt],
+        [requestId, requestCreatedAt],
       );
       await setup.query("COMMIT");
 
       await issuing.query("BEGIN");
+      const issuedAt = new Date();
       await issuing.query(
         `UPDATE quote_requests SET status = 'QUOTED', updated_at = $2
          WHERE id = $1`,
@@ -21348,7 +21385,7 @@ describe("commerce persistence foundations", () => {
            (id, quote_request_id, customer_id, issuance_command_key,
             expires_at, issued_at, created_at)
          VALUES ($1,$2,$3,'legacy-import',$4,$5,$5)`,
-        [quoteId, requestId, foundation.customerId, quoteExpiresAt, createdAt],
+        [quoteId, requestId, foundation.customerId, quoteExpiresAt, issuedAt],
       );
       await issuing.query(
         `INSERT INTO price_snapshots
@@ -22013,10 +22050,6 @@ describe("commerce persistence foundations", () => {
           constraint: "quote_request_individual_order_atomic_check",
         },
       );
-      await client.query(
-        `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1`,
-        [quoteRequestId, now],
-      );
       const closedRequestId = fixtures.id("closed-custom-request");
       const closedQuoteId = fixtures.id("closed-custom-quote");
       const closedSnapshotId = fixtures.id("closed-custom-snapshot");
@@ -22090,8 +22123,14 @@ describe("commerce persistence foundations", () => {
           ),
         {
           code: "23514",
-          constraint: "quote_item_accepted_immutable_check",
+          constraint: "quote_item_price_binding_immutable_check",
         },
+      );
+
+      await client.query(
+        `UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2
+         WHERE id = $1`,
+        [quoteRequestId, now],
       );
 
       await expectQueryError(

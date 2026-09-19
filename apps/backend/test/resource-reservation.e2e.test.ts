@@ -174,9 +174,7 @@ describe("phase resource reservation execution", () => {
         "eligibility-source-horizon",
         {
           deleteAfter: new Date(Date.now() + 105 * 60 * 1_000),
-          quoteExpiresAt: new Date(
-            Date.now() + 105 * 60 * 1_000 - 90 * 24 * 60 * 60 * 1_000,
-          ),
+          quoteExpiresAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000),
         },
       );
       const now = new Date();

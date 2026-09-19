@@ -3425,9 +3425,7 @@ describe("persistence foundations", () => {
           {
             deleteAfter: testTimes.capacityHalfHour,
             hold: "NONE",
-            quoteExpiresAt: new Date(
-              testTimes.capacityStart.getTime() - 91 * 24 * 60 * 60 * 1_000,
-            ),
+            quoteExpiresAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1_000),
           },
         );
         await client.query(

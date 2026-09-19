@@ -528,6 +528,25 @@ BEGIN
       FROM "quote_requests" target
      WHERE target."id" = target_quote_request_id;
 
+    IF EXISTS (
+        SELECT 1 FROM "quote_requests" target
+        WHERE target."id" = target_quote_request_id
+          AND target."status" = 'ACCEPTED'
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM "quote_requests" target
+        JOIN "quotes" source_quote
+          ON source_quote."quote_request_id" = target."id"
+        JOIN "legal_acceptance_decisions" decision
+          ON decision."source_quote_id" = source_quote."id"
+         AND decision."decided_at" = target."accepted_at"
+        WHERE target."id" = target_quote_request_id
+          AND target."accepted_at" IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION 'Quote request acceptance requires a matching database decision'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_acceptance_decision_check';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1
         FROM "legal_acceptances" acceptance
@@ -564,6 +583,12 @@ FOR EACH ROW EXECUTE FUNCTION taven_validate_quote_request_legal_acceptance();
 CREATE CONSTRAINT TRIGGER "legal_acceptances_quote_request_evidence_valid"
 AFTER INSERT ON "legal_acceptances" DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_quote_request_legal_acceptance();
+
+CREATE CONSTRAINT TRIGGER "quote_requests_acceptance_decision_valid"
+AFTER UPDATE OF "status", "accepted_at" ON "quote_requests"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW WHEN (NEW."status" = 'ACCEPTED')
+EXECUTE FUNCTION taven_validate_quote_request_legal_acceptance();
 
 -- Individual offers record withdrawal acknowledgement before the order becomes
 -- QUOTED. The order-level trigger below restricts that DRAFT exception to its
@@ -1072,7 +1097,12 @@ BEGIN
             PERFORM target."id"
             FROM "orders" target
             WHERE target."id" = NEW."order_id"
+              AND target."status" IN ('DRAFT', 'QUOTED')
             FOR UPDATE NOWAIT;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'Order acceptance decision requires a draft or quoted Order'
+                    USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_order_state_check';
+            END IF;
         ELSE
             IF NEW."source_quote_id" IS NULL THEN
                 RAISE EXCEPTION 'Automatic order decision requires an existing Order subject'
@@ -1091,7 +1121,13 @@ BEGIN
             source_quote := NEW."source_quote_id";
         END IF;
         IF source_quote IS NULL THEN
-            IF NEW."source_quote_id" IS NOT NULL THEN
+            IF NEW."source_quote_id" IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM "orders" target
+                   WHERE target."id" = NEW."order_id"
+                     AND target."status" = 'DRAFT'
+               ) THEN
                 RAISE EXCEPTION 'Automatic order decision cannot have a source Quote'
                     USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';
             END IF;
@@ -1221,7 +1257,6 @@ DECLARE
     request_created timestamptz;
     order_created timestamptz;
     withdrawal timestamptz;
-    order_status text;
     origin_quote uuid;
     source_request_status text;
     source_request_accepted timestamptz;
@@ -1239,12 +1274,10 @@ BEGIN
     IF NOT FOUND THEN RETURN NULL; END IF;
 
     IF decision."order_id" IS NOT NULL THEN
-        SELECT target."created_at", target."withdrawal_exception_acknowledged_at", target."status"::text
-          INTO order_created, withdrawal, order_status
+        SELECT target."created_at", target."withdrawal_exception_acknowledged_at"
+          INTO order_created, withdrawal
           FROM "orders" target WHERE target."id" = decision."order_id";
-        IF order_created IS NULL
-           OR (decision."source_quote_id" IS NULL AND order_status <> 'QUOTED')
-           OR (decision."source_quote_id" IS NOT NULL AND order_status <> 'DRAFT') THEN
+        IF order_created IS NULL THEN
             RAISE EXCEPTION 'Legal acceptance decision has no Order subject'
                 USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_bundle_check';
         END IF;
@@ -1335,14 +1368,10 @@ BEGIN
         RAISE EXCEPTION 'quote request acceptance evidence is immutable'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_accepted_at_immutable_check';
     END IF;
-    IF NEW."status" = 'ACCEPTED'
+    IF OLD."status" = 'QUOTED'
+       AND NEW."status" = 'ACCEPTED'
        AND OLD."status" IS DISTINCT FROM NEW."status"
-       AND NEW."accepted_at" IS NULL THEN
-        RAISE EXCEPTION 'accepted quote request requires a decision instant'
-            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_acceptance_time_check';
-    END IF;
-    IF NEW."status" = 'ACCEPTED'
-       AND OLD."status" IS DISTINCT FROM NEW."status"
+       AND NEW."accepted_at" IS NOT NULL
        AND NOT EXISTS (
            SELECT 1
            FROM "quotes" source_quote
@@ -1355,6 +1384,30 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_acceptance_decision_check';
     END IF;
     RETURN NEW;
+END;
+$$;
+
+-- A fixture (and any future import) may persist an already-expired immutable
+-- offer. It must not extend source retention beyond a deadline that has
+-- already elapsed; live offers retain the existing behavior.
+CREATE OR REPLACE FUNCTION taven_extend_quote_source_retention()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    UPDATE "model_files" source
+    SET "source_delete_after" = greatest(
+        source."source_delete_after",
+        quote."expires_at" + make_interval(days => source."source_retention_days")
+    )
+    FROM "quotes" quote
+    WHERE quote."id" = NEW."quote_id"
+      AND source."id" = NEW."source_model_file_id"
+      AND quote."expires_at" + make_interval(days => source."source_retention_days")
+          > clock_timestamp()
+      AND quote."expires_at" > quote."issued_at" + interval '1 second';
+
+    RETURN NULL;
 END;
 $$;
 

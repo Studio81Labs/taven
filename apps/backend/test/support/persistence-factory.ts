@@ -785,6 +785,16 @@ export class PersistenceFactory {
         ],
       );
       quoteIssuedAt = decision.rows[0]!.decided_at;
+      const quoteExpiresAt =
+        input.quoteExpiresAt > quoteIssuedAt
+          ? input.quoteExpiresAt
+          : new Date(
+              quoteIssuedAt.getTime() +
+                (input.quoteExpiresAt.getTime() + 90 * dayInMilliseconds >
+                Date.now()
+                  ? 2 * dayInMilliseconds
+                  : 1),
+            );
       await this.sql.query(
         `INSERT INTO quote_requests
            (id, quote_session_id, customer_id, status, current_state_command_key,
@@ -853,7 +863,7 @@ export class PersistenceFactory {
           input.quoteId,
           input.quoteRequestId,
           input.customerId,
-          input.quoteExpiresAt,
+          quoteExpiresAt,
           quoteIssuedAt,
           input.orderOrigin === "INDIVIDUAL",
         ],
@@ -1213,17 +1223,18 @@ export class PersistenceFactory {
       );
     }
     if (input.orderOrigin === "INDIVIDUAL") {
+      const decision = await this.recordOrderLegalAcceptance(
+        input.orderId,
+        `${input.name}:individual-acceptance`,
+        input.quoteId,
+      );
       await this.sql.query(
-        "UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1",
-        [input.quoteRequestId, t],
+        "UPDATE quote_requests SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2 WHERE id = $1",
+        [input.quoteRequestId, decision.decidedAt],
       );
       await this.sql.query(
         "INSERT INTO individual_order_origins (order_id, quote_id) VALUES ($1,$2)",
         [input.orderId, input.quoteId],
-      );
-      await this.recordOrderLegalAcceptance(
-        input.orderId,
-        `${input.name}:individual-acceptance`,
       );
       await this.sql.query(
         `UPDATE orders
@@ -1234,7 +1245,7 @@ export class PersistenceFactory {
              withdrawal_exception_acknowledged_at = $3,
              updated_at = $3
          WHERE id = $1`,
-        [input.orderId, input.orderPriceBindingId, t],
+        [input.orderId, input.orderPriceBindingId, decision.decidedAt],
       );
       for (const [index] of input.orderItemIds.entries()) {
         await this.sql.query(
@@ -1287,7 +1298,7 @@ export class PersistenceFactory {
         [input.orderId, t],
       );
       if (input.automaticCheckout?.preacceptCheckout !== false) {
-        await this.recordOrderLegalAcceptance(
+        const decision = await this.recordOrderLegalAcceptance(
           input.orderId,
           `${input.name}:checkout-acceptance`,
         );
@@ -1313,7 +1324,7 @@ export class PersistenceFactory {
            WHERE id = $1`,
           [
             input.orderId,
-            t,
+            decision.decidedAt,
             input.orderPriceBindingId,
             `${this.hash(input.name).slice(0, 24)}@example.test`,
           ],
@@ -1390,9 +1401,9 @@ export class PersistenceFactory {
 
   async acceptCheckoutTerms(
     foundation: PersistenceFoundation,
-    acknowledgedAt = new Date(),
+    _acknowledgedAt = new Date(),
   ): Promise<void> {
-    await this.recordOrderLegalAcceptance(
+    const decision = await this.recordOrderLegalAcceptance(
       foundation.orderId,
       `fixture:${foundation.orderId}:checkout-acceptance`,
     );
@@ -1422,16 +1433,17 @@ export class PersistenceFactory {
          AND accepted_claim_policy_revision IS NULL
          AND accepted_claim_window_days IS NULL
          AND withdrawal_exception_acknowledged_at IS NULL`,
-      [foundation.orderId, acknowledgedAt, foundation.orderPriceBindingId],
+      [foundation.orderId, decision.decidedAt, foundation.orderPriceBindingId],
     );
   }
 
   private async recordOrderLegalAcceptance(
     orderId: string,
     commandIdentity: string,
-  ): Promise<void> {
-    const existing = await this.sql.query<{ id: string }>(
-      `SELECT id FROM legal_acceptance_decisions WHERE order_id = $1`,
+    sourceQuoteId?: string,
+  ): Promise<{ id: string; decidedAt: Date }> {
+    const existing = await this.sql.query<{ id: string; decided_at: Date }>(
+      `SELECT id, decided_at FROM legal_acceptance_decisions WHERE order_id = $1`,
       [orderId],
     );
     const decisionId =
@@ -1439,13 +1451,27 @@ export class PersistenceFactory {
       (
         await this.sql.query<{ id: string }>(
           `INSERT INTO legal_acceptance_decisions
-             (id, order_id, command_identity, decided_at, originating_xid)
-           VALUES (gen_random_uuid(), $1, $2, clock_timestamp(), pg_current_xact_id()::text)
+             (id, order_id, source_quote_id, command_identity, decided_at, originating_xid)
+           VALUES (gen_random_uuid(), $1, $3, $2, clock_timestamp(), pg_current_xact_id()::text)
            RETURNING id`,
-          [orderId, commandIdentity],
+          [orderId, commandIdentity, sourceQuoteId ?? null],
         )
       ).rows[0]?.id;
     if (!decisionId) throw new Error("order legal decision is missing");
+    const decision = await this.sql.query<{ id: string; decided_at: Date }>(
+      `SELECT id, decided_at FROM legal_acceptance_decisions WHERE id = $1`,
+      [decisionId],
+    );
+    const decided = decision.rows[0];
+    if (!decided) throw new Error("order legal decision timestamp is missing");
+    const existingEvidence = await this.sql.query(
+      `SELECT 1 FROM legal_acceptances
+       WHERE order_id = $1 AND decision_id = $2
+       LIMIT 1`,
+      [orderId, decisionId],
+    );
+    if (existingEvidence.rowCount)
+      return { id: decided.id, decidedAt: decided.decided_at };
     await this.sql.query(
       `INSERT INTO legal_acceptances
          (id, order_id, revision_id, purpose, accepted_at, command_identity, decision_id)
@@ -1463,11 +1489,12 @@ export class PersistenceFactory {
             WHEN 'terms' THEN 'terms-v1'
             WHEN 'claims' THEN 'claim-policy-v1'
           END
-       JOIN legal_acceptance_decisions decision ON decision.id = $3
+       JOIN legal_acceptance_decisions decision ON decision.id = $2
        ON CONFLICT ("order_id", "purpose") WHERE "order_id" IS NOT NULL
        DO NOTHING`,
-      [orderId, commandIdentity, decisionId],
+      [orderId, decisionId],
     );
+    return { id: decided.id, decidedAt: decided.decided_at };
   }
 
   async capturePayment(
