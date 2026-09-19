@@ -516,6 +516,11 @@ function assertReceiptMatches(
       "Baseline receipt belongs to a different immutable package",
     );
   }
+  if (canonicalJson(receipt.package) !== canonicalJson(baseline)) {
+    throw new Error(
+      "Baseline receipt package contents do not match the pinned package",
+    );
+  }
 }
 
 function idempotencyKey(
@@ -624,22 +629,33 @@ async function auditIds(
   revisionId: string,
   publicationId: string | undefined,
 ): Promise<string[]> {
-  const page = await api.json<{
-    items: Array<{ id: string; payload: Record<string, unknown> }>;
-  }>(
-    `/admin/legal-documents/${encodeURIComponent(key)}/audit-events?limit=100`,
-  );
-  return page.items
-    .filter((event) => {
-      const payload = event.payload;
-      return (
-        payload.revisionId === revisionId &&
-        (payload.publicationId === undefined ||
-          (publicationId !== undefined &&
-            payload.publicationId === publicationId))
-      );
-    })
-    .map((event) => event.id);
+  const matches: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await api.json<{
+      items: Array<{ id: string; payload: Record<string, unknown> }>;
+      nextCursor?: string;
+    }>(
+      `/admin/legal-documents/${encodeURIComponent(key)}/audit-events?limit=100${
+        cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""
+      }`,
+    );
+    matches.push(
+      ...page.items
+        .filter((event) => {
+          const payload = event.payload;
+          return (
+            payload.revisionId === revisionId &&
+            (payload.publicationId === undefined ||
+              (publicationId !== undefined &&
+                payload.publicationId === publicationId))
+          );
+        })
+        .map((event) => event.id),
+    );
+    cursor = page.nextCursor;
+  } while (cursor);
+  return matches;
 }
 
 async function reconcileDocument(
@@ -786,11 +802,6 @@ async function reconcileDocument(
     current = receipt.documents[document.key];
   }
   if (!current) throw new Error(`${document.key} has no receipt state`);
-  const publication = detail.publications.find(
-    (candidate) =>
-      candidate.revisionId === revision.id &&
-      isCurrentPublication(detail, candidate),
-  );
   const currentDetail = await api.json<LegalDocumentDetail>(
     `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
   );
@@ -799,7 +810,7 @@ async function reconcileDocument(
       candidate.revisionId === revision.id &&
       isCurrentPublication(currentDetail, candidate),
   );
-  const selectedPublication = currentPublication ?? publication;
+  const selectedPublication = currentPublication;
   if (!selectedPublication) {
     const published = await api.json<LegalPublication>(
       `/admin/legal-documents/${encodeURIComponent(document.key)}/revisions/${revision.id}/publish`,
@@ -873,12 +884,17 @@ async function reconcileDocument(
       `${document.key} availability hash does not match the imported revision`,
     );
   }
-  finalState.auditEventIds = await auditIds(
+  const auditEventIds = await auditIds(
     api,
     document.key,
     revision.id,
     finalState.publicationId,
   );
+  if (auditEventIds.length > 0) {
+    finalState.auditEventIds = auditEventIds;
+  } else if (finalState.auditEventIds.length === 0) {
+    throw new Error(`${document.key} has no matching import audit evidence`);
+  }
   writeReceipt(receiptPath, receipt);
 }
 
