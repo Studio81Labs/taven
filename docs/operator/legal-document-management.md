@@ -63,6 +63,52 @@ An immediate or scheduled publication replaces the active publication only at
 its start boundary. Published text is publicly available at
 `GET /legal-documents/{key}/revisions/{revisionCode}` once active.
 
+## Import the owner-approved development baseline
+
+PR5c's v0.1 package is a development/staging baseline only. It is not counsel
+review, a production revision, or launch authorization. The package is pinned
+to the source commit and exact hashes described in
+`docs/product/taven-development-legal-baseline-v0.1.md`.
+
+Run the importer only with an explicitly selected, non-production target
+descriptor. Start from `docs/operator/legal-baseline-target.example.json`, copy
+it outside the repository, and set the real target URL and stable target ID.
+The descriptor must identify `development` or `staging`, set
+`allowBaselineImport` to `true`, and use an exact allowed admin origin; a
+production target is rejected before any request is sent. The importer does
+not classify a target from `NODE_ENV`.
+
+Supply an existing authenticated ADMIN session and its CSRF token through
+`TAVEN_LEGAL_IMPORT_SESSION_COOKIE` and `TAVEN_LEGAL_IMPORT_CSRF_TOKEN`. These
+values are never written to the receipt or logged. The session is used for the
+ordinary protected create, approve and publish commands, so the authenticated
+actor and audit trail remain real operator evidence.
+
+```bash
+cp docs/operator/legal-baseline-target.example.json /tmp/taven-baseline-target.json
+TAVEN_LEGAL_IMPORT_SESSION_COOKIE='taven_admin=…' \
+TAVEN_LEGAL_IMPORT_CSRF_TOKEN='…' \
+  pnpm -C apps/backend legal:baseline:import \
+    --target-config /tmp/taven-baseline-target.json \
+    --receipt /tmp/taven-legal-baseline-receipt.json
+```
+
+The receipt is created before mutations and records the immutable source and
+package hashes, target descriptor hash, per-document effective instant,
+revision/publication UUIDs, and audit event IDs. Re-running with the same
+target descriptor and receipt reconciles completed documents and reuses the
+same effective instants and idempotency namespace; it never overwrites an
+approved code or resamples a timestamp. Partial imports resume only missing
+documents. Use a new receipt for a different isolated target. Keep receipts
+restricted because they identify operator and environment metadata, even
+though they contain no credentials.
+
+The importer verifies the exact public revision and availability response after
+all six documents are complete. A future `--effective-at` is allowed for
+boundary testing and remains scheduled until its database publication starts.
+It does not enable production defaults, bypass database triggers, create a
+seed approval, or change the schema/API.
+
 ## Cancel or archive
 
 Cancel a still-pending scheduled publication with

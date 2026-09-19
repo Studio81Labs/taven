@@ -1,0 +1,7 @@
+{
+  "targetId": "local-development-legal-baseline",
+  "environment": "development",
+  "baseUrl": "http://localhost:3001",
+  "origin": "http://localhost:3002",
+  "allowBaselineImport": true
+}
