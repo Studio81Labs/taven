@@ -19,6 +19,28 @@ records the approved database and contract decisions; it does not migrate data,
 create production approvals, or authorize launch. PR4/#144 can finish on the
 existing merged mechanism before the two new implementation increments.
 
+## Owner-approved development baseline amendment
+
+The [owner decision in #38](https://github.com/Studio81Labs/taven/issues/38#issuecomment-5744707749)
+now approves the six current drafts as immutable v0.1 revisions for development
+and staging. [Development baseline contract](../product/taven-development-legal-baseline-v0.1.md)
+defines exact codes, source/hash pinning, environment-scoped evidence, owner-authorized
+import-time effective instants, explicit protected import, isolation and validation.
+This supersedes older statements below that final production approval blocks PR5c,
+or that no scoped baseline effective instant may be assigned. Normal unapproved
+drafts/seeds and production defaults remain fail-closed. No schema/API change or
+runtime approval shortcut is required: use the delivered management lifecycle in
+an explicitly isolated non-production database. APPROVED alone does not encode an
+environment boundary or prove counsel review.
+
+#151/#152 are delivered. Resume #143/PR5c with this actual owner-approved baseline;
+#38/#39 retain final legal review, new production revisions (expected v1.0), actual
+production instants/evidence, commercial approval and public activation. v0.1 is
+never edited or converted into v1.0. Preserve ADR0021/0022 acceptance timing,
+immutable historical references and settlement. PR5c owns baseline integration;
+#39 owns the production package check before opening new admissions. See the
+linked baseline contract for validation, replay and release obligations.
+
 ## Subsequent acceptance and reissue decisions
 
 [ADR 0021](0021-own-legal-acceptance-decision-time.md) / #159 replaces the

@@ -12,6 +12,20 @@ Tento registr odděluje skutečně potvrzené vstupy od návrhů, které nesměj
 použity jako závazný zákaznický slib. Není právním posouzením a nenahrazuje
 kontrolu českým právním poradcem.
 
+## Novější rozhodnutí: vývojový právní baseline v0.1
+
+[Vlastník v #38](https://github.com/Studio81Labs/taven/issues/38#issuecomment-5744707749)
+schválil současné návrhy jako immutable v0.1 pouze pro vývoj a staging.
+[Závazný rozsah, kódy a postup](taven-development-legal-baseline-v0.1.md) nahrazují
+starší zákaz použít tyto konkrétní revize ve vývojových API/checkout testech a
+čekání PR5c na produkční právní schválení. Účinnost smí implementace při importu
+přidělit pro dané neprodukční prostředí. Nejde o kontrolu českým právním poradcem
+ani o produkční účinnost. Běžné neschválené placeholdery zůstávají neúčinné.
+
+Historické záznamy níže zůstávají zachované; produkční sliby, veřejná aktivace a
+nové produkční právní revize (očekávané v1.0) nadále vyžadují #38/#39. Vývojový
+baseline se nikdy nepřepisuje na produkční revizi.
+
 ## 1. Právní identita prodávajícího
 
 Vlastník dodal pro veřejnou právní identifikaci služby tyto údaje:
