@@ -1,5 +1,10 @@
 import type { components } from "@taven/openapi-client";
-import { toValue, type MaybeRefOrGetter } from "vue";
+import {
+  getCurrentScope,
+  onScopeDispose,
+  toValue,
+  type MaybeRefOrGetter,
+} from "vue";
 import { legalDocuments } from "../content/public-site";
 import type { LegalDocumentKey } from "../content/launch-manifest";
 import type { LegalAvailability } from "../utils/legal-availability";
@@ -34,6 +39,12 @@ export function usePublicLegalDocument(
   pinnedRevision?: MaybeRefOrGetter<string | null>,
   pinnedContentHash?: MaybeRefOrGetter<string | null>,
 ) {
+  let disposed = false;
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      disposed = true;
+    });
+  }
   const { $api } = useNuxtApp();
   const { availability, refresh: refreshAvailability } = useLegalAvailability();
   const fallback = legalDocuments[key];
@@ -101,6 +112,7 @@ export function usePublicLegalDocument(
   async function refresh(
     selectedAvailability?: LegalAvailability | null,
   ): Promise<void> {
+    if (disposed) return;
     const stateIdentity = currentIdentity.value;
     const generation = (refreshGenerations.value[stateIdentity] ?? 0) + 1;
     refreshGenerations.value = {
@@ -109,13 +121,15 @@ export function usePublicLegalDocument(
     };
     const revisionCode = pinnedRevision ? toValue(pinnedRevision) : null;
     const contentHash = pinnedContentHash ? toValue(pinnedContentHash) : null;
-    const selected = selectedAvailability ?? (await refreshAvailability());
-    const record = selected?.documents[key];
     const isCurrent = () =>
+      !disposed &&
       generation === refreshGenerations.value[stateIdentity] &&
       stateIdentity === currentIdentity.value &&
       revisionCode === (pinnedRevision ? toValue(pinnedRevision) : null) &&
       contentHash === (pinnedContentHash ? toValue(pinnedContentHash) : null);
+    const selected = selectedAvailability ?? (await refreshAvailability());
+    if (!isCurrent()) return;
+    const record = selected?.documents[key];
     if (
       !revisionCode &&
       (!record?.effective || !record.contentHash || !record.effectiveAt)
@@ -134,6 +148,7 @@ export function usePublicLegalDocument(
       return;
     }
     try {
+      if (!isCurrent()) return;
       const response = await Promise.race([
         $api.GET("/legal-documents/{key}/revisions/{revisionCode}", {
           params: {
@@ -144,6 +159,7 @@ export function usePublicLegalDocument(
           setTimeout(() => reject(new Error("timeout")), 1_000),
         ),
       ]);
+      if (!isCurrent()) return;
       const revision = response.data as PublicRevision | undefined;
       if (
         !revision ||
@@ -155,6 +171,7 @@ export function usePublicLegalDocument(
         throw new Error("stale legal document response");
       }
       const latest = await refreshAvailability();
+      if (!isCurrent()) return;
       const latestRecord = latest?.documents[key];
       if (!revisionCode) {
         if (
