@@ -141,6 +141,16 @@ export function assertCheckoutPaymentMethodsAvailable(
   }
 }
 
+export function assertCheckoutRetryPaymentMethodsAvailable(
+  availableMethods: readonly string[],
+): void {
+  if (availableMethods.length === 0) {
+    throw launchApprovalRequired(
+      "Checkout payment retries require at least one provider capability",
+    );
+  }
+}
+
 export function checkoutPaymentLaunchInputsApproved(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {

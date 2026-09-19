@@ -193,7 +193,7 @@ describe("payment capabilities", () => {
 });
 
 describe("checkout retry context", () => {
-  it("uses frozen accepted evidence after current publications rotate", async () => {
+  it("uses frozen accepted evidence and an available method after publications rotate", async () => {
     vi.stubEnv(CHECKOUT_PAYMENT_FLOWS_ENV, "true");
     vi.stubEnv(CHECKOUT_CLAIM_WINDOW_DAYS_ENV, "30");
     const token = "a".repeat(43);
@@ -233,7 +233,7 @@ describe("checkout retry context", () => {
       {
         capabilities: vi.fn().mockResolvedValue({
           provider: "sandbox",
-          methods: ["CARD", "BANK_TRANSFER"],
+          methods: ["CARD"],
         }),
       } as never,
       {} as never,
@@ -250,7 +250,7 @@ describe("checkout retry context", () => {
       ),
     ).resolves.toMatchObject({
       retryAllowed: true,
-      methods: ["CARD", "BANK_TRANSFER"],
+      methods: ["CARD"],
       acceptedEvidence: {
         termsRevision: "terms-v1",
         claimPolicyRevision: "claims-v1",

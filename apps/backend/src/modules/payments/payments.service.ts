@@ -16,6 +16,7 @@ import {
   assertCheckoutClaimPolicyRevisionCurrent,
   assertCheckoutPaymentFlowEnabled,
   assertCheckoutPaymentMethodsAvailable,
+  assertCheckoutRetryPaymentMethodsAvailable,
   assertCheckoutPaymentFlowsEnabled,
   assertEffectiveCheckoutPhotoConsent,
   assertCheckoutTermsRevisionCurrent,
@@ -209,7 +210,7 @@ export class PaymentsService {
     }
     try {
       const capabilities = await this.provider.capabilities();
-      assertCheckoutPaymentMethodsAvailable(capabilities.methods);
+      assertCheckoutRetryPaymentMethodsAvailable(capabilities.methods);
       return {
         retryAllowed: evidence.retryAttemptExists,
         methods: evidence.retryAttemptExists ? [...capabilities.methods] : [],
@@ -629,7 +630,11 @@ export class PaymentsService {
     assertCheckoutEvidenceMatches(initial.order, input);
 
     const capabilities = await this.provider.capabilities();
-    assertCheckoutPaymentMethodsAvailable(capabilities.methods);
+    if (initialFrozenEvidence) {
+      assertCheckoutRetryPaymentMethodsAvailable(capabilities.methods);
+    } else {
+      assertCheckoutPaymentMethodsAvailable(capabilities.methods);
+    }
     if (!capabilities.methods.includes(input.method)) {
       throw new BadRequestException("Payment method is unavailable");
     }

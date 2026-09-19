@@ -4,6 +4,8 @@ import {
   assertBindingQuoteFlowsEnabled,
   assertCheckoutPaymentFlowEnabled,
   assertCheckoutPaymentFlowsEnabled,
+  assertCheckoutPaymentMethodsAvailable,
+  assertCheckoutRetryPaymentMethodsAvailable,
   assertCheckoutTermsRevisionCurrent,
   assertEffectiveCheckoutLegalDocuments,
   assertQuotePhotoUploadsEnabled,
@@ -93,6 +95,18 @@ describe("launch approval gates", () => {
     expect(() =>
       assertCheckoutTermsRevisionCurrent("terms-v1", "terms-v1"),
     ).not.toThrow();
+  });
+
+  it("allows a retry when at least one payment method remains available", () => {
+    expect(() =>
+      assertCheckoutRetryPaymentMethodsAvailable(["CARD"]),
+    ).not.toThrow();
+    expect(() => assertCheckoutRetryPaymentMethodsAvailable([])).toThrow(
+      ServiceUnavailableException,
+    );
+    expect(() => assertCheckoutPaymentMethodsAvailable(["CARD"])).toThrow(
+      ServiceUnavailableException,
+    );
   });
 
   it("enables the unrelated switches only with explicit true", () => {
