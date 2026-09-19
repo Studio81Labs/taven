@@ -760,16 +760,18 @@ BEGIN
         -- such a request is carried forward by the explicit offer reissue
         -- path, retain its legacy privacy evidence rather than making the
         -- replacement offer impossible to accept.
-        IF EXISTS (
+        IF NOT EXISTS (
             SELECT 1
             FROM "quotes" quote
             WHERE quote."quote_request_id" = target_quote_request_id
               AND quote."issuance_command_key" = 'legacy-import'
         ) THEN
-            RETURN NULL;
+            RAISE EXCEPTION 'Quote request requires immutable privacy acknowledgement evidence'
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_privacy_acceptance_evidence_check';
         END IF;
-        RAISE EXCEPTION 'Quote request requires immutable privacy acknowledgement evidence'
-            USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_privacy_acceptance_evidence_check';
+        -- Keep validating photo-consent evidence below. The legacy privacy
+        -- exception must not make the mutable photo scalar a bypass for the
+        -- immutable consent ledger.
     END IF;
 
     IF (photo_consent_granted_at IS NULL AND EXISTS (
