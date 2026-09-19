@@ -717,8 +717,8 @@ export class QuotesService {
             throw new ConflictException("Current offer has expired");
           }
           const acceptedOrder =
-            await transaction.individualOrderOrigin.findUnique({
-              where: { quoteId: currentQuote.id },
+            await transaction.individualOrderOrigin.findFirst({
+              where: { quote: { quoteRequestId: requestId } },
               select: { orderId: true },
             });
           if (acceptedOrder) {
@@ -1149,7 +1149,7 @@ export class QuotesService {
           fromStoredResponse: (stored) => {
             if (!isCurrentStoredOfferIssuedResponse(stored)) {
               throw new ConflictException(
-                "Offer issuance replay is incompatible with the current legal evidence contract; retry with a new idempotency key",
+                "Offer issuance replay is incompatible with the current legal evidence contract; use the dedicated offer reissue command",
               );
             }
             const { capabilityKeyId, ...response } =
