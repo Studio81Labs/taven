@@ -150,7 +150,7 @@ type IdempotencyOptions<T> = Readonly<{
 }>;
 type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
 type LockedAutomaticQuoteHandoff =
-  Prisma.AutomaticQuoteHandoffCapabilityGetPayload<{}>;
+  Prisma.AutomaticQuoteHandoffCapabilityGetPayload<Prisma.AutomaticQuoteHandoffCapabilityDefaultArgs>;
 type StoredQuoteRequestCreatedResponse = Omit<
   QuoteRequestCreatedDto,
   "requestToken"
