@@ -157,14 +157,14 @@ type LegalPublication = {
   cancelledAt?: string;
 };
 
-function isCurrentPublication(
+function currentPublicationForRevision(
   detail: LegalDocumentDetail,
-  publication: LegalPublication,
-): boolean {
-  return (
-    publication.cancelledAt === undefined &&
-    (detail.activePublication?.id === publication.id ||
-      detail.pendingPublication?.id === publication.id)
+  revisionId: string,
+): LegalPublication | undefined {
+  return [detail.activePublication, detail.pendingPublication].find(
+    (publication) =>
+      publication?.revisionId === revisionId &&
+      publication.cancelledAt === undefined,
   );
 }
 
@@ -223,6 +223,15 @@ export function parseTargetConfig(value: unknown): BaselineTargetConfig {
   }
   const baseUrl = parseUrl(config.baseUrl, "baseUrl");
   const origin = parseUrl(config.origin, "origin");
+  for (const [name, value] of [
+    ["baseUrl", baseUrl],
+    ["origin", origin],
+  ] as const) {
+    const parsed = new URL(value);
+    if (parsed.protocol === "http:" && !isLoopbackHost(parsed.hostname)) {
+      throw new Error(`${name} must use HTTPS outside loopback development`);
+    }
+  }
   if (
     config.environment === "staging" &&
     (!baseUrl.startsWith("https://") || !origin.startsWith("https://"))
@@ -236,6 +245,12 @@ export function parseTargetConfig(value: unknown): BaselineTargetConfig {
     origin,
     allowBaselineImport: true,
   };
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return (
+    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+  );
 }
 
 export function parseTrustedTargetAllowlist(
@@ -666,9 +681,6 @@ async function reconcileDocument(
   receiptPath: string,
 ): Promise<void> {
   const state = receipt.documents[document.key];
-  if (state?.status === "published" && state.approvedBy && state.approvedAt) {
-    return;
-  }
   const detail = await api.json<LegalDocumentDetail>(
     `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
   );
@@ -805,10 +817,9 @@ async function reconcileDocument(
   const currentDetail = await api.json<LegalDocumentDetail>(
     `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
   );
-  const currentPublication = currentDetail.publications.find(
-    (candidate) =>
-      candidate.revisionId === revision.id &&
-      isCurrentPublication(currentDetail, candidate),
+  const currentPublication = currentPublicationForRevision(
+    currentDetail,
+    revision.id,
   );
   const selectedPublication = currentPublication;
   if (!selectedPublication) {
@@ -835,10 +846,12 @@ async function reconcileDocument(
     const publishedDetail = await api.json<LegalDocumentDetail>(
       `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
     );
-    const livePublication = publishedDetail.publications.find(
+    const livePublication = [
+      publishedDetail.activePublication,
+      publishedDetail.pendingPublication,
+    ].find(
       (candidate) =>
-        candidate.id === published.id &&
-        isCurrentPublication(publishedDetail, candidate),
+        candidate?.id === published.id && candidate.cancelledAt === undefined,
     );
     if (!livePublication) {
       throw new Error(

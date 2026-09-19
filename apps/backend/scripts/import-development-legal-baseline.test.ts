@@ -72,6 +72,15 @@ describe("development legal baseline importer", () => {
         allowBaselineImport: true,
       }),
     ).toThrow(/without a path prefix/);
+    expect(() =>
+      parseTargetConfig({
+        targetId: "remote-dev",
+        environment: "development",
+        baseUrl: "http://dev.example.test",
+        origin: "http://dev.example.test",
+        allowBaselineImport: true,
+      }),
+    ).toThrow(/HTTPS outside loopback/);
   });
 
   it("rejects valueless and unknown command-line options", () => {
