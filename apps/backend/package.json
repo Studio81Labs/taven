@@ -31,6 +31,7 @@
     "db:generate": "prisma generate",
     "db:seed": "prisma db seed",
     "operators:provision": "tsx scripts/provision-operator.ts",
+    "legal:baseline:import": "tsx scripts/import-development-legal-baseline.ts",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
