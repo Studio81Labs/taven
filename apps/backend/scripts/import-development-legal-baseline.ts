@@ -53,6 +53,20 @@ const OWNER_DECISION_REFERENCE =
   "https://github.com/Studio81Labs/taven/issues/38#issuecomment-5744707749";
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
+function baselineApprovalEvidence(
+  baseline: BaselinePackage,
+  target: BaselineTargetConfig,
+): string {
+  return [
+    "Owner-approved development/staging baseline v0.1",
+    OWNER_DECISION_REFERENCE,
+    `source commit ${baseline.sourceCommit}`,
+    `package hash ${baseline.packageHash}`,
+    `target ${target.targetId} (${target.environment})`,
+    "Counsel and production approval are not claimed",
+  ].join("; ");
+}
+
 export type BaselineKey = (typeof BASELINE_KEYS)[number];
 
 export type BaselineDocument = Readonly<{
@@ -131,6 +145,7 @@ type LegalDocumentSummary = {
 type LegalDocumentDetail = LegalDocumentSummary & {
   revisions: LegalRevision[];
   publications: LegalPublication[];
+  nextCursor?: string;
 };
 
 type LegalRevision = {
@@ -146,6 +161,7 @@ type LegalRevision = {
   effectiveAt?: string;
   approvedBy?: string;
   approvedAt?: string;
+  approvalEvidence?: string;
 };
 
 type LegalPublication = {
@@ -612,6 +628,29 @@ class BaselineApi {
   }
 }
 
+async function loadDocumentDetail(
+  api: BaselineApi,
+  key: BaselineKey,
+): Promise<LegalDocumentDetail> {
+  let cursor: string | undefined;
+  let detail: LegalDocumentDetail | undefined;
+  do {
+    const page = await api.json<LegalDocumentDetail>(
+      `/admin/legal-documents/${encodeURIComponent(key)}?limit=100&publicationLimit=100${
+        cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""
+      }`,
+    );
+    if (!detail) {
+      detail = { ...page, revisions: [...page.revisions] };
+    } else {
+      detail.revisions.push(...page.revisions);
+    }
+    cursor = page.nextCursor;
+  } while (cursor);
+  if (!detail) throw new Error(`${key} document detail was not returned`);
+  return detail;
+}
+
 function jsonBody(value: unknown): RequestInit {
   return { body: JSON.stringify(value) };
 }
@@ -681,9 +720,7 @@ async function reconcileDocument(
   receiptPath: string,
 ): Promise<void> {
   const state = receipt.documents[document.key];
-  const detail = await api.json<LegalDocumentDetail>(
-    `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
-  );
+  const detail = await loadDocumentDetail(api, document.key);
   let revision = detail.revisions.find(
     (candidate) => candidate.revisionCode === document.revisionCode,
   );
@@ -700,6 +737,15 @@ async function reconcileDocument(
   ) {
     throw new Error(
       `${document.key} already uses ${document.revisionCode} with different content`,
+    );
+  }
+  if (
+    revision?.status === "APPROVED" &&
+    revision.approvalEvidence !==
+      baselineApprovalEvidence(baseline, receipt.target)
+  ) {
+    throw new Error(
+      `${document.key} approved revision evidence does not match the v0.1 baseline`,
     );
   }
   if (!revision) {
@@ -761,14 +807,7 @@ async function reconcileDocument(
           expectedContentHash: revision.contentHash,
           revisionCode: document.revisionCode,
           effectiveAt,
-          approvalEvidence: [
-            "Owner-approved development/staging baseline v0.1",
-            OWNER_DECISION_REFERENCE,
-            `source commit ${baseline.sourceCommit}`,
-            `package hash ${baseline.packageHash}`,
-            `target ${receipt.target.targetId} (${receipt.target.environment})`,
-            "Counsel and production approval are not claimed",
-          ].join("; "),
+          approvalEvidence: baselineApprovalEvidence(baseline, receipt.target),
           reasonCode: BASELINE_REASON_CODE,
           reason: BASELINE_REASON,
         }),
@@ -814,9 +853,7 @@ async function reconcileDocument(
     current = receipt.documents[document.key];
   }
   if (!current) throw new Error(`${document.key} has no receipt state`);
-  const currentDetail = await api.json<LegalDocumentDetail>(
-    `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
-  );
+  const currentDetail = await loadDocumentDetail(api, document.key);
   const currentPublication = currentPublicationForRevision(
     currentDetail,
     revision.id,
@@ -843,9 +880,7 @@ async function reconcileDocument(
       },
       true,
     );
-    const publishedDetail = await api.json<LegalDocumentDetail>(
-      `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
-    );
+    const publishedDetail = await loadDocumentDetail(api, document.key);
     const livePublication = [
       publishedDetail.activePublication,
       publishedDetail.pendingPublication,
