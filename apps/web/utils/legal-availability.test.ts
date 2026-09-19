@@ -24,6 +24,7 @@ function availability() {
     revision: "document-v1",
     status: "approved" as const,
     effectiveAt: "2030-01-01T00:00:00.000Z",
+    contentHash: "a".repeat(64),
     effective: true,
   };
   return {

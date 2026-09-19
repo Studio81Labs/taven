@@ -35,6 +35,12 @@ instants. Its owning `QuoteRequest` carries the mutable
 availability is projected from that request state, the immutable expiry, and
 an injected clock; a second independently writable Quote status is forbidden.
 
+[ADR 0022](0022-version-individual-offers-for-reissue.md) adds atomic reissue
+while a request remains QUOTED: immutable Quote versions share that request,
+which explicitly selects its current Quote. Terminal requests retain that
+pointer. [ADR 0021](0021-own-legal-acceptance-decision-time.md) owns the shared
+first-acceptance decision instant; the canonical lock rank is unchanged.
+
 ### Deterministic lock protocol
 
 Every mutating command declares its complete lock set before making a state

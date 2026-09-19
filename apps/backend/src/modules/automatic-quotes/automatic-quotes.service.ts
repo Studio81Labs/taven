@@ -21,6 +21,7 @@ import {
   OrderStatus,
   OutboxStatus,
   PaymentRole,
+  PaymentStatus,
   PreflightSeverity,
   Prisma,
   PriceComponentKind,
@@ -50,6 +51,8 @@ import { ResourceReservationService } from "../resources/resource-reservation.se
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import { reserveAnonymousQuote } from "../quotes/anonymous-quote-limit";
+import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
+import { assertEffectiveLegalDocuments } from "../legal-approvals/legal-approvals.catalog";
 import {
   deliveryValidationParcels,
   parseAutomaticQuotePricingParameters,
@@ -228,6 +231,60 @@ export function isCarrierValidationReady(input: {
   return input.deliverySelector.mode !== "PACKETA" || input.allReferenceSliced;
 }
 
+export function hasFrozenCheckoutEvidence(order: {
+  acceptedOrderPriceBindingId: string | null;
+  acceptedTermsRevision: string | null;
+  acceptedClaimPolicyRevision: string | null;
+  acceptedClaimWindowDays: number | null;
+  withdrawalExceptionAcknowledgedAt: Date | null;
+}): boolean {
+  return frozenCheckoutEvidenceState(order) === "complete";
+}
+
+export function frozenCheckoutEvidenceState(order: {
+  acceptedOrderPriceBindingId: string | null;
+  acceptedTermsRevision: string | null;
+  acceptedClaimPolicyRevision: string | null;
+  acceptedClaimWindowDays: number | null;
+  withdrawalExceptionAcknowledgedAt: Date | null;
+}): "none" | "complete" | "partial" {
+  const present = [
+    order.acceptedOrderPriceBindingId,
+    order.acceptedTermsRevision,
+    order.acceptedClaimPolicyRevision,
+    order.acceptedClaimWindowDays,
+    order.withdrawalExceptionAcknowledgedAt,
+  ].filter((value) => value !== null).length;
+  return present === 0 ? "none" : present === 5 ? "complete" : "partial";
+}
+
+export function hasRetryableAutomaticCheckoutPayment(order: {
+  status: OrderStatus;
+  acceptedOrderPriceBindingId: string | null;
+  payments: ReadonlyArray<{
+    orderPriceBindingId: string;
+    role: PaymentRole;
+    status: PaymentStatus;
+  }>;
+}): boolean {
+  if (order.status !== OrderStatus.QUOTED || !order.acceptedOrderPriceBindingId)
+    return false;
+  const payments = order.payments.filter(
+    (payment) =>
+      payment.orderPriceBindingId === order.acceptedOrderPriceBindingId &&
+      payment.role === PaymentRole.FULL,
+  );
+  return (
+    payments.some((payment) => payment.status === PaymentStatus.FAILED) &&
+    !payments.some(
+      (payment) =>
+        payment.status === PaymentStatus.CREATED ||
+        payment.status === PaymentStatus.PENDING ||
+        payment.status === PaymentStatus.CAPTURED,
+    )
+  );
+}
+
 export async function parcelConfigurationChange(
   transaction: Transaction,
   orderId: string,
@@ -262,7 +319,15 @@ export class AutomaticQuotesService {
     private readonly resourceReservations: ResourceReservationService,
     @Inject(DELIVERY_CAPABILITY)
     private readonly deliveryCapabilities: DeliveryCapabilityPort,
+    private readonly legalApprovals?: LegalApprovalsService,
   ) {}
+
+  private requiredLegalApprovals(): LegalApprovalsService {
+    if (!this.legalApprovals) {
+      throw new Error("Legal approvals service is unavailable");
+    }
+    return this.legalApprovals;
+  }
 
   async createSession(
     input: CreateAutomaticQuoteSessionDto,
@@ -1567,26 +1632,36 @@ export class AutomaticQuotesService {
     sessionId = normalizedUuid(sessionId, "sessionId");
     const sessionCapability = bearerCapability(authorization);
     const commandKey = requireIdempotencyKey(idempotencyKey);
+    // Validate the capability before entering the idempotent transaction;
+    // all mutable/legal state used for preparation is read again after locks.
     const session = await this.loadSession(sessionId);
     assertSessionCapability(session, sessionCapability);
-    assertBindingQuoteFlowsEnabled();
+    let automaticOrderId: string | undefined;
     await this.idempotentEffect(
       "automatic-quote.prepare",
       commandKey,
       async (transaction) => {
+        await this.requiredLegalApprovals().lock(transaction, ["terms"]);
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const draft = await transaction.automaticQuoteDraft.findFirst({
           where: { order: { automaticOrigin: { quoteSessionId: sessionId } } },
-          select: { configurationRevision: true },
+          select: {
+            configurationRevision: true,
+            order: { select: { id: true } },
+          },
         });
-        if (!draft) throw new ConflictException("Automatic order is missing");
+        if (!draft?.order)
+          throw new ConflictException("Automatic order is missing");
+        automaticOrderId = draft.order.id;
         return fingerprintOf({
           sessionId,
           configurationRevision: draft.configurationRevision,
         });
       },
       async (transaction) => {
+        const legalApprovals = this.requiredLegalApprovals();
+        await legalApprovals.lock(transaction, ["terms"]);
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const order = await transaction.order.findFirst({
@@ -1595,11 +1670,49 @@ export class AutomaticQuotesService {
             automaticQuoteDraft: {
               include: { items: { orderBy: { ordinal: "asc" } } },
             },
+            acceptedPriceBinding: {
+              select: {
+                payments: {
+                  select: {
+                    orderPriceBindingId: true,
+                    role: true,
+                    status: true,
+                  },
+                },
+              },
+            },
           },
         });
         const draft = order?.automaticQuoteDraft;
         if (!order || !draft)
           throw new ConflictException("Automatic order is missing");
+        automaticOrderId = order.id;
+        const observedAt = await databaseNow(transaction);
+        const legal = {
+          observedAt,
+          approvals: await legalApprovals.readAt(transaction, observedAt),
+        };
+        const evidenceState = frozenCheckoutEvidenceState(order);
+        if (evidenceState === "partial") {
+          throw new ConflictException(
+            "Automatic quote has incomplete checkout evidence",
+          );
+        }
+        if (
+          evidenceState === "complete" &&
+          !hasRetryableAutomaticCheckoutPayment({
+            ...order,
+            payments: order.acceptedPriceBinding?.payments ?? [],
+          })
+        ) {
+          throw new ConflictException(
+            "Automatic quote has no retryable failed payment",
+          );
+        }
+        if (evidenceState !== "complete") assertBindingQuoteFlowsEnabled();
+        if (evidenceState === "none") {
+          assertEffectiveLegalDocuments(legal.approvals, ["terms"]);
+        }
         if (draft.items.length === 0) return;
         let enqueued = false;
         for (const item of draft.items) {
@@ -1651,10 +1764,16 @@ export class AutomaticQuotesService {
           }
         }
         if (enqueued) return;
-        await this.stageOrFinalizeBinding(transaction, order.id);
+        if (evidenceState === "none") {
+          await this.stageOrFinalizeBinding(
+            transaction,
+            order.id,
+            legal.approvals.documents.terms.revisionId!,
+          );
+        }
       },
     );
-    await this.advanceEligibility(session.automaticOrderOrigin!.order.id);
+    if (automaticOrderId) await this.advanceEligibility(automaticOrderId);
     return this.getSession(sessionId, authorization);
   }
 
@@ -2324,6 +2443,7 @@ export class AutomaticQuotesService {
   private async stageOrFinalizeBinding(
     transaction: Transaction,
     orderId: string,
+    legalTermsRevisionId: string,
   ): Promise<void> {
     if (!(await this.riskAllowsAutomaticQuote(transaction, orderId))) return;
     const draftOrder = await transaction.order.findUniqueOrThrow({
@@ -2347,6 +2467,7 @@ export class AutomaticQuotesService {
       bindingMatchesAutomaticDraft(
         draftOrder.activePriceBinding.orderPriceBinding,
         draft,
+        legalTermsRevisionId,
       )
     ) {
       return;
@@ -2373,7 +2494,7 @@ export class AutomaticQuotesService {
     );
     if (!transient) return;
     const bindingId = deterministicUuid(
-      `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}`,
+      `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}:${legalTermsRevisionId}`,
     );
     const preparationInput = {
       priceList,
@@ -2478,6 +2599,7 @@ export class AutomaticQuotesService {
       orderPhaseId: topology.phaseId,
       bindingId,
       priceList,
+      legalTermsRevisionId,
       destinationId: destination.id,
       configurationRevision: draft.configurationRevision,
       expressRequested: draft.expressRequested,
@@ -3021,6 +3143,7 @@ export class AutomaticQuotesService {
         revision: string;
         currency: string;
       };
+      legalTermsRevisionId: string;
       destinationId: string;
       configurationRevision: number;
       expressRequested: boolean;
@@ -3039,6 +3162,7 @@ export class AutomaticQuotesService {
         orderId: input.orderId,
         configurationRevision: input.configurationRevision,
         deliveryDestinationId: input.destinationId,
+        legalTermsRevisionId: input.legalTermsRevisionId,
         expressRequested: input.expressRequested,
         priceListRevision: input.priceList.revision,
         expressEligibilityAtPricing: {
@@ -3072,6 +3196,7 @@ export class AutomaticQuotesService {
         orderId: input.orderId,
         priceSnapshotId: snapshotId,
         deliveryDestinationId: input.destinationId,
+        legalTermsRevisionId: input.legalTermsRevisionId,
         createdAt: observedAt,
       },
     });
@@ -5048,6 +5173,12 @@ export class AutomaticQuotesService {
     const deliverySelector = this.deliveryCapabilities.selectionPolicy();
     const order = session.automaticOrderOrigin!.order;
     const draft = order.automaticQuoteDraft!;
+    const frozenEvidenceState = frozenCheckoutEvidenceState(order);
+    if (frozenEvidenceState === "partial") {
+      throw new ConflictException(
+        "Automatic quote has incomplete checkout evidence",
+      );
+    }
     const expired =
       session.status === QuoteSessionStatus.EXPIRED ||
       session.expiresAt.getTime() <= Date.now();
@@ -5281,10 +5412,24 @@ export class AutomaticQuotesService {
         handoffReasons.push(reason);
       }
     }
-    const checkoutReady =
+    const hasFrozenEvidence = hasFrozenCheckoutEvidence(order);
+    const canOtherwiseBeCheckoutReady =
       !expired &&
       order.status === OrderStatus.QUOTED &&
       Boolean(active && currentPlan && currentReservation);
+    let bindingUsesCurrentTerms = hasFrozenEvidence;
+    if (!bindingUsesCurrentTerms && canOtherwiseBeCheckoutReady) {
+      const legal = await this.requiredLegalApprovals().availability();
+      assertEffectiveLegalDocuments(legal, ["terms"]);
+      bindingUsesCurrentTerms =
+        active?.legalTermsRevisionId === legal.documents.terms.revisionId;
+    }
+    const checkoutReady =
+      !expired &&
+      order.status === OrderStatus.QUOTED &&
+      Boolean(
+        active && currentPlan && currentReservation && bindingUsesCurrentTerms,
+      );
     if (
       requiresShipmentHandoff({
         readyItems,
@@ -5788,6 +5933,7 @@ function automaticBindingConfigurationRevision(
 function bindingMatchesAutomaticDraft(
   binding: {
     deliveryDestinationId: string;
+    legalTermsRevisionId: string | null;
     priceSnapshot: { inputSnapshot: Prisma.JsonValue };
   },
   draft: {
@@ -5795,9 +5941,12 @@ function bindingMatchesAutomaticDraft(
     expressRequested: boolean;
     configurationRevision: number;
   },
+  expectedLegalTermsRevisionId?: string,
 ): boolean {
   return (
     binding.deliveryDestinationId === draft.selectedDeliveryDestinationId &&
+    (expectedLegalTermsRevisionId === undefined ||
+      binding.legalTermsRevisionId === expectedLegalTermsRevisionId) &&
     automaticBindingExpressRequested(binding.priceSnapshot.inputSnapshot) ===
       draft.expressRequested &&
     automaticBindingConfigurationRevision(

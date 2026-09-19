@@ -1,12 +1,12 @@
 import { publicSite } from "../content/public-site";
 import { canonicalTitle, canonicalUrl } from "../utils/site-meta";
-import type { Ref } from "vue";
+import { toValue, type MaybeRefOrGetter } from "vue";
 
 interface PublicPageMeta {
-  description: string;
-  noindex?: boolean | Readonly<Ref<boolean>>;
+  description: MaybeRefOrGetter<string>;
+  noindex?: MaybeRefOrGetter<boolean>;
   path: string;
-  title?: string;
+  title?: MaybeRefOrGetter<string>;
 }
 
 export function usePublicPageMeta({
@@ -16,18 +16,24 @@ export function usePublicPageMeta({
   title,
 }: PublicPageMeta): void {
   const config = useRuntimeConfig();
-  const fullTitle = canonicalTitle(title, publicSite.brand.name);
+  const resolvedTitle = computed(() =>
+    canonicalTitle(
+      title === undefined ? undefined : toValue(title),
+      publicSite.brand.name,
+    ),
+  );
+  const resolvedDescription = computed(() => toValue(description));
   const url = canonicalUrl(config.public.siteUrl, path);
 
   useSeoMeta({
-    title: fullTitle,
-    description,
-    ogDescription: description,
-    ogTitle: fullTitle,
+    title: resolvedTitle,
+    description: resolvedDescription,
+    ogDescription: resolvedDescription,
+    ogTitle: resolvedTitle,
     ogType: "website",
     ogUrl: url,
     robots: computed(() =>
-      unref(noindex) ? "noindex, nofollow" : "index, follow",
+      toValue(noindex) ? "noindex, nofollow" : "index, follow",
     ),
     twitterCard: "summary",
   });

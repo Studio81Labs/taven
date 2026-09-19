@@ -56,6 +56,15 @@ export class CreateQuoteRequestDto {
   @ApiPropertyOptional({ type: Boolean })
   photoPublicationConsent?: boolean;
 
+  @ApiPropertyOptional({ type: String, maxLength: 100 })
+  privacyNoticeRevision?: string;
+
+  @ApiPropertyOptional({ type: Boolean })
+  privacyAcknowledged?: boolean;
+
+  @ApiPropertyOptional({ type: String, maxLength: 100 })
+  photoConsentRevision?: string;
+
   @ApiPropertyOptional({
     type: String,
     minLength: 43,
@@ -150,6 +159,12 @@ export class QuoteRequestDetailDto {
 
   @ApiProperty({ type: Boolean })
   slaBreached!: boolean;
+
+  @ApiPropertyOptional({ type: String, format: "uuid", nullable: true })
+  currentOfferId!: string | null;
+
+  @ApiPropertyOptional({ type: "integer", nullable: true })
+  currentOfferVersion!: number | null;
 
   @ApiProperty({ type: [QuoteAttachmentDto] })
   attachments!: QuoteAttachmentDto[];
@@ -441,8 +456,13 @@ export class IssueOfferDto {
   })
   depositMinor!: number;
 
-  @ApiProperty({ type: "object", additionalProperties: true })
-  termsSnapshot!: Record<string, unknown>;
+  @ApiPropertyOptional({
+    type: "object",
+    additionalProperties: true,
+    description:
+      "Deprecated operator echo of terms text; new offers derive their immutable snapshot from the database revision.",
+  })
+  termsSnapshot?: Record<string, unknown>;
 
   @ApiProperty({ type: "object", additionalProperties: true })
   inputSnapshot!: Record<string, unknown>;
@@ -463,6 +483,33 @@ export class IssueOfferDto {
   components!: OfferPriceComponentDto[];
 }
 
+export class ReissueOfferDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  expectedQuoteId!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: POSTGRES_INTEGER_MAX })
+  expectedVersion!: number;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 1000,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
+  reason!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: "^[A-Z][A-Z0-9_]{0,99}$",
+  })
+  reasonCode!: string;
+
+  @ApiProperty({ type: IssueOfferDto })
+  offer!: IssueOfferDto;
+}
+
 export class OfferIssuedDto {
   @ApiProperty({ type: String, format: "uuid" })
   quoteId!: string;
@@ -476,6 +523,24 @@ export class OfferIssuedDto {
 
   @ApiProperty({ type: String })
   termsRevision!: string;
+
+  @ApiPropertyOptional({ type: String })
+  claimPolicyRevision?: string;
+
+  @ApiPropertyOptional({ type: "integer", minimum: 1 })
+  claimWindowDays?: number;
+
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  legalTermsRevisionId?: string;
+
+  @ApiPropertyOptional({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalTermsContentHash?: string;
+
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  legalClaimsRevisionId?: string;
+
+  @ApiPropertyOptional({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalClaimsContentHash?: string;
 
   @ApiProperty({ type: String })
   offerToken!: string;
@@ -617,10 +682,36 @@ export class OfferPreviewDto {
   termsRevision!: string;
 
   @ApiProperty({ type: String })
+  claimPolicyRevision!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1 })
+  claimWindowDays!: number;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  legalTermsRevisionId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalTermsContentHash!: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
+  legalClaimsRevisionId!: string;
+
+  @ApiProperty({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalClaimsContentHash!: string;
+
+  @ApiProperty({ type: String })
   summary!: string;
 
   @ApiProperty({ type: "object", additionalProperties: true })
   termsSnapshot!: Record<string, unknown>;
+
+  @ApiProperty({
+    type: "object",
+    additionalProperties: true,
+    description:
+      "Immutable claims document content for the pinned claim-policy revision.",
+  })
+  claimsSnapshot!: Record<string, unknown>;
 
   @ApiProperty({ type: String })
   currency!: string;
@@ -674,7 +765,7 @@ export class OfferPreviewDto {
   promisedDate!: string | null;
 }
 
-export class AcceptOfferDto {
+class ExpectedOfferDto {
   @ApiProperty({
     type: "integer",
     minimum: 1,
@@ -691,7 +782,16 @@ export class AcceptOfferDto {
   termsRevision!: string;
 }
 
-export class RejectOfferDto extends AcceptOfferDto {
+export class AcceptOfferDto extends ExpectedOfferDto {
+  @ApiPropertyOptional({
+    type: Boolean,
+    description:
+      "Required as true for a fresh acceptance; omitted only for completed legacy replay.",
+  })
+  acknowledgeWithdrawalException?: boolean;
+}
+
+export class RejectOfferDto extends ExpectedOfferDto {
   @ApiPropertyOptional({
     type: String,
     maxLength: 2_000,

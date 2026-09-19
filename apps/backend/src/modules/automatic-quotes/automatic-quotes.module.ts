@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { PrismaModule } from "../../prisma/prisma.module";
 import { ResourcesModule } from "../resources/resources.module";
+import { LegalApprovalsModule } from "../legal-approvals/legal-approvals.module";
 import { AutomaticQuoteEstimatesController } from "./automatic-quote-estimates.controller";
 import { AutomaticQuotesController } from "./automatic-quotes.controller";
 import { AutomaticQuotesService } from "./automatic-quotes.service";
@@ -10,7 +11,7 @@ import {
 } from "./delivery-capability.port";
 
 @Module({
-  imports: [PrismaModule, ResourcesModule],
+  imports: [PrismaModule, ResourcesModule, LegalApprovalsModule],
   controllers: [AutomaticQuotesController, AutomaticQuoteEstimatesController],
   providers: [
     AutomaticQuotesService,

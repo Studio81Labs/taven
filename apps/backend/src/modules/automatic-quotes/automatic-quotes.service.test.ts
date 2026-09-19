@@ -6,12 +6,80 @@ import {
   AutomaticQuotesService,
   conservativePartsPerPlate,
   decimalToInteger,
+  frozenCheckoutEvidenceState,
+  hasRetryableAutomaticCheckoutPayment,
+  hasFrozenCheckoutEvidence,
   isCarrierValidationReady,
   parcelConfigurationChange,
   requiresShipmentHandoff,
 } from "./automatic-quotes.service";
 
 describe("AutomaticQuotesService", () => {
+  it("recognizes complete frozen checkout evidence for resource renewal", () => {
+    const accepted = {
+      acceptedOrderPriceBindingId: "binding-id",
+      acceptedTermsRevision: "terms-v1",
+      acceptedClaimPolicyRevision: "claims-v1",
+      acceptedClaimWindowDays: 30,
+      withdrawalExceptionAcknowledgedAt: new Date(),
+    };
+
+    expect(hasFrozenCheckoutEvidence(accepted)).toBe(true);
+    expect(
+      hasFrozenCheckoutEvidence({ ...accepted, acceptedClaimWindowDays: null }),
+    ).toBe(false);
+    expect(frozenCheckoutEvidenceState(accepted)).toBe("complete");
+    expect(
+      frozenCheckoutEvidenceState({
+        ...accepted,
+        acceptedClaimWindowDays: null,
+      }),
+    ).toBe("partial");
+    expect(
+      frozenCheckoutEvidenceState({
+        acceptedOrderPriceBindingId: null,
+        acceptedTermsRevision: null,
+        acceptedClaimPolicyRevision: null,
+        acceptedClaimWindowDays: null,
+        withdrawalExceptionAcknowledgedAt: null,
+      }),
+    ).toBe("none");
+  });
+
+  it("only permits preparation bypass for a quoted failed-payment retry", () => {
+    const retryable = {
+      status: "QUOTED" as const,
+      acceptedOrderPriceBindingId: "binding-id",
+      payments: [
+        {
+          orderPriceBindingId: "binding-id",
+          role: "FULL" as const,
+          status: "FAILED" as const,
+        },
+      ],
+    };
+    expect(hasRetryableAutomaticCheckoutPayment(retryable)).toBe(true);
+    expect(
+      hasRetryableAutomaticCheckoutPayment({
+        ...retryable,
+        status: "CANCELLED",
+      }),
+    ).toBe(false);
+    expect(
+      hasRetryableAutomaticCheckoutPayment({
+        ...retryable,
+        payments: [
+          ...retryable.payments,
+          {
+            orderPriceBindingId: "binding-id",
+            role: "FULL" as const,
+            status: "CAPTURED" as const,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("converts API-valid volumes beyond JavaScript's safe integer range", () => {
     expect(decimalToInteger(9_261_000, 9, "volume")).toBe(
       9_261_000_000_000_000n,

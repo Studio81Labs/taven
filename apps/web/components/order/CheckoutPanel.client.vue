@@ -29,10 +29,12 @@ import {
   paymentReturnPresentation,
 } from "../../utils/payment-return";
 import { useLegalAvailability } from "../../composables/useLegalAvailability";
+import { usePublicLegalDocument } from "../../composables/usePublicLegalDocument";
 
 type CheckoutPayment = components["schemas"]["CheckoutPaymentDto"];
 type CreateCheckoutPayment = components["schemas"]["CreateCheckoutPaymentDto"];
 type PaymentCapabilities = components["schemas"]["PaymentCapabilitiesDto"];
+type CheckoutRetryContext = components["schemas"]["CheckoutRetryContextDto"];
 const CHECKOUT_OBSERVATION_TIMEOUT_MS = 1_000;
 
 const props = defineProps<{
@@ -41,12 +43,12 @@ const props = defineProps<{
   onRestart: () => void;
 }>();
 const { $api } = useNuxtApp();
-const { availability, refresh: refreshLegalAvailability } =
-  useLegalAvailability();
+const { availability, refresh: refreshAvailability } = useLegalAvailability();
 const form = ref<HTMLFormElement>();
 const credentials = shallowRef<StoredQuoteSession>();
 const capabilities = shallowRef<PaymentCapabilities>();
 const payment = shallowRef<CheckoutPayment>();
+const retryContext = shallowRef<CheckoutRetryContext>();
 const command = shallowRef<CheckoutCommandHandoff>();
 const loading = ref(true);
 const submitting = ref(false);
@@ -54,6 +56,10 @@ const cancelling = ref(false);
 const redirecting = ref(false);
 const errorMessage = ref<string>();
 const initialized = ref(false);
+let disposed = false;
+onBeforeUnmount(() => {
+  disposed = true;
+});
 
 const draft = reactive<CheckoutCustomerDraft>({
   email: "",
@@ -84,16 +90,176 @@ const localDocumentIds = {
   retention: legalDocuments.retention,
   photoConsent: legalDocuments.photoConsent,
 };
+const presentedLegalDocuments = {
+  terms: usePublicLegalDocument("terms"),
+  claims: usePublicLegalDocument("claims"),
+  privacy: usePublicLegalDocument("privacy"),
+  prohibitedContent: usePublicLegalDocument("prohibitedContent"),
+  retention: usePublicLegalDocument("retention"),
+  photoConsent: usePublicLegalDocument("photoConsent"),
+};
+const verifiedLegalDocuments = computed(() => ({
+  terms: presentedLegalDocuments.terms.effective.value,
+  claims: presentedLegalDocuments.claims.effective.value,
+  privacy: presentedLegalDocuments.privacy.effective.value,
+  prohibitedContent: presentedLegalDocuments.prohibitedContent.effective.value,
+  retention: presentedLegalDocuments.retention.effective.value,
+  photoConsent: presentedLegalDocuments.photoConsent.effective.value,
+}));
+async function refreshLegalAvailability(): Promise<void> {
+  if (disposed) return;
+  const selected = await refreshAvailability();
+  if (disposed) return;
+  for (const { refresh } of Object.values(presentedLegalDocuments)) {
+    if (disposed) return;
+    await refresh(selected);
+  }
+}
 const approvedDocuments = computed(() =>
   approvedCheckoutDocuments(
     capabilities.value,
     localDocumentIds,
     availability.value,
+    verifiedLegalDocuments.value,
   ),
+);
+const retryEvidence = computed(
+  () => retryContext.value?.acceptedEvidence ?? null,
+);
+// Historical evidence controls the read-only retry presentation. Whether a
+// new payment attempt may actually be submitted is a separate server decision
+// exposed by retryAllowed.
+const acceptedCheckoutMode = computed(
+  () => props.quote.checkoutEvidenceAccepted === true,
+);
+const retryMode = computed(
+  () => acceptedCheckoutMode.value || retryEvidence.value !== null,
+);
+type LegalEvidenceFingerprint = Readonly<{
+  contentHash: string | null | undefined;
+  revision: string | undefined;
+}>;
+
+const acknowledgedLegalEvidence = reactive<{
+  claims?: LegalEvidenceFingerprint;
+  photoConsent?: LegalEvidenceFingerprint;
+  terms?: LegalEvidenceFingerprint;
+}>({});
+
+function currentLegalEvidence(
+  key: "terms" | "claims" | "photoConsent",
+): LegalEvidenceFingerprint | undefined {
+  const document = availability.value?.documents[key];
+  if (!document) return undefined;
+  return {
+    revision: document.revision,
+    contentHash: document.contentHash,
+  };
+}
+
+function matchesLegalEvidence(
+  acknowledged: LegalEvidenceFingerprint | undefined,
+  current: LegalEvidenceFingerprint | undefined,
+): boolean {
+  return Boolean(
+    acknowledged &&
+    current &&
+    acknowledged.revision === current.revision &&
+    acknowledged.contentHash === current.contentHash,
+  );
+}
+
+function legalRevisionLink(
+  key: "terms" | "claims" | "photoConsent",
+  revision: string | null | undefined,
+  contentHash: string | undefined | null,
+) {
+  return {
+    path: legalDocuments[key].path,
+    query: revision && contentHash ? { revision, contentHash } : undefined,
+  };
+}
+
+function hasHistoricalRevision(
+  contentHash: string | null | undefined,
+): boolean {
+  return Boolean(contentHash);
+}
+const paymentMethods = computed(() =>
+  retryMode.value && retryContext.value
+    ? retryContext.value.methods
+    : retryMode.value
+      ? []
+      : (capabilities.value?.methods ?? []),
 );
 watch(approvedDocuments, (documents) => {
   if (!documents?.photoConsentRevision) draft.photoPublicationConsent = false;
 });
+watch(
+  [
+    () => draft.acceptTerms,
+    () => draft.acceptClaimPolicy,
+    () => draft.acknowledgeWithdrawalException,
+    () => draft.photoPublicationConsent,
+    () => availability.value?.documents.terms.revision,
+    () => availability.value?.documents.terms.contentHash,
+    () => availability.value?.documents.claims.revision,
+    () => availability.value?.documents.claims.contentHash,
+    () => availability.value?.documents.photoConsent.revision,
+    () => availability.value?.documents.photoConsent.contentHash,
+  ],
+  () => {
+    const terms = currentLegalEvidence("terms");
+    const claims = currentLegalEvidence("claims");
+    const photoConsent = currentLegalEvidence("photoConsent");
+
+    if (draft.acceptTerms || draft.acknowledgeWithdrawalException) {
+      if (
+        acknowledgedLegalEvidence.terms &&
+        !matchesLegalEvidence(acknowledgedLegalEvidence.terms, terms)
+      ) {
+        draft.acceptTerms = false;
+        draft.acknowledgeWithdrawalException = false;
+        acknowledgedLegalEvidence.terms = undefined;
+      } else if (terms) {
+        acknowledgedLegalEvidence.terms ??= terms;
+      }
+    } else {
+      acknowledgedLegalEvidence.terms = undefined;
+    }
+
+    if (draft.acceptClaimPolicy) {
+      if (
+        acknowledgedLegalEvidence.claims &&
+        !matchesLegalEvidence(acknowledgedLegalEvidence.claims, claims)
+      ) {
+        draft.acceptClaimPolicy = false;
+        acknowledgedLegalEvidence.claims = undefined;
+      } else if (claims) {
+        acknowledgedLegalEvidence.claims ??= claims;
+      }
+    } else {
+      acknowledgedLegalEvidence.claims = undefined;
+    }
+
+    if (draft.photoPublicationConsent) {
+      if (
+        acknowledgedLegalEvidence.photoConsent &&
+        !matchesLegalEvidence(
+          acknowledgedLegalEvidence.photoConsent,
+          photoConsent,
+        )
+      ) {
+        draft.photoPublicationConsent = false;
+        acknowledgedLegalEvidence.photoConsent = undefined;
+      } else if (photoConsent) {
+        acknowledgedLegalEvidence.photoConsent ??= photoConsent;
+      }
+    } else {
+      acknowledgedLegalEvidence.photoConsent = undefined;
+    }
+  },
+);
 const bindingPrice = computed(() => props.quote.bindingQuote ?? null);
 const selectedDestination = computed(
   () => props.quote.selectedDeliveryDestination ?? null,
@@ -107,13 +273,15 @@ const restartMode = computed(() =>
 const canSubmit = computed(
   () =>
     Boolean(
-      approvedDocuments.value &&
+      (approvedDocuments.value || retryMode.value) &&
       bindingPrice.value?.kind === "BINDING" &&
       selectedDestination.value &&
-      draft.acceptTerms &&
-      draft.acceptClaimPolicy &&
-      draft.acknowledgeWithdrawalException &&
-      capabilities.value?.methods.includes(draft.method),
+      (!retryMode.value || retryContext.value?.retryAllowed === true) &&
+      (retryMode.value ||
+        (draft.acceptTerms &&
+          draft.acceptClaimPolicy &&
+          draft.acknowledgeWithdrawalException)) &&
+      paymentMethods.value.includes(draft.method),
     ) &&
     !submitting.value &&
     !redirecting.value,
@@ -149,9 +317,14 @@ onMounted(async () => {
   }
   command.value = storedCheckout?.command;
   initialized.value = true;
+  await loadRetryContext();
+  if (disposed) return;
   await loadCapabilities();
+  if (disposed) return;
   await refreshLegalAvailability();
+  if (disposed) return;
   if (command.value?.paymentId) await refreshPayment();
+  if (disposed) return;
   loading.value = false;
 });
 
@@ -173,22 +346,34 @@ async function loadCapabilities(): Promise<void> {
         "Dostupné platební metody se nepodařilo bezpečně ověřit.";
       return;
     }
-    if (!response.data.methods.includes(draft.method)) {
-      draft.method = response.data.methods[0] ?? "CARD";
+    if (!paymentMethods.value.includes(draft.method)) {
+      draft.method = paymentMethods.value[0] ?? "CARD";
     }
   } catch {
-    errorMessage.value =
-      "Dostupné platební metody se nepodařilo bezpečně ověřit.";
+    if (!retryMode.value) {
+      errorMessage.value =
+        "Dostupné platební metody se nepodařilo bezpečně ověřit.";
+    }
   }
 }
 
 async function submitCheckout(): Promise<void> {
   if (!form.value?.reportValidity() || !canSubmit.value) return;
-  await refreshLegalAvailability();
+  if (retryMode.value) await loadRetryContext();
+  else await refreshLegalAvailability();
   const session = credentials.value;
   const documents = approvedDocuments.value;
-  if (!session || !documents) return;
-  if (draft.photoPublicationConsent && !documents.photoConsentRevision) {
+  const evidence = retryEvidence.value;
+  if (!session || (!documents && !evidence)) return;
+  if (retryMode.value && !retryContext.value?.retryAllowed) {
+    errorMessage.value = "Předchozí platbu už nelze bezpečně opakovat.";
+    return;
+  }
+  if (
+    !retryMode.value &&
+    draft.photoPublicationConsent &&
+    !documents?.photoConsentRevision
+  ) {
     errorMessage.value =
       "Dobrovolný souhlas s fotografiemi zatím nemá schválené znění.";
     return;
@@ -199,15 +384,20 @@ async function submitCheckout(): Promise<void> {
     fullName: draft.fullName,
     billing: compactBilling(draft.billing),
     method: draft.method,
-    acceptTerms: draft.acceptTerms,
-    acceptClaimPolicy: draft.acceptClaimPolicy,
-    acknowledgeWithdrawalException: draft.acknowledgeWithdrawalException,
-    termsRevision: documents.termsRevision,
-    claimPolicyRevision: documents.claimPolicyRevision,
-    photoPublicationConsent: draft.photoPublicationConsent,
-    photoConsentRevision: draft.photoPublicationConsent
-      ? documents.photoConsentRevision
-      : null,
+    acceptTerms: retryMode.value || draft.acceptTerms,
+    acceptClaimPolicy: retryMode.value || draft.acceptClaimPolicy,
+    acknowledgeWithdrawalException:
+      retryMode.value || draft.acknowledgeWithdrawalException,
+    termsRevision: evidence?.termsRevision ?? documents!.termsRevision,
+    claimPolicyRevision:
+      evidence?.claimPolicyRevision ?? documents!.claimPolicyRevision,
+    photoPublicationConsent:
+      evidence?.photoPublicationConsent ?? draft.photoPublicationConsent,
+    photoConsentRevision: evidence
+      ? evidence.photoConsentRevision
+      : draft.photoPublicationConsent
+        ? documents!.photoConsentRevision
+        : null,
   };
   const requestFingerprint = checkoutRequestFingerprint(body);
   const activeCommand =
@@ -250,11 +440,35 @@ async function submitCheckout(): Promise<void> {
         : {}),
     };
     persistCheckout();
+    if (result.data.status === "FAILED") await loadRetryContext();
     await continueFromPayment(result.data);
   } catch {
     errorMessage.value = checkoutErrorMessage(0);
   } finally {
     submitting.value = false;
+  }
+}
+
+async function loadRetryContext(): Promise<void> {
+  const session = credentials.value;
+  if (!session) return;
+  try {
+    const result = await $api.GET(
+      "/automatic-quote-sessions/{sessionId}/checkout/retry-context",
+      {
+        headers: { Authorization: `Bearer ${session.sessionToken}` },
+        params: { path: { sessionId: session.sessionId } },
+      },
+    );
+    retryContext.value = result.data;
+    if (
+      result.data?.retryAllowed &&
+      !result.data.methods.includes(draft.method)
+    ) {
+      draft.method = result.data.methods[0] ?? "CARD";
+    }
+  } catch {
+    retryContext.value = undefined;
   }
 }
 
@@ -303,6 +517,7 @@ async function refreshPayment(): Promise<void> {
       return;
     }
     payment.value = result.data;
+    if (result.data.status === "FAILED") await loadRetryContext();
     if (result.data.checkoutUrl) {
       command.value = {
         ...command.value!,
@@ -380,7 +595,12 @@ async function continueFromPayment(value: CheckoutPayment): Promise<void> {
   );
 }
 
-function startNewAttempt(): void {
+async function startNewAttempt(): Promise<void> {
+  await loadRetryContext();
+  if (!retryContext.value?.retryAllowed) {
+    errorMessage.value = "Předchozí platbu už nelze bezpečně opakovat.";
+    return;
+  }
   payment.value = undefined;
   command.value = undefined;
   errorMessage.value = undefined;
@@ -523,7 +743,7 @@ function compactBilling(
     </div>
 
     <div
-      v-else-if="!approvedDocuments"
+      v-else-if="!approvedDocuments && !retryMode"
       class="mt-6 border-l-4 border-[#925b10] bg-[#fff8eb] p-5"
       role="status"
     >
@@ -647,7 +867,7 @@ function compactBilling(
       <fieldset class="grid gap-3">
         <legend class="text-lg font-semibold">Způsob platby</legend>
         <label
-          v-for="method in capabilities?.methods"
+          v-for="method in paymentMethods"
           :key="method"
           class="flex min-h-11 items-center gap-3 border border-[#d9d9d2] px-4"
         >
@@ -660,65 +880,171 @@ function compactBilling(
 
       <fieldset class="grid gap-4">
         <legend class="text-lg font-semibold">Potvrzení</legend>
-        <label class="flex items-start gap-3 text-sm leading-6"
-          ><input
-            v-model="draft.acceptTerms"
-            class="mt-1"
-            required
-            type="checkbox"
-          /><span
-            >Souhlasím s
-            <NuxtLink class="underline" :to="legalDocuments.terms.path"
-              >VOP</NuxtLink
+        <p
+          v-if="retryMode && retryEvidence"
+          class="text-sm leading-6 text-[#54554c]"
+        >
+          Opakujete neúspěšný platební pokus s dříve zaznamenaným zněním VOP ({{
+            retryEvidence.termsRevision
+          }}) a reklamačního řádu ({{ retryEvidence.claimPolicyRevision }}).
+          <NuxtLink
+            v-if="hasHistoricalRevision(retryEvidence.terms.contentHash)"
+            class="underline"
+            :to="
+              legalRevisionLink(
+                'terms',
+                retryEvidence.terms.revision,
+                retryEvidence.terms.contentHash,
+              )
+            "
+            >Zobrazit VOP</NuxtLink
+          >
+          <span v-else>Historické znění VOP už není k dispozici</span>
+          a
+          <NuxtLink
+            v-if="hasHistoricalRevision(retryEvidence.claims.contentHash)"
+            class="underline"
+            :to="
+              legalRevisionLink(
+                'claims',
+                retryEvidence.claims.revision,
+                retryEvidence.claims.contentHash,
+              )
+            "
+            >reklamační řád</NuxtLink
+          >
+          <span v-else
+            >historické znění reklamačního řádu už není k dispozici</span
+          >. Reklamační lhůta je {{ retryEvidence.claimWindowDays }} dní.
+          <template v-if="retryEvidence.withdrawalExceptionAcknowledged">
+            Výjimku z odstoupení jste při přijetí nabídky výslovně potvrdil/a.
+          </template>
+          <template v-else>
+            Výjimku z odstoupení jste při přijetí nabídky nepotvrdil/a.
+          </template>
+          <template v-if="retryEvidence.photoPublicationConsent">
+            Souhlas s pořízením a zveřejněním fotografií zůstává součástí
+            přijaté nabídky podle
+            <NuxtLink
+              v-if="
+                retryEvidence.photoConsent &&
+                hasHistoricalRevision(retryEvidence.photoConsent.contentHash)
+              "
+              class="underline"
+              :to="
+                legalRevisionLink(
+                  'photoConsent',
+                  retryEvidence.photoConsent.revision,
+                  retryEvidence.photoConsent.contentHash,
+                )
+              "
+              >pravidel fotografování ({{
+                retryEvidence.photoConsentRevision
+              }})</NuxtLink
             >
-            ve znění {{ approvedDocuments.termsRevision }}.</span
-          ></label
+            <span v-else>historické znění pravidel už není k dispozici</span>.
+          </template>
+          <template v-else>
+            Souhlas s pořízením a zveřejněním fotografií jste neudělil/a.
+          </template>
+          Tento záznam neměníme ani jej znovu nepotvrzujete.
+        </p>
+        <p
+          v-else-if="retryMode"
+          class="border-l-4 border-[#925b10] bg-[#fff8eb] p-4 text-sm leading-6"
         >
-        <label class="flex items-start gap-3 text-sm leading-6"
-          ><input
-            v-model="draft.acceptClaimPolicy"
-            class="mt-1"
-            required
-            type="checkbox"
-          /><span
-            >Seznámil/a jsem se s
-            <NuxtLink class="underline" :to="legalDocuments.claims.path"
-              >reklamačním řádem</NuxtLink
-            >
-            ve znění {{ approvedDocuments.claimPolicyRevision }}.</span
-          ></label
-        >
-        <label class="flex items-start gap-3 text-sm leading-6"
-          ><input
-            v-model="draft.acknowledgeWithdrawalException"
-            class="mt-1"
-            required
-            type="checkbox"
-          /><span
-            >Beru na vědomí, že výrobek je zhotoven podle mých požadavků a může
-            se na něj vztahovat zákonná výjimka z práva odstoupit do 14 dnů.
-            Práva z vadného plnění tím nejsou dotčena.</span
-          ></label
-        >
-        <label
-          class="flex items-start gap-3 text-sm leading-6"
-          :class="!approvedDocuments.photoConsentRevision && 'text-[#777870]'"
-          ><input
-            v-model="draft.photoPublicationConsent"
-            class="mt-1"
-            type="checkbox"
-            :disabled="!approvedDocuments.photoConsentRevision"
-          /><span
-            >Dobrovolně souhlasím s pořízením a zveřejněním fotografií výsledku
-            podle
-            <NuxtLink class="underline" :to="legalDocuments.photoConsent.path"
-              >pravidel fotografování</NuxtLink
-            >.
-            <span v-if="!approvedDocuments.photoConsentRevision"
-              >Tato volba čeká na schválené znění.</span
-            ></span
-          ></label
-        >
+          Dříve zaznamenané právní souhlasy zůstávají součástí této objednávky a
+          tento krok je pouze pro opakování platby. Ověřený kontext opakování se
+          momentálně nepodařilo načíst, proto nelze souhlasy znovu měnit ani
+          opakovaný pokus o platbu bezpečně odeslat.
+        </p>
+        <template v-else>
+          <label class="flex items-start gap-3 text-sm leading-6"
+            ><input
+              v-model="draft.acceptTerms"
+              class="mt-1"
+              required
+              type="checkbox"
+            /><span
+              >Souhlasím s
+              <NuxtLink
+                class="underline"
+                :to="
+                  legalRevisionLink(
+                    'terms',
+                    approvedDocuments?.termsRevision,
+                    availability?.documents.terms.contentHash,
+                  )
+                "
+                >VOP</NuxtLink
+              >
+              ve znění {{ approvedDocuments?.termsRevision }}.</span
+            ></label
+          >
+          <label class="flex items-start gap-3 text-sm leading-6"
+            ><input
+              v-model="draft.acceptClaimPolicy"
+              class="mt-1"
+              required
+              type="checkbox"
+            /><span
+              >Seznámil/a jsem se s
+              <NuxtLink
+                class="underline"
+                :to="
+                  legalRevisionLink(
+                    'claims',
+                    approvedDocuments?.claimPolicyRevision,
+                    availability?.documents.claims.contentHash,
+                  )
+                "
+                >reklamačním řádem</NuxtLink
+              >
+              ve znění {{ approvedDocuments?.claimPolicyRevision }}.</span
+            ></label
+          >
+          <label class="flex items-start gap-3 text-sm leading-6"
+            ><input
+              v-model="draft.acknowledgeWithdrawalException"
+              class="mt-1"
+              required
+              type="checkbox"
+            /><span
+              >Beru na vědomí, že výrobek je zhotoven podle mých požadavků a
+              může se na něj vztahovat zákonná výjimka z práva odstoupit do 14
+              dnů. Práva z vadného plnění tím nejsou dotčena.</span
+            ></label
+          >
+          <label
+            class="flex items-start gap-3 text-sm leading-6"
+            :class="
+              !approvedDocuments?.photoConsentRevision && 'text-[#777870]'
+            "
+            ><input
+              v-model="draft.photoPublicationConsent"
+              class="mt-1"
+              type="checkbox"
+              :disabled="!approvedDocuments?.photoConsentRevision"
+            /><span
+              >Dobrovolně souhlasím s pořízením a zveřejněním fotografií
+              výsledku podle
+              <NuxtLink
+                class="underline"
+                :to="
+                  legalRevisionLink(
+                    'photoConsent',
+                    approvedDocuments?.photoConsentRevision,
+                    availability?.documents.photoConsent.contentHash,
+                  )
+                "
+                >pravidel fotografování</NuxtLink
+              >.
+              <span v-if="!approvedDocuments?.photoConsentRevision"
+                >Tato volba čeká na schválené znění.</span
+              ></span
+            ></label
+          >
+        </template>
       </fieldset>
 
       <p

@@ -42,6 +42,14 @@ const presentation = computed(() =>
 const restartMode = computed(() =>
   payment.value ? paymentRestartMode(payment.value.status) : null,
 );
+const paymentRetryDestination = computed(() =>
+  session.value?.sessionId
+    ? {
+        path: "/objednavka",
+        query: { retry: "1", sessionId: session.value.sessionId },
+      }
+    : "/objednavka",
+);
 const toneClass = computed(() => {
   switch (presentation.value.tone) {
     case "success":
@@ -247,7 +255,7 @@ function queryValue(value: unknown): string | undefined {
         <NuxtLink
           v-if="restartMode === 'PAYMENT'"
           class="inline-flex min-h-12 items-center border border-[#1a1a16] px-6 font-semibold"
-          to="/objednavka"
+          :to="paymentRetryDestination"
           no-prefetch
         >
           Zpět ke kalkulaci

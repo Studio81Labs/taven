@@ -25,6 +25,7 @@ import {
   quarantineObjectKey,
 } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
 
 const s3Config = {
   endpoint: process.env.TAVEN_S3_ENDPOINT ?? "http://127.0.0.1:9010",
@@ -51,6 +52,7 @@ describe("secure object storage and retention", () => {
   let retention: RetentionService;
   let s3: S3Client;
   let operator: OperatorContext;
+  let termsSnapshot: Record<string, unknown>;
   const cleanupKeys = new Set<string>();
 
   beforeAll(async () => {
@@ -62,6 +64,23 @@ describe("secure object storage and retention", () => {
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
     await prisma.anonymousUploadLimit.deleteMany();
+    const termsRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { revisionCode: e2eLegalRevisionCodes.terms },
+      select: {
+        contentVersion: true,
+        title: true,
+        summary: true,
+        sections: true,
+        contentHash: true,
+      },
+    });
+    termsSnapshot = {
+      contentVersion: termsRevision.contentVersion,
+      title: termsRevision.title,
+      summary: termsRevision.summary,
+      sections: termsRevision.sections,
+      contentHash: termsRevision.contentHash,
+    };
     objects = app.get<ObjectStorage>(OBJECT_STORAGE);
     quotes = app.get(QuotesService);
     retention = app.get(RetentionService);
@@ -93,6 +112,49 @@ describe("secure object storage and retention", () => {
       },
     });
   });
+
+  async function createQuoteRequestWithPrivacyEvidence(
+    id: string,
+    quoteSessionId: string,
+    currentStateCommandKey: string,
+  ): Promise<void> {
+    await prisma.$transaction(async (transaction) => {
+      const commandIdentity = `fixture:${id}:privacy`;
+      const decision = await transaction.legalAcceptanceDecision.create({
+        data: {
+          id: randomUUID(),
+          quoteRequestId: id,
+          commandIdentity,
+          decidedAt: new Date(),
+          originatingXid: "fixture",
+        },
+      });
+      await transaction.quoteRequest.create({
+        data: {
+          id,
+          quoteSessionId,
+          currentStateCommandKey,
+          createdAt: decision.decidedAt,
+          updatedAt: decision.decidedAt,
+        },
+      });
+      const privacyRevision =
+        await transaction.legalDocumentRevision.findFirstOrThrow({
+          where: { revisionCode: e2eLegalRevisionCodes.privacy },
+          select: { id: true },
+        });
+      await transaction.legalAcceptance.create({
+        data: {
+          quoteRequestId: id,
+          revisionId: privacyRevision.id,
+          purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
+          acceptedAt: decision.decidedAt,
+          commandIdentity,
+          decisionId: decision.id,
+        },
+      });
+    });
+  }
 
   it("creates immutable profile snapshots idempotently on S3-compatible storage", async () => {
     const bytes = new TextEncoder().encode('{"layer_height":"0.2"}');
@@ -441,9 +503,11 @@ describe("secure object storage and retention", () => {
         expiresAt: new Date(Date.now() + 60_000),
       },
     });
-    await prisma.quoteRequest.create({
-      data: { id: scopeId, quoteSessionId: quoteSession.id },
-    });
+    await createQuoteRequestWithPrivacyEvidence(
+      scopeId,
+      quoteSession.id,
+      "legacy-import",
+    );
     const requestBody = JSON.stringify({
       kind: "QUOTE_REFERENCE",
       scopeKind: "QUOTE_REQUEST",
@@ -534,9 +598,11 @@ describe("secure object storage and retention", () => {
         expiresAt: new Date(Date.now() + 60_000),
       },
     });
-    await prisma.quoteRequest.create({
-      data: { id: scopeId, quoteSessionId: quoteSession.id },
-    });
+    await createQuoteRequestWithPrivacyEvidence(
+      scopeId,
+      quoteSession.id,
+      "legacy-import",
+    );
     const request = {
       method: "POST",
       headers: {
@@ -617,6 +683,8 @@ describe("secure object storage and retention", () => {
           name: "Storage Test",
           email: `${randomUUID()}@example.test`,
         },
+        privacyAcknowledged: true,
+        privacyNoticeRevision: e2eLegalRevisionCodes.privacy,
       },
       "198.51.100.24",
       `storage-terminal-create-${randomUUID()}`,
@@ -721,7 +789,7 @@ describe("secure object storage and retention", () => {
         netAmountMinor: 110_000,
         vatAmountMinor: 0,
         depositMinor: 33_000,
-        termsSnapshot: {},
+        termsSnapshot,
         inputSnapshot: {},
         deliveryDestination: {
           providerEndpointId: "storage-race-endpoint",

@@ -5,6 +5,7 @@ import {
   ApiServiceUnavailableResponse,
   ApiTags,
 } from "@nestjs/swagger";
+import { LEGAL_DOCUMENT_KEYS } from "./legal-approvals.catalog";
 import { LegalDocumentAvailabilityDto } from "./legal-approvals.dto";
 import { LegalApprovalsService } from "./legal-approvals.service";
 
@@ -22,7 +23,22 @@ export class LegalApprovalsController {
   @ApiServiceUnavailableResponse({
     description: "Legal approvals or trusted database time are unavailable",
   })
-  availability(): Promise<LegalDocumentAvailabilityDto> {
-    return this.approvals.availability();
+  async availability(): Promise<LegalDocumentAvailabilityDto> {
+    const evaluated = await this.approvals.availability();
+    return {
+      schemaVersion: evaluated.schemaVersion,
+      policyRevision: evaluated.policyRevision,
+      evaluatedAt: evaluated.evaluatedAt,
+      documents: Object.fromEntries(
+        LEGAL_DOCUMENT_KEYS.map((key) => {
+          const { revision, status, effectiveAt, contentHash, effective } =
+            evaluated.documents[key];
+          return [
+            key,
+            { revision, status, effectiveAt, contentHash, effective },
+          ];
+        }),
+      ) as unknown as LegalDocumentAvailabilityDto["documents"],
+    };
   }
 }

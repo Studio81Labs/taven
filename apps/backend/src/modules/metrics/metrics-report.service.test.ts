@@ -361,7 +361,7 @@ describe("v0-1 metric classifications", () => {
           slaDueAt: new Date("2026-01-01T01:00:00.000Z"),
           slaRespondedAt: new Date("2026-01-01T02:00:00.000Z"),
           status: "QUOTED",
-          quote: { issuedAt: new Date("2026-01-01T02:00:00.000Z") },
+          quotes: [{ issuedAt: new Date("2026-01-01T02:00:00.000Z") }],
         },
       ],
       new Date("2026-01-01T03:00:00.000Z"),

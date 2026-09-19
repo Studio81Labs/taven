@@ -1,6 +1,66 @@
 {
   "components": {
     "schemas": {
+      "AcceptedCheckoutEvidenceDto": {
+        "properties": {
+          "acceptedOrderPriceBindingId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "claimPolicyRevision": {
+            "type": "string"
+          },
+          "claims": {
+            "$ref": "#/components/schemas/LegalVersionReferenceDto"
+          },
+          "claimWindowDays": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "legacy": {
+            "type": "boolean"
+          },
+          "photoConsent": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalVersionReferenceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "photoConsentRevision": {
+            "nullable": true,
+            "type": "string"
+          },
+          "photoPublicationConsent": {
+            "type": "boolean"
+          },
+          "terms": {
+            "$ref": "#/components/schemas/LegalVersionReferenceDto"
+          },
+          "termsRevision": {
+            "type": "string"
+          },
+          "withdrawalExceptionAcknowledged": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acceptedOrderPriceBindingId",
+          "termsRevision",
+          "claimPolicyRevision",
+          "claimWindowDays",
+          "withdrawalExceptionAcknowledged",
+          "photoPublicationConsent",
+          "photoConsentRevision",
+          "legacy",
+          "terms",
+          "claims",
+          "photoConsent"
+        ],
+        "type": "object"
+      },
       "AcceptedOfferDto": {
         "properties": {
           "orderId": {
@@ -26,6 +86,10 @@
       },
       "AcceptOfferDto": {
         "properties": {
+          "acknowledgeWithdrawalException": {
+            "description": "Required as true for a fresh acceptance; omitted only for completed legacy replay.",
+            "type": "boolean"
+          },
           "termsRevision": {
             "maxLength": 100,
             "minLength": 1,
@@ -1744,6 +1808,38 @@
         ],
         "type": "object"
       },
+      "CheckoutRetryContextDto": {
+        "properties": {
+          "acceptedEvidence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AcceptedCheckoutEvidenceDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "methods": {
+            "items": {
+              "enum": [
+                "CARD",
+                "BANK_TRANSFER"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "retryAllowed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "retryAllowed",
+          "methods",
+          "acceptedEvidence"
+        ],
+        "type": "object"
+      },
       "ClaimReprintJobDto": {
         "properties": {
           "candidateResourceEstimateId": {
@@ -2516,8 +2612,19 @@
             "additionalProperties": true,
             "type": "object"
           },
+          "photoConsentRevision": {
+            "maxLength": 100,
+            "type": "string"
+          },
           "photoPublicationConsent": {
             "type": "boolean"
+          },
+          "privacyAcknowledged": {
+            "type": "boolean"
+          },
+          "privacyNoticeRevision": {
+            "maxLength": 100,
+            "type": "string"
           },
           "purpose": {
             "maxLength": 2000,
@@ -4226,6 +4333,7 @@
           },
           "termsSnapshot": {
             "additionalProperties": true,
+            "description": "Deprecated operator echo of terms text; new offers derive their immutable snapshot from the database revision.",
             "type": "object"
           },
           "vatAmountMinor": {
@@ -4249,7 +4357,6 @@
           "netAmountMinor",
           "vatAmountMinor",
           "depositMinor",
-          "termsSnapshot",
           "inputSnapshot",
           "deliveryDestination",
           "shipmentPlans",
@@ -4390,6 +4497,11 @@
       },
       "LegalDocumentAvailabilityRecordDto": {
         "properties": {
+          "contentHash": {
+            "nullable": true,
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
           "effective": {
             "type": "boolean"
           },
@@ -4413,6 +4525,7 @@
           "revision",
           "status",
           "effectiveAt",
+          "contentHash",
           "effective"
         ],
         "type": "object"
@@ -4778,6 +4891,26 @@
           "contentHash",
           "createdAt",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "LegalVersionReferenceDto": {
+        "properties": {
+          "contentHash": {
+            "nullable": true,
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "revision",
+          "contentHash"
         ],
         "type": "object"
       },
@@ -5548,8 +5681,31 @@
       },
       "OfferIssuedDto": {
         "properties": {
+          "claimPolicyRevision": {
+            "type": "string"
+          },
+          "claimWindowDays": {
+            "minimum": 1,
+            "type": "integer"
+          },
           "expiresAt": {
             "format": "date-time",
+            "type": "string"
+          },
+          "legalClaimsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalClaimsRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "legalTermsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalTermsRevisionId": {
+            "format": "uuid",
             "type": "string"
           },
           "offerToken": {
@@ -5655,6 +5811,18 @@
       },
       "OfferPreviewDto": {
         "properties": {
+          "claimPolicyRevision": {
+            "type": "string"
+          },
+          "claimsSnapshot": {
+            "additionalProperties": true,
+            "description": "Immutable claims document content for the pinned claim-policy revision.",
+            "type": "object"
+          },
+          "claimWindowDays": {
+            "minimum": 1,
+            "type": "integer"
+          },
           "components": {
             "items": {
               "$ref": "#/components/schemas/OfferPreviewPriceComponentDto"
@@ -5681,6 +5849,22 @@
               "$ref": "#/components/schemas/OfferPreviewItemDto"
             },
             "type": "array"
+          },
+          "legalClaimsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalClaimsRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "legalTermsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalTermsRevisionId": {
+            "format": "uuid",
+            "type": "string"
           },
           "netAmountMinor": {
             "maximum": 9007199254740991,
@@ -5745,8 +5929,15 @@
           "quoteId",
           "version",
           "termsRevision",
+          "claimPolicyRevision",
+          "claimWindowDays",
+          "legalTermsRevisionId",
+          "legalTermsContentHash",
+          "legalClaimsRevisionId",
+          "legalClaimsContentHash",
           "summary",
           "termsSnapshot",
+          "claimsSnapshot",
           "currency",
           "contractTotalMinor",
           "taxRegime",
@@ -6532,6 +6723,15 @@
           },
           "contact": {
             "$ref": "#/components/schemas/QuoteContactDto"
+          },
+          "currentOfferId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "currentOfferVersion": {
+            "nullable": true,
+            "type": "integer"
           },
           "description": {
             "type": "string"
@@ -7398,6 +7598,15 @@
           "contact": {
             "$ref": "#/components/schemas/QuoteContactDto"
           },
+          "currentOfferId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "currentOfferVersion": {
+            "nullable": true,
+            "type": "integer"
+          },
           "description": {
             "type": "string"
           },
@@ -7906,6 +8115,42 @@
           "succeededRefunds",
           "pendingOrSuspendedRefunds",
           "activeContract"
+        ],
+        "type": "object"
+      },
+      "ReissueOfferDto": {
+        "properties": {
+          "expectedQuoteId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "expectedVersion": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offer": {
+            "$ref": "#/components/schemas/IssueOfferDto"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedQuoteId",
+          "expectedVersion",
+          "reason",
+          "reasonCode",
+          "offer"
         ],
         "type": "object"
       },
@@ -14184,6 +14429,75 @@
         ]
       }
     },
+    "/admin/quote-requests/{requestId}/offers/reissue": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_reissue",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReissueOfferDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferIssuedDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Reissue the current immutable individual offer",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
     "/admin/quote-requests/{requestId}/review": {
       "post": {
         "operationId": "OperatorQuoteRequestsController_review",
@@ -14614,6 +14928,49 @@
           }
         ],
         "summary": "Create the initial checkout payment intent",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/automatic-quote-sessions/{sessionId}/checkout/retry-context": {
+      "get": {
+        "operationId": "PaymentsController_retryContext",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutRetryContextDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Session capability is invalid"
+          },
+          "503": {
+            "description": "Accepted checkout evidence is incomplete or unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read server-owned evidence for an initial-payment retry",
         "tags": [
           "payments"
         ]

@@ -180,17 +180,23 @@ describe("UploadService confirmation response", () => {
     let transactionActive = false;
     const transaction = {
       $queryRaw: vi.fn().mockImplementation((strings: TemplateStringsArray) =>
-        strings.join(" ").includes("FROM upload_intents")
-          ? [{ id: uploadId }]
-          : [
-              {
-                session_status: "OPEN",
-                request_status: "NEW",
-                offer_expires_at: null,
-                session_expires_at: new Date(Date.now() + 5_000),
-                observed_at: new Date(),
-              },
-            ],
+        strings.join(" ").includes('FROM "legal_documents"')
+          ? [
+              { key: "privacy" },
+              { key: "prohibitedContent" },
+              { key: "retention" },
+            ]
+          : strings.join(" ").includes("FROM upload_intents")
+            ? [{ id: uploadId }]
+            : [
+                {
+                  session_status: "OPEN",
+                  request_status: "NEW",
+                  offer_expires_at: null,
+                  session_expires_at: new Date(Date.now() + 5_000),
+                  observed_at: new Date(),
+                },
+              ],
       ),
       uploadIntent: {
         findUniqueOrThrow: vi.fn().mockResolvedValue(pendingIntent),
@@ -231,12 +237,13 @@ describe("UploadService confirmation response", () => {
       readObjectRange: async () => bytes,
       copyObject,
     });
+    const legalApprovals = approvedLegalApprovals();
     const service = new UploadService(
       prisma as never,
       storage,
       config,
       {} as never,
-      approvedLegalApprovals() as never,
+      legalApprovals as never,
     );
 
     await expect(
@@ -250,6 +257,11 @@ describe("UploadService confirmation response", () => {
     });
     expect(transaction.photoAsset.create).toHaveBeenCalledOnce();
     expect(copyObject).toHaveBeenCalledOnce();
+    expect(legalApprovals.lock).toHaveBeenCalledWith(transaction, [
+      "privacy",
+      "prohibitedContent",
+      "retention",
+    ]);
     expect(prisma.photoAsset.findUnique).toHaveBeenCalledWith({
       where: { id: photoId },
       select: { uploadedAt: true, photoDeleteAfter: true },
@@ -411,14 +423,17 @@ function storageWith(overrides: Partial<ObjectStorage>): ObjectStorage {
 }
 
 function approvedLegalApprovals() {
+  const approvals = {
+    documents: {
+      privacy: { effective: true },
+      prohibitedContent: { effective: true },
+      retention: { effective: true },
+    },
+  };
   return {
-    evaluateAt: vi.fn(() => ({
-      documents: {
-        privacy: { effective: true },
-        prohibitedContent: { effective: true },
-        retention: { effective: true },
-      },
-    })),
+    lock: vi.fn(async () => undefined),
+    lockAndRead: vi.fn(async () => ({ approvals })),
+    readAt: vi.fn(async () => approvals),
   };
 }
 

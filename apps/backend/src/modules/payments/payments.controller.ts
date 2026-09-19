@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Headers,
+  Header,
   HttpCode,
   Ip,
   Param,
@@ -34,6 +35,7 @@ import {
   CreateBalancePaymentDto,
   CheckoutPaymentDto,
   CreateCheckoutPaymentDto,
+  CheckoutRetryContextDto,
   PaymentCapabilitiesDto,
   PaymentWebhookAcceptedDto,
 } from "./payments.dto";
@@ -125,6 +127,25 @@ export class PaymentsController {
       authorization,
       idempotencyKey,
     );
+  }
+
+  @Get("automatic-quote-sessions/:sessionId/checkout/retry-context")
+  @Header("Cache-Control", "no-store")
+  @ApiBearerAuth()
+  @ApiParam(SESSION_ID)
+  @ApiOperation({
+    summary: "Read server-owned evidence for an initial-payment retry",
+  })
+  @ApiOkResponse({ type: CheckoutRetryContextDto })
+  @ApiUnauthorizedResponse({ description: "Session capability is invalid" })
+  @ApiServiceUnavailableResponse({
+    description: "Accepted checkout evidence is incomplete or unavailable",
+  })
+  retryContext(
+    @Param("sessionId") sessionId: string,
+    @Headers("authorization") authorization?: string,
+  ): Promise<CheckoutRetryContextDto> {
+    return this.payments.checkoutRetryContext(sessionId, authorization);
   }
 
   @Get("automatic-quote-sessions/:sessionId/checkout/payment")

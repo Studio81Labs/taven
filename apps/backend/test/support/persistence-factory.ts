@@ -719,10 +719,7 @@ export class PersistenceFactory {
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
-    const quoteIssuedAt = new Date(
-      Math.min(t.getTime(), input.quoteExpiresAt.getTime() - 1),
-    );
-    const quoteRequestCreatedAt = quoteIssuedAt;
+    let quoteIssuedAt: Date;
     const snapshotId = this.id(`${input.name}:price-snapshot`);
     const scheduleId = this.id(`${input.name}:payment-schedule`);
     const componentIds = this.componentIds(input.name, input.resolvedItems);
@@ -773,32 +770,121 @@ export class PersistenceFactory {
       ],
     );
     if (input.customerOwned) {
+      const requestDecisionId = this.id(
+        `${input.name}:quote-request-legal-decision`,
+      );
+      const decision = await this.sql.query<{ decided_at: Date }>(
+        `INSERT INTO legal_acceptance_decisions
+           (id, quote_request_id, command_identity, decided_at, originating_xid)
+         VALUES ($1, $2, $3, clock_timestamp(), pg_current_xact_id()::text)
+         RETURNING decided_at`,
+        [
+          requestDecisionId,
+          input.quoteRequestId,
+          `${input.name}:quote-request-privacy`,
+        ],
+      );
+      quoteIssuedAt = decision.rows[0]!.decided_at;
+      const quoteExpiresAt =
+        input.quoteExpiresAt > quoteIssuedAt
+          ? input.quoteExpiresAt
+          : new Date(
+              quoteIssuedAt.getTime() +
+                (input.quoteExpiresAt.getTime() + 90 * dayInMilliseconds >
+                Date.now()
+                  ? 2 * dayInMilliseconds
+                  : 1),
+            );
       await this.sql.query(
-        "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, created_at, updated_at) VALUES ($1,$2,$3,'NEW',$4,$4)",
+        `INSERT INTO quote_requests
+           (id, quote_session_id, customer_id, status, current_state_command_key,
+            sla_due_at, created_at, updated_at)
+         SELECT $1, $2, $3, 'NEW', 'legacy-import',
+                decision.decided_at + interval '24 hours', decision.decided_at,
+                decision.decided_at
+         FROM legal_acceptance_decisions decision
+         WHERE decision.id = $4`,
         [
           input.quoteRequestId,
           input.quoteSessionId,
           input.customerId,
-          quoteRequestCreatedAt,
+          requestDecisionId,
         ],
       );
       await this.sql.query(
+        `INSERT INTO legal_acceptances
+           (id, quote_request_id, revision_id, purpose, accepted_at,
+            command_identity, decision_id)
+         SELECT gen_random_uuid(), $1, revision.id,
+                'PRIVACY_NOTICE_ACKNOWLEDGED', decision.decided_at,
+                decision.command_identity, decision.id
+         FROM legal_document_revisions revision
+         JOIN legal_documents document ON document.id = revision.document_id
+         JOIN legal_acceptance_decisions decision ON decision.id = $2
+         WHERE document.key = 'privacy'
+           AND revision.revision_code = 'privacy-v1'`,
+        [input.quoteRequestId, requestDecisionId],
+      );
+      await this.sql.query(
         "UPDATE quote_requests SET status = 'IN_REVIEW', updated_at = $2 WHERE id = $1",
-        [input.quoteRequestId, t],
+        [input.quoteRequestId, quoteIssuedAt],
       );
       await this.sql.query(
         "UPDATE quote_requests SET status = 'QUOTED', updated_at = $2 WHERE id = $1",
-        [input.quoteRequestId, t],
+        [input.quoteRequestId, quoteIssuedAt],
       );
       await this.sql.query(
-        "INSERT INTO quotes (id, quote_request_id, customer_id, expires_at, issued_at, created_at) VALUES ($1,$2,$3,$4,$5,$5)",
+        `INSERT INTO quotes
+           (id, quote_request_id, customer_id, terms_revision,
+            issuance_command_key,
+            legal_terms_revision_id, legal_claims_revision_id,
+            claim_window_days, terms_snapshot, expires_at, issued_at, created_at)
+         VALUES
+          ($1,$2,$3,'terms-v1','legacy-import',
+            CASE WHEN $6 THEN (SELECT revision.id
+                               FROM legal_document_revisions revision
+                               JOIN legal_documents document ON document.id = revision.document_id
+                               WHERE document.key = 'terms' AND revision.revision_code = 'terms-v1') END,
+            CASE WHEN $6 THEN (SELECT revision.id
+                               FROM legal_document_revisions revision
+                               JOIN legal_documents document ON document.id = revision.document_id
+                               WHERE document.key = 'claims' AND revision.revision_code = 'claim-policy-v1') END,
+            CASE WHEN $6 THEN 30 END,
+            CASE WHEN $6 THEN (SELECT jsonb_build_object(
+              'contentVersion', revision.content_version,
+              'title', revision.title,
+              'summary', revision.summary,
+              'sections', revision.sections,
+              'contentHash', revision.content_hash
+            ) FROM legal_document_revisions revision
+            JOIN legal_documents document ON document.id = revision.document_id
+            WHERE document.key = 'terms' AND revision.revision_code = 'terms-v1') ELSE '{}'::jsonb END,
+            $4,$5,$5)`,
         [
           input.quoteId,
           input.quoteRequestId,
           input.customerId,
-          input.quoteExpiresAt,
+          quoteExpiresAt,
           quoteIssuedAt,
+          input.orderOrigin === "INDIVIDUAL",
         ],
+      );
+      // These fixtures model offers that existed before the cutover. Seed
+      // their immutable provenance explicitly; production writers cannot
+      // insert into this protected table.
+      await this.sql.query("SET LOCAL session_replication_role = 'replica'");
+      await this.sql.query(
+        `INSERT INTO legacy_quote_request_imports
+           (quote_request_id, quote_id, photo_publication_consent_granted_at)
+         SELECT $1, $2, photo_publication_consent_granted_at
+         FROM quote_requests
+         WHERE id = $1`,
+        [input.quoteRequestId, input.quoteId],
+      );
+      await this.sql.query("SET LOCAL session_replication_role = 'origin'");
+      await this.sql.query(
+        "UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1",
+        [input.quoteRequestId, input.quoteId],
       );
       for (const [index, item] of input.resolvedItems.entries()) {
         await this.sql.query(
@@ -918,7 +1004,16 @@ export class PersistenceFactory {
     }
     await input.beforeOrderPricing?.();
     await this.sql.query(
-      "INSERT INTO order_price_bindings (id, order_id, price_snapshot_id, delivery_destination_id, created_at) VALUES ($1,$2,$3,$4,$5)",
+      `INSERT INTO order_price_bindings
+         (id, order_id, price_snapshot_id, delivery_destination_id,
+          legal_terms_revision_id, created_at)
+       VALUES
+         ($1,$2,$3,$4,
+          (SELECT revision.id
+           FROM legal_document_revisions revision
+           JOIN legal_documents document ON document.id = revision.document_id
+           WHERE document.key = 'terms' AND revision.revision_code = 'terms-v1'),
+          $5)`,
       [
         input.orderPriceBindingId,
         input.orderId,
@@ -927,7 +1022,7 @@ export class PersistenceFactory {
         t,
       ],
     );
-    if (input.includeActivePriceBinding) {
+    if (input.includeActivePriceBinding || input.orderOrigin === "INDIVIDUAL") {
       await this.sql.query(
         "INSERT INTO order_active_price_bindings (order_id, order_price_binding_id) VALUES ($1,$2)",
         [input.orderId, input.orderPriceBindingId],
@@ -1142,13 +1237,29 @@ export class PersistenceFactory {
       );
     }
     if (input.orderOrigin === "INDIVIDUAL") {
+      const decision = await this.recordOrderLegalAcceptance(
+        input.orderId,
+        `${input.name}:individual-acceptance`,
+        input.quoteId,
+      );
       await this.sql.query(
-        "UPDATE quote_requests SET status = 'ACCEPTED', updated_at = $2 WHERE id = $1",
-        [input.quoteRequestId, t],
+        "UPDATE quote_requests SET status = 'ACCEPTED', accepted_at = $2, updated_at = $2 WHERE id = $1",
+        [input.quoteRequestId, decision.decidedAt],
       );
       await this.sql.query(
         "INSERT INTO individual_order_origins (order_id, quote_id) VALUES ($1,$2)",
         [input.orderId, input.quoteId],
+      );
+      await this.sql.query(
+        `UPDATE orders
+         SET accepted_order_price_binding_id = $2,
+             accepted_terms_revision = 'terms-v1',
+             accepted_claim_policy_revision = 'claim-policy-v1',
+             accepted_claim_window_days = 30,
+             withdrawal_exception_acknowledged_at = $3,
+             updated_at = $3
+         WHERE id = $1`,
+        [input.orderId, input.orderPriceBindingId, decision.decidedAt],
       );
       for (const [index] of input.orderItemIds.entries()) {
         await this.sql.query(
@@ -1201,6 +1312,10 @@ export class PersistenceFactory {
         [input.orderId, t],
       );
       if (input.automaticCheckout?.preacceptCheckout !== false) {
+        const decision = await this.recordOrderLegalAcceptance(
+          input.orderId,
+          `${input.name}:checkout-acceptance`,
+        );
         await this.sql.query(
           `UPDATE orders
            SET accepted_order_price_binding_id = $3,
@@ -1215,6 +1330,7 @@ export class PersistenceFactory {
                accepted_claim_window_days = 30,
                withdrawal_exception_acknowledged_at = $2,
                checkout_contact_snapshot = jsonb_build_object(
+                 'version', 2,
                  'email', $4::text,
                  'fullName', 'Test customer'
                ),
@@ -1222,7 +1338,7 @@ export class PersistenceFactory {
            WHERE id = $1`,
           [
             input.orderId,
-            t,
+            decision.decidedAt,
             input.orderPriceBindingId,
             `${this.hash(input.name).slice(0, 24)}@example.test`,
           ],
@@ -1299,8 +1415,12 @@ export class PersistenceFactory {
 
   async acceptCheckoutTerms(
     foundation: PersistenceFoundation,
-    acknowledgedAt = new Date(),
+    _acknowledgedAt = new Date(),
   ): Promise<void> {
+    const decision = await this.recordOrderLegalAcceptance(
+      foundation.orderId,
+      `fixture:${foundation.orderId}:checkout-acceptance`,
+    );
     await this.sql.query(
       `UPDATE orders
        SET accepted_order_price_binding_id = $3,
@@ -1315,6 +1435,7 @@ export class PersistenceFactory {
            accepted_claim_window_days = 30,
            withdrawal_exception_acknowledged_at = $2,
            checkout_contact_snapshot = jsonb_build_object(
+             'version', 2,
              'email', 'test@example.test',
              'fullName', 'Test customer'
            ),
@@ -1326,8 +1447,68 @@ export class PersistenceFactory {
          AND accepted_claim_policy_revision IS NULL
          AND accepted_claim_window_days IS NULL
          AND withdrawal_exception_acknowledged_at IS NULL`,
-      [foundation.orderId, acknowledgedAt, foundation.orderPriceBindingId],
+      [foundation.orderId, decision.decidedAt, foundation.orderPriceBindingId],
     );
+  }
+
+  private async recordOrderLegalAcceptance(
+    orderId: string,
+    commandIdentity: string,
+    sourceQuoteId?: string,
+  ): Promise<{ id: string; decidedAt: Date }> {
+    const existing = await this.sql.query<{ id: string; decided_at: Date }>(
+      `SELECT id, decided_at FROM legal_acceptance_decisions WHERE order_id = $1`,
+      [orderId],
+    );
+    const decisionId =
+      existing.rows[0]?.id ??
+      (
+        await this.sql.query<{ id: string }>(
+          `INSERT INTO legal_acceptance_decisions
+             (id, order_id, source_quote_id, command_identity, decided_at, originating_xid)
+           VALUES (gen_random_uuid(), $1, $3, $2, clock_timestamp(), pg_current_xact_id()::text)
+           RETURNING id`,
+          [orderId, commandIdentity, sourceQuoteId ?? null],
+        )
+      ).rows[0]?.id;
+    if (!decisionId) throw new Error("order legal decision is missing");
+    const decision = await this.sql.query<{ id: string; decided_at: Date }>(
+      `SELECT id, decided_at FROM legal_acceptance_decisions WHERE id = $1`,
+      [decisionId],
+    );
+    const decided = decision.rows[0];
+    if (!decided) throw new Error("order legal decision timestamp is missing");
+    const existingEvidence = await this.sql.query(
+      `SELECT 1 FROM legal_acceptances
+       WHERE order_id = $1 AND decision_id = $2
+       LIMIT 1`,
+      [orderId, decisionId],
+    );
+    if (existingEvidence.rowCount)
+      return { id: decided.id, decidedAt: decided.decided_at };
+    await this.sql.query(
+      `INSERT INTO legal_acceptances
+         (id, order_id, revision_id, purpose, accepted_at, command_identity, decision_id)
+       SELECT gen_random_uuid(), $1, revision.id, evidence.purpose,
+              decision.decided_at, decision.command_identity, decision.id
+       FROM (
+         VALUES
+           ('terms'::text, 'TERMS_ACCEPTED'::legal_acceptance_purpose),
+           ('claims'::text, 'CLAIM_POLICY_ACCEPTED'::legal_acceptance_purpose)
+       ) AS evidence(document_key, purpose)
+       JOIN legal_documents document ON document.key = evidence.document_key
+        JOIN legal_document_revisions revision
+           ON revision.document_id = document.id
+          AND revision.revision_code = CASE evidence.document_key
+            WHEN 'terms' THEN 'terms-v1'
+            WHEN 'claims' THEN 'claim-policy-v1'
+          END
+       JOIN legal_acceptance_decisions decision ON decision.id = $2
+       ON CONFLICT ("order_id", "purpose") WHERE "order_id" IS NOT NULL
+       DO NOTHING`,
+      [orderId, decisionId],
+    );
+    return { id: decided.id, decidedAt: decided.decided_at };
   }
 
   async capturePayment(

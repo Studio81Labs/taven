@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
 import { legalDocuments } from "../../content/public-site";
-import { isServerVerifiedLegalDocument } from "../../utils/legal-availability";
 import { useLegalAvailability } from "../../composables/useLegalAvailability";
+import { usePublicLegalDocument } from "../../composables/usePublicLegalDocument";
 import {
   assistedQuotePrefill,
   clearAssistedQuoteHandoff,
@@ -29,8 +29,19 @@ usePublicPageMeta({
 
 const route = useRoute();
 const automaticQuoteEnabled = useAutomaticQuoteEnabled();
-const { availability, refresh: refreshLegalAvailability } =
-  useLegalAvailability();
+const { availability, refresh: refreshAvailability } = useLegalAvailability();
+const presentedLegalDocuments = {
+  privacy: usePublicLegalDocument("privacy"),
+  retention: usePublicLegalDocument("retention"),
+  prohibitedContent: usePublicLegalDocument("prohibitedContent"),
+  photoConsent: usePublicLegalDocument("photoConsent"),
+};
+async function refreshLegalAvailability(): Promise<void> {
+  const selected = await refreshAvailability();
+  for (const { refresh } of Object.values(presentedLegalDocuments)) {
+    await refresh(selected);
+  }
+}
 onMounted(() => void refreshLegalAvailability());
 const source = normalizeAssistedQuoteSource(route.query.source);
 const initialPrefill = assistedQuotePrefill(source);
@@ -73,39 +84,51 @@ const requestFieldsLocked = computed(() => submitted.value);
 const photoFieldsLocked = computed(
   () => submitted.value && !attachmentsEditable.value,
 );
-const privacyNoticeEffective = computed(() =>
-  isServerVerifiedLegalDocument(
-    "privacy",
-    legalDocuments.privacy,
-    availability.value,
-  ),
-);
-const retentionPolicyEffective = computed(() =>
-  isServerVerifiedLegalDocument(
-    "retention",
-    legalDocuments.retention,
-    availability.value,
-  ),
-);
-const prohibitedContentPolicyEffective = computed(() =>
-  isServerVerifiedLegalDocument(
-    "prohibitedContent",
-    legalDocuments.prohibitedContent,
-    availability.value,
-  ),
-);
-const photoConsentEffective = computed(() =>
-  isServerVerifiedLegalDocument(
-    "photoConsent",
-    legalDocuments.photoConsent,
-    availability.value,
-  ),
-);
-watch(privacyNoticeEffective, (effective) => {
-  if (!effective) privacyAcknowledged.value = false;
+const privacyNoticeEffective = presentedLegalDocuments.privacy.effective;
+const retentionPolicyEffective = presentedLegalDocuments.retention.effective;
+const prohibitedContentPolicyEffective =
+  presentedLegalDocuments.prohibitedContent.effective;
+const photoConsentEffective = presentedLegalDocuments.photoConsent.effective;
+const privacyNoticeEvidence = computed(() => {
+  const document = availability.value?.documents.privacy;
+  return privacyNoticeEffective.value && document
+    ? `${document.revision}:${document.contentHash}`
+    : null;
 });
-watch(photoConsentEffective, (effective) => {
-  if (!effective) photoPublicationConsent.value = false;
+const photoConsentEvidence = computed(() => {
+  const document = availability.value?.documents.photoConsent;
+  return photoConsentEffective.value && document
+    ? `${document.revision}:${document.contentHash}`
+    : null;
+});
+function legalDocumentLink(
+  key: "privacy" | "photoConsent",
+  isEffective: boolean,
+) {
+  const record = availability.value?.documents[key];
+  return isEffective && record?.revision && record.contentHash
+    ? {
+        path: legalDocuments[key].path,
+        query: {
+          revision: record.revision,
+          contentHash: record.contentHash,
+        },
+      }
+    : { path: legalDocuments[key].path };
+}
+const privacyDocumentLink = computed(() =>
+  legalDocumentLink("privacy", privacyNoticeEffective.value),
+);
+const photoConsentDocumentLink = computed(() =>
+  legalDocumentLink("photoConsent", photoConsentEffective.value),
+);
+watch(privacyNoticeEvidence, (evidence, previousEvidence) => {
+  if (!evidence || (previousEvidence && evidence !== previousEvidence))
+    privacyAcknowledged.value = false;
+});
+watch(photoConsentEvidence, (evidence, previousEvidence) => {
+  if (!evidence || (previousEvidence && evidence !== previousEvidence))
+    photoPublicationConsent.value = false;
 });
 const hasDimensions = computed(() =>
   [widthMm.value, depthMm.value, heightMm.value].some(isPositiveDimension),
@@ -219,6 +242,14 @@ async function submitRequest(): Promise<void> {
     },
     description: description.value.trim(),
     photoPublicationConsent: photoPublicationConsent.value,
+    privacyAcknowledged: privacyAcknowledged.value,
+    privacyNoticeRevision: availability.value!.documents.privacy.revision,
+    ...(photoPublicationConsent.value
+      ? {
+          photoConsentRevision:
+            availability.value!.documents.photoConsent.revision,
+        }
+      : {}),
     ...(context?.handoffToken
       ? { automaticQuoteHandoffToken: context.handoffToken }
       : {}),
@@ -458,7 +489,7 @@ function isPositiveDimension(value: number | ""): value is number {
               <span>
                 Beru na vědomí, že kontaktní údaje a podklady použijeme k
                 posouzení poptávky a komunikaci o nabídce podle
-                <NuxtLink class="underline" :to="legalDocuments.privacy.path"
+                <NuxtLink class="underline" :to="privacyDocumentLink"
                   >zásad zpracování osobních údajů</NuxtLink
                 >. Fotografie dostanou při nahrání vlastní termín smazání. *
                 <template v-if="!privacyNoticeEffective">
@@ -475,9 +506,7 @@ function isPositiveDimension(value: number | ""): value is number {
               <span>
                 Souhlasím s případným zveřejněním výsledných fotografií jako
                 ukázky práce podle
-                <NuxtLink
-                  class="underline"
-                  :to="legalDocuments.photoConsent.path"
+                <NuxtLink class="underline" :to="photoConsentDocumentLink"
                   >pravidel fotografování</NuxtLink
                 >. Tento souhlas je nepovinný a lze jej odmítnout.
                 <template v-if="!photoConsentEffective">

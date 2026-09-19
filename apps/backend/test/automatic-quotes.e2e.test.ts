@@ -25,6 +25,7 @@ import { CandidateEstimateService } from "../src/modules/resources/candidate-est
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
 import { PersistenceFactory } from "./support/persistence-factory";
 
 const quoteCapabilityKey =
@@ -4264,6 +4265,8 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         name: "Step handoff customer",
       },
       description: "Need a manual review of the imported STEP model.",
+      privacyAcknowledged: true,
+      privacyNoticeRevision: e2eLegalRevisionCodes.privacy,
     };
     const submitted = await api("quote-requests", {
       method: "POST",

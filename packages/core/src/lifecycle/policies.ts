@@ -8480,7 +8480,8 @@ function requireAtomicIssuedQuoteCreation<S extends string>(
     typeof resultId !== "string" ||
     resultId.trim().length === 0 ||
     context?.quoteIssuanceQuoteRequestId !== quoteRequestId ||
-    context?.quoteIssuanceQuoteRequestPreviousStatus !== "in_review" ||
+    (context?.quoteIssuanceQuoteRequestPreviousStatus !== "in_review" &&
+      context?.quoteIssuanceQuoteRequestPreviousStatus !== "quoted") ||
     context?.quoteIssuanceQuoteRequestTargetStatus !== "quoted" ||
     (command.current === "in_review" &&
       command.target === "quoted" &&
@@ -8492,6 +8493,20 @@ function requireAtomicIssuedQuoteCreation<S extends string>(
         command.currentStateCommandKey !== requestStateKey ||
         expectedRequest?.id !== quoteRequestId ||
         expectedRequest.status !== "in_review" ||
+        expectedRequest.resultId !== requestPreviousResultId ||
+        expectedRequest.currentStateCommandKey !== requestStateKey ||
+        expectedRequest.immutable !== true)) ||
+    (command.current === "quoted" &&
+      command.target === "quoted" &&
+      (context?.quoteIssuanceQuoteRequestPreviousStatus !== "quoted" ||
+        !nonBlank(requestPreviousResultId) ||
+        !nonBlank(requestStateKey) ||
+        command.aggregateId !== quoteRequestId ||
+        !nonBlank(command.currentStateResultId) ||
+        command.currentStateResultId !== requestPreviousResultId ||
+        command.currentStateCommandKey !== requestStateKey ||
+        expectedRequest?.id !== quoteRequestId ||
+        expectedRequest.status !== "quoted" ||
         expectedRequest.resultId !== requestPreviousResultId ||
         expectedRequest.currentStateCommandKey !== requestStateKey ||
         expectedRequest.immutable !== true)) ||
@@ -8764,10 +8779,13 @@ export const quoteRequestPolicy: TransitionPolicy<QuoteRequestStatus> = {
   transitions: {
     new: ["in_review"],
     in_review: ["quoted"],
-    quoted: ["accepted", "rejected", "expired"],
+    quoted: ["quoted", "accepted", "rejected", "expired"],
   },
   guard: (command) => {
     if (command.current === "in_review" && command.target === "quoted") {
+      requireAtomicIssuedQuoteCreation("QuoteRequest", command);
+    }
+    if (command.current === "quoted" && command.target === "quoted") {
       requireAtomicIssuedQuoteCreation("QuoteRequest", command);
     }
     if (command.current === "quoted" && command.target === "accepted") {
