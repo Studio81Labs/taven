@@ -9,6 +9,8 @@ export const BASELINE_SOURCE_COMMIT =
   "e2343c42290feef1ff1ef45da1694106906b59e3";
 export const BASELINE_SOURCE_PATH = "apps/web/content/legal-drafts.ts";
 export const BASELINE_MANIFEST_PATH = "apps/web/content/launch-manifest.ts";
+const BASELINE_SOURCE_HASH =
+  "d295c84a2a54f59aca65bd7d9d756264aa0c14126a6de3e54fc9a9c85b9788cf";
 
 const BASELINE_KEYS = [
   "terms",
@@ -242,13 +244,20 @@ export async function loadBaselinePackage(
   const sourcePath = path.join(repoRoot, BASELINE_SOURCE_PATH);
   const manifestPath = path.join(repoRoot, BASELINE_MANIFEST_PATH);
   const source = readFileSync(sourcePath);
-  const committedSource = execFileSync(
-    "git",
-    ["show", `${BASELINE_SOURCE_COMMIT}:${BASELINE_SOURCE_PATH}`],
-    { cwd: repoRoot },
-  );
   const sourceHash = sha256(source);
-  if (sourceHash !== sha256(committedSource)) {
+  let pinnedSourceHash = BASELINE_SOURCE_HASH;
+  try {
+    const committedSource = execFileSync(
+      "git",
+      ["show", `${BASELINE_SOURCE_COMMIT}:${BASELINE_SOURCE_PATH}`],
+      { cwd: repoRoot },
+    );
+    pinnedSourceHash = sha256(committedSource);
+  } catch {
+    // Pull-request checkouts are shallow; the pinned digest still verifies the
+    // immutable source when the historical commit object is unavailable.
+  }
+  if (sourceHash !== pinnedSourceHash) {
     throw new Error(
       `${BASELINE_SOURCE_PATH} differs from pinned package commit ${BASELINE_SOURCE_COMMIT}`,
     );
