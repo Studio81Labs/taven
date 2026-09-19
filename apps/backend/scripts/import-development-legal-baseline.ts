@@ -95,6 +95,8 @@ type ReceiptDocument = {
   revisionId?: string;
   contentHash: string;
   effectiveAt: string;
+  approvedBy?: string;
+  approvedAt?: string;
   publicationId?: string;
   status: "approved" | "published" | "scheduled";
   auditEventIds: string[];
@@ -142,6 +144,8 @@ type LegalRevision = {
   contentHash: string;
   revisionCode?: string;
   effectiveAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
 };
 
 type LegalPublication = {
@@ -395,13 +399,34 @@ function requiredArgument(args: Arguments, name: string): string {
   return value.trim();
 }
 
-function normalizeEffectiveAt(value: string | undefined): string {
+export function normalizeEffectiveAt(value: string | undefined): string {
   const raw = value ?? new Date().toISOString();
-  if (
-    value !== undefined &&
-    !/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(raw)
-  ) {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+      raw,
+    );
+  if (!match) {
     throw new Error("--effective-at must include a timezone offset or Z");
+  }
+  const [, year, month, day, hour, minute, second, fraction = "0"] = match;
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(Number(year), Number(month) - 1, Number(day));
+  calendar.setUTCHours(
+    Number(hour),
+    Number(minute),
+    Number(second),
+    Number(fraction.padEnd(3, "0")),
+  );
+  if (
+    calendar.getUTCFullYear() !== Number(year) ||
+    calendar.getUTCMonth() !== Number(month) - 1 ||
+    calendar.getUTCDate() !== Number(day) ||
+    calendar.getUTCHours() !== Number(hour) ||
+    calendar.getUTCMinutes() !== Number(minute) ||
+    calendar.getUTCSeconds() !== Number(second) ||
+    calendar.getUTCMilliseconds() !== Number(fraction.padEnd(3, "0"))
+  ) {
+    throw new Error("--effective-at must contain a real calendar date");
   }
   const parsed = new Date(raw);
   if (!Number.isFinite(parsed.getTime())) {
@@ -597,26 +622,29 @@ async function reconcileDocument(
   receiptPath: string,
 ): Promise<void> {
   const state = receipt.documents[document.key];
-  if (state?.status === "published") return;
+  if (state?.status === "published" && state.approvedBy && state.approvedAt) {
+    return;
+  }
   const detail = await api.json<LegalDocumentDetail>(
     `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
   );
   let revision = detail.revisions.find(
-    (candidate) =>
-      candidate.contentHash ===
-      (state?.contentHash || packageDocumentHash(document)),
+    (candidate) => candidate.revisionCode === document.revisionCode,
   );
   if (!revision) {
     revision = detail.revisions.find(
       (candidate) =>
-        candidate.status === "APPROVED" &&
-        candidate.revisionCode === document.revisionCode,
+        candidate.contentHash ===
+        (state?.contentHash || packageDocumentHash(document)),
     );
-    if (revision && !packageDocumentMatches(revision, document)) {
-      throw new Error(
-        `${document.key} already uses ${document.revisionCode} with different content`,
-      );
-    }
+  }
+  if (
+    revision?.revisionCode === document.revisionCode &&
+    !packageDocumentMatches(revision, document)
+  ) {
+    throw new Error(
+      `${document.key} already uses ${document.revisionCode} with different content`,
+    );
   }
   if (!revision) {
     const created = await api.json<LegalRevision>(
@@ -707,6 +735,27 @@ async function reconcileDocument(
   }
 
   const current = receipt.documents[document.key];
+  if (revision.status === "APPROVED") {
+    const approvedEffectiveAt = revision.effectiveAt ?? current?.effectiveAt;
+    if (!approvedEffectiveAt || !revision.approvedBy || !revision.approvedAt) {
+      throw new Error(
+        `${document.key} approved revision is missing approval evidence`,
+      );
+    }
+    receipt.documents[document.key] = {
+      revisionId: revision.id,
+      contentHash: revision.contentHash,
+      effectiveAt: approvedEffectiveAt,
+      status: current?.status ?? "approved",
+      auditEventIds: current?.auditEventIds ?? [],
+      ...(current?.publicationId
+        ? { publicationId: current.publicationId }
+        : {}),
+      approvedBy: revision.approvedBy,
+      approvedAt: revision.approvedAt,
+    };
+    writeReceipt(receiptPath, receipt);
+  }
   const publication = detail.publications.find(
     (candidate) =>
       candidate.revisionId === revision.id &&

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalJson,
   loadBaselinePackage,
+  normalizeEffectiveAt,
   parseTargetConfig,
   parseTrustedTargetAllowlist,
 } from "./import-development-legal-baseline";
@@ -57,6 +58,15 @@ describe("development legal baseline importer", () => {
   it("serializes package values deterministically", () => {
     expect(canonicalJson({ b: 2, a: [true, null, "x"] })).toBe(
       '{"a":[true,null,"x"],"b":2}',
+    );
+  });
+
+  it("rejects impossible calendar dates before normalization", () => {
+    expect(() => normalizeEffectiveAt("2027-02-30T00:00:00Z")).toThrow(
+      /real calendar date/,
+    );
+    expect(normalizeEffectiveAt("2027-02-28T00:00:00+02:00")).toBe(
+      "2027-02-27T22:00:00.000Z",
     );
   });
 
