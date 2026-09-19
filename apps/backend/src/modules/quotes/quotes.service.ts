@@ -149,6 +149,8 @@ type IdempotencyOptions<T> = Readonly<{
   beforeReplay?: (transaction: Transaction) => Promise<void>;
 }>;
 type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
+type LockedAutomaticQuoteHandoff =
+  Prisma.AutomaticQuoteHandoffCapabilityGetPayload<{}>;
 type StoredQuoteRequestCreatedResponse = Omit<
   QuoteRequestCreatedDto,
   "requestToken"
@@ -219,6 +221,12 @@ export class QuotesService {
             ] as const)
           : (["privacy", "prohibitedContent", "retention"] as const);
         await legalApprovals.lock(transaction, requiredLegalKeys);
+        const lockedHandoff = request.automaticQuoteHandoffToken
+          ? await lockAutomaticQuoteHandoff(
+              transaction,
+              request.automaticQuoteHandoffToken,
+            )
+          : undefined;
         await reserveAnonymousQuote(
           transaction,
           currentCapabilityRequest.clientSubjectHash,
@@ -315,11 +323,12 @@ export class QuotesService {
               : []),
           ],
         });
-        if (request.automaticQuoteHandoffToken) {
+        if (lockedHandoff) {
           await consumeAutomaticQuoteHandoff(
             transaction,
-            request.automaticQuoteHandoffToken,
+            lockedHandoff,
             requestId,
+            observedAt,
           );
         }
         await transaction.auditEvent.create({
@@ -1990,11 +1999,10 @@ async function lockedRequest(transaction: Transaction, requestId: string) {
   return transaction.quoteRequest.findUnique({ where: { id: requestId } });
 }
 
-async function consumeAutomaticQuoteHandoff(
+async function lockAutomaticQuoteHandoff(
   transaction: Transaction,
   token: string,
-  quoteRequestId: string,
-): Promise<void> {
+): Promise<LockedAutomaticQuoteHandoff> {
   const tokenHash = hashToken(token);
   const rows = await transaction.$queryRaw<Array<{ id: string }>>`
     SELECT "id"
@@ -2007,14 +2015,28 @@ async function consumeAutomaticQuoteHandoff(
       "Automatic quote handoff capability is invalid",
     );
   }
-  const observedAt = await databaseNow(transaction);
   const capability =
     await transaction.automaticQuoteHandoffCapability.findUnique({
       where: { id: rows[0].id },
     });
   if (
     !capability ||
-    capability.scope !== AutomaticQuoteHandoffScope.ASSISTED_QUOTE_REQUEST ||
+    capability.scope !== AutomaticQuoteHandoffScope.ASSISTED_QUOTE_REQUEST
+  ) {
+    throw new UnauthorizedException(
+      "Automatic quote handoff capability is invalid",
+    );
+  }
+  return capability;
+}
+
+async function consumeAutomaticQuoteHandoff(
+  transaction: Transaction,
+  capability: LockedAutomaticQuoteHandoff,
+  quoteRequestId: string,
+  observedAt: Date,
+): Promise<void> {
+  if (
     capability.consumedAt !== null ||
     capability.expiresAt.getTime() <= observedAt.getTime()
   ) {

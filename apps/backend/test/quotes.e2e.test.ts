@@ -2227,7 +2227,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       INSERT INTO quote_requests
         (id, public_reference, description, current_state_command_key, created_at, updated_at)
       VALUES
-        (${requestId}, ${`legacy-photo-${randomUUID()}`},
+        (${requestId}::uuid, ${`legacy-photo-${randomUUID()}`},
          'Legacy photo consent repair', 'legacy-import', clock_timestamp(), clock_timestamp())
     `;
     const photoRevisionRows = await prisma.$queryRaw<Array<{ id: string }>>`
@@ -2243,13 +2243,13 @@ describe("QuoteRequest and tokenized individual offers", () => {
       await transaction.$executeRaw`
         UPDATE quote_requests
         SET photo_publication_consent_granted_at = ${firstConsentAt}
-        WHERE id = ${requestId}
+        WHERE id = ${requestId}::uuid
       `;
       await transaction.$executeRaw`
         INSERT INTO legal_acceptances
           (id, quote_request_id, revision_id, purpose, accepted_at, command_identity)
         VALUES
-          (${randomUUID()}, ${requestId}, ${photoRevision.id},
+          (${randomUUID()}::uuid, ${requestId}::uuid, ${photoRevision.id}::uuid,
            'PHOTO_PUBLICATION_GRANTED', ${firstConsentAt},
            ${key("legacy-photo-consent-repair")})
       `;
@@ -2261,7 +2261,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         SET photo_publication_consent_granted_at = ${new Date(
           firstConsentAt.getTime() + 1_000,
         )}
-        WHERE id = ${requestId}
+        WHERE id = ${requestId}::uuid
       `,
     ).rejects.toThrow(
       "Quote request photo consent changes require matching immutable legal acceptance evidence",

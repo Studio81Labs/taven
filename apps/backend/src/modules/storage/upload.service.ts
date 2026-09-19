@@ -217,21 +217,10 @@ export class UploadService {
         WHERE request.id = ${metadata.scopeId}::uuid
         FOR SHARE OF request, session
       `;
-      const observedAt = await databaseNow(transaction);
-      const legal = await this.legalApprovals.readAt(transaction, observedAt);
-      assertEffectiveLegalDocuments(legal, QUOTE_UPLOAD_LEGAL_DOCUMENTS);
       const scope = rows[0];
-      const requestAcceptsPhotos =
-        scope?.request_status === "NEW" ||
-        scope?.request_status === "IN_REVIEW" ||
-        (scope?.request_status === "QUOTED" &&
-          scope.offer_expires_at !== null &&
-          scope.offer_expires_at.getTime() > observedAt.getTime());
       if (
         !scope ||
         scope.session_status !== "OPEN" ||
-        !requestAcceptsPhotos ||
-        scope.expires_at.getTime() <= observedAt.getTime() ||
         !matchesTokenHash(scopeToken, scope.public_token_hash)
       ) {
         throw new UnauthorizedException("Quote-session capability is invalid");
@@ -247,6 +236,22 @@ export class UploadService {
         subjectHash,
         metadata.sizeBytes,
       );
+      const observedAt = await databaseNow(transaction);
+      const legal = await this.legalApprovals.readAt(transaction, observedAt);
+      assertEffectiveLegalDocuments(legal, QUOTE_UPLOAD_LEGAL_DOCUMENTS);
+      const requestAcceptsPhotos =
+        scope?.request_status === "NEW" ||
+        scope?.request_status === "IN_REVIEW" ||
+        (scope?.request_status === "QUOTED" &&
+          scope.offer_expires_at !== null &&
+          scope.offer_expires_at.getTime() > observedAt.getTime());
+      if (
+        !requestAcceptsPhotos ||
+        scope.expires_at.getTime() <= observedAt.getTime() ||
+        !matchesTokenHash(scopeToken, scope.public_token_hash)
+      ) {
+        throw new UnauthorizedException("Quote-session capability is invalid");
+      }
       await transaction.uploadIntent.create({
         data: {
           id: uploadId,
