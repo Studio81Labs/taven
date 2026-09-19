@@ -4,6 +4,17 @@ Legal documents are managed through the authenticated admin API. An operator mus
 have `legal:read` to inspect documents and `legal:write` to make changes. A
 node-free `ADMIN` is intentionally limited to legal and audit access.
 
+## Development/staging baseline
+
+The owner authorizes an explicit v0.1 import for development/staging under the
+[baseline contract](../product/taven-development-legal-baseline-v0.1.md). Use the
+ordinary protected workflow below, pin content/commit/hash and record the actual
+limited approval scope and environment-specific effective instant. This is not
+counsel or production approval. No automatic approval seed or NODE_ENV shortcut
+is permitted; verify an isolated non-production target before writes. #39 must
+reject the v0.1 baseline as production policy before public activation. Keep all
+historical v0.1 records unchanged when later production revisions are created.
+
 ## Authenticate and preserve the session
 
 In development, create a session with `POST /admin/auth/login`. In staging and
