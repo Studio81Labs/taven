@@ -2638,9 +2638,7 @@
         },
         "required": [
           "description",
-          "contact",
-          "privacyNoticeRevision",
-          "privacyAcknowledged"
+          "contact"
         ],
         "type": "object"
       },
@@ -6726,6 +6724,15 @@
           "contact": {
             "$ref": "#/components/schemas/QuoteContactDto"
           },
+          "currentOfferId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "currentOfferVersion": {
+            "nullable": true,
+            "type": "integer"
+          },
           "description": {
             "type": "string"
           },
@@ -7590,6 +7597,15 @@
           },
           "contact": {
             "$ref": "#/components/schemas/QuoteContactDto"
+          },
+          "currentOfferId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "currentOfferVersion": {
+            "nullable": true,
+            "type": "integer"
           },
           "description": {
             "type": "string"

@@ -418,7 +418,7 @@ export class QuotesService {
       include: {
         quoteSession: true,
         customer: true,
-        currentQuote: { select: { issuedAt: true } },
+        currentQuote: { select: { id: true, version: true, issuedAt: true } },
       },
     });
     if (
@@ -453,7 +453,7 @@ export class QuotesService {
       include: {
         quoteSession: true,
         customer: true,
-        currentQuote: { select: { issuedAt: true } },
+        currentQuote: { select: { id: true, version: true, issuedAt: true } },
         automaticQuoteHandoff: true,
       },
       orderBy: [{ slaDueAt: "asc" }, { createdAt: "asc" }],
@@ -519,7 +519,9 @@ export class QuotesService {
           include: {
             quoteSession: true,
             customer: true,
-            currentQuote: { select: { issuedAt: true } },
+            currentQuote: {
+              select: { id: true, version: true, issuedAt: true },
+            },
             automaticQuoteHandoff: true,
           },
         });
@@ -579,7 +581,7 @@ export class QuotesService {
       include: {
         quoteSession: true,
         customer: true,
-        currentQuote: { select: { issuedAt: true } },
+        currentQuote: { select: { id: true, version: true, issuedAt: true } },
         automaticQuoteHandoff: true,
       },
     });
@@ -1400,8 +1402,11 @@ export class QuotesService {
           "photoConsent",
           "terms",
         ]);
-        const quote = await lockedOffer(transaction, quoteId);
+        const quote = await lockedOffer(transaction, quoteId, {
+          allowSuperseded: true,
+        });
         assertOfferCapability(quote, token);
+        assertCurrentOffer(quote);
         assertExpectedOffer(quote, expected);
         if (quote.quoteRequest.status === QuoteRequestStatus.ACCEPTED) {
           throw new ConflictException("Offer was already accepted");
@@ -1774,8 +1779,11 @@ export class QuotesService {
       commandKey,
       fingerprintOf({ quoteId, ...expected, reason }),
       async (transaction) => {
-        const quote = await lockedOffer(transaction, quoteId);
+        const quote = await lockedOffer(transaction, quoteId, {
+          allowSuperseded: true,
+        });
         assertOfferCapability(quote, token);
+        assertCurrentOffer(quote);
         assertExpectedOffer(quote, expected);
         const observedAt = await databaseNow(transaction);
         if (
@@ -1964,7 +1972,7 @@ export class QuotesService {
         displayName: string | null;
         phone: string | null;
       } | null;
-      currentQuote?: { issuedAt: Date } | null;
+      currentQuote?: { id: string; version: number; issuedAt: Date } | null;
     },
     observedAt: Date,
     attachments?: RequestAttachments,
@@ -1998,6 +2006,8 @@ export class QuotesService {
       attribution: nullableJsonObject(request.attribution),
       slaDueAt: request.slaDueAt.toISOString(),
       slaBreached: respondedAt > request.slaDueAt.getTime(),
+      currentOfferId: request.currentQuote?.id ?? null,
+      currentOfferVersion: request.currentQuote?.version ?? null,
       attachments: requestAttachments.map((attachment) => ({
         id: attachment.id,
         mediaType: attachment.mediaType,
@@ -2023,7 +2033,7 @@ export class QuotesService {
         modelFileIds: string[];
         itemSelections: Prisma.JsonValue;
       } | null;
-      currentQuote?: { issuedAt: Date } | null;
+      currentQuote?: { id: string; version: number; issuedAt: Date } | null;
     },
     observedAt: Date,
     attachments?: RequestAttachments,
@@ -2265,20 +2275,37 @@ async function consumeAutomaticQuoteHandoff(
   });
 }
 
-async function lockedOffer(transaction: Transaction, quoteId: string) {
-  await transaction.$queryRaw`
-    SELECT request."id"
-    FROM "quote_requests" request
-    JOIN "quotes" quote
-      ON quote."id" = request."current_quote_id"
-     AND quote."quote_request_id" = request."id"
-    WHERE quote."id" = ${quoteId}::uuid
-    FOR UPDATE OF request
-  `;
+async function lockedOffer(
+  transaction: Transaction,
+  quoteId: string,
+  options?: { allowSuperseded?: boolean },
+) {
+  if (options?.allowSuperseded) {
+    await transaction.$queryRaw`
+      SELECT request."id"
+      FROM "quote_requests" request
+      JOIN "quotes" quote
+        ON quote."quote_request_id" = request."id"
+      WHERE quote."id" = ${quoteId}::uuid
+      FOR UPDATE OF request
+    `;
+  } else {
+    await transaction.$queryRaw`
+      SELECT request."id"
+      FROM "quote_requests" request
+      JOIN "quotes" quote
+        ON quote."id" = request."current_quote_id"
+       AND quote."quote_request_id" = request."id"
+      WHERE quote."id" = ${quoteId}::uuid
+      FOR UPDATE OF request
+    `;
+  }
   return transaction.quote.findFirst({
     where: {
       id: quoteId,
-      quoteRequest: { currentQuoteId: quoteId },
+      ...(options?.allowSuperseded
+        ? {}
+        : { quoteRequest: { currentQuoteId: quoteId } }),
     },
     include: {
       quoteRequest: true,
@@ -3492,6 +3519,15 @@ function assertOfferCapability(
     !matchesTokenHash(token, quote.publicTokenHash)
   ) {
     throw new UnauthorizedException("Offer capability is invalid");
+  }
+}
+
+function assertCurrentOffer(quote: {
+  id: string;
+  quoteRequest: { currentQuoteId: string | null };
+}): void {
+  if (quote.quoteRequest.currentQuoteId !== quote.id) {
+    throw new GoneException("OFFER_SUPERSEDED");
   }
 }
 

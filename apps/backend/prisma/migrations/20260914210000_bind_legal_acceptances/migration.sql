@@ -74,8 +74,28 @@ BEGIN
     IF request_row."current_quote_id" IS NULL THEN
         IF request_row."status" IN ('QUOTED', 'ACCEPTED', 'REJECTED', 'EXPIRED')
            OR TG_TABLE_NAME = 'quotes' THEN
+            -- Pre-cutover imports do not have a pointer until the migration
+            -- backfill (or an explicit reissue) supplies one. Preserve their
+            -- historical atomic-issuance contract while requiring the pointer
+            -- for every newly issued offer.
+            IF EXISTS (
+                SELECT 1
+                FROM "quotes" quote
+                JOIN "quote_price_bindings" binding ON binding."quote_id" = quote."id"
+                  WHERE quote."quote_request_id" = request_row."id"
+                  AND quote."issuance_command_key" = 'legacy-import'
+                  AND quote."customer_id" = request_row."customer_id"
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "quotes" newer_quote
+                      WHERE newer_quote."quote_request_id" = request_row."id"
+                        AND newer_quote."issuance_command_key" <> 'legacy-import'
+                  )
+            ) THEN
+                RETURN NULL;
+            END IF;
             RAISE EXCEPTION 'quoted or closed request requires its current offer'
-                USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_required_check';
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_request_issuance_atomic_check';
         END IF;
         RETURN NULL;
     END IF;
@@ -109,7 +129,8 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_status_check';
     END IF;
 
-    IF current_quote."issuance_command_key" IS DISTINCT FROM request_row."current_state_command_key" THEN
+    IF request_row."status" = 'QUOTED'
+       AND current_quote."issuance_command_key" IS DISTINCT FROM request_row."current_state_command_key" THEN
         RAISE EXCEPTION 'current offer issuance command must match request state command'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_command_check';
     END IF;
@@ -123,7 +144,6 @@ BEGIN
                  FROM "quote_price_bindings" binding
                  JOIN "price_snapshots" snapshot
                    ON snapshot."id" = binding."price_snapshot_id"
-                  AND snapshot."sealed_at" IS NOT NULL
                 WHERE binding."quote_id" = current_quote."id"
            )
            OR NOT EXISTS (
@@ -151,6 +171,63 @@ CREATE CONSTRAINT TRIGGER "quote_requests_current_offer_reconciled"
 AFTER UPDATE OF "current_quote_id" ON "quote_requests"
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_reconcile_issued_quote_request();
+
+-- Snapshot sealing is performed by the pre-existing deferred commerce
+-- reconciliation trigger. Check the sealed bit from a later event so offer
+-- reconciliation cannot observe the row before that trigger has sealed it.
+CREATE OR REPLACE FUNCTION taven_validate_current_offer_sealed_package()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_request_id uuid;
+    request_row record;
+    quote_row record;
+BEGIN
+    SELECT binding."quote_id"
+      INTO quote_row
+      FROM "quote_price_bindings" binding
+     WHERE binding."price_snapshot_id" = NEW."id"
+     LIMIT 1;
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT quote."quote_request_id"
+      INTO target_request_id
+      FROM "quotes" quote
+     WHERE quote."id" = quote_row."quote_id";
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT request.*
+      INTO request_row
+      FROM "quote_requests" request
+     WHERE request."id" = target_request_id
+       AND request."current_quote_id" = quote_row."quote_id"
+     FOR UPDATE;
+    IF NOT FOUND OR request_row."status" IN ('NEW', 'IN_REVIEW') THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT quote.*
+      INTO quote_row
+      FROM "quotes" quote
+     WHERE quote."id" = request_row."current_quote_id";
+    IF quote_row."issuance_command_key" <> 'legacy-import'
+       AND NEW."sealed_at" IS NULL THEN
+        RAISE EXCEPTION 'current offer price package must be sealed'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_package_check';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "price_snapshots_current_offer_sealed"
+AFTER UPDATE OF "sealed_at" ON "price_snapshots"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_current_offer_sealed_package();
 
 ALTER TABLE "quotes"
     ADD COLUMN "legal_terms_revision_id" UUID,
@@ -679,6 +756,18 @@ BEGIN
         WHERE acceptance."quote_request_id" = target_quote_request_id
           AND acceptance."purpose" = 'PRIVACY_NOTICE_ACKNOWLEDGED'
     ) THEN
+        -- Historical requests predate the immutable acceptance ledger. Once
+        -- such a request is carried forward by the explicit offer reissue
+        -- path, retain its legacy privacy evidence rather than making the
+        -- replacement offer impossible to accept.
+        IF EXISTS (
+            SELECT 1
+            FROM "quotes" quote
+            WHERE quote."quote_request_id" = target_quote_request_id
+              AND quote."issuance_command_key" = 'legacy-import'
+        ) THEN
+            RETURN NULL;
+        END IF;
         RAISE EXCEPTION 'Quote request requires immutable privacy acknowledgement evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_privacy_acceptance_evidence_check';
     END IF;
@@ -1427,6 +1516,21 @@ BEGIN
         SELECT origin."quote_id" INTO origin_quote
           FROM "individual_order_origins" origin
          WHERE origin."order_id" = decision."order_id";
+        IF decision."source_quote_id" IS NOT NULL AND origin_quote IS NULL THEN
+            RAISE EXCEPTION 'Automatic order decision cannot have a source Quote'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';
+        END IF;
+        IF origin_quote IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+               FROM "quotes" quote
+               WHERE quote."id" = origin_quote
+                 AND quote."issuance_command_key" <> 'legacy-import'
+           )
+           AND order_created IS DISTINCT FROM decision."decided_at" THEN
+            RAISE EXCEPTION 'Individual Order creation must use the decision instant'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_time_check';
+        END IF;
         IF origin_quote IS NOT NULL AND decision."source_quote_id" IS DISTINCT FROM origin_quote THEN
             RAISE EXCEPTION 'Individual decision source Quote is not its Order origin'
                 USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';

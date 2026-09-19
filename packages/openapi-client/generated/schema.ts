@@ -2585,8 +2585,8 @@ export interface components {
             };
             photoConsentRevision?: string;
             photoPublicationConsent?: boolean;
-            privacyAcknowledged: boolean;
-            privacyNoticeRevision: string;
+            privacyAcknowledged?: boolean;
+            privacyNoticeRevision?: string;
             purpose?: string;
             /** Format: date */
             requestedDate?: string;
@@ -3763,6 +3763,9 @@ export interface components {
             } | null;
             automaticQuoteHandoff?: components["schemas"]["AutomaticQuoteRequestHandoffDto"] | null;
             contact: components["schemas"]["QuoteContactDto"];
+            /** Format: uuid */
+            currentOfferId?: string | null;
+            currentOfferVersion?: number | null;
             description: string;
             measurements?: {
                 [key: string]: unknown;
@@ -3998,6 +4001,9 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             contact: components["schemas"]["QuoteContactDto"];
+            /** Format: uuid */
+            currentOfferId?: string | null;
+            currentOfferVersion?: number | null;
             description: string;
             measurements?: {
                 [key: string]: unknown;

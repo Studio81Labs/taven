@@ -56,11 +56,11 @@ export class CreateQuoteRequestDto {
   @ApiPropertyOptional({ type: Boolean })
   photoPublicationConsent?: boolean;
 
-  @ApiProperty({ type: String, maxLength: 100 })
-  privacyNoticeRevision!: string;
+  @ApiPropertyOptional({ type: String, maxLength: 100 })
+  privacyNoticeRevision?: string;
 
-  @ApiProperty({ type: Boolean })
-  privacyAcknowledged!: boolean;
+  @ApiPropertyOptional({ type: Boolean })
+  privacyAcknowledged?: boolean;
 
   @ApiPropertyOptional({ type: String, maxLength: 100 })
   photoConsentRevision?: string;
@@ -159,6 +159,12 @@ export class QuoteRequestDetailDto {
 
   @ApiProperty({ type: Boolean })
   slaBreached!: boolean;
+
+  @ApiPropertyOptional({ type: String, format: "uuid", nullable: true })
+  currentOfferId!: string | null;
+
+  @ApiPropertyOptional({ type: "integer", nullable: true })
+  currentOfferVersion!: number | null;
 
   @ApiProperty({ type: [QuoteAttachmentDto] })
   attachments!: QuoteAttachmentDto[];
