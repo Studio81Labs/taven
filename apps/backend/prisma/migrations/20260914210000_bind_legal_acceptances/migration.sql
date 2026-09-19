@@ -1823,6 +1823,17 @@ BEGIN
             RAISE EXCEPTION 'Individual decision source Quote is not its Order origin'
                 USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';
         END IF;
+        IF origin_quote IS NOT NULL AND NOT EXISTS (
+            SELECT 1
+            FROM "quotes" quote
+            JOIN "quote_requests" request
+              ON request."id" = quote."quote_request_id"
+             AND request."current_quote_id" = quote."id"
+            WHERE quote."id" = origin_quote
+        ) THEN
+            RAISE EXCEPTION 'Individual acceptance source Quote must remain the current offer'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_current_offer_check';
+        END IF;
         IF origin_quote IS NOT NULL AND EXISTS (
             SELECT 1 FROM "quotes" quote
             WHERE quote."id" = origin_quote
