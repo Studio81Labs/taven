@@ -26,6 +26,132 @@ SET "current_quote_id" = quote."id"
 FROM "quotes" quote
 WHERE quote."quote_request_id" = request."id";
 
+-- Reconcile the versioned offer pointer at commit.  The composite foreign key
+-- proves request ownership, while this deferred check proves that the
+-- selected offer is the newest sealed version and that every newly inserted
+-- offer is selected before its transaction commits.
+CREATE OR REPLACE FUNCTION taven_reconcile_issued_quote_request()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    target_request_id uuid;
+    request_row record;
+    current_quote record;
+    latest_version integer;
+BEGIN
+    IF TG_TABLE_NAME = 'quote_requests' THEN
+        target_request_id := NEW."id";
+    ELSIF TG_TABLE_NAME = 'quotes' THEN
+        target_request_id := NEW."quote_request_id";
+    ELSE
+        SELECT quote."quote_request_id"
+          INTO target_request_id
+          FROM "quotes" quote
+         WHERE quote."id" = NEW."quote_id";
+    END IF;
+
+    SELECT request.*
+      INTO request_row
+      FROM "quote_requests" request
+     WHERE request."id" = target_request_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    IF TG_TABLE_NAME = 'quote_requests'
+       AND TG_OP = 'UPDATE'
+       AND NEW."current_quote_id" IS DISTINCT FROM OLD."current_quote_id"
+       AND (
+           OLD."status" IN ('ACCEPTED', 'REJECTED', 'EXPIRED')
+           OR NEW."status" IN ('ACCEPTED', 'REJECTED', 'EXPIRED')
+       ) THEN
+        RAISE EXCEPTION 'terminal quote request current offer is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_terminal_check';
+    END IF;
+
+    IF request_row."current_quote_id" IS NULL THEN
+        IF request_row."status" IN ('QUOTED', 'ACCEPTED', 'REJECTED', 'EXPIRED')
+           OR TG_TABLE_NAME = 'quotes' THEN
+            RAISE EXCEPTION 'quoted or closed request requires its current offer'
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_required_check';
+        END IF;
+        RETURN NULL;
+    END IF;
+
+    SELECT quote.*
+      INTO current_quote
+      FROM "quotes" quote
+     WHERE quote."id" = request_row."current_quote_id"
+       AND quote."quote_request_id" = request_row."id";
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'quote request current offer does not belong to the request'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_identity_check';
+    END IF;
+
+    IF current_quote."customer_id" IS DISTINCT FROM request_row."customer_id" THEN
+        RAISE EXCEPTION 'quote request current offer customer does not match the request'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_customer_check';
+    END IF;
+
+    SELECT max(quote."version")
+      INTO latest_version
+      FROM "quotes" quote
+     WHERE quote."quote_request_id" = request_row."id";
+    IF current_quote."version" IS DISTINCT FROM latest_version THEN
+        RAISE EXCEPTION 'quote request current offer must be the newest version'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_version_check';
+    END IF;
+
+    IF request_row."status" IN ('NEW', 'IN_REVIEW') THEN
+        RAISE EXCEPTION 'pre-quote request cannot select a current offer'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_status_check';
+    END IF;
+
+    IF current_quote."issuance_command_key" IS DISTINCT FROM request_row."current_state_command_key" THEN
+        RAISE EXCEPTION 'current offer issuance command must match request state command'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_command_check';
+    END IF;
+
+    IF current_quote."issuance_command_key" <> 'legacy-import' THEN
+        IF current_quote."legal_terms_revision_id" IS NULL
+           OR current_quote."legal_claims_revision_id" IS NULL
+           OR current_quote."claim_window_days" IS NULL
+           OR NOT EXISTS (
+               SELECT 1
+                 FROM "quote_price_bindings" binding
+                 JOIN "price_snapshots" snapshot
+                   ON snapshot."id" = binding."price_snapshot_id"
+                  AND snapshot."sealed_at" IS NOT NULL
+                WHERE binding."quote_id" = current_quote."id"
+           )
+           OR NOT EXISTS (
+               SELECT 1 FROM "quote_items" item
+                WHERE item."quote_id" = current_quote."id"
+           )
+           OR NOT EXISTS (
+               SELECT 1 FROM "quote_delivery_destinations" destination
+                WHERE destination."quote_id" = current_quote."id"
+           )
+           OR NOT EXISTS (
+               SELECT 1 FROM "quote_shipment_plans" plan
+                WHERE plan."quote_id" = current_quote."id"
+           ) THEN
+            RAISE EXCEPTION 'current offer does not contain a complete sealed package'
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_package_check';
+        END IF;
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "quote_requests_current_offer_reconciled"
+AFTER UPDATE OF "current_quote_id" ON "quote_requests"
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_reconcile_issued_quote_request();
+
 ALTER TABLE "quotes"
     ADD COLUMN "legal_terms_revision_id" UUID,
     ADD COLUMN "legal_claims_revision_id" UUID,

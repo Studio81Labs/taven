@@ -3195,6 +3195,7 @@ model LegalAcceptance {
   revision     LegalDocumentRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
   decision     LegalAcceptanceDecision? @relation(fields: [decisionId], references: [id], onDelete: Restrict)
 
+  @@index([decisionId])
   @@index([revisionId])
   @@map("legal_acceptances")
 }
@@ -3214,7 +3215,6 @@ model LegalAcceptanceDecision {
   sourceQuote    Quote?          @relation("QuoteAcceptanceSource", fields: [sourceQuoteId], references: [id], onDelete: Restrict)
   acceptances    LegalAcceptance[]
 
-  @@index([sourceQuoteId])
   @@map("legal_acceptance_decisions")
 }
 
