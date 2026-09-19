@@ -1257,7 +1257,6 @@ DECLARE
     request_created timestamptz;
     order_created timestamptz;
     withdrawal timestamptz;
-    photo_scalar timestamptz;
     origin_quote uuid;
     source_request_status text;
     source_request_accepted timestamptz;
