@@ -157,6 +157,17 @@ type LegalPublication = {
   cancelledAt?: string;
 };
 
+function isCurrentPublication(
+  detail: LegalDocumentDetail,
+  publication: LegalPublication,
+): boolean {
+  return (
+    publication.cancelledAt === undefined &&
+    (detail.activePublication?.id === publication.id ||
+      detail.pendingPublication?.id === publication.id)
+  );
+}
+
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "boolean") {
     return JSON.stringify(value);
@@ -778,8 +789,7 @@ async function reconcileDocument(
   const publication = detail.publications.find(
     (candidate) =>
       candidate.revisionId === revision.id &&
-      candidate.cancelledAt === undefined &&
-      candidate.endsAt === undefined,
+      isCurrentPublication(detail, candidate),
   );
   const currentDetail = await api.json<LegalDocumentDetail>(
     `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
@@ -787,8 +797,7 @@ async function reconcileDocument(
   const currentPublication = currentDetail.publications.find(
     (candidate) =>
       candidate.revisionId === revision.id &&
-      candidate.cancelledAt === undefined &&
-      candidate.endsAt === undefined,
+      isCurrentPublication(currentDetail, candidate),
   );
   const selectedPublication = currentPublication ?? publication;
   if (!selectedPublication) {
@@ -812,9 +821,17 @@ async function reconcileDocument(
       },
       true,
     );
-    if (published.cancelledAt !== undefined || published.endsAt !== undefined) {
+    const publishedDetail = await api.json<LegalDocumentDetail>(
+      `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
+    );
+    const livePublication = publishedDetail.publications.find(
+      (candidate) =>
+        candidate.id === published.id &&
+        isCurrentPublication(publishedDetail, candidate),
+    );
+    if (!livePublication) {
       throw new Error(
-        `${document.key} publish idempotency record refers to an ended publication`,
+        `${document.key} publish idempotency record is no longer active or pending`,
       );
     }
     receipt.documents[document.key] = {
@@ -822,7 +839,7 @@ async function reconcileDocument(
       revisionId: revision.id,
       contentHash: revision.contentHash,
       effectiveAt: current.effectiveAt,
-      publicationId: published.id,
+      publicationId: livePublication.id,
       status: "scheduled",
       auditEventIds: [],
     };
