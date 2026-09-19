@@ -2240,19 +2240,31 @@ describe("QuoteRequest and tokenized individual offers", () => {
     if (!photoRevision) throw new Error("E2E photo revision is missing");
     const firstConsentAt = new Date();
     await prisma.$transaction(async (transaction) => {
-      await transaction.$executeRaw`
-        UPDATE quote_requests
-        SET photo_publication_consent_granted_at = ${firstConsentAt}
-        WHERE id = ${requestId}::uuid
-      `;
-      await transaction.$executeRaw`
-        INSERT INTO legal_acceptances
-          (id, quote_request_id, revision_id, purpose, accepted_at, command_identity)
-        VALUES
-          (${randomUUID()}::uuid, ${requestId}::uuid, ${photoRevision.id}::uuid,
-           'PHOTO_PUBLICATION_GRANTED', ${firstConsentAt},
-           ${key("legacy-photo-consent-repair")})
-      `;
+      try {
+        await transaction.$executeRaw`
+          UPDATE quote_requests
+          SET photo_publication_consent_granted_at = ${firstConsentAt}
+          WHERE id = ${requestId}::uuid
+        `;
+      } catch (error) {
+        throw new Error("legacy scalar repair update failed", {
+          cause: error,
+        });
+      }
+      try {
+        await transaction.$executeRaw`
+          INSERT INTO legal_acceptances
+            (id, quote_request_id, revision_id, purpose, accepted_at, command_identity)
+          VALUES
+            (${randomUUID()}::uuid, ${requestId}::uuid, ${photoRevision.id}::uuid,
+             'PHOTO_PUBLICATION_GRANTED', ${firstConsentAt},
+             ${key("legacy-photo-consent-repair")})
+        `;
+      } catch (error) {
+        throw new Error("legacy acceptance ledger insert failed", {
+          cause: error,
+        });
+      }
     });
 
     await expect(
