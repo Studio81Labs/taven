@@ -962,6 +962,16 @@ async function verifyBaseline(
     if (!state?.revisionId || !state.contentHash) {
       throw new Error(`${document.key} has no completed baseline receipt`);
     }
+    const detail = await loadDocumentDetail(api, document.key);
+    const currentPublication = currentPublicationForRevision(
+      detail,
+      state.revisionId,
+    );
+    if (!currentPublication || currentPublication.id !== state.publicationId) {
+      throw new Error(
+        `${document.key} receipt publication is no longer active or pending`,
+      );
+    }
     const record = availability.documents[document.key];
     if (state.status === "published") {
       if (
