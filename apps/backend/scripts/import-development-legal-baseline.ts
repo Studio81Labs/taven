@@ -491,6 +491,10 @@ export function normalizeEffectiveAt(value: string | undefined): string {
   if (!Number.isFinite(parsed.getTime())) {
     throw new Error("--effective-at must be a valid timezone-aware instant");
   }
+  const utcYear = parsed.getUTCFullYear();
+  if (utcYear < 1 || utcYear > 9999) {
+    throw new Error("--effective-at must normalize to UTC year 0001-9999");
+  }
   return parsed.toISOString();
 }
 

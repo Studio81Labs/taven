@@ -105,6 +105,12 @@ describe("development legal baseline importer", () => {
     expect(normalizeEffectiveAt("2027-02-28T00:00:00+02:00")).toBe(
       "2027-02-27T22:00:00.000Z",
     );
+    expect(() => normalizeEffectiveAt("0000-01-01T00:00:00Z")).toThrow(
+      /UTC year 0001-9999/,
+    );
+    expect(() => normalizeEffectiveAt("9999-12-31T23:59:59-23:59")).toThrow(
+      /UTC year 0001-9999/,
+    );
   });
 
   it("requires an exact match in the trusted target allowlist", () => {
