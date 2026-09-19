@@ -113,6 +113,49 @@ describe("secure object storage and retention", () => {
     });
   });
 
+  async function createQuoteRequestWithPrivacyEvidence(
+    id: string,
+    quoteSessionId: string,
+    currentStateCommandKey: string,
+  ): Promise<void> {
+    await prisma.$transaction(async (transaction) => {
+      const commandIdentity = `fixture:${id}:privacy`;
+      const decision = await transaction.legalAcceptanceDecision.create({
+        data: {
+          id: randomUUID(),
+          quoteRequestId: id,
+          commandIdentity,
+          decidedAt: new Date(),
+          originatingXid: "fixture",
+        },
+      });
+      await transaction.quoteRequest.create({
+        data: {
+          id,
+          quoteSessionId,
+          currentStateCommandKey,
+          createdAt: decision.decidedAt,
+          updatedAt: decision.decidedAt,
+        },
+      });
+      const privacyRevision =
+        await transaction.legalDocumentRevision.findFirstOrThrow({
+          where: { revisionCode: e2eLegalRevisionCodes.privacy },
+          select: { id: true },
+        });
+      await transaction.legalAcceptance.create({
+        data: {
+          quoteRequestId: id,
+          revisionId: privacyRevision.id,
+          purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
+          acceptedAt: decision.decidedAt,
+          commandIdentity,
+          decisionId: decision.id,
+        },
+      });
+    });
+  }
+
   it("creates immutable profile snapshots idempotently on S3-compatible storage", async () => {
     const bytes = new TextEncoder().encode('{"layer_height":"0.2"}');
     const contentHash = createHash("sha256").update(bytes).digest("hex");
@@ -460,13 +503,11 @@ describe("secure object storage and retention", () => {
         expiresAt: new Date(Date.now() + 60_000),
       },
     });
-    await prisma.quoteRequest.create({
-      data: {
-        id: scopeId,
-        quoteSessionId: quoteSession.id,
-        currentStateCommandKey: "legacy-import",
-      },
-    });
+    await createQuoteRequestWithPrivacyEvidence(
+      scopeId,
+      quoteSession.id,
+      "legacy-import",
+    );
     const requestBody = JSON.stringify({
       kind: "QUOTE_REFERENCE",
       scopeKind: "QUOTE_REQUEST",
@@ -557,13 +598,11 @@ describe("secure object storage and retention", () => {
         expiresAt: new Date(Date.now() + 60_000),
       },
     });
-    await prisma.quoteRequest.create({
-      data: {
-        id: scopeId,
-        quoteSessionId: quoteSession.id,
-        currentStateCommandKey: "legacy-import",
-      },
-    });
+    await createQuoteRequestWithPrivacyEvidence(
+      scopeId,
+      quoteSession.id,
+      "legacy-import",
+    );
     const request = {
       method: "POST",
       headers: {

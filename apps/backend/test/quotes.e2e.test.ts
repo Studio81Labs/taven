@@ -2178,9 +2178,18 @@ describe("QuoteRequest and tokenized individual offers", () => {
   });
 
   it("requires immutable legal evidence for direct quote-request writes", async () => {
+    const quoteSession = await prisma.quoteSession.create({
+      data: {
+        publicTokenHash: createHash("sha256")
+          .update(randomBytes(32))
+          .digest("hex"),
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
     await expect(
       prisma.quoteRequest.create({
         data: {
+          quoteSessionId: quoteSession.id,
           publicReference: `mp-${randomUUID()}`,
           description: "Direct write without privacy evidence",
           currentStateCommandKey: key("direct-without-privacy"),
@@ -2196,14 +2205,28 @@ describe("QuoteRequest and tokenized individual offers", () => {
         select: { id: true },
       },
     );
+    const requestId = randomUUID();
     await expect(
       prisma.$transaction(async (transaction) => {
+        const commandIdentity = key("direct-photo-without-evidence");
+        const decision = await transaction.legalAcceptanceDecision.create({
+          data: {
+            id: randomUUID(),
+            quoteRequestId: requestId,
+            commandIdentity,
+            decidedAt: new Date(),
+            originatingXid: "test",
+          },
+        });
         const request = await transaction.quoteRequest.create({
           data: {
+            id: requestId,
             publicReference: `mphoto-${randomUUID()}`,
             description: "Direct write without photo consent evidence",
             photoPublicationConsentGrantedAt: new Date(),
             currentStateCommandKey: key("direct-photo-without-evidence"),
+            createdAt: decision.decidedAt,
+            updatedAt: decision.decidedAt,
           },
         });
         await transaction.legalAcceptance.create({
@@ -2211,25 +2234,64 @@ describe("QuoteRequest and tokenized individual offers", () => {
             quoteRequestId: request.id,
             revisionId: privacyRevision.id,
             purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
-            acceptedAt: new Date(),
-            commandIdentity: key("direct-photo-without-evidence"),
+            acceptedAt: decision.decidedAt,
+            commandIdentity,
+            decisionId: decision.id,
           },
         });
       }),
-    ).rejects.toThrow(
-      "Quote request photo consent requires matching immutable legal acceptance evidence",
-    );
+    ).rejects.toThrow("Quote request legal acceptance decision is incomplete");
   });
 
-  it("allows one legacy photo-consent repair but rejects later timestamp rewrites", async () => {
+  it("rejects legacy photo-consent repairs without a database decision", async () => {
     const requestId = randomUUID();
-    await prisma.$executeRaw`
-      INSERT INTO quote_requests
-        (id, public_reference, description, current_state_command_key, created_at, updated_at)
-      VALUES
-        (${requestId}::uuid, ${`legacy-photo-${randomUUID()}`},
-         'Legacy photo consent repair', 'legacy-import', clock_timestamp(), clock_timestamp())
-    `;
+    const quoteSession = await prisma.quoteSession.create({
+      data: {
+        publicTokenHash: createHash("sha256")
+          .update(randomBytes(32))
+          .digest("hex"),
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    const commandIdentity = key("legacy-photo-consent-repair");
+    const decision = await prisma.$transaction(async (transaction) => {
+      const created = await transaction.legalAcceptanceDecision.create({
+        data: {
+          id: randomUUID(),
+          quoteRequestId: requestId,
+          commandIdentity: `fixture:${requestId}:privacy`,
+          decidedAt: new Date(),
+          originatingXid: "test",
+        },
+      });
+      await transaction.quoteRequest.create({
+        data: {
+          id: requestId,
+          quoteSessionId: quoteSession.id,
+          publicReference: `legacy-photo-${randomUUID()}`,
+          description: "Legacy photo consent repair",
+          currentStateCommandKey: "legacy-import",
+          createdAt: created.decidedAt,
+          updatedAt: created.decidedAt,
+        },
+      });
+      const privacyRevision =
+        await transaction.legalDocumentRevision.findFirstOrThrow({
+          where: { revisionCode: e2eLegalRevisionCodes.privacy },
+          select: { id: true },
+        });
+      await transaction.legalAcceptance.create({
+        data: {
+          quoteRequestId: requestId,
+          revisionId: privacyRevision.id,
+          purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
+          acceptedAt: created.decidedAt,
+          commandIdentity: created.commandIdentity,
+          decisionId: created.id,
+        },
+      });
+      return created;
+    });
     const photoRevisionRows = await prisma.$queryRaw<Array<{ id: string }>>`
       SELECT id
       FROM legal_document_revisions
@@ -2238,53 +2300,15 @@ describe("QuoteRequest and tokenized individual offers", () => {
     `;
     const photoRevision = photoRevisionRows[0];
     if (!photoRevision) throw new Error("E2E photo revision is missing");
-    const firstConsentAt = new Date();
-    await prisma.$transaction(async (transaction) => {
-      try {
-        await transaction.$executeRaw`
-          INSERT INTO legal_acceptances
-            (id, quote_request_id, revision_id, purpose, accepted_at, command_identity)
-          VALUES
-            (${randomUUID()}::uuid, ${requestId}::uuid, ${photoRevision.id}::uuid,
-             'PHOTO_PUBLICATION_GRANTED', ${firstConsentAt},
-             ${key("legacy-photo-consent-repair")})
-        `;
-      } catch (error) {
-        throw new Error("legacy acceptance ledger insert failed", {
-          cause: error,
-        });
-      }
-      try {
-        await transaction.$executeRaw`
-          UPDATE quote_requests
-          SET photo_publication_consent_granted_at = ${firstConsentAt}
-          WHERE id = ${requestId}::uuid
-        `;
-      } catch (error) {
-        throw new Error("legacy scalar repair update failed", {
-          cause: error,
-        });
-      }
-      try {
-        await transaction.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
-      } catch (error) {
-        throw new Error("legacy consent trigger validation failed", {
-          cause: error,
-        });
-      }
-    });
-
     await expect(
       prisma.$executeRaw`
-        UPDATE quote_requests
-        SET photo_publication_consent_granted_at = ${new Date(
-          firstConsentAt.getTime() + 1_000,
-        )}
-        WHERE id = ${requestId}::uuid
+        INSERT INTO legal_acceptances
+          (id, quote_request_id, revision_id, purpose, accepted_at, command_identity)
+        VALUES
+          (${randomUUID()}::uuid, ${requestId}::uuid, ${photoRevision.id}::uuid,
+           'PHOTO_PUBLICATION_GRANTED', ${decision.decidedAt}, ${commandIdentity})
       `,
-    ).rejects.toThrow(
-      "Quote request photo consent changes require matching immutable legal acceptance evidence",
-    );
+    ).rejects.toThrow("New legal acceptance requires a database decision");
   });
 
   function requestInput(scope: string) {

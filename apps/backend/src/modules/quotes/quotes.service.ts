@@ -315,30 +315,30 @@ export class QuotesService {
             updatedAt: observedAt,
           },
         });
-        await transaction.legalAcceptance.createMany({
-          data: [
-            {
-              quoteRequestId: requestId,
-              revisionId: finalLegal.documents.privacy.revisionId!,
-              purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
-              acceptedAt: observedAt,
-              commandIdentity: commandKey,
-              decisionId: decision.id,
-            },
-            ...(request.photoPublicationConsent
-              ? [
-                  {
-                    quoteRequestId: requestId,
-                    revisionId: finalLegal.documents.photoConsent.revisionId!,
-                    purpose: "PHOTO_PUBLICATION_GRANTED" as const,
-                    acceptedAt: observedAt,
-                    commandIdentity: commandKey,
-                    decisionId: decision.id,
-                  },
-                ]
-              : []),
-          ],
-        });
+        await transaction.$executeRaw`
+          INSERT INTO "legal_acceptances"
+            ("id", "quote_request_id", "revision_id", "purpose", "accepted_at",
+             "command_identity", "decision_id")
+          SELECT gen_random_uuid(), ${requestId}::uuid,
+                 ${finalLegal.documents.privacy.revisionId!}::uuid,
+                 'PRIVACY_NOTICE_ACKNOWLEDGED'::legal_acceptance_purpose,
+                 decision."decided_at", decision."command_identity", decision."id"
+          FROM "legal_acceptance_decisions" decision
+          WHERE decision."id" = ${decision.id}::uuid
+        `;
+        if (request.photoPublicationConsent) {
+          await transaction.$executeRaw`
+            INSERT INTO "legal_acceptances"
+              ("id", "quote_request_id", "revision_id", "purpose", "accepted_at",
+               "command_identity", "decision_id")
+            SELECT gen_random_uuid(), ${requestId}::uuid,
+                   ${finalLegal.documents.photoConsent.revisionId!}::uuid,
+                   'PHOTO_PUBLICATION_GRANTED'::legal_acceptance_purpose,
+                   decision."decided_at", decision."command_identity", decision."id"
+            FROM "legal_acceptance_decisions" decision
+            WHERE decision."id" = ${decision.id}::uuid
+          `;
+        }
         if (lockedHandoff) {
           await consumeAutomaticQuoteHandoff(
             transaction,
@@ -1441,7 +1441,7 @@ export class QuotesService {
           quote.quoteRequestId,
           commandKey,
           resultId,
-          decision.decidedAt,
+          decision.id,
         );
         if (!acceptance.accepted_at) {
           await transaction.$executeRawUnsafe(
@@ -1450,7 +1450,7 @@ export class QuotesService {
           await expireLockedOffer(transaction, quote, acceptance.evaluated_at);
           return { kind: "expired" };
         }
-        const observedAt = acceptance.accepted_at;
+        const observedAt = decision.decidedAt;
         const approvals = await this.requiredLegalApprovals().readAt(
           transaction,
           observedAt,
@@ -1655,26 +1655,23 @@ export class QuotesService {
             withdrawalExceptionAcknowledgedAt: observedAt,
           },
         });
-        await transaction.legalAcceptance.createMany({
-          data: [
-            {
-              orderId,
-              revisionId: quote.legalTermsRevisionId!,
-              purpose: "TERMS_ACCEPTED",
-              acceptedAt: observedAt,
-              commandIdentity: commandKey,
-              decisionId: decision.id,
-            },
-            {
-              orderId,
-              revisionId: quote.legalClaimsRevisionId!,
-              purpose: "CLAIM_POLICY_ACCEPTED",
-              acceptedAt: observedAt,
-              commandIdentity: commandKey,
-              decisionId: decision.id,
-            },
-          ],
-        });
+        await transaction.$executeRaw`
+          INSERT INTO "legal_acceptances"
+            ("id", "order_id", "revision_id", "purpose", "accepted_at",
+             "command_identity", "decision_id")
+          SELECT gen_random_uuid(), ${orderId}::uuid,
+                 evidence."revision_id", evidence."purpose",
+                 decision."decided_at", decision."command_identity", decision."id"
+          FROM (
+            VALUES
+              (${quote.legalTermsRevisionId!}::uuid,
+               'TERMS_ACCEPTED'::legal_acceptance_purpose),
+              (${quote.legalClaimsRevisionId!}::uuid,
+               'CLAIM_POLICY_ACCEPTED'::legal_acceptance_purpose)
+          ) AS evidence("revision_id", "purpose")
+          JOIN "legal_acceptance_decisions" decision
+            ON decision."id" = ${decision.id}::uuid
+        `;
         const sourceModelFileIds = [
           ...new Set(
             quote.items.flatMap((item) =>
@@ -2311,11 +2308,13 @@ async function acceptLockedQuoteRequest(
   requestId: string,
   commandKey: string,
   resultId: string,
-  decidedAt: Date,
+  decisionId: string,
 ): Promise<QuoteAcceptanceRow> {
   const rows = await transaction.$queryRaw<QuoteAcceptanceRow[]>`
     WITH evaluation AS MATERIALIZED (
-      SELECT ${decidedAt}::timestamptz AS evaluated_at
+      SELECT decision."decided_at" AS evaluated_at
+      FROM "legal_acceptance_decisions" decision
+      WHERE decision."id" = ${decisionId}::uuid
     ), accepted AS (
       UPDATE quote_requests request
       SET status = 'ACCEPTED',

@@ -1322,5 +1322,41 @@ CREATE CONSTRAINT TRIGGER "legal_acceptances_decision_bundle_valid"
 AFTER INSERT ON "legal_acceptances" DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION taven_validate_legal_acceptance_bundle();
 
+-- The earlier acceptance trigger used statement_timestamp(), which would
+-- silently replace the database-owned decision instant. Preserve the caller's
+-- decision-bound value and let the deferred decision bundle validate it.
+CREATE OR REPLACE FUNCTION taven_set_quote_request_acceptance_time()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD."status" = 'ACCEPTED'
+       AND NEW."accepted_at" IS DISTINCT FROM OLD."accepted_at" THEN
+        RAISE EXCEPTION 'quote request acceptance evidence is immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_accepted_at_immutable_check';
+    END IF;
+    IF NEW."status" = 'ACCEPTED'
+       AND OLD."status" IS DISTINCT FROM NEW."status"
+       AND NEW."accepted_at" IS NULL THEN
+        RAISE EXCEPTION 'accepted quote request requires a decision instant'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_acceptance_time_check';
+    END IF;
+    IF NEW."status" = 'ACCEPTED'
+       AND OLD."status" IS DISTINCT FROM NEW."status"
+       AND NOT EXISTS (
+           SELECT 1
+           FROM "quotes" source_quote
+           JOIN "legal_acceptance_decisions" decision
+             ON decision."source_quote_id" = source_quote."id"
+           WHERE source_quote."quote_request_id" = NEW."id"
+             AND decision."decided_at" = NEW."accepted_at"
+       ) THEN
+        RAISE EXCEPTION 'Quote request acceptance requires a matching database decision'
+            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_acceptance_decision_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
 -- Existing completeness functions remain in force, but new acceptance bundles
 -- also require the decision-specific transaction/time checks above.

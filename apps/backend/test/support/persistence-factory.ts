@@ -719,13 +719,7 @@ export class PersistenceFactory {
     beforeOrderPricing?: () => Promise<void>;
   }): Promise<void> {
     const t = createdAt;
-    const quoteIssuedAt = new Date(
-      Math.min(
-        input.orderOrigin === "INDIVIDUAL" ? Date.now() : t.getTime(),
-        input.quoteExpiresAt.getTime() - 1,
-      ),
-    );
-    const quoteRequestCreatedAt = quoteIssuedAt;
+    let quoteIssuedAt: Date;
     const snapshotId = this.id(`${input.name}:price-snapshot`);
     const scheduleId = this.id(`${input.name}:payment-schedule`);
     const componentIds = this.componentIds(input.name, input.resolvedItems);
@@ -776,22 +770,57 @@ export class PersistenceFactory {
       ],
     );
     if (input.customerOwned) {
+      const requestDecisionId = this.id(
+        `${input.name}:quote-request-legal-decision`,
+      );
+      const decision = await this.sql.query<{ decided_at: Date }>(
+        `INSERT INTO legal_acceptance_decisions
+           (id, quote_request_id, command_identity, decided_at, originating_xid)
+         VALUES ($1, $2, $3, clock_timestamp(), pg_current_xact_id()::text)
+         RETURNING decided_at`,
+        [
+          requestDecisionId,
+          input.quoteRequestId,
+          `${input.name}:quote-request-privacy`,
+        ],
+      );
+      quoteIssuedAt = decision.rows[0]!.decided_at;
       await this.sql.query(
-        "INSERT INTO quote_requests (id, quote_session_id, customer_id, status, current_state_command_key, created_at, updated_at) VALUES ($1,$2,$3,'NEW','legacy-import',$4,$4)",
+        `INSERT INTO quote_requests
+           (id, quote_session_id, customer_id, status, current_state_command_key,
+            created_at, updated_at)
+         SELECT $1, $2, $3, 'NEW', 'legacy-import', decision.decided_at,
+                decision.decided_at
+         FROM legal_acceptance_decisions decision
+         WHERE decision.id = $4`,
         [
           input.quoteRequestId,
           input.quoteSessionId,
           input.customerId,
-          quoteRequestCreatedAt,
+          requestDecisionId,
         ],
       );
       await this.sql.query(
+        `INSERT INTO legal_acceptances
+           (id, quote_request_id, revision_id, purpose, accepted_at,
+            command_identity, decision_id)
+         SELECT gen_random_uuid(), $1, revision.id,
+                'PRIVACY_NOTICE_ACKNOWLEDGED', decision.decided_at,
+                decision.command_identity, decision.id
+         FROM legal_document_revisions revision
+         JOIN legal_documents document ON document.id = revision.document_id
+         JOIN legal_acceptance_decisions decision ON decision.id = $2
+         WHERE document.key = 'privacy'
+           AND revision.revision_code = 'privacy-v1'`,
+        [input.quoteRequestId, requestDecisionId],
+      );
+      await this.sql.query(
         "UPDATE quote_requests SET status = 'IN_REVIEW', updated_at = $2 WHERE id = $1",
-        [input.quoteRequestId, t],
+        [input.quoteRequestId, quoteIssuedAt],
       );
       await this.sql.query(
         "UPDATE quote_requests SET status = 'QUOTED', updated_at = $2 WHERE id = $1",
-        [input.quoteRequestId, t],
+        [input.quoteRequestId, quoteIssuedAt],
       );
       await this.sql.query(
         `INSERT INTO quotes
@@ -828,6 +857,10 @@ export class PersistenceFactory {
           quoteIssuedAt,
           input.orderOrigin === "INDIVIDUAL",
         ],
+      );
+      await this.sql.query(
+        "UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1",
+        [input.quoteRequestId, input.quoteId],
       );
       for (const [index, item] of input.resolvedItems.entries()) {
         await this.sql.query(
@@ -1188,6 +1221,10 @@ export class PersistenceFactory {
         "INSERT INTO individual_order_origins (order_id, quote_id) VALUES ($1,$2)",
         [input.orderId, input.quoteId],
       );
+      await this.recordOrderLegalAcceptance(
+        input.orderId,
+        `${input.name}:individual-acceptance`,
+      );
       await this.sql.query(
         `UPDATE orders
          SET accepted_order_price_binding_id = $2,
@@ -1198,24 +1235,6 @@ export class PersistenceFactory {
              updated_at = $3
          WHERE id = $1`,
         [input.orderId, input.orderPriceBindingId, t],
-      );
-      await this.sql.query(
-        `INSERT INTO legal_acceptances
-           (id, order_id, revision_id, purpose, accepted_at, command_identity)
-         SELECT gen_random_uuid(), $1, revision.id, purpose, clock_timestamp(), $2
-         FROM (
-           VALUES
-             ('terms'::text, 'TERMS_ACCEPTED'::legal_acceptance_purpose),
-             ('claims'::text, 'CLAIM_POLICY_ACCEPTED'::legal_acceptance_purpose)
-         ) AS evidence(document_key, purpose)
-         JOIN legal_documents document ON document.key = evidence.document_key
-         JOIN legal_document_revisions revision
-           ON revision.document_id = document.id
-          AND revision.revision_code = CASE evidence.document_key
-            WHEN 'terms' THEN 'terms-v1'
-            WHEN 'claims' THEN 'claim-policy-v1'
-          END`,
-        [input.orderId, `${input.name}:individual-acceptance`],
       );
       for (const [index] of input.orderItemIds.entries()) {
         await this.sql.query(
@@ -1268,6 +1287,10 @@ export class PersistenceFactory {
         [input.orderId, t],
       );
       if (input.automaticCheckout?.preacceptCheckout !== false) {
+        await this.recordOrderLegalAcceptance(
+          input.orderId,
+          `${input.name}:checkout-acceptance`,
+        );
         await this.sql.query(
           `UPDATE orders
            SET accepted_order_price_binding_id = $3,
@@ -1294,10 +1317,6 @@ export class PersistenceFactory {
             input.orderPriceBindingId,
             `${this.hash(input.name).slice(0, 24)}@example.test`,
           ],
-        );
-        await this.recordOrderLegalAcceptance(
-          input.orderId,
-          `${input.name}:checkout-acceptance`,
         );
       }
       await this.sql.query(
@@ -1373,6 +1392,10 @@ export class PersistenceFactory {
     foundation: PersistenceFoundation,
     acknowledgedAt = new Date(),
   ): Promise<void> {
+    await this.recordOrderLegalAcceptance(
+      foundation.orderId,
+      `fixture:${foundation.orderId}:checkout-acceptance`,
+    );
     await this.sql.query(
       `UPDATE orders
        SET accepted_order_price_binding_id = $3,
@@ -1401,35 +1424,49 @@ export class PersistenceFactory {
          AND withdrawal_exception_acknowledged_at IS NULL`,
       [foundation.orderId, acknowledgedAt, foundation.orderPriceBindingId],
     );
-    await this.recordOrderLegalAcceptance(
-      foundation.orderId,
-      `fixture:${foundation.orderId}:checkout-acceptance`,
-    );
   }
 
   private async recordOrderLegalAcceptance(
     orderId: string,
     commandIdentity: string,
   ): Promise<void> {
+    const existing = await this.sql.query<{ id: string }>(
+      `SELECT id FROM legal_acceptance_decisions WHERE order_id = $1`,
+      [orderId],
+    );
+    const decisionId =
+      existing.rows[0]?.id ??
+      (
+        await this.sql.query<{ id: string }>(
+          `INSERT INTO legal_acceptance_decisions
+             (id, order_id, command_identity, decided_at, originating_xid)
+           VALUES (gen_random_uuid(), $1, $2, clock_timestamp(), pg_current_xact_id()::text)
+           RETURNING id`,
+          [orderId, commandIdentity],
+        )
+      ).rows[0]?.id;
+    if (!decisionId) throw new Error("order legal decision is missing");
     await this.sql.query(
       `INSERT INTO legal_acceptances
-         (id, order_id, revision_id, purpose, accepted_at, command_identity)
-       SELECT gen_random_uuid(), $1, revision.id, evidence.purpose, clock_timestamp(), $2
+         (id, order_id, revision_id, purpose, accepted_at, command_identity, decision_id)
+       SELECT gen_random_uuid(), $1, revision.id, evidence.purpose,
+              decision.decided_at, decision.command_identity, decision.id
        FROM (
          VALUES
            ('terms'::text, 'TERMS_ACCEPTED'::legal_acceptance_purpose),
            ('claims'::text, 'CLAIM_POLICY_ACCEPTED'::legal_acceptance_purpose)
        ) AS evidence(document_key, purpose)
        JOIN legal_documents document ON document.key = evidence.document_key
-       JOIN legal_document_revisions revision
-         ON revision.document_id = document.id
-        AND revision.revision_code = CASE evidence.document_key
-          WHEN 'terms' THEN 'terms-v1'
-          WHEN 'claims' THEN 'claim-policy-v1'
-        END
+        JOIN legal_document_revisions revision
+           ON revision.document_id = document.id
+          AND revision.revision_code = CASE evidence.document_key
+            WHEN 'terms' THEN 'terms-v1'
+            WHEN 'claims' THEN 'claim-policy-v1'
+          END
+       JOIN legal_acceptance_decisions decision ON decision.id = $3
        ON CONFLICT ("order_id", "purpose") WHERE "order_id" IS NOT NULL
        DO NOTHING`,
-      [orderId, commandIdentity],
+      [orderId, commandIdentity, decisionId],
     );
   }
 

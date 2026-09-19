@@ -842,39 +842,36 @@ export class PaymentsService {
         },
       });
       if (!context.order.acceptedOrderPriceBindingId && !isRetry) {
-        await transaction.legalAcceptance.createMany({
-          data: [
-            {
-              orderId: context.order.id,
-              revisionId: legal.approvals.documents.terms.revisionId!,
-              purpose: "TERMS_ACCEPTED",
-              acceptedAt: observedAt,
-              commandIdentity: idempotencyKey,
-              decisionId: decision!.id,
-            },
-            {
-              orderId: context.order.id,
-              revisionId: legal.approvals.documents.claims.revisionId!,
-              purpose: "CLAIM_POLICY_ACCEPTED",
-              acceptedAt: observedAt,
-              commandIdentity: idempotencyKey,
-              decisionId: decision!.id,
-            },
-            ...(input.photoPublicationConsent
-              ? [
-                  {
-                    orderId: context.order.id,
-                    revisionId:
-                      legal.approvals.documents.photoConsent.revisionId!,
-                    purpose: "PHOTO_PUBLICATION_GRANTED" as const,
-                    acceptedAt: observedAt,
-                    commandIdentity: idempotencyKey,
-                    decisionId: decision!.id,
-                  },
-                ]
-              : []),
-          ],
-        });
+        await transaction.$executeRaw`
+          INSERT INTO "legal_acceptances"
+            ("id", "order_id", "revision_id", "purpose", "accepted_at",
+             "command_identity", "decision_id")
+          SELECT gen_random_uuid(), ${context.order.id}::uuid,
+                 evidence."revision_id", evidence."purpose",
+                 decision."decided_at", decision."command_identity", decision."id"
+          FROM (
+            VALUES
+              (${legal.approvals.documents.terms.revisionId!}::uuid,
+               'TERMS_ACCEPTED'::legal_acceptance_purpose),
+              (${legal.approvals.documents.claims.revisionId!}::uuid,
+               'CLAIM_POLICY_ACCEPTED'::legal_acceptance_purpose)
+          ) AS evidence("revision_id", "purpose")
+          JOIN "legal_acceptance_decisions" decision
+            ON decision."id" = ${decision!.id}::uuid
+        `;
+        if (input.photoPublicationConsent) {
+          await transaction.$executeRaw`
+            INSERT INTO "legal_acceptances"
+              ("id", "order_id", "revision_id", "purpose", "accepted_at",
+               "command_identity", "decision_id")
+            SELECT gen_random_uuid(), ${context.order.id}::uuid,
+                   ${legal.approvals.documents.photoConsent.revisionId!}::uuid,
+                   'PHOTO_PUBLICATION_GRANTED'::legal_acceptance_purpose,
+                   decision."decided_at", decision."command_identity", decision."id"
+            FROM "legal_acceptance_decisions" decision
+            WHERE decision."id" = ${decision!.id}::uuid
+          `;
+        }
       }
       const paymentId = randomUUID();
       const payment = await transaction.payment.create({
