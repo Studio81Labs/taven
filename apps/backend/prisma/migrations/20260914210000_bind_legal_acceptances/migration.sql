@@ -482,6 +482,7 @@ BEGIN
            AND NEW."photo_publication_consent_granted_at" IS DISTINCT FROM OLD."photo_publication_consent_granted_at"
            AND (
                NEW."photo_publication_consent_granted_at" IS NULL
+               OR OLD."photo_publication_consent_granted_at" IS NOT NULL
                OR NOT EXISTS (
                    SELECT 1
                    FROM "legal_acceptances" acceptance

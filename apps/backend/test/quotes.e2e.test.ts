@@ -2221,6 +2221,49 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
   });
 
+  it("allows one legacy photo-consent repair but rejects later timestamp rewrites", async () => {
+    const request = await prisma.quoteRequest.create({
+      data: {
+        publicReference: `legacy-photo-${randomUUID()}`,
+        description: "Legacy photo consent repair",
+        currentStateCommandKey: "legacy-import",
+      },
+    });
+    const photoRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { revisionCode: e2eLegalRevisionCodes.photoConsent },
+      select: { id: true },
+    });
+    const firstConsentAt = new Date();
+    await prisma.$transaction(async (transaction) => {
+      await transaction.quoteRequest.update({
+        where: { id: request.id },
+        data: { photoPublicationConsentGrantedAt: firstConsentAt },
+      });
+      await transaction.legalAcceptance.create({
+        data: {
+          quoteRequestId: request.id,
+          revisionId: photoRevision.id,
+          purpose: "PHOTO_PUBLICATION_GRANTED",
+          acceptedAt: firstConsentAt,
+          commandIdentity: key("legacy-photo-consent-repair"),
+        },
+      });
+    });
+
+    await expect(
+      prisma.quoteRequest.update({
+        where: { id: request.id },
+        data: {
+          photoPublicationConsentGrantedAt: new Date(
+            firstConsentAt.getTime() + 1_000,
+          ),
+        },
+      }),
+    ).rejects.toThrow(
+      "Quote request photo consent changes require matching immutable legal acceptance evidence",
+    );
+  });
+
   function requestInput(scope: string) {
     return {
       description: `A detailed individual quote request for ${scope}`,
