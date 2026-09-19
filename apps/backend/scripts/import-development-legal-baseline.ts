@@ -761,6 +761,11 @@ async function reconcileDocument(
     );
   }
   if (!revision) {
+    if (state && !state.effectiveAt) {
+      throw new Error(
+        `${document.key} receipt is missing effectiveAt and cannot be safely recovered`,
+      );
+    }
     const created = await api.json<LegalRevision>(
       `/admin/legal-documents/${encodeURIComponent(document.key)}/revisions`,
       {
@@ -801,7 +806,12 @@ async function reconcileDocument(
   }
   if (revision.status === "DRAFT") {
     const current = receipt.documents[document.key];
-    const effectiveAt = current?.effectiveAt ?? normalizeEffectiveAt(undefined);
+    if (!current?.effectiveAt) {
+      throw new Error(
+        `${document.key} receipt is missing effectiveAt and cannot be safely approved`,
+      );
+    }
+    const effectiveAt = current.effectiveAt;
     const approved = await api.json<LegalRevision>(
       `/admin/legal-documents/${encodeURIComponent(document.key)}/revisions/${revision.id}/approve`,
       {
@@ -1072,8 +1082,6 @@ async function main(): Promise<void> {
         status: "approved",
         auditEventIds: [],
       };
-    } else if (!state.effectiveAt) {
-      state.effectiveAt = effectiveAt;
     }
   }
   writeReceipt(path.resolve(receiptPath), receipt);
