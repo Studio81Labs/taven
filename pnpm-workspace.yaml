@@ -63,3 +63,6 @@ overrides:
   # GHSA-4mjr-xmp4-gh2g and GHSA-x5fp-wj9c-mxmx. Express and body-parser pin
   # 6.15.3; remove when both parents adopt qs >= 6.16.0.
   "qs@6": ">=6.16.0 <7"
+  # GHSA-9rgm-9g3h-6x36. Nuxt currently resolves devalue 5.9.1; remove when
+  # its dependency range includes the patched devalue release.
+  devalue: ">=5.9.2 <6"
