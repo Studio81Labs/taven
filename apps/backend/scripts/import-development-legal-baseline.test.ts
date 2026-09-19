@@ -54,6 +54,24 @@ describe("development legal baseline importer", () => {
         allowBaselineImport: true,
       }),
     ).toThrow(/credentials or a fragment/);
+    expect(() =>
+      parseTargetConfig({
+        targetId: "staging",
+        environment: "staging",
+        baseUrl: "http://staging.taven.cz",
+        origin: "https://staging.taven.cz",
+        allowBaselineImport: true,
+      }),
+    ).toThrow(/HTTPS/);
+    expect(() =>
+      parseTargetConfig({
+        targetId: "staging",
+        environment: "staging",
+        baseUrl: "https://staging.taven.cz/legal",
+        origin: "https://staging.taven.cz",
+        allowBaselineImport: true,
+      }),
+    ).toThrow(/without a path prefix/);
   });
 
   it("rejects valueless and unknown command-line options", () => {

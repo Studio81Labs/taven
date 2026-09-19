@@ -212,6 +212,12 @@ export function parseTargetConfig(value: unknown): BaselineTargetConfig {
   }
   const baseUrl = parseUrl(config.baseUrl, "baseUrl");
   const origin = parseUrl(config.origin, "origin");
+  if (
+    config.environment === "staging" &&
+    (!baseUrl.startsWith("https://") || !origin.startsWith("https://"))
+  ) {
+    throw new Error("staging target URLs must use HTTPS");
+  }
   return {
     targetId,
     environment: config.environment,
@@ -283,6 +289,11 @@ function parseUrl(value: unknown, name: string): string {
   }
   if (name === "origin" && parsed.pathname !== "/") {
     throw new Error("origin must be an exact origin URL");
+  }
+  if (name === "baseUrl" && parsed.pathname !== "/") {
+    throw new Error(
+      "baseUrl must be an exact origin URL without a path prefix",
+    );
   }
   return name === "origin"
     ? parsed.origin
@@ -767,7 +778,8 @@ async function reconcileDocument(
   const publication = detail.publications.find(
     (candidate) =>
       candidate.revisionId === revision.id &&
-      candidate.cancelledAt === undefined,
+      candidate.cancelledAt === undefined &&
+      candidate.endsAt === undefined,
   );
   const currentDetail = await api.json<LegalDocumentDetail>(
     `/admin/legal-documents/${encodeURIComponent(document.key)}?limit=100&publicationLimit=100`,
@@ -775,7 +787,8 @@ async function reconcileDocument(
   const currentPublication = currentDetail.publications.find(
     (candidate) =>
       candidate.revisionId === revision.id &&
-      candidate.cancelledAt === undefined,
+      candidate.cancelledAt === undefined &&
+      candidate.endsAt === undefined,
   );
   const selectedPublication = currentPublication ?? publication;
   if (!selectedPublication) {
@@ -799,9 +812,9 @@ async function reconcileDocument(
       },
       true,
     );
-    if (published.cancelledAt !== undefined) {
+    if (published.cancelledAt !== undefined || published.endsAt !== undefined) {
       throw new Error(
-        `${document.key} publish idempotency record refers to a cancelled publication`,
+        `${document.key} publish idempotency record refers to an ended publication`,
       );
     }
     receipt.documents[document.key] = {
