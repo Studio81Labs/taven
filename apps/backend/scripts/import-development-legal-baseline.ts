@@ -954,6 +954,22 @@ async function reconcileDocument(
       `${document.key} availability hash does not match the imported revision`,
     );
   }
+  const lifecycleAfterAvailability = await loadDocumentDetail(
+    api,
+    document.key,
+  );
+  const verifiedPublication = currentPublicationForRevision(
+    lifecycleAfterAvailability,
+    revision.id,
+  );
+  if (
+    !verifiedPublication ||
+    verifiedPublication.id !== finalState.publicationId
+  ) {
+    throw new Error(
+      `${document.key} receipt publication changed during final verification`,
+    );
+  }
   const auditEventIds = await auditIds(
     api,
     document.key,
