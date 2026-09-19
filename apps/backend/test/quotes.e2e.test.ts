@@ -2242,17 +2242,6 @@ describe("QuoteRequest and tokenized individual offers", () => {
     await prisma.$transaction(async (transaction) => {
       try {
         await transaction.$executeRaw`
-          UPDATE quote_requests
-          SET photo_publication_consent_granted_at = ${firstConsentAt}
-          WHERE id = ${requestId}::uuid
-        `;
-      } catch (error) {
-        throw new Error("legacy scalar repair update failed", {
-          cause: error,
-        });
-      }
-      try {
-        await transaction.$executeRaw`
           INSERT INTO legal_acceptances
             (id, quote_request_id, revision_id, purpose, accepted_at, command_identity)
           VALUES
@@ -2262,6 +2251,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
         `;
       } catch (error) {
         throw new Error("legacy acceptance ledger insert failed", {
+          cause: error,
+        });
+      }
+      try {
+        await transaction.$executeRaw`
+          UPDATE quote_requests
+          SET photo_publication_consent_granted_at = ${firstConsentAt}
+          WHERE id = ${requestId}::uuid
+        `;
+      } catch (error) {
+        throw new Error("legacy scalar repair update failed", {
           cause: error,
         });
       }
