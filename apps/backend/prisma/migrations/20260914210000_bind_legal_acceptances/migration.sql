@@ -60,15 +60,15 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    IF TG_TABLE_NAME = 'quote_requests'
-       AND TG_OP = 'UPDATE'
-       AND NEW."current_quote_id" IS DISTINCT FROM OLD."current_quote_id"
-       AND (
-           OLD."status" IN ('ACCEPTED', 'REJECTED', 'EXPIRED')
-           OR NEW."status" IN ('ACCEPTED', 'REJECTED', 'EXPIRED')
-       ) THEN
-        RAISE EXCEPTION 'terminal quote request current offer is immutable'
-            USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_terminal_check';
+    IF TG_TABLE_NAME = 'quote_requests' AND TG_OP = 'UPDATE' THEN
+        IF NEW."current_quote_id" IS DISTINCT FROM OLD."current_quote_id"
+           AND (
+               OLD."status" IN ('ACCEPTED', 'REJECTED', 'EXPIRED')
+               OR NEW."status" IN ('ACCEPTED', 'REJECTED', 'EXPIRED')
+           ) THEN
+            RAISE EXCEPTION 'terminal quote request current offer is immutable'
+                USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_terminal_check';
+        END IF;
     END IF;
 
     IF request_row."current_quote_id" IS NULL THEN
