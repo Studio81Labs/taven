@@ -761,7 +761,7 @@ async function reconcileDocument(
     );
   }
   if (!revision) {
-    if (state && !state.effectiveAt) {
+    if (!state?.effectiveAt) {
       throw new Error(
         `${document.key} receipt is missing effectiveAt and cannot be safely recovered`,
       );
@@ -793,7 +793,7 @@ async function reconcileDocument(
     receipt.documents[document.key] = {
       revisionId: revision.id,
       contentHash: revision.contentHash,
-      effectiveAt: state?.effectiveAt ?? normalizeEffectiveAt(undefined),
+      effectiveAt: state.effectiveAt,
       status: "approved",
       auditEventIds: [],
     };
@@ -1073,17 +1073,6 @@ async function main(): Promise<void> {
     ),
   };
   assertReceiptMatches(receipt, target, targetFile.hash, baseline);
-  for (const document of baseline.documents) {
-    const state = receipt.documents[document.key];
-    if (!state) {
-      receipt.documents[document.key] = {
-        contentHash: "",
-        effectiveAt,
-        status: "approved",
-        auditEventIds: [],
-      };
-    }
-  }
   writeReceipt(path.resolve(receiptPath), receipt);
 
   const sessionCookie = requiredString(
