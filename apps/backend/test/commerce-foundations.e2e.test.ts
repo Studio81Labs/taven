@@ -66,6 +66,23 @@ async function advanceQuoteRequestToQuoted(
   );
 }
 
+async function seedLegacyQuoteImport(
+  client: PoolClient,
+  quoteRequestId: string,
+  quoteId: string,
+): Promise<void> {
+  await client.query("SET LOCAL session_replication_role = 'replica'");
+  await client.query(
+    `INSERT INTO legacy_quote_request_imports
+       (quote_request_id, quote_id, photo_publication_consent_granted_at)
+     SELECT $1, $2, photo_publication_consent_granted_at
+     FROM quote_requests
+     WHERE id = $1`,
+    [quoteRequestId, quoteId],
+  );
+  await client.query("SET LOCAL session_replication_role = 'origin'");
+}
+
 async function forceQuoteIssuanceConstraints(
   client: PoolClient,
 ): Promise<void> {
@@ -3774,6 +3791,11 @@ describe("commerce persistence foundations", () => {
           new Date(quoteCreatedAt.getTime() + 60 * 60 * 1_000),
           quoteCreatedAt,
         ],
+      );
+      await seedLegacyQuoteImport(
+        client,
+        mutableQuoteRequestId,
+        mutableQuoteId,
       );
       const mutableOrderId = fixtures.id("reference-inputs:order");
       const mutableQuoteSessionId = fixtures.id(
@@ -21196,6 +21218,7 @@ describe("commerce persistence foundations", () => {
               requestDecisionAt,
             ],
           );
+          await seedLegacyQuoteImport(client, requestId, quoteId);
           await forceQuoteIssuanceConstraints(client);
         },
         {
@@ -21246,6 +21269,7 @@ describe("commerce persistence foundations", () => {
           requestDecisionAt,
         ],
       );
+      await seedLegacyQuoteImport(client, requestId, quoteId);
       await client.query(
         `INSERT INTO price_snapshots
            (id, price_list_id, currency, contract_total_minor, pricing_revision,
@@ -21473,6 +21497,7 @@ describe("commerce persistence foundations", () => {
          VALUES ($1,$2,$3,'legacy-import',$4,$5,$5)`,
         [quoteId, requestId, foundation.customerId, quoteExpiresAt, issuedAt],
       );
+      await seedLegacyQuoteImport(issuing, requestId, quoteId);
       await issuing.query(
         `UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1`,
         [requestId, quoteId],

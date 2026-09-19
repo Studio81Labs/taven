@@ -264,6 +264,7 @@ $$;
 CREATE TABLE "legacy_quote_request_imports" (
     "quote_request_id" UUID NOT NULL,
     "quote_id" UUID NOT NULL,
+    "photo_publication_consent_granted_at" TIMESTAMPTZ(3),
     CONSTRAINT "legacy_quote_request_imports_pkey"
         PRIMARY KEY ("quote_request_id", "quote_id"),
     CONSTRAINT "legacy_quote_request_imports_request_fkey"
@@ -272,9 +273,22 @@ CREATE TABLE "legacy_quote_request_imports" (
         FOREIGN KEY ("quote_id", "quote_request_id")
         REFERENCES "quotes"("id", "quote_request_id") ON DELETE RESTRICT
 );
-INSERT INTO "legacy_quote_request_imports" ("quote_request_id", "quote_id")
-SELECT quote."quote_request_id", quote."id"
-FROM "quotes" quote;
+INSERT INTO "legacy_quote_request_imports" ("quote_request_id", "quote_id", "photo_publication_consent_granted_at")
+SELECT quote."quote_request_id", quote."id", request."photo_publication_consent_granted_at"
+FROM "quotes" quote
+JOIN "quote_requests" request ON request."id" = quote."quote_request_id";
+
+CREATE FUNCTION taven_is_cutover_imported_quote(target_quote_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM "legacy_quote_request_imports" imported
+        WHERE imported."quote_id" = target_quote_id
+    );
+$$;
 
 CREATE FUNCTION taven_protect_legacy_quote_request_imports()
 RETURNS trigger
@@ -394,7 +408,7 @@ BEGIN
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_command_check';
     END IF;
 
-    IF current_quote."issuance_command_key" <> 'legacy-import' THEN
+    IF NOT taven_is_cutover_imported_quote(current_quote."id") THEN
         IF current_quote."legal_terms_revision_id" IS NULL
            OR current_quote."legal_claims_revision_id" IS NULL
            OR current_quote."claim_window_days" IS NULL
@@ -474,7 +488,7 @@ BEGIN
       INTO quote_row
       FROM "quotes" quote
      WHERE quote."id" = request_row."current_quote_id";
-    IF quote_row."issuance_command_key" <> 'legacy-import'
+    IF NOT taven_is_cutover_imported_quote(quote_row."id")
        AND NEW."sealed_at" IS NULL THEN
         RAISE EXCEPTION 'current offer price package must be sealed'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_request_current_offer_package_check';
@@ -634,7 +648,8 @@ BEGIN
         FOR SHARE;
     END IF;
 
-    IF NEW."issuance_command_key" <> 'legacy-import'
+    IF NOT taven_is_cutover_imported_quote(NEW."id")
+       AND NOT (TG_OP = 'INSERT' AND NEW."issuance_command_key" = 'legacy-import')
        AND NEW."legal_terms_revision_id" IS NULL
        AND NEW."legal_claims_revision_id" IS NULL
        AND NEW."claim_window_days" IS NULL THEN
@@ -1040,11 +1055,21 @@ BEGIN
             FROM "legal_acceptances" acceptance
             WHERE acceptance."quote_request_id" = target_quote_request_id
               AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+        )) OR (photo_consent_granted_at IS NULL AND EXISTS (
+            SELECT 1
+            FROM "legacy_quote_request_imports" imported
+            WHERE imported."quote_request_id" = target_quote_request_id
+              AND imported."photo_publication_consent_granted_at" IS NOT NULL
         )) OR (photo_consent_granted_at IS NOT NULL AND NOT EXISTS (
             SELECT 1
             FROM "legal_acceptances" acceptance
             WHERE acceptance."quote_request_id" = target_quote_request_id
               AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+        ) AND NOT EXISTS (
+            SELECT 1
+            FROM "legacy_quote_request_imports" imported
+            WHERE imported."quote_request_id" = target_quote_request_id
+              AND imported."photo_publication_consent_granted_at" IS NOT DISTINCT FROM photo_consent_granted_at
         )) THEN
         RAISE EXCEPTION 'Quote request photo consent requires matching immutable legal acceptance evidence'
             USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_photo_consent_acceptance_evidence_check';
@@ -1788,7 +1813,7 @@ BEGIN
                SELECT 1
                FROM "quotes" quote
                WHERE quote."id" = origin_quote
-                 AND quote."issuance_command_key" <> 'legacy-import'
+                 AND NOT taven_is_cutover_imported_quote(quote."id")
            )
            AND order_created IS DISTINCT FROM decision."decided_at" THEN
             RAISE EXCEPTION 'Individual Order creation must use the decision instant'

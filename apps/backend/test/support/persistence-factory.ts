@@ -869,6 +869,19 @@ export class PersistenceFactory {
           input.orderOrigin === "INDIVIDUAL",
         ],
       );
+      // These fixtures model offers that existed before the cutover. Seed
+      // their immutable provenance explicitly; production writers cannot
+      // insert into this protected table.
+      await this.sql.query("SET LOCAL session_replication_role = 'replica'");
+      await this.sql.query(
+        `INSERT INTO legacy_quote_request_imports
+           (quote_request_id, quote_id, photo_publication_consent_granted_at)
+         SELECT $1, $2, photo_publication_consent_granted_at
+         FROM quote_requests
+         WHERE id = $1`,
+        [input.quoteRequestId, input.quoteId],
+      );
+      await this.sql.query("SET LOCAL session_replication_role = 'origin'");
       await this.sql.query(
         "UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1",
         [input.quoteRequestId, input.quoteId],

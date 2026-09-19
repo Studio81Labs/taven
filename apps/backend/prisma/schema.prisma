@@ -1848,8 +1848,9 @@ model Quote {
 }
 
 model LegacyQuoteRequestImport {
-  quoteRequestId String @map("quote_request_id") @db.Uuid
-  quoteId        String @map("quote_id") @db.Uuid
+  quoteRequestId              String    @map("quote_request_id") @db.Uuid
+  quoteId                     String    @map("quote_id") @db.Uuid
+  photoPublicationConsentGrantedAt DateTime? @map("photo_publication_consent_granted_at") @db.Timestamptz(3)
 
   quoteRequest QuoteRequest @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict, map: "legacy_quote_request_imports_request_fkey")
   quote        Quote        @relation(fields: [quoteId, quoteRequestId], references: [id, quoteRequestId], onDelete: Restrict, map: "legacy_quote_request_imports_quote_fkey")
