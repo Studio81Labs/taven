@@ -959,12 +959,6 @@ async function verifyBaseline(
   baseline: BaselinePackage,
   receipt: BaselineReceipt,
 ): Promise<void> {
-  const availability = await api.json<{
-    documents: Record<
-      BaselineKey,
-      { revision: string; contentHash: string | null; effective: boolean }
-    >;
-  }>("/legal-documents/availability");
   for (const document of baseline.documents) {
     const state = receipt.documents[document.key];
     if (!state?.revisionId || !state.contentHash) {
@@ -980,6 +974,12 @@ async function verifyBaseline(
         `${document.key} receipt publication is no longer active or pending`,
       );
     }
+    const availability = await api.json<{
+      documents: Record<
+        BaselineKey,
+        { revision: string; contentHash: string | null; effective: boolean }
+      >;
+    }>("/legal-documents/availability");
     const record = availability.documents[document.key];
     if (state.status === "published") {
       if (
