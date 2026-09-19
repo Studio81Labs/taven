@@ -1065,6 +1065,7 @@ BEGIN
             FROM "legal_acceptances" acceptance
             WHERE acceptance."quote_request_id" = target_quote_request_id
               AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
+              AND acceptance."accepted_at" IS NOT DISTINCT FROM photo_consent_granted_at
         ) AND NOT EXISTS (
             SELECT 1
             FROM "legacy_quote_request_imports" imported
