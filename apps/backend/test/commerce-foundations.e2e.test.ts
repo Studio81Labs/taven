@@ -3737,21 +3737,26 @@ describe("commerce persistence foundations", () => {
         "reference-inputs:quote-request",
       );
       const mutableQuoteId = fixtures.id("reference-inputs:quote");
-      const quoteCreatedAt = new Date();
+      const decisionRequestedAt = new Date();
       const mutableRequestDecisionId = fixtures.id(
         "reference-inputs:request-decision",
       );
-      await client.query(
+      const mutableRequestDecision = await client.query<{ decided_at: Date }>(
         `INSERT INTO legal_acceptance_decisions
            (id, quote_request_id, command_identity, decided_at, originating_xid)
-         VALUES ($1,$2,$3,$4,'test')`,
+         VALUES ($1,$2,$3,$4,'test')
+         RETURNING decided_at`,
         [
           mutableRequestDecisionId,
           mutableQuoteRequestId,
           "reference-inputs:request-privacy",
-          quoteCreatedAt,
+          decisionRequestedAt,
         ],
       );
+      const quoteCreatedAt = mutableRequestDecision.rows[0]?.decided_at;
+      if (!quoteCreatedAt) {
+        throw new Error("reference-inputs decision timestamp is missing");
+      }
       await client.query(
         `INSERT INTO quote_requests
            (id, customer_id, status, current_state_command_key, created_at, updated_at)
