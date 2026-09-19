@@ -539,6 +539,14 @@ function assertReceiptMatches(
     throw new Error("Baseline receipt belongs to a different target config");
   }
   if (
+    canonicalJson(receipt.target) !==
+    canonicalJson({ ...target, configHash: targetConfigHash })
+  ) {
+    throw new Error(
+      "Baseline receipt target contents do not match the validated target",
+    );
+  }
+  if (
     receipt.package.sourceCommit !== baseline.sourceCommit ||
     receipt.package.sourceHash !== baseline.sourceHash ||
     receipt.package.packageHash !== baseline.packageHash
