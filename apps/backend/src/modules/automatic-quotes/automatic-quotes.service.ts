@@ -1670,11 +1670,15 @@ export class AutomaticQuotesService {
             automaticQuoteDraft: {
               include: { items: { orderBy: { ordinal: "asc" } } },
             },
-            payments: {
+            acceptedPriceBinding: {
               select: {
-                orderPriceBindingId: true,
-                role: true,
-                status: true,
+                payments: {
+                  select: {
+                    orderPriceBindingId: true,
+                    role: true,
+                    status: true,
+                  },
+                },
               },
             },
           },
@@ -1696,7 +1700,10 @@ export class AutomaticQuotesService {
         }
         if (
           evidenceState === "complete" &&
-          !hasRetryableAutomaticCheckoutPayment(order)
+          !hasRetryableAutomaticCheckoutPayment({
+            ...order,
+            payments: order.acceptedPriceBinding?.payments ?? [],
+          })
         ) {
           throw new ConflictException(
             "Automatic quote has no retryable failed payment",
