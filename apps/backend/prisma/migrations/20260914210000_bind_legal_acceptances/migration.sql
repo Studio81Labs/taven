@@ -1257,6 +1257,7 @@ DECLARE
     request_created timestamptz;
     order_created timestamptz;
     withdrawal timestamptz;
+    photo_scalar timestamptz;
     origin_quote uuid;
     source_request_status text;
     source_request_accepted timestamptz;
@@ -1274,8 +1275,9 @@ BEGIN
     IF NOT FOUND THEN RETURN NULL; END IF;
 
     IF decision."order_id" IS NOT NULL THEN
-        SELECT target."created_at", target."withdrawal_exception_acknowledged_at"
-          INTO order_created, withdrawal
+        SELECT target."created_at", target."withdrawal_exception_acknowledged_at",
+               target."photo_publication_consent_granted_at"
+          INTO order_created, withdrawal, photo_scalar
           FROM "orders" target WHERE target."id" = decision."order_id";
         IF order_created IS NULL THEN
             RAISE EXCEPTION 'Legal acceptance decision has no Order subject'
@@ -1290,7 +1292,10 @@ BEGIN
                count(*) FILTER (WHERE purpose = 'PHOTO_PUBLICATION_GRANTED')
           INTO terms_count, claims_count, photo_count
           FROM "legal_acceptances" WHERE "decision_id" = decision."id";
-        IF terms_count <> 1 OR claims_count <> 1 OR photo_count > 1 THEN
+        IF terms_count <> 1 OR claims_count <> 1 OR photo_count > 1
+           OR (photo_scalar IS NULL AND photo_count <> 0)
+           OR (photo_scalar IS NOT NULL AND photo_count <> 1)
+           OR (photo_count = 1 AND photo_scalar IS DISTINCT FROM decision."decided_at") THEN
             RAISE EXCEPTION 'Order legal acceptance decision is incomplete'
                 USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_bundle_check';
         END IF;
