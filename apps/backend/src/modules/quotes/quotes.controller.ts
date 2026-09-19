@@ -49,6 +49,7 @@ import {
   QuoteRequestCreatedDto,
   QuoteRequestDetailDto,
   QuoteRequestStatusDto,
+  ReissueOfferDto,
   RejectOfferDto,
 } from "./quotes.dto";
 import { QuotesService } from "./quotes.service";
@@ -315,6 +316,21 @@ export class OperatorQuoteRequestsController {
     @Headers("idempotency-key") idempotencyKey?: string,
   ): Promise<OfferIssuedDto> {
     return this.quotes.issueOffer(operator, requestId, body, idempotencyKey);
+  }
+
+  @Post(":requestId/offers/reissue")
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({ summary: "Reissue the current immutable individual offer" })
+  @ApiParam({ name: "requestId", type: String, format: "uuid" })
+  @ApiBody({ type: ReissueOfferDto })
+  @ApiCreatedResponse({ type: OfferIssuedDto })
+  reissue(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("requestId") requestId: string,
+    @Body() body: ReissueOfferDto,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<OfferIssuedDto> {
+    return this.quotes.reissueOffer(operator, requestId, body, idempotencyKey);
   }
 
   @Post(":requestId/expire")

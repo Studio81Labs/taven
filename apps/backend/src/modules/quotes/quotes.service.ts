@@ -42,7 +42,10 @@ import {
   assertEffectiveLegalDocuments,
   legalApprovalRequired,
 } from "../legal-approvals/legal-approvals.catalog";
-import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
+import {
+  createLegalAcceptanceDecision,
+  LegalApprovalsService,
+} from "../legal-approvals/legal-approvals.service";
 import {
   operatorNode,
   requireOperatorPermission,
@@ -74,6 +77,7 @@ import type {
   QuoteRequestCreatedDto,
   QuoteRequestDetailDto,
   QuoteRequestStatusDto,
+  ReissueOfferDto,
   RejectOfferDto,
 } from "./quotes.dto";
 
@@ -231,10 +235,10 @@ export class QuotesService {
           transaction,
           currentCapabilityRequest.clientSubjectHash,
         );
-        const observedAt = await databaseNow(transaction);
+        const preflightAt = await databaseNow(transaction);
         const legal = {
-          observedAt,
-          approvals: await legalApprovals.readAt(transaction, observedAt),
+          observedAt: preflightAt,
+          approvals: await legalApprovals.readAt(transaction, preflightAt),
         };
         assertEffectiveQuoteRequestLegalDocuments(
           legal.approvals,
@@ -253,6 +257,18 @@ export class QuotesService {
         const customerId = randomUUID();
         const resultId = randomUUID();
         const publicReference = `QR-${requestId.replaceAll("-", "").slice(0, 12).toUpperCase()}`;
+        const decision = await createLegalAcceptanceDecision(transaction, {
+          id: randomUUID(),
+          quoteRequestId: requestId,
+          commandIdentity: commandKey,
+        });
+        const observedAt = decision.decidedAt;
+        const finalLegal = await legalApprovals.readAt(transaction, observedAt);
+        assertEffectiveQuoteRequestLegalDocuments(
+          finalLegal,
+          request.photoPublicationConsent,
+        );
+        requireFreshQuoteRequestLegalEvidence(request, finalLegal);
         const expiresAt = addDays(observedAt, REQUEST_SESSION_DAYS);
         const slaDueAt = addBusinessHours(observedAt, 24);
 
@@ -304,20 +320,21 @@ export class QuotesService {
           data: [
             {
               quoteRequestId: requestId,
-              revisionId: legal.approvals.documents.privacy.revisionId!,
+              revisionId: finalLegal.documents.privacy.revisionId!,
               purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
               acceptedAt: observedAt,
               commandIdentity: commandKey,
+              decisionId: decision.id,
             },
             ...(request.photoPublicationConsent
               ? [
                   {
                     quoteRequestId: requestId,
-                    revisionId:
-                      legal.approvals.documents.photoConsent.revisionId!,
+                    revisionId: finalLegal.documents.photoConsent.revisionId!,
                     purpose: "PHOTO_PUBLICATION_GRANTED" as const,
                     acceptedAt: observedAt,
                     commandIdentity: commandKey,
+                    decisionId: decision.id,
                   },
                 ]
               : []),
@@ -399,7 +416,11 @@ export class QuotesService {
     const observedAt = await databaseNow(this.prisma);
     const request = await this.prisma.quoteRequest.findUnique({
       where: { id: requestId },
-      include: { quoteSession: true, customer: true },
+      include: {
+        quoteSession: true,
+        customer: true,
+        currentQuote: { select: { issuedAt: true } },
+      },
     });
     if (
       !request?.quoteSession ||
@@ -433,7 +454,7 @@ export class QuotesService {
       include: {
         quoteSession: true,
         customer: true,
-        quote: { select: { issuedAt: true } },
+        currentQuote: { select: { issuedAt: true } },
         automaticQuoteHandoff: true,
       },
       orderBy: [{ slaDueAt: "asc" }, { createdAt: "asc" }],
@@ -484,7 +505,9 @@ export class QuotesService {
         const keys = await transaction.$queryRaw<Array<{ id: string }>>`
       SELECT request.id
       FROM quote_requests AS request
-      LEFT JOIN quotes AS quote ON quote.quote_request_id = request.id
+      LEFT JOIN quotes AS quote
+        ON quote.id = request.current_quote_id
+       AND quote.quote_request_id = request.id
       WHERE TRUE
         ${statusFilter}
         ${slaFilter}
@@ -497,7 +520,7 @@ export class QuotesService {
           include: {
             quoteSession: true,
             customer: true,
-            quote: { select: { issuedAt: true } },
+            currentQuote: { select: { issuedAt: true } },
             automaticQuoteHandoff: true,
           },
         });
@@ -557,7 +580,7 @@ export class QuotesService {
       include: {
         quoteSession: true,
         customer: true,
-        quote: { select: { issuedAt: true } },
+        currentQuote: { select: { issuedAt: true } },
         automaticQuoteHandoff: true,
       },
     });
@@ -630,17 +653,34 @@ export class QuotesService {
     requestId: string,
     input: IssueOfferDto,
     idempotencyKey: string | undefined,
+    reissue?: {
+      expectedQuoteId: string;
+      expectedVersion: number;
+      reason: string;
+      reasonCode: string;
+    },
   ): Promise<OfferIssuedDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
     const nodeId = operatorNode(operator);
     requestId = normalizedUuid(requestId, "requestId");
     const commandKey = requireIdempotencyKey(idempotencyKey);
     const offer = validateOffer(input);
-    const fingerprint = fingerprintOf({ requestId, ...offer.fingerprint });
+    const fingerprint = fingerprintOf({
+      requestId,
+      ...(reissue
+        ? {
+            expectedQuoteId: reissue.expectedQuoteId,
+            expectedVersion: reissue.expectedVersion,
+            reason: reissue.reason,
+            reasonCode: reissue.reasonCode,
+          }
+        : {}),
+      ...offer.fingerprint,
+    });
     const offerCapabilityKey = this.currentCapabilityKey();
 
     return this.idempotent<OfferIssuedDto>(
-      "quote-request.issue-offer",
+      reissue ? "quote-request.reissue-offer" : "quote-request.issue-offer",
       commandKey,
       fingerprint,
       async (transaction) => {
@@ -652,7 +692,41 @@ export class QuotesService {
         const request = await lockedRequest(transaction, requestId);
         if (!request)
           throw new NotFoundException("Quote request was not found");
+        const currentQuote = reissue
+          ? request.currentQuoteId
+            ? await transaction.quote.findUnique({
+                where: { id: request.currentQuoteId },
+                select: { id: true, version: true, expiresAt: true },
+              })
+            : null
+          : null;
         const observedAt = await databaseNow(transaction);
+        if (reissue) {
+          if (request.status !== QuoteRequestStatus.QUOTED || !currentQuote) {
+            throw new ConflictException(
+              "Quote request is not eligible for reissue",
+            );
+          }
+          if (
+            currentQuote.id !== reissue.expectedQuoteId ||
+            currentQuote.version !== reissue.expectedVersion
+          ) {
+            throw new ConflictException("Current offer identity is stale");
+          }
+          if (currentQuote.expiresAt.getTime() <= observedAt.getTime()) {
+            throw new ConflictException("Current offer has expired");
+          }
+          const acceptedOrder =
+            await transaction.individualOrderOrigin.findUnique({
+              where: { quoteId: currentQuote.id },
+              select: { orderId: true },
+            });
+          if (acceptedOrder) {
+            throw new ConflictException(
+              "Quote request has already been accepted",
+            );
+          }
+        }
         const legal = {
           observedAt,
           approvals: await legalApprovals.readAt(transaction, observedAt),
@@ -701,7 +775,8 @@ export class QuotesService {
           );
         }
         if (
-          request.status !== QuoteRequestStatus.IN_REVIEW ||
+          (!reissue && request.status !== QuoteRequestStatus.IN_REVIEW) ||
+          (reissue && request.status !== QuoteRequestStatus.QUOTED) ||
           !request.customerId
         ) {
           throw new ConflictException(
@@ -788,19 +863,28 @@ export class QuotesService {
           depositMinor: offer.depositMinor,
         });
 
+        const version = reissue
+          ? currentQuote!.version >= POSTGRES_INTEGER_MAX
+            ? (() => {
+                throw new ConflictException("Offer version limit reached");
+              })()
+            : currentQuote!.version + 1
+          : 1;
         await applyIssuanceTransition(request, {
           commandKey,
           quoteId,
           resultId,
           issuedAt,
           expiresAt: offer.expiresAt,
+          previousStatus: reissue ? "quoted" : "in_review",
         });
 
         await transaction.quoteRequest.update({
           where: { id: requestId },
           data: {
             status: QuoteRequestStatus.QUOTED,
-            slaRespondedAt: issuedAt,
+            currentQuoteId: quoteId,
+            ...(reissue ? {} : { slaRespondedAt: issuedAt }),
             currentStateCommandKey: commandKey,
             currentStateResultId: resultId,
             updatedAt: issuedAt,
@@ -814,7 +898,7 @@ export class QuotesService {
             customerId: request.customerId,
             publicTokenHash: hashToken(offerToken),
             capabilityKeyId: offerCapabilityKey.id,
-            version: 1,
+            version,
             summary: offer.summary,
             termsRevision,
             termsSnapshot: jsonInput(termsSnapshot)!,
@@ -866,7 +950,7 @@ export class QuotesService {
             inputSnapshot: jsonInput({
               ...offer.inputSnapshot,
               quoteRequestId: requestId,
-              quoteVersion: 1,
+              quoteVersion: version,
               deliveryDestination: offer.deliveryDestination,
               shipmentPlans: offer.shipmentPlans,
               paymentPolicy: offer.paymentPolicy,
@@ -993,11 +1077,24 @@ export class QuotesService {
           eventType: "quote_offer.issued",
           idempotencyKey: commandKey,
           correlationId: resultId,
-          payload: { operation: "issue_offer", status: "QUOTED", version: 1 },
+          payload: {
+            operation: reissue ? "reissue_offer" : "issue_offer",
+            status: "QUOTED",
+            version,
+            ...(reissue
+              ? {
+                  previousQuoteId: reissue.expectedQuoteId,
+                  newQuoteId: quoteId,
+                  previousVersion: reissue.expectedVersion,
+                  reason: reissue.reason,
+                  reasonCode: reissue.reasonCode,
+                }
+              : {}),
+          },
         });
         await transaction.outboxMessage.create({
           data: {
-            deduplicationKey: `quote-offer-issued:${quoteId}:1`,
+            deduplicationKey: `quote-offer-issued:${quoteId}:${version}`,
             aggregateType: "Quote",
             aggregateId: quoteId,
             messageType: "email.quote-offer-issued",
@@ -1005,7 +1102,7 @@ export class QuotesService {
             payload: jsonInput({
               requestId,
               quoteId,
-              version: 1,
+              version,
               recipient: contactFrom(request.contactSnapshot, undefined).email,
               offerTokenDerivation: {
                 quoteId,
@@ -1021,7 +1118,7 @@ export class QuotesService {
 
         return {
           quoteId,
-          version: 1,
+          version,
           termsRevision,
           claimPolicyRevision: legal.approvals.documents.claims.revision,
           claimWindowDays: approvedCheckoutClaimWindowDays(),
@@ -1226,6 +1323,44 @@ export class QuotesService {
     };
   }
 
+  async reissueOffer(
+    operator: OperatorContext,
+    requestId: string,
+    input: ReissueOfferDto,
+    idempotencyKey: string | undefined,
+  ): Promise<OfferIssuedDto> {
+    const expectedQuoteId = normalizedUuid(
+      input.expectedQuoteId,
+      "expectedQuoteId",
+    );
+    if (
+      !Number.isSafeInteger(input.expectedVersion) ||
+      input.expectedVersion < 1 ||
+      input.expectedVersion > POSTGRES_INTEGER_MAX
+    ) {
+      throw new BadRequestException(
+        "expectedVersion must be a positive integer",
+      );
+    }
+    const reason = typeof input.reason === "string" ? input.reason.trim() : "";
+    if (!reason || reason.length > 1000) {
+      throw new BadRequestException(
+        "reason must be nonblank and at most 1000 characters",
+      );
+    }
+    const reasonCode =
+      typeof input.reasonCode === "string" ? input.reasonCode : "";
+    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
+      throw new BadRequestException("reasonCode is invalid");
+    }
+    return this.issueOffer(operator, requestId, input.offer, idempotencyKey, {
+      expectedQuoteId,
+      expectedVersion: input.expectedVersion,
+      reason,
+      reasonCode,
+    });
+  }
+
   async acceptOffer(
     quoteId: string,
     input: AcceptOfferDto,
@@ -1243,9 +1378,10 @@ export class QuotesService {
       fingerprintOf({ quoteId, ...expected }),
       async (transaction) => {
         assertBindingQuoteFlowsEnabled();
-        await this.requiredLegalApprovals().lockAndRead(transaction, [
-          "terms",
+        await this.requiredLegalApprovals().lock(transaction, [
           "claims",
+          "photoConsent",
+          "terms",
         ]);
         const quote = await lockedOffer(transaction, quoteId);
         assertOfferCapability(quote, token);
@@ -1267,13 +1403,33 @@ export class QuotesService {
         const orderId = randomUUID();
         const resultId = randomUUID();
         const publicReference = `I-${orderId.replaceAll("-", "").slice(0, 12).toUpperCase()}`;
+        await transaction.$executeRawUnsafe(
+          "SAVEPOINT individual_acceptance_decision",
+        );
+        const decision = await createLegalAcceptanceDecision(transaction, {
+          id: randomUUID(),
+          orderId,
+          sourceQuoteId: quoteId,
+          commandIdentity: commandKey,
+        });
+        if (quote.expiresAt.getTime() <= decision.decidedAt.getTime()) {
+          await transaction.$executeRawUnsafe(
+            "ROLLBACK TO SAVEPOINT individual_acceptance_decision",
+          );
+          await expireLockedOffer(transaction, quote, decision.decidedAt);
+          return { kind: "expired" };
+        }
         const acceptance = await acceptLockedQuoteRequest(
           transaction,
           quote.quoteRequestId,
           commandKey,
           resultId,
+          decision.decidedAt,
         );
         if (!acceptance.accepted_at) {
+          await transaction.$executeRawUnsafe(
+            "ROLLBACK TO SAVEPOINT individual_acceptance_decision",
+          );
           await expireLockedOffer(transaction, quote, acceptance.evaluated_at);
           return { kind: "expired" };
         }
@@ -1490,6 +1646,7 @@ export class QuotesService {
               purpose: "TERMS_ACCEPTED",
               acceptedAt: observedAt,
               commandIdentity: commandKey,
+              decisionId: decision.id,
             },
             {
               orderId,
@@ -1497,6 +1654,7 @@ export class QuotesService {
               purpose: "CLAIM_POLICY_ACCEPTED",
               acceptedAt: observedAt,
               commandIdentity: commandKey,
+              decisionId: decision.id,
             },
           ],
         });
@@ -1694,10 +1852,12 @@ export class QuotesService {
         const request = await lockedRequest(transaction, requestId);
         if (!request)
           throw new NotFoundException("Quote request was not found");
-        const quote = await transaction.quote.findUnique({
-          where: { quoteRequestId: requestId },
-          include: { quoteRequest: true },
-        });
+        const quote = request.currentQuoteId
+          ? await transaction.quote.findUnique({
+              where: { id: request.currentQuoteId },
+              include: { quoteRequest: true },
+            })
+          : null;
         if (!quote || request.status !== QuoteRequestStatus.QUOTED) {
           throw new ConflictException("Quote request has no active offer");
         }
@@ -1759,6 +1919,12 @@ export class QuotesService {
       },
     });
     assertOfferCapability(quote, token);
+    if (
+      quote.quoteRequest.currentQuoteId &&
+      quote.quoteRequest.currentQuoteId !== quote.id
+    ) {
+      throw new GoneException("OFFER_SUPERSEDED");
+    }
     return quote;
   }
 
@@ -1784,7 +1950,7 @@ export class QuotesService {
         displayName: string | null;
         phone: string | null;
       } | null;
-      quote?: { issuedAt: Date } | null;
+      currentQuote?: { issuedAt: Date } | null;
     },
     observedAt: Date,
     attachments?: RequestAttachments,
@@ -1802,7 +1968,7 @@ export class QuotesService {
     const respondedAt =
       slaResponseEvidenceAt(
         request.slaRespondedAt,
-        request.quote?.issuedAt,
+        request.currentQuote?.issuedAt,
       )?.getTime() ?? observedAt.getTime();
     return {
       requestId: request.id,
@@ -1843,7 +2009,7 @@ export class QuotesService {
         modelFileIds: string[];
         itemSelections: Prisma.JsonValue;
       } | null;
-      quote?: { issuedAt: Date } | null;
+      currentQuote?: { issuedAt: Date } | null;
     },
     observedAt: Date,
     attachments?: RequestAttachments,
@@ -2065,12 +2231,17 @@ async function lockedOffer(transaction: Transaction, quoteId: string) {
   await transaction.$queryRaw`
     SELECT request."id"
     FROM "quote_requests" request
-    JOIN "quotes" quote ON quote."quote_request_id" = request."id"
+    JOIN "quotes" quote
+      ON quote."id" = request."current_quote_id"
+     AND quote."quote_request_id" = request."id"
     WHERE quote."id" = ${quoteId}::uuid
     FOR UPDATE OF request
   `;
-  return transaction.quote.findUnique({
-    where: { id: quoteId },
+  return transaction.quote.findFirst({
+    where: {
+      id: quoteId,
+      quoteRequest: { currentQuoteId: quoteId },
+    },
     include: {
       quoteRequest: true,
       items: { orderBy: { ordinal: "asc" } },
@@ -2099,10 +2270,11 @@ async function acceptLockedQuoteRequest(
   requestId: string,
   commandKey: string,
   resultId: string,
+  decidedAt: Date,
 ): Promise<QuoteAcceptanceRow> {
   const rows = await transaction.$queryRaw<QuoteAcceptanceRow[]>`
     WITH evaluation AS MATERIALIZED (
-      SELECT statement_timestamp() AS evaluated_at
+      SELECT ${decidedAt}::timestamptz AS evaluated_at
     ), accepted AS (
       UPDATE quote_requests request
       SET status = 'ACCEPTED',
@@ -2116,7 +2288,8 @@ async function acceptLockedQuoteRequest(
         AND EXISTS (
           SELECT 1
           FROM quotes quote
-          WHERE quote.quote_request_id = request.id
+          WHERE quote.id = request.current_quote_id
+            AND quote.quote_request_id = request.id
             AND quote.expires_at > evaluation.evaluated_at
         )
       RETURNING request.accepted_at
@@ -2249,6 +2422,7 @@ async function applyIssuanceTransition(
     resultId: string;
     issuedAt: Date;
     expiresAt: Date;
+    previousStatus: "in_review" | "quoted";
   },
 ): Promise<void> {
   const { Instant } = await coreModule();
@@ -2268,7 +2442,7 @@ async function applyIssuanceTransition(
       quoteIssuancePreviousQuoteRequestResultId: request.currentStateResultId,
       quoteIssuanceCurrentStateCommandKey: request.currentStateCommandKey,
       quoteIssuanceQuoteRequestId: request.id,
-      quoteIssuanceQuoteRequestPreviousStatus: "in_review",
+      quoteIssuanceQuoteRequestPreviousStatus: evidence.previousStatus,
       quoteIssuanceQuoteRequestTargetStatus: "quoted",
       quoteIssuanceIssuedQuoteId: evidence.quoteId,
       quoteIssuanceIssuedQuoteRequestId: request.id,
@@ -2276,7 +2450,7 @@ async function applyIssuanceTransition(
       quoteIssuanceQuoteResultId: evidence.resultId,
       quoteIssuanceExpectedQuoteRequest: {
         id: request.id,
-        status: "in_review",
+        status: evidence.previousStatus,
         resultId: request.currentStateResultId,
         currentStateCommandKey: request.currentStateCommandKey,
         immutable: true,

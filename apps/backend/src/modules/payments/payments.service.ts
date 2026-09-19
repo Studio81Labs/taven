@@ -44,7 +44,10 @@ import {
   ResourceNotFoundError,
 } from "../resources/resource-errors";
 import { ResourceReservationService } from "../resources/resource-reservation.service";
-import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
+import {
+  createLegalAcceptanceDecision,
+  LegalApprovalsService,
+} from "../legal-approvals/legal-approvals.service";
 import type {
   AcceptedCheckoutEvidenceDto,
   CheckoutRetryContextDto,
@@ -670,7 +673,15 @@ export class PaymentsService {
         "photoConsent",
       ]);
       const context = await this.loadContext(sessionId, transaction, true);
-      const observedAt = await databaseNow(transaction);
+      const decision = !context.order.acceptedOrderPriceBindingId
+        ? await createLegalAcceptanceDecision(transaction, {
+            id: randomUUID(),
+            orderId: context.order.id,
+            commandIdentity: idempotencyKey,
+          })
+        : null;
+      const observedAt =
+        decision?.decidedAt ?? (await databaseNow(transaction));
       const legal = {
         observedAt,
         approvals: await legalApprovals.readAt(transaction, observedAt),
@@ -821,6 +832,7 @@ export class PaymentsService {
             ? {}
             : { withdrawalExceptionAcknowledgedAt: observedAt }),
           ...(input.photoPublicationConsent &&
+          !isRetry &&
           !context.order.photoPublicationConsentGrantedAt
             ? {
                 photoPublicationConsentGrantedAt: observedAt,
@@ -838,6 +850,7 @@ export class PaymentsService {
               purpose: "TERMS_ACCEPTED",
               acceptedAt: observedAt,
               commandIdentity: idempotencyKey,
+              decisionId: decision!.id,
             },
             {
               orderId: context.order.id,
@@ -845,6 +858,7 @@ export class PaymentsService {
               purpose: "CLAIM_POLICY_ACCEPTED",
               acceptedAt: observedAt,
               commandIdentity: idempotencyKey,
+              decisionId: decision!.id,
             },
             ...(input.photoPublicationConsent
               ? [
@@ -855,6 +869,7 @@ export class PaymentsService {
                     purpose: "PHOTO_PUBLICATION_GRANTED" as const,
                     acceptedAt: observedAt,
                     commandIdentity: idempotencyKey,
+                    decisionId: decision!.id,
                   },
                 ]
               : []),

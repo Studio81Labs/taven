@@ -11,6 +11,42 @@ import {
 
 type QueryClient = Pick<PrismaService, "$queryRaw" | "legalDocument">;
 
+export type LegalAcceptanceDecision = {
+  id: string;
+  decidedAt: Date;
+  originatingXid: string;
+};
+
+export async function createLegalAcceptanceDecision(
+  tx: Pick<Prisma.TransactionClient, "$queryRaw">,
+  input: {
+    id: string;
+    orderId?: string;
+    quoteRequestId?: string;
+    sourceQuoteId?: string;
+    commandIdentity: string;
+  },
+): Promise<LegalAcceptanceDecision> {
+  const rows = await tx.$queryRaw<LegalAcceptanceDecision[]>`
+    INSERT INTO "legal_acceptance_decisions" (
+      "id", "order_id", "quote_request_id", "source_quote_id",
+      "command_identity", "decided_at", "originating_xid"
+    ) VALUES (
+      ${input.id}::uuid,
+      ${input.orderId ?? null}::uuid,
+      ${input.quoteRequestId ?? null}::uuid,
+      ${input.sourceQuoteId ?? null}::uuid,
+      ${input.commandIdentity},
+      clock_timestamp(),
+      pg_current_xact_id()::text
+    )
+    RETURNING "id", "decided_at" AS "decidedAt", "originating_xid" AS "originatingXid"
+  `;
+  const decision = rows[0];
+  if (!decision) throw new Error("Legal acceptance decision was not created");
+  return decision;
+}
+
 @Injectable()
 export class LegalApprovalsService {
   constructor(private readonly prisma: PrismaService) {}

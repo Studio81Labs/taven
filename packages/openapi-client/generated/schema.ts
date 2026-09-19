@@ -1341,6 +1341,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/quote-requests/{requestId}/offers/reissue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reissue the current immutable individual offer */
+        post: operations["OperatorQuoteRequestsController_reissue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/quote-requests/{requestId}/review": {
         parameters: {
             query?: never;
@@ -4114,6 +4131,14 @@ export interface components {
             definition: string;
             pendingOrSuspendedRefunds: number;
             succeededRefunds: components["schemas"]["MetricMoneyDto"];
+        };
+        ReissueOfferDto: {
+            /** Format: uuid */
+            expectedQuoteId: string;
+            expectedVersion: number;
+            offer: components["schemas"]["IssueOfferDto"];
+            reason: string;
+            reasonCode: string;
         };
         RejectClaimDto: {
             reason: string;
@@ -7095,6 +7120,36 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    OperatorQuoteRequestsController_reissue: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReissueOfferDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfferIssuedDto"];
+                };
             };
         };
     };

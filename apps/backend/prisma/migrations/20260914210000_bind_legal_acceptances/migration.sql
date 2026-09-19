@@ -9,6 +9,23 @@ CREATE TYPE "legal_acceptance_purpose" AS ENUM (
     'PHOTO_PUBLICATION_GRANTED'
 );
 
+ALTER TABLE "quote_requests" ADD COLUMN "current_quote_id" UUID;
+
+DROP INDEX "quotes_quote_request_id_key";
+ALTER TABLE "quotes"
+    ADD CONSTRAINT "quotes_id_request_key" UNIQUE ("id", "quote_request_id"),
+    ADD CONSTRAINT "quotes_request_version_key" UNIQUE ("quote_request_id", "version");
+ALTER TABLE "quote_requests"
+    ADD CONSTRAINT "quote_requests_current_quote_key" UNIQUE ("current_quote_id", "id"),
+    ADD CONSTRAINT "quote_requests_current_quote_fkey"
+        FOREIGN KEY ("current_quote_id", "id")
+        REFERENCES "quotes"("id", "quote_request_id")
+        ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED;
+UPDATE "quote_requests" request
+SET "current_quote_id" = quote."id"
+FROM "quotes" quote
+WHERE quote."quote_request_id" = request."id";
+
 ALTER TABLE "quotes"
     ADD COLUMN "legal_terms_revision_id" UUID,
     ADD COLUMN "legal_claims_revision_id" UUID,
@@ -47,6 +64,7 @@ CREATE TABLE "legal_acceptances" (
     "accepted_at" TIMESTAMPTZ(3) NOT NULL,
     "command_identity" VARCHAR(255) NOT NULL,
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "decision_id" UUID,
     CONSTRAINT "legal_acceptances_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "legal_acceptances_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT,
     CONSTRAINT "legal_acceptances_quote_request_id_fkey" FOREIGN KEY ("quote_request_id") REFERENCES "quote_requests"("id") ON DELETE RESTRICT,
@@ -61,6 +79,46 @@ CREATE TABLE "legal_acceptances" (
         AND "accepted_at" <= TIMESTAMPTZ '2100-01-01T00:00:00Z'
     )
 );
+
+CREATE TABLE "legal_acceptance_decisions" (
+    "id" UUID NOT NULL,
+    "order_id" UUID,
+    "quote_request_id" UUID,
+    "source_quote_id" UUID,
+    "command_identity" VARCHAR(255) NOT NULL,
+    "decided_at" TIMESTAMPTZ(3) NOT NULL,
+    "originating_xid" VARCHAR(64) NOT NULL,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "legal_acceptance_decisions_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "legal_acceptance_decisions_subject_check" CHECK (
+        ("order_id" IS NOT NULL AND "quote_request_id" IS NULL)
+        OR ("order_id" IS NULL AND "quote_request_id" IS NOT NULL)
+    ),
+    CONSTRAINT "legal_acceptance_decisions_command_check" CHECK (btrim("command_identity") <> ''),
+    CONSTRAINT "legal_acceptance_decisions_time_check" CHECK (
+        "decided_at" >= TIMESTAMPTZ '2000-01-01T00:00:00Z'
+        AND "decided_at" <= TIMESTAMPTZ '2100-01-01T00:00:00Z'
+    )
+);
+
+ALTER TABLE "legal_acceptance_decisions"
+    ADD CONSTRAINT "legal_acceptance_decisions_order_fkey"
+        FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+    ADD CONSTRAINT "legal_acceptance_decisions_request_fkey"
+        FOREIGN KEY ("quote_request_id") REFERENCES "quote_requests"("id") ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+    ADD CONSTRAINT "legal_acceptance_decisions_source_quote_fkey"
+        FOREIGN KEY ("source_quote_id") REFERENCES "quotes"("id") ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED;
+
+ALTER TABLE "legal_acceptances"
+    ADD CONSTRAINT "legal_acceptances_decision_fkey"
+        FOREIGN KEY ("decision_id") REFERENCES "legal_acceptance_decisions"("id") ON DELETE RESTRICT;
+CREATE UNIQUE INDEX "legal_acceptance_decisions_order_id_key"
+    ON "legal_acceptance_decisions"("order_id");
+CREATE UNIQUE INDEX "legal_acceptance_decisions_quote_request_id_key"
+    ON "legal_acceptance_decisions"("quote_request_id");
+CREATE UNIQUE INDEX "legal_acceptance_decisions_source_quote_id_key"
+    ON "legal_acceptance_decisions"("source_quote_id");
+CREATE INDEX "legal_acceptances_decision_id_idx" ON "legal_acceptances"("decision_id");
 
 CREATE UNIQUE INDEX "legal_acceptances_order_purpose_key"
     ON "legal_acceptances"("order_id", "purpose") WHERE "order_id" IS NOT NULL;
@@ -448,62 +506,27 @@ FOR EACH ROW EXECUTE FUNCTION taven_validate_order_legal_acceptance();
 -- Each new QuoteRequest is an acceptance event, rather than an imported
 -- historical record. Require its privacy acknowledgement in the immutable
 -- ledger and, when requested, require the matching photo-publication grant.
--- The companion acceptance trigger lets the service insert the request and
--- both ledger rows in one deferred transaction.
+-- Historical rows remain readable, but no later legacy-consent augmentation
+-- can bypass the decision-owned writer path.
 CREATE OR REPLACE FUNCTION taven_validate_quote_request_legal_acceptance()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
     target_quote_request_id uuid;
     photo_consent_granted_at timestamptz;
-    request_command_key text;
-    acceptance_purpose legal_acceptance_purpose;
 BEGIN
     IF TG_TABLE_NAME = 'quote_requests' THEN
         target_quote_request_id := COALESCE(NEW."id", OLD."id");
     ELSE
         target_quote_request_id := COALESCE(NEW."quote_request_id", OLD."quote_request_id");
-        acceptance_purpose := NEW."purpose";
     END IF;
     IF target_quote_request_id IS NULL THEN
         RETURN NULL;
     END IF;
 
-    SELECT target."photo_publication_consent_granted_at", target."current_state_command_key"
-      INTO photo_consent_granted_at, request_command_key
+    SELECT target."photo_publication_consent_granted_at"
+      INTO photo_consent_granted_at
       FROM "quote_requests" target
      WHERE target."id" = target_quote_request_id;
-
-    -- The schema's legacy-import marker identifies pre-cutover/imported rows.
-    -- Preserve their existing scalar evidence, but do not let the marker
-    -- authorize a post-cutover photo-consent mutation without its ledger row.
-    IF request_command_key = 'legacy-import' THEN
-        IF TG_TABLE_NAME = 'quote_requests'
-           AND TG_OP = 'UPDATE'
-           AND (to_jsonb(NEW) ->> 'photo_publication_consent_granted_at') IS DISTINCT FROM
-               (to_jsonb(OLD) ->> 'photo_publication_consent_granted_at')
-           AND (
-               (to_jsonb(NEW) ->> 'photo_publication_consent_granted_at') IS NULL
-               OR (to_jsonb(OLD) ->> 'photo_publication_consent_granted_at') IS NOT NULL
-               OR NOT EXISTS (
-                   SELECT 1
-                   FROM "legal_acceptances" acceptance
-                   WHERE acceptance."quote_request_id" = target_quote_request_id
-                     AND acceptance."purpose" = 'PHOTO_PUBLICATION_GRANTED'
-               )
-           ) THEN
-            RAISE EXCEPTION 'Quote request photo consent changes require matching immutable legal acceptance evidence'
-                USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_photo_consent_acceptance_evidence_check';
-        END IF;
-        IF TG_TABLE_NAME = 'legal_acceptances'
-           AND acceptance_purpose = 'PHOTO_PUBLICATION_GRANTED'
-           AND (
-               photo_consent_granted_at IS NULL
-           ) THEN
-            RAISE EXCEPTION 'Quote request photo consent ledger must match immutable scalar evidence'
-                USING ERRCODE = '23514', CONSTRAINT = 'quote_requests_photo_consent_acceptance_evidence_check';
-        END IF;
-        RETURN NULL;
-    END IF;
 
     IF NOT EXISTS (
         SELECT 1
@@ -1002,3 +1025,291 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+-- PR5b decision provenance. Existing legacy rows remain readable with a NULL
+-- decision_id; all new acceptance bundles must be owned by one DB-stamped row.
+CREATE OR REPLACE FUNCTION taven_validate_legal_acceptance_decision()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    source_request uuid;
+    source_order uuid;
+    source_quote uuid;
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Legal acceptance decisions are immutable'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_immutable_check';
+    END IF;
+    IF (NEW."order_id" IS NULL) = (NEW."quote_request_id" IS NULL) THEN
+        RAISE EXCEPTION 'Legal acceptance decision must have exactly one subject'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_subject_check';
+    END IF;
+    IF btrim(NEW."command_identity") = '' THEN
+        RAISE EXCEPTION 'Legal acceptance decision command identity is required'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_command_check';
+    END IF;
+    PERFORM document."id"
+    FROM "legal_documents" document
+    WHERE document."key" IN ('privacy', 'photoConsent', 'terms', 'claims')
+    FOR SHARE NOWAIT;
+    IF NEW."quote_request_id" IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM "quote_requests" WHERE id = NEW."quote_request_id") THEN
+            RAISE EXCEPTION 'Quote request acceptance decision requires a new request'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_request_state_check';
+        END IF;
+        IF NEW."source_quote_id" IS NOT NULL THEN
+            RAISE EXCEPTION 'Request creation decision cannot have a source Quote'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';
+        END IF;
+    ELSE
+        IF EXISTS (SELECT 1 FROM "orders" WHERE "id" = NEW."order_id") THEN
+            PERFORM target."id"
+            FROM "orders" target
+            WHERE target."id" = NEW."order_id"
+            FOR UPDATE NOWAIT;
+        ELSE
+            PERFORM request."id"
+            FROM "quote_requests" request
+            WHERE request."current_quote_id" = NEW."source_quote_id"
+            FOR UPDATE NOWAIT;
+        END IF;
+        IF EXISTS (SELECT 1 FROM "orders" WHERE "id" = NEW."order_id") THEN
+            SELECT origin."quote_id" INTO source_quote
+            FROM "individual_order_origins" origin
+            WHERE origin."order_id" = NEW."order_id";
+        ELSE
+            source_quote := NEW."source_quote_id";
+        END IF;
+        IF source_quote IS NULL THEN
+            IF NEW."source_quote_id" IS NOT NULL THEN
+                RAISE EXCEPTION 'Automatic order decision cannot have a source Quote'
+                    USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM "orders" target
+                WHERE target."id" = NEW."order_id"
+                  AND (target."accepted_order_price_binding_id" IS NOT NULL
+                    OR target."accepted_terms_revision" IS NOT NULL
+                    OR target."accepted_claim_policy_revision" IS NOT NULL
+                    OR target."accepted_claim_window_days" IS NOT NULL
+                    OR target."withdrawal_exception_acknowledged_at" IS NOT NULL
+                    OR target."photo_publication_consent_granted_at" IS NOT NULL
+                    OR EXISTS (SELECT 1 FROM "payments" payment WHERE payment."order_id" = target."id"))
+            ) THEN
+                RAISE EXCEPTION 'Automatic order already has acceptance evidence'
+                    USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_order_state_check';
+            END IF;
+        ELSIF NEW."source_quote_id" IS DISTINCT FROM source_quote THEN
+            RAISE EXCEPTION 'Individual decision source Quote does not match its Order origin'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';
+        END IF;
+        IF NEW."source_quote_id" IS NOT NULL AND NOT EXISTS (
+            SELECT 1
+            FROM "quotes" quote
+            JOIN "quote_requests" request
+              ON request."id" = quote."quote_request_id"
+             AND request."current_quote_id" = quote."id"
+            WHERE quote."id" = NEW."source_quote_id"
+              AND request."status" = 'QUOTED'
+              AND NOT EXISTS (
+                  SELECT 1 FROM "individual_order_origins" origin
+                  WHERE origin."quote_id" = quote."id"
+              )
+        ) THEN
+            RAISE EXCEPTION 'Individual decision source Quote must be the unexpired current offer'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';
+        END IF;
+    END IF;
+    NEW."decided_at" := date_trunc('milliseconds', clock_timestamp());
+    NEW."originating_xid" := pg_current_xact_id()::text;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "legal_acceptance_decisions_integrity"
+BEFORE INSERT OR UPDATE OR DELETE ON "legal_acceptance_decisions"
+FOR EACH ROW EXECUTE FUNCTION taven_validate_legal_acceptance_decision();
+
+CREATE OR REPLACE FUNCTION taven_validate_legal_acceptance()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    expected_key text;
+    decision record;
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Legal acceptance evidence is append-only'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptances_append_only_check';
+    END IF;
+    IF NEW."decision_id" IS NULL THEN
+        RAISE EXCEPTION 'New legal acceptance requires a database decision'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptances_decision_required_check';
+    END IF;
+    SELECT * INTO decision FROM "legal_acceptance_decisions" WHERE id = NEW."decision_id";
+    IF NOT FOUND
+       OR decision."command_identity" IS DISTINCT FROM NEW."command_identity"
+       OR decision."decided_at" IS DISTINCT FROM NEW."accepted_at"
+       OR decision."originating_xid" IS DISTINCT FROM pg_current_xact_id()::text
+       OR ((decision."order_id" IS NULL) IS DISTINCT FROM (NEW."order_id" IS NULL))
+       OR decision."order_id" IS DISTINCT FROM NEW."order_id"
+       OR decision."quote_request_id" IS DISTINCT FROM NEW."quote_request_id" THEN
+        RAISE EXCEPTION 'Legal acceptance does not match its database decision'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptances_decision_match_check';
+    END IF;
+    expected_key := CASE NEW."purpose"
+        WHEN 'TERMS_ACCEPTED' THEN 'terms'
+        WHEN 'CLAIM_POLICY_ACCEPTED' THEN 'claims'
+        WHEN 'PRIVACY_NOTICE_ACKNOWLEDGED' THEN 'privacy'
+        WHEN 'PHOTO_PUBLICATION_GRANTED' THEN 'photoConsent'
+    END;
+    PERFORM document."id"
+    FROM "legal_documents" document
+    WHERE document."key" = expected_key
+    FOR SHARE NOWAIT;
+    IF NEW."order_id" IS NOT NULL
+       AND NEW."purpose" NOT IN ('TERMS_ACCEPTED', 'CLAIM_POLICY_ACCEPTED', 'PHOTO_PUBLICATION_GRANTED') THEN
+        RAISE EXCEPTION 'Legal acceptance purpose is incompatible with an Order subject'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptances_order_purpose_check';
+    END IF;
+    IF NEW."quote_request_id" IS NOT NULL
+       AND NEW."purpose" NOT IN ('PRIVACY_NOTICE_ACKNOWLEDGED', 'PHOTO_PUBLICATION_GRANTED') THEN
+        RAISE EXCEPTION 'Legal acceptance purpose is incompatible with a QuoteRequest subject'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptances_quote_request_purpose_check';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM "legal_document_revisions" revision
+        JOIN "legal_documents" document ON document."id" = revision."document_id"
+        JOIN "legal_document_publications" publication
+          ON publication."revision_id" = revision."id"
+         AND publication."cancelled_at" IS NULL
+         AND publication."starts_at" <= NEW."accepted_at"
+         AND (publication."ends_at" IS NULL OR publication."ends_at" > NEW."accepted_at")
+        WHERE revision."id" = NEW."revision_id"
+          AND document."key" = expected_key
+          AND revision."status" = 'APPROVED'
+          AND revision."revision_code" IS NOT NULL
+          AND revision."effective_at" <= NEW."accepted_at"
+    ) THEN
+        RAISE EXCEPTION 'Legal acceptance must use the effective published document revision'
+            USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptances_effective_revision_check';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION taven_validate_legal_acceptance_bundle()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    decision record;
+    target_order uuid;
+    target_request uuid;
+    terms_count integer;
+    claims_count integer;
+    privacy_count integer;
+    photo_count integer;
+    photo_scalar timestamptz;
+    request_created timestamptz;
+    order_created timestamptz;
+    withdrawal timestamptz;
+    order_status text;
+    origin_quote uuid;
+    source_request_status text;
+    source_request_accepted timestamptz;
+BEGIN
+    target_order := COALESCE(NEW."order_id", OLD."order_id");
+    target_request := COALESCE(NEW."quote_request_id", OLD."quote_request_id");
+    IF TG_TABLE_NAME = 'legal_acceptance_decisions' THEN
+        target_order := NEW."order_id";
+        target_request := NEW."quote_request_id";
+    END IF;
+    SELECT * INTO decision
+    FROM "legal_acceptance_decisions"
+    WHERE (target_order IS NOT NULL AND "order_id" = target_order)
+       OR (target_request IS NOT NULL AND "quote_request_id" = target_request);
+    IF NOT FOUND THEN RETURN NULL; END IF;
+
+    IF decision."order_id" IS NOT NULL THEN
+        SELECT target."created_at", target."withdrawal_exception_acknowledged_at", target."status"::text
+          INTO order_created, withdrawal, order_status
+          FROM "orders" target WHERE target."id" = decision."order_id";
+        IF order_created IS NULL
+           OR (decision."source_quote_id" IS NULL AND order_status <> 'QUOTED')
+           OR (decision."source_quote_id" IS NOT NULL AND order_status <> 'DRAFT') THEN
+            RAISE EXCEPTION 'Legal acceptance decision has no Order subject'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_bundle_check';
+        END IF;
+        IF withdrawal IS DISTINCT FROM decision."decided_at" THEN
+            RAISE EXCEPTION 'Order withdrawal acknowledgement must use the decision instant'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_time_check';
+        END IF;
+        SELECT count(*) FILTER (WHERE purpose = 'TERMS_ACCEPTED'),
+               count(*) FILTER (WHERE purpose = 'CLAIM_POLICY_ACCEPTED'),
+               count(*) FILTER (WHERE purpose = 'PHOTO_PUBLICATION_GRANTED')
+          INTO terms_count, claims_count, photo_count
+          FROM "legal_acceptances" WHERE "decision_id" = decision."id";
+        IF terms_count <> 1 OR claims_count <> 1 OR photo_count > 1 THEN
+            RAISE EXCEPTION 'Order legal acceptance decision is incomplete'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_bundle_check';
+        END IF;
+        SELECT origin."quote_id" INTO origin_quote
+          FROM "individual_order_origins" origin
+         WHERE origin."order_id" = decision."order_id";
+        IF origin_quote IS NOT NULL AND decision."source_quote_id" IS DISTINCT FROM origin_quote THEN
+            RAISE EXCEPTION 'Individual decision source Quote is not its Order origin'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_source_check';
+        END IF;
+        IF origin_quote IS NOT NULL AND EXISTS (
+            SELECT 1 FROM "quotes" quote
+            WHERE quote."id" = origin_quote
+              AND quote."expires_at" <= decision."decided_at"
+        ) THEN
+            RAISE EXCEPTION 'Individual acceptance decision cannot commit after offer expiry'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_expiry_check';
+        END IF;
+        IF origin_quote IS NOT NULL THEN
+            SELECT request."status"::text, request."accepted_at"
+              INTO source_request_status, source_request_accepted
+              FROM "quotes" quote
+              JOIN "quote_requests" request ON request."id" = quote."quote_request_id"
+             WHERE quote."id" = origin_quote;
+            IF source_request_status <> 'ACCEPTED'
+               OR source_request_accepted IS DISTINCT FROM decision."decided_at" THEN
+                RAISE EXCEPTION 'Individual acceptance decision must own the accepted source request transition'
+                    USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_request_transition_check';
+            END IF;
+        END IF;
+    ELSE
+        SELECT target."created_at", target."photo_publication_consent_granted_at"
+          INTO request_created, photo_scalar
+          FROM "quote_requests" target WHERE target."id" = decision."quote_request_id";
+        IF request_created IS NULL OR request_created IS DISTINCT FROM decision."decided_at" THEN
+            RAISE EXCEPTION 'Quote request creation must use the decision instant'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_time_check';
+        END IF;
+        SELECT count(*) FILTER (WHERE purpose = 'PRIVACY_NOTICE_ACKNOWLEDGED'),
+               count(*) FILTER (WHERE purpose = 'PHOTO_PUBLICATION_GRANTED')
+          INTO privacy_count, photo_count
+          FROM "legal_acceptances" WHERE "decision_id" = decision."id";
+        IF privacy_count <> 1 OR photo_count > 1
+           OR (photo_scalar IS NULL AND photo_count <> 0)
+           OR (photo_scalar IS NOT NULL AND photo_count <> 1) THEN
+            RAISE EXCEPTION 'Quote request legal acceptance decision is incomplete'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_bundle_check';
+        END IF;
+        IF photo_scalar IS NOT NULL AND photo_scalar IS DISTINCT FROM decision."decided_at" THEN
+            RAISE EXCEPTION 'Quote request photo consent must use the decision instant'
+                USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_time_check';
+        END IF;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER "legal_acceptance_decisions_bundle_valid"
+AFTER INSERT ON "legal_acceptance_decisions" DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_legal_acceptance_bundle();
+CREATE CONSTRAINT TRIGGER "legal_acceptances_decision_bundle_valid"
+AFTER INSERT ON "legal_acceptances" DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION taven_validate_legal_acceptance_bundle();
+
+-- Existing completeness functions remain in force, but new acceptance bundles
+-- also require the decision-specific transaction/time checks above.

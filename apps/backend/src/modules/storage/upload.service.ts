@@ -213,7 +213,9 @@ export class UploadService {
                session.expires_at
         FROM quote_requests request
         JOIN quote_sessions session ON session.id = request.quote_session_id
-        LEFT JOIN quotes quote ON quote.quote_request_id = request.id
+        LEFT JOIN quotes quote
+          ON quote.id = request.current_quote_id
+         AND quote.quote_request_id = request.id
         WHERE request.id = ${metadata.scopeId}::uuid
         FOR SHARE OF request, session
       `;
@@ -424,7 +426,9 @@ export class UploadService {
                    clock_timestamp() AS observed_at
             FROM quote_requests request
             JOIN quote_sessions session ON session.id = request.quote_session_id
-            LEFT JOIN quotes quote ON quote.quote_request_id = request.id
+            LEFT JOIN quotes quote
+              ON quote.id = request.current_quote_id
+             AND quote.quote_request_id = request.id
             WHERE request.id = ${photoMetadata.scopeId}::uuid
             FOR UPDATE OF request
           `;

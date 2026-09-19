@@ -1778,6 +1778,7 @@ model QuoteRequest {
   slaRespondedAt         DateTime?          @map("sla_responded_at") @db.Timestamptz(3)
   currentStateCommandKey String             @map("current_state_command_key") @db.VarChar(255)
   currentStateResultId   String             @default(uuid()) @map("current_state_result_id") @db.Uuid
+  currentQuoteId         String?            @map("current_quote_id") @db.Uuid
   acceptedAt             DateTime?          @map("accepted_at") @db.Timestamptz(3)
   rejectedAt             DateTime?          @map("rejected_at") @db.Timestamptz(3)
   expiredAt              DateTime?          @map("expired_at") @db.Timestamptz(3)
@@ -1787,12 +1788,15 @@ model QuoteRequest {
 
   quoteSession                  QuoteSession?                     @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
   customer                      Customer?                         @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  quote                         Quote?
+  quotes                        Quote[]                           @relation("QuoteRequestQuotes")
+  currentQuote                  Quote?                            @relation("QuoteRequestCurrentQuote", fields: [currentQuoteId, id], references: [id, quoteRequestId], onDelete: Restrict)
   auditEvents                   AuditEvent[]
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
   automaticQuoteHandoff         AutomaticQuoteRequestHandoff?
   legalAcceptances              LegalAcceptance[]
+  legalAcceptanceDecision       LegalAcceptanceDecision?
 
+  @@unique([currentQuoteId, id], map: "quote_requests_current_quote_key")
   @@index([customerId, status])
   @@index([status, slaDueAt])
   @@map("quote_requests")
@@ -1800,7 +1804,7 @@ model QuoteRequest {
 
 model Quote {
   id                 String    @id @default(uuid()) @db.Uuid
-  quoteRequestId     String    @unique @map("quote_request_id") @db.Uuid
+  quoteRequestId     String    @map("quote_request_id") @db.Uuid
   customerId         String    @map("customer_id") @db.Uuid
   publicTokenHash    String?   @unique @map("public_token_hash") @db.VarChar(64)
   capabilityKeyId    String?   @map("capability_key_id") @db.VarChar(64)
@@ -1818,7 +1822,8 @@ model Quote {
   issuedAt           DateTime  @default(now()) @map("issued_at") @db.Timestamptz(3)
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  quoteRequest                  QuoteRequest                      @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
+  quoteRequest                  QuoteRequest                      @relation("QuoteRequestQuotes", fields: [quoteRequestId], references: [id], onDelete: Restrict)
+  currentForRequest             QuoteRequest?                     @relation("QuoteRequestCurrentQuote")
   customer                      Customer                          @relation(fields: [customerId], references: [id], onDelete: Restrict)
   items                         QuoteItem[]
   priceBinding                  QuotePriceBinding?
@@ -1829,8 +1834,11 @@ model Quote {
   auditEvents                   AuditEvent[]
   legalTermsRevision            LegalDocumentRevision?           @relation("QuoteLegalTermsRevision", fields: [legalTermsRevisionId], references: [id], onDelete: Restrict)
   legalClaimsRevision           LegalDocumentRevision?           @relation("QuoteLegalClaimsRevision", fields: [legalClaimsRevisionId], references: [id], onDelete: Restrict)
+  acceptanceDecision            LegalAcceptanceDecision?         @relation("QuoteAcceptanceSource")
 
   @@unique([id, customerId], map: "quotes_id_customer_key")
+  @@unique([id, quoteRequestId], map: "quotes_id_request_key")
+  @@unique([quoteRequestId, version], map: "quotes_request_version_key")
   @@index([customerId, issuedAt])
   @@index([legalTermsRevisionId], map: "quotes_legal_terms_revision_id_idx")
   @@index([legalClaimsRevisionId], map: "quotes_legal_claims_revision_id_idx")
@@ -2072,6 +2080,7 @@ model Order {
   automaticQuoteDraft          AutomaticQuoteDraft?
   handlingAllocations          HandlingAllocation[]
   legalAcceptances             LegalAcceptance[]
+  legalAcceptanceDecision      LegalAcceptanceDecision?
   actualCosts                  OrderActualCost[]
   businessEvents               BusinessEvent[]
 
@@ -3179,13 +3188,34 @@ model LegalAcceptance {
   acceptedAt      DateTime               @map("accepted_at") @db.Timestamptz(3)
   commandIdentity String                 @map("command_identity") @db.VarChar(255)
   createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  decisionId      String?                @map("decision_id") @db.Uuid
 
   order        Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
   quoteRequest QuoteRequest?         @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
   revision     LegalDocumentRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  decision     LegalAcceptanceDecision? @relation(fields: [decisionId], references: [id], onDelete: Restrict)
 
   @@index([revisionId])
   @@map("legal_acceptances")
+}
+
+model LegalAcceptanceDecision {
+  id              String    @id @default(uuid()) @db.Uuid
+  orderId         String?   @unique @map("order_id") @db.Uuid
+  quoteRequestId  String?   @unique @map("quote_request_id") @db.Uuid
+  sourceQuoteId   String?   @unique @map("source_quote_id") @db.Uuid
+  commandIdentity String    @map("command_identity") @db.VarChar(255)
+  decidedAt       DateTime  @map("decided_at") @db.Timestamptz(3)
+  originatingXid  String    @map("originating_xid") @db.VarChar(64)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order          Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  quoteRequest   QuoteRequest?   @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
+  sourceQuote    Quote?          @relation("QuoteAcceptanceSource", fields: [sourceQuoteId], references: [id], onDelete: Restrict)
+  acceptances    LegalAcceptance[]
+
+  @@index([sourceQuoteId])
+  @@map("legal_acceptance_decisions")
 }
 
 model LegalDocumentPublication {
