@@ -7,6 +7,7 @@ import {
   conservativePartsPerPlate,
   decimalToInteger,
   frozenCheckoutEvidenceState,
+  hasRetryableAutomaticCheckoutPayment,
   hasFrozenCheckoutEvidence,
   isCarrierValidationReady,
   parcelConfigurationChange,
@@ -43,6 +44,40 @@ describe("AutomaticQuotesService", () => {
         withdrawalExceptionAcknowledgedAt: null,
       }),
     ).toBe("none");
+  });
+
+  it("only permits preparation bypass for a quoted failed-payment retry", () => {
+    const retryable = {
+      status: "QUOTED" as const,
+      acceptedOrderPriceBindingId: "binding-id",
+      payments: [
+        {
+          orderPriceBindingId: "binding-id",
+          role: "FULL" as const,
+          status: "FAILED" as const,
+        },
+      ],
+    };
+    expect(hasRetryableAutomaticCheckoutPayment(retryable)).toBe(true);
+    expect(
+      hasRetryableAutomaticCheckoutPayment({
+        ...retryable,
+        status: "CANCELLED",
+      }),
+    ).toBe(false);
+    expect(
+      hasRetryableAutomaticCheckoutPayment({
+        ...retryable,
+        payments: [
+          ...retryable.payments,
+          {
+            orderPriceBindingId: "binding-id",
+            role: "FULL" as const,
+            status: "CAPTURED" as const,
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("converts API-valid volumes beyond JavaScript's safe integer range", () => {

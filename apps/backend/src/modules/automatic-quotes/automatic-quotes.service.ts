@@ -21,6 +21,7 @@ import {
   OrderStatus,
   OutboxStatus,
   PaymentRole,
+  PaymentStatus,
   PreflightSeverity,
   Prisma,
   PriceComponentKind,
@@ -255,6 +256,33 @@ export function frozenCheckoutEvidenceState(order: {
     order.withdrawalExceptionAcknowledgedAt,
   ].filter((value) => value !== null).length;
   return present === 0 ? "none" : present === 5 ? "complete" : "partial";
+}
+
+export function hasRetryableAutomaticCheckoutPayment(order: {
+  status: OrderStatus;
+  acceptedOrderPriceBindingId: string | null;
+  payments: ReadonlyArray<{
+    orderPriceBindingId: string;
+    role: PaymentRole;
+    status: PaymentStatus;
+  }>;
+}): boolean {
+  if (order.status !== OrderStatus.QUOTED || !order.acceptedOrderPriceBindingId)
+    return false;
+  const payments = order.payments.filter(
+    (payment) =>
+      payment.orderPriceBindingId === order.acceptedOrderPriceBindingId &&
+      payment.role === PaymentRole.FULL,
+  );
+  return (
+    payments.some((payment) => payment.status === PaymentStatus.FAILED) &&
+    !payments.some(
+      (payment) =>
+        payment.status === PaymentStatus.CREATED ||
+        payment.status === PaymentStatus.PENDING ||
+        payment.status === PaymentStatus.CAPTURED,
+    )
+  );
 }
 
 export async function parcelConfigurationChange(
@@ -1642,6 +1670,13 @@ export class AutomaticQuotesService {
             automaticQuoteDraft: {
               include: { items: { orderBy: { ordinal: "asc" } } },
             },
+            payments: {
+              select: {
+                orderPriceBindingId: true,
+                role: true,
+                status: true,
+              },
+            },
           },
         });
         const draft = order?.automaticQuoteDraft;
@@ -1657,6 +1692,14 @@ export class AutomaticQuotesService {
         if (evidenceState === "partial") {
           throw new ConflictException(
             "Automatic quote has incomplete checkout evidence",
+          );
+        }
+        if (
+          evidenceState === "complete" &&
+          !hasRetryableAutomaticCheckoutPayment(order)
+        ) {
+          throw new ConflictException(
+            "Automatic quote has no retryable failed payment",
           );
         }
         if (evidenceState !== "complete") assertBindingQuoteFlowsEnabled();

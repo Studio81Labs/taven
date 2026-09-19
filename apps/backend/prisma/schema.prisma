@@ -1832,6 +1832,8 @@ model Quote {
 
   @@unique([id, customerId], map: "quotes_id_customer_key")
   @@index([customerId, issuedAt])
+  @@index([legalTermsRevisionId], map: "quotes_legal_terms_revision_id_idx")
+  @@index([legalClaimsRevisionId], map: "quotes_legal_claims_revision_id_idx")
   @@map("quotes")
 }
 
@@ -2151,6 +2153,7 @@ model OrderPriceBinding {
   @@unique([orderId, priceSnapshotId], map: "order_price_bindings_order_snapshot_key")
   @@unique([id, orderId, priceSnapshotId], map: "order_price_bindings_payment_contract_key")
   @@unique([id, orderId, priceSnapshotId, deliveryDestinationId], map: "order_price_bindings_contract_destination_key")
+  @@index([legalTermsRevisionId], map: "order_price_bindings_legal_terms_revision_id_idx")
   @@map("order_price_bindings")
 }
 
@@ -3181,8 +3184,6 @@ model LegalAcceptance {
   quoteRequest QuoteRequest?         @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
   revision     LegalDocumentRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
 
-  @@index([orderId, purpose])
-  @@index([quoteRequestId, purpose])
   @@index([revisionId])
   @@map("legal_acceptances")
 }

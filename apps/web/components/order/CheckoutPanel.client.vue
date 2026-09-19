@@ -56,6 +56,10 @@ const cancelling = ref(false);
 const redirecting = ref(false);
 const errorMessage = ref<string>();
 const initialized = ref(false);
+let disposed = false;
+onBeforeUnmount(() => {
+  disposed = true;
+});
 
 const draft = reactive<CheckoutCustomerDraft>({
   email: "",
@@ -103,8 +107,11 @@ const verifiedLegalDocuments = computed(() => ({
   photoConsent: presentedLegalDocuments.photoConsent.effective.value,
 }));
 async function refreshLegalAvailability(): Promise<void> {
+  if (disposed) return;
   const selected = await refreshAvailability();
+  if (disposed) return;
   for (const { refresh } of Object.values(presentedLegalDocuments)) {
+    if (disposed) return;
     await refresh(selected);
   }
 }
@@ -311,9 +318,13 @@ onMounted(async () => {
   command.value = storedCheckout?.command;
   initialized.value = true;
   await loadRetryContext();
+  if (disposed) return;
   await loadCapabilities();
+  if (disposed) return;
   await refreshLegalAvailability();
+  if (disposed) return;
   if (command.value?.paymentId) await refreshPayment();
+  if (disposed) return;
   loading.value = false;
 });
 
