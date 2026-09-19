@@ -1795,6 +1795,7 @@ model QuoteRequest {
   automaticQuoteHandoff         AutomaticQuoteRequestHandoff?
   legalAcceptances              LegalAcceptance[]
   legalAcceptanceDecision       LegalAcceptanceDecision?
+  legacyQuoteRequestImports     LegacyQuoteRequestImport[]
 
   @@unique([currentQuoteId, id], map: "quote_requests_current_quote_key")
   @@index([customerId, status])
@@ -1835,6 +1836,7 @@ model Quote {
   legalTermsRevision            LegalDocumentRevision?           @relation("QuoteLegalTermsRevision", fields: [legalTermsRevisionId], references: [id], onDelete: Restrict)
   legalClaimsRevision           LegalDocumentRevision?           @relation("QuoteLegalClaimsRevision", fields: [legalClaimsRevisionId], references: [id], onDelete: Restrict)
   acceptanceDecision            LegalAcceptanceDecision?         @relation("QuoteAcceptanceSource")
+  legacyQuoteRequestImports     LegacyQuoteRequestImport[]
 
   @@unique([id, customerId], map: "quotes_id_customer_key")
   @@unique([id, quoteRequestId], map: "quotes_id_request_key")
@@ -1843,6 +1845,17 @@ model Quote {
   @@index([legalTermsRevisionId], map: "quotes_legal_terms_revision_id_idx")
   @@index([legalClaimsRevisionId], map: "quotes_legal_claims_revision_id_idx")
   @@map("quotes")
+}
+
+model LegacyQuoteRequestImport {
+  quoteRequestId String @map("quote_request_id") @db.Uuid
+  quoteId        String @map("quote_id") @db.Uuid
+
+  quoteRequest QuoteRequest @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
+  quote        Quote        @relation(fields: [quoteId, quoteRequestId], references: [id, quoteRequestId], onDelete: Restrict)
+
+  @@id([quoteRequestId, quoteId])
+  @@map("legacy_quote_request_imports")
 }
 
 model QuoteItem {
