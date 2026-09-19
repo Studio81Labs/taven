@@ -1789,7 +1789,7 @@ model QuoteRequest {
   quoteSession                  QuoteSession?                     @relation(fields: [quoteSessionId], references: [id], onDelete: Restrict)
   customer                      Customer?                         @relation(fields: [customerId], references: [id], onDelete: Restrict)
   quotes                        Quote[]                           @relation("QuoteRequestQuotes")
-  currentQuote                  Quote?                            @relation("QuoteRequestCurrentQuote", fields: [currentQuoteId, id], references: [id, quoteRequestId], onDelete: Restrict)
+  currentQuote                  Quote?                            @relation("QuoteRequestCurrentQuote", fields: [currentQuoteId, id], references: [id, quoteRequestId], onDelete: Restrict, map: "quote_requests_current_quote_fkey")
   auditEvents                   AuditEvent[]
   legacyFullPaymentQuoteBinding LegacyIndividualFullQuoteBinding?
   automaticQuoteHandoff         AutomaticQuoteRequestHandoff?
@@ -1851,8 +1851,8 @@ model LegacyQuoteRequestImport {
   quoteRequestId String @map("quote_request_id") @db.Uuid
   quoteId        String @map("quote_id") @db.Uuid
 
-  quoteRequest QuoteRequest @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
-  quote        Quote        @relation(fields: [quoteId, quoteRequestId], references: [id, quoteRequestId], onDelete: Restrict)
+  quoteRequest QuoteRequest @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict, map: "legacy_quote_request_imports_request_fkey")
+  quote        Quote        @relation(fields: [quoteId, quoteRequestId], references: [id, quoteRequestId], onDelete: Restrict, map: "legacy_quote_request_imports_quote_fkey")
 
   @@id([quoteRequestId, quoteId])
   @@map("legacy_quote_request_imports")
@@ -3206,7 +3206,7 @@ model LegalAcceptance {
   order        Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
   quoteRequest QuoteRequest?         @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
   revision     LegalDocumentRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
-  decision     LegalAcceptanceDecision? @relation(fields: [decisionId], references: [id], onDelete: Restrict)
+  decision     LegalAcceptanceDecision? @relation(fields: [decisionId], references: [id], onDelete: Restrict, map: "legal_acceptances_decision_fkey")
 
   @@index([decisionId])
   @@index([revisionId])
@@ -3223,9 +3223,9 @@ model LegalAcceptanceDecision {
   originatingXid  String    @map("originating_xid") @db.VarChar(64)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  order          Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  quoteRequest   QuoteRequest?   @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
-  sourceQuote    Quote?          @relation("QuoteAcceptanceSource", fields: [sourceQuoteId], references: [id], onDelete: Restrict)
+  order          Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict, map: "legal_acceptance_decisions_order_fkey")
+  quoteRequest   QuoteRequest?   @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict, map: "legal_acceptance_decisions_request_fkey")
+  sourceQuote    Quote?          @relation("QuoteAcceptanceSource", fields: [sourceQuoteId], references: [id], onDelete: Restrict, map: "legal_acceptance_decisions_source_quote_fkey")
   acceptances    LegalAcceptance[]
 
   @@map("legal_acceptance_decisions")

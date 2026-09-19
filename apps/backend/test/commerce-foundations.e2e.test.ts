@@ -21188,7 +21188,13 @@ describe("commerce persistence foundations", () => {
                (id, quote_request_id, customer_id, issuance_command_key,
                 expires_at, issued_at, created_at)
              VALUES ($1,$2,$3,'legacy-import',$4,$5,$5)`,
-            [quoteId, requestId, foundation.customerId, quoteExpiresAt, now],
+            [
+              quoteId,
+              requestId,
+              foundation.customerId,
+              quoteExpiresAt,
+              requestDecisionAt,
+            ],
           );
           await forceQuoteIssuanceConstraints(client);
         },
@@ -21232,7 +21238,13 @@ describe("commerce persistence foundations", () => {
            (id, quote_request_id, customer_id, issuance_command_key,
             expires_at, issued_at, created_at)
          VALUES ($1,$2,$3,'legacy-import',$4,$5,$5)`,
-        [quoteId, requestId, foundation.customerId, quoteExpiresAt, now],
+        [
+          quoteId,
+          requestId,
+          foundation.customerId,
+          quoteExpiresAt,
+          requestDecisionAt,
+        ],
       );
       await client.query(
         `INSERT INTO price_snapshots
@@ -21579,6 +21591,10 @@ describe("commerce persistence foundations", () => {
               expires_at, issued_at, created_at)
            VALUES ($1,$2,$3,'legacy-import',$4,$5,$5)`,
             [quoteId, requestId, foundation.customerId, expiresAt, issuedAt],
+          );
+          await client.query(
+            `UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1`,
+            [requestId, quoteId],
           );
           if (includeItem) {
             await client.query(
