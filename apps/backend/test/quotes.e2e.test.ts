@@ -2222,43 +2222,47 @@ describe("QuoteRequest and tokenized individual offers", () => {
   });
 
   it("allows one legacy photo-consent repair but rejects later timestamp rewrites", async () => {
-    const request = await prisma.quoteRequest.create({
-      data: {
-        publicReference: `legacy-photo-${randomUUID()}`,
-        description: "Legacy photo consent repair",
-        currentStateCommandKey: "legacy-import",
-      },
-    });
-    const photoRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
-      where: { revisionCode: e2eLegalRevisionCodes.photoConsent },
-      select: { id: true },
-    });
+    const requestId = randomUUID();
+    await prisma.$executeRaw`
+      INSERT INTO quote_requests
+        (id, public_reference, description, current_state_command_key, created_at, updated_at)
+      VALUES
+        (${requestId}, ${`legacy-photo-${randomUUID()}`},
+         'Legacy photo consent repair', 'legacy-import', clock_timestamp(), clock_timestamp())
+    `;
+    const photoRevisionRows = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM legal_document_revisions
+      WHERE revision_code = ${e2eLegalRevisionCodes.photoConsent}
+      LIMIT 1
+    `;
+    const photoRevision = photoRevisionRows[0];
+    if (!photoRevision) throw new Error("E2E photo revision is missing");
     const firstConsentAt = new Date();
     await prisma.$transaction(async (transaction) => {
-      await transaction.quoteRequest.update({
-        where: { id: request.id },
-        data: { photoPublicationConsentGrantedAt: firstConsentAt },
-      });
-      await transaction.legalAcceptance.create({
-        data: {
-          quoteRequestId: request.id,
-          revisionId: photoRevision.id,
-          purpose: "PHOTO_PUBLICATION_GRANTED",
-          acceptedAt: firstConsentAt,
-          commandIdentity: key("legacy-photo-consent-repair"),
-        },
-      });
+      await transaction.$executeRaw`
+        UPDATE quote_requests
+        SET photo_publication_consent_granted_at = ${firstConsentAt}
+        WHERE id = ${requestId}
+      `;
+      await transaction.$executeRaw`
+        INSERT INTO legal_acceptances
+          (id, quote_request_id, revision_id, purpose, accepted_at, command_identity)
+        VALUES
+          (${randomUUID()}, ${requestId}, ${photoRevision.id},
+           'PHOTO_PUBLICATION_GRANTED', ${firstConsentAt},
+           ${key("legacy-photo-consent-repair")})
+      `;
     });
 
     await expect(
-      prisma.quoteRequest.update({
-        where: { id: request.id },
-        data: {
-          photoPublicationConsentGrantedAt: new Date(
-            firstConsentAt.getTime() + 1_000,
-          ),
-        },
-      }),
+      prisma.$executeRaw`
+        UPDATE quote_requests
+        SET photo_publication_consent_granted_at = ${new Date(
+          firstConsentAt.getTime() + 1_000,
+        )}
+        WHERE id = ${requestId}
+      `,
     ).rejects.toThrow(
       "Quote request photo consent changes require matching immutable legal acceptance evidence",
     );
