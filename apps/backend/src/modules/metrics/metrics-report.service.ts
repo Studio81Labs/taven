@@ -389,7 +389,7 @@ export class MetricsReportService {
         slaDueAt: true,
         slaRespondedAt: true,
         status: true,
-        quote: { select: { issuedAt: true } },
+        currentQuote: { select: { issuedAt: true } },
       },
     });
     const spend = await transaction.acquisitionSpend.findMany({
@@ -1049,7 +1049,7 @@ type AssistedRequest = Readonly<{
   slaDueAt: Date;
   slaRespondedAt: Date | null;
   status: string;
-  quote: Readonly<{ issuedAt: Date }> | null;
+  currentQuote: Readonly<{ issuedAt: Date }> | null;
 }>;
 
 type AutomaticUse = Readonly<{
@@ -1203,9 +1203,10 @@ export function assistedSlaMetrics(
 }
 
 function responseAt(request: AssistedRequest): Date | null {
-  const timestamps = [request.slaRespondedAt, request.quote?.issuedAt].filter(
-    (value): value is Date => value !== null && value !== undefined,
-  );
+  const timestamps = [
+    request.slaRespondedAt,
+    request.currentQuote?.issuedAt,
+  ].filter((value): value is Date => value !== null && value !== undefined);
   if (timestamps.length === 0) return null;
   return timestamps.reduce((earliest, candidate) =>
     candidate.getTime() < earliest.getTime() ? candidate : earliest,

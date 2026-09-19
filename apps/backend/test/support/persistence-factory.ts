@@ -798,8 +798,9 @@ export class PersistenceFactory {
       await this.sql.query(
         `INSERT INTO quote_requests
            (id, quote_session_id, customer_id, status, current_state_command_key,
-            created_at, updated_at)
-         SELECT $1, $2, $3, 'NEW', 'legacy-import', decision.decided_at,
+            sla_due_at, created_at, updated_at)
+         SELECT $1, $2, $3, 'NEW', 'legacy-import',
+                decision.decided_at + interval '24 hours', decision.decided_at,
                 decision.decided_at
          FROM legal_acceptance_decisions decision
          WHERE decision.id = $4`,
