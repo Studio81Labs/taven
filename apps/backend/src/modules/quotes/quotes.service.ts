@@ -419,6 +419,11 @@ export class QuotesService {
         quoteSession: true,
         customer: true,
         currentQuote: { select: { id: true, version: true, issuedAt: true } },
+        quotes: {
+          select: { issuedAt: true },
+          orderBy: [{ issuedAt: "asc" }, { id: "asc" }],
+          take: 1,
+        },
       },
     });
     if (
@@ -454,6 +459,11 @@ export class QuotesService {
         quoteSession: true,
         customer: true,
         currentQuote: { select: { id: true, version: true, issuedAt: true } },
+        quotes: {
+          select: { issuedAt: true },
+          orderBy: [{ issuedAt: "asc" }, { id: "asc" }],
+          take: 1,
+        },
         automaticQuoteHandoff: true,
       },
       orderBy: [{ slaDueAt: "asc" }, { createdAt: "asc" }],
@@ -504,9 +514,13 @@ export class QuotesService {
         const keys = await transaction.$queryRaw<Array<{ id: string }>>`
       SELECT request.id
       FROM quote_requests AS request
-      LEFT JOIN quotes AS quote
-        ON quote.id = request.current_quote_id
-       AND quote.quote_request_id = request.id
+      LEFT JOIN LATERAL (
+        SELECT quote.issued_at
+        FROM quotes AS quote
+        WHERE quote.quote_request_id = request.id
+        ORDER BY quote.issued_at ASC, quote.id ASC
+        LIMIT 1
+      ) AS first_quote ON TRUE
       WHERE TRUE
         ${statusFilter}
         ${slaFilter}
@@ -521,6 +535,11 @@ export class QuotesService {
             customer: true,
             currentQuote: {
               select: { id: true, version: true, issuedAt: true },
+            },
+            quotes: {
+              select: { issuedAt: true },
+              orderBy: [{ issuedAt: "asc" }, { id: "asc" }],
+              take: 1,
             },
             automaticQuoteHandoff: true,
           },
@@ -582,6 +601,11 @@ export class QuotesService {
         quoteSession: true,
         customer: true,
         currentQuote: { select: { id: true, version: true, issuedAt: true } },
+        quotes: {
+          select: { issuedAt: true },
+          orderBy: [{ issuedAt: "asc" }, { id: "asc" }],
+          take: 1,
+        },
         automaticQuoteHandoff: true,
       },
     });
@@ -1973,6 +1997,7 @@ export class QuotesService {
         phone: string | null;
       } | null;
       currentQuote?: { id: string; version: number; issuedAt: Date } | null;
+      quotes?: ReadonlyArray<{ issuedAt: Date }>;
     },
     observedAt: Date,
     attachments?: RequestAttachments,
@@ -1990,7 +2015,7 @@ export class QuotesService {
     const respondedAt =
       slaResponseEvidenceAt(
         request.slaRespondedAt,
-        request.currentQuote?.issuedAt,
+        request.quotes?.[0]?.issuedAt,
       )?.getTime() ?? observedAt.getTime();
     return {
       requestId: request.id,
@@ -2034,6 +2059,7 @@ export class QuotesService {
         itemSelections: Prisma.JsonValue;
       } | null;
       currentQuote?: { id: string; version: number; issuedAt: Date } | null;
+      quotes?: ReadonlyArray<{ issuedAt: Date }>;
     },
     observedAt: Date,
     attachments?: RequestAttachments,
@@ -3679,7 +3705,9 @@ function operatorQueueSlaFilter(
   sla: OperatorQueueSla | undefined,
   observedAt: Date,
 ): Prisma.Sql {
-  const respondedAt = Prisma.sql`LEAST(request.sla_responded_at, quote.issued_at)`;
+  const respondedAt = Prisma.sql`
+    LEAST(request.sla_responded_at, first_quote.issued_at)
+  `;
   switch (sla) {
     case "PENDING":
       return Prisma.sql`AND ${respondedAt} IS NULL`;
