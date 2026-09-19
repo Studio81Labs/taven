@@ -2265,6 +2265,13 @@ describe("QuoteRequest and tokenized individual offers", () => {
           cause: error,
         });
       }
+      try {
+        await transaction.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
+      } catch (error) {
+        throw new Error("legacy consent trigger validation failed", {
+          cause: error,
+        });
+      }
     });
 
     await expect(
