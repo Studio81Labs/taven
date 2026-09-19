@@ -3488,16 +3488,16 @@ export interface components {
             providerEndpointId: string;
         };
         OfferIssuedDto: {
-            claimPolicyRevision: string;
-            claimWindowDays: number;
+            claimPolicyRevision?: string;
+            claimWindowDays?: number;
             /** Format: date-time */
             expiresAt: string;
-            legalClaimsContentHash: string;
+            legalClaimsContentHash?: string;
             /** Format: uuid */
-            legalClaimsRevisionId: string;
-            legalTermsContentHash: string;
+            legalClaimsRevisionId?: string;
+            legalTermsContentHash?: string;
             /** Format: uuid */
-            legalTermsRevisionId: string;
+            legalTermsRevisionId?: string;
             offerToken: string;
             /** Format: uuid */
             quoteId: string;

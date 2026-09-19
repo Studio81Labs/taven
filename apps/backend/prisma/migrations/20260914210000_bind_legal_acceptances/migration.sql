@@ -1047,10 +1047,17 @@ BEGIN
         RAISE EXCEPTION 'Legal acceptance decision command identity is required'
             USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_command_check';
     END IF;
-    PERFORM document."id"
-    FROM "legal_documents" document
-    WHERE document."key" IN ('privacy', 'photoConsent', 'terms', 'claims')
-    FOR SHARE NOWAIT;
+    IF NEW."quote_request_id" IS NOT NULL THEN
+        PERFORM document."id"
+        FROM "legal_documents" document
+        WHERE document."key" IN ('privacy', 'photoConsent')
+        FOR SHARE NOWAIT;
+    ELSE
+        PERFORM document."id"
+        FROM "legal_documents" document
+        WHERE document."key" IN ('claims', 'photoConsent', 'terms')
+        FOR SHARE NOWAIT;
+    END IF;
     IF NEW."quote_request_id" IS NOT NULL THEN
         IF EXISTS (SELECT 1 FROM "quote_requests" WHERE id = NEW."quote_request_id") THEN
             RAISE EXCEPTION 'Quote request acceptance decision requires a new request'
@@ -1067,6 +1074,10 @@ BEGIN
             WHERE target."id" = NEW."order_id"
             FOR UPDATE NOWAIT;
         ELSE
+            IF NEW."source_quote_id" IS NULL THEN
+                RAISE EXCEPTION 'Automatic order decision requires an existing Order subject'
+                    USING ERRCODE = '23514', CONSTRAINT = 'legal_acceptance_decision_order_subject_check';
+            END IF;
             PERFORM request."id"
             FROM "quote_requests" request
             WHERE request."current_quote_id" = NEW."source_quote_id"

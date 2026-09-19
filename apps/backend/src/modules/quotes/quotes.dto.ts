@@ -518,23 +518,23 @@ export class OfferIssuedDto {
   @ApiProperty({ type: String })
   termsRevision!: string;
 
-  @ApiProperty({ type: String })
-  claimPolicyRevision!: string;
+  @ApiPropertyOptional({ type: String })
+  claimPolicyRevision?: string;
 
-  @ApiProperty({ type: "integer", minimum: 1 })
-  claimWindowDays!: number;
+  @ApiPropertyOptional({ type: "integer", minimum: 1 })
+  claimWindowDays?: number;
 
-  @ApiProperty({ type: String, format: "uuid" })
-  legalTermsRevisionId!: string;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  legalTermsRevisionId?: string;
 
-  @ApiProperty({ type: String, pattern: "^[a-f0-9]{64}$" })
-  legalTermsContentHash!: string;
+  @ApiPropertyOptional({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalTermsContentHash?: string;
 
-  @ApiProperty({ type: String, format: "uuid" })
-  legalClaimsRevisionId!: string;
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  legalClaimsRevisionId?: string;
 
-  @ApiProperty({ type: String, pattern: "^[a-f0-9]{64}$" })
-  legalClaimsContentHash!: string;
+  @ApiPropertyOptional({ type: String, pattern: "^[a-f0-9]{64}$" })
+  legalClaimsContentHash?: string;
 
   @ApiProperty({ type: String })
   offerToken!: string;

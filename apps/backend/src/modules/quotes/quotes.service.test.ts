@@ -44,7 +44,7 @@ describe("offer issuance idempotency compatibility", () => {
     capabilityKeyId: "quote-key-v1",
   };
 
-  it("rejects legacy stored responses missing legal evidence", () => {
+  it("accepts legacy stored responses without newly added legal evidence", () => {
     expect(
       isCurrentStoredOfferIssuedResponse({
         quoteId: current.quoteId,
@@ -53,7 +53,7 @@ describe("offer issuance idempotency compatibility", () => {
         expiresAt: current.expiresAt,
         capabilityKeyId: current.capabilityKeyId,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(isCurrentStoredOfferIssuedResponse(current)).toBe(true);
   });
 });

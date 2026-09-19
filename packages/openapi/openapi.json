@@ -5730,12 +5730,6 @@
           "quoteId",
           "version",
           "termsRevision",
-          "claimPolicyRevision",
-          "claimWindowDays",
-          "legalTermsRevisionId",
-          "legalTermsContentHash",
-          "legalClaimsRevisionId",
-          "legalClaimsContentHash",
           "offerToken",
           "expiresAt"
         ],

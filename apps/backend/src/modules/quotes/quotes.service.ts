@@ -165,6 +165,7 @@ type StoredQuoteRequestCreatedResponse = Omit<
   }>;
 type StoredOfferIssuedResponse = Omit<OfferIssuedDto, "offerToken"> &
   Readonly<{ capabilityKeyId: string }>;
+type OfferIssuanceResult = OfferIssuedDto | { kind: "expired" };
 
 @Injectable()
 export class QuotesService {
@@ -216,14 +217,12 @@ export class QuotesService {
       capabilityRequests.map(({ fingerprint }) => fingerprint),
       async (transaction, generation) => {
         const legalApprovals = this.requiredLegalApprovals();
-        const requiredLegalKeys = request.photoPublicationConsent
-          ? ([
-              "privacy",
-              "prohibitedContent",
-              "retention",
-              "photoConsent",
-            ] as const)
-          : (["privacy", "prohibitedContent", "retention"] as const);
+        const requiredLegalKeys = [
+          "privacy",
+          "prohibitedContent",
+          "retention",
+          "photoConsent",
+        ] as const;
         await legalApprovals.lock(transaction, requiredLegalKeys);
         const lockedHandoff = request.automaticQuoteHandoffToken
           ? await lockAutomaticQuoteHandoff(
@@ -679,7 +678,7 @@ export class QuotesService {
     });
     const offerCapabilityKey = this.currentCapabilityKey();
 
-    return this.idempotent<OfferIssuedDto>(
+    const result = await this.idempotent<OfferIssuanceResult>(
       reissue ? "quote-request.reissue-offer" : "quote-request.issue-offer",
       commandKey,
       fingerprint,
@@ -714,7 +713,14 @@ export class QuotesService {
             throw new ConflictException("Current offer identity is stale");
           }
           if (currentQuote.expiresAt.getTime() <= observedAt.getTime()) {
-            throw new ConflictException("Current offer has expired");
+            const expiredQuote = await lockedOffer(
+              transaction,
+              currentQuote.id,
+            );
+            if (expiredQuote) {
+              await expireLockedOffer(transaction, expiredQuote, observedAt);
+            }
+            return { kind: "expired" as const };
           }
           const acceptedOrder =
             await transaction.individualOrderOrigin.findFirst({
@@ -1131,22 +1137,29 @@ export class QuotesService {
         } satisfies OfferIssuedDto;
       },
       {
-        responseStatusCode: HttpStatus.CREATED,
+        responseStatusCode: (response) =>
+          "kind" in response && response.kind === "expired"
+            ? HttpStatus.GONE
+            : HttpStatus.CREATED,
         responseCodec: {
-          toStoredResponse: (response) => ({
-            quoteId: response.quoteId,
-            version: response.version,
-            termsRevision: response.termsRevision,
-            claimPolicyRevision: response.claimPolicyRevision,
-            claimWindowDays: response.claimWindowDays,
-            legalTermsRevisionId: response.legalTermsRevisionId,
-            legalTermsContentHash: response.legalTermsContentHash,
-            legalClaimsRevisionId: response.legalClaimsRevisionId,
-            legalClaimsContentHash: response.legalClaimsContentHash,
-            expiresAt: response.expiresAt,
-            capabilityKeyId: offerCapabilityKey.id,
-          }),
+          toStoredResponse: (response) =>
+            "kind" in response
+              ? response
+              : {
+                  quoteId: response.quoteId,
+                  version: response.version,
+                  termsRevision: response.termsRevision,
+                  claimPolicyRevision: response.claimPolicyRevision,
+                  claimWindowDays: response.claimWindowDays,
+                  legalTermsRevisionId: response.legalTermsRevisionId,
+                  legalTermsContentHash: response.legalTermsContentHash,
+                  legalClaimsRevisionId: response.legalClaimsRevisionId,
+                  legalClaimsContentHash: response.legalClaimsContentHash,
+                  expiresAt: response.expiresAt,
+                  capabilityKeyId: offerCapabilityKey.id,
+                },
           fromStoredResponse: (stored) => {
+            if (isExpiredOfferIssuanceResult(stored)) return stored;
             if (!isCurrentStoredOfferIssuedResponse(stored)) {
               throw new ConflictException(
                 "Offer issuance replay is incompatible with the current legal evidence contract; use the dedicated offer reissue command",
@@ -1174,6 +1187,10 @@ export class QuotesService {
         },
       },
     );
+    if (isExpiredOfferIssuanceResult(result)) {
+      throw new GoneException("Offer is no longer available");
+    }
+    return result;
   }
 
   async previewOffer(
@@ -2139,22 +2156,46 @@ export function isCurrentStoredOfferIssuedResponse(
     return false;
   }
   const response = stored as Record<string, unknown>;
-  return (
+  const baseShape =
     typeof response.quoteId === "string" &&
     typeof response.version === "number" &&
     Number.isSafeInteger(response.version) &&
     response.version >= 1 &&
     typeof response.termsRevision === "string" &&
-    typeof response.claimPolicyRevision === "string" &&
-    typeof response.claimWindowDays === "number" &&
-    Number.isSafeInteger(response.claimWindowDays) &&
-    response.claimWindowDays >= 1 &&
-    typeof response.legalTermsRevisionId === "string" &&
-    typeof response.legalTermsContentHash === "string" &&
-    typeof response.legalClaimsRevisionId === "string" &&
-    typeof response.legalClaimsContentHash === "string" &&
     typeof response.expiresAt === "string" &&
-    typeof response.capabilityKeyId === "string"
+    typeof response.capabilityKeyId === "string";
+  if (!baseShape) return false;
+  const optionalFields = [
+    "claimPolicyRevision",
+    "legalTermsRevisionId",
+    "legalTermsContentHash",
+    "legalClaimsRevisionId",
+    "legalClaimsContentHash",
+  ] as const;
+  if (
+    optionalFields.some(
+      (field) =>
+        response[field] !== undefined && typeof response[field] !== "string",
+    )
+  ) {
+    return false;
+  }
+  return (
+    response.claimWindowDays === undefined ||
+    (typeof response.claimWindowDays === "number" &&
+      Number.isSafeInteger(response.claimWindowDays) &&
+      response.claimWindowDays >= 1)
+  );
+}
+
+function isExpiredOfferIssuanceResult(
+  stored: unknown,
+): stored is { kind: "expired" } {
+  return (
+    typeof stored === "object" &&
+    stored !== null &&
+    !Array.isArray(stored) &&
+    (stored as Record<string, unknown>).kind === "expired"
   );
 }
 
