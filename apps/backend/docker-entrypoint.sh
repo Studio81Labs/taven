@@ -30,7 +30,11 @@ if [ -z "${NODE_EXTRA_CA_CERTS:-}" ]; then
     extra_ca_dir=$(dirname "$extra_ca_path")
     mkdir -p "$extra_ca_dir"
     umask 077
-    cat "$database_cert_path" "$redis_cert_path" > "$extra_ca_path"
+    {
+      cat "$database_cert_path"
+      printf '\n'
+      cat "$redis_cert_path"
+    } > "$extra_ca_path"
     export NODE_EXTRA_CA_CERTS="$extra_ca_path"
   elif [ -f "$database_cert_path" ]; then
     export NODE_EXTRA_CA_CERTS="$database_cert_path"
