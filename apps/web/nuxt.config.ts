@@ -23,6 +23,7 @@ export default defineNuxtConfig({
       customerContactEmail: "zakaznici@taven.cz",
       dataControllerEmail: "legal@taven.cz",
       automaticQuoteEnabled: false,
+      deploymentEnvironment: "unknown",
     },
   },
   app: {

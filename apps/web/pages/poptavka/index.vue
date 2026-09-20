@@ -282,6 +282,7 @@ function isPositiveDimension(value: number | ""): value is number {
 
 <template>
   <div class="application-page">
+    <PublicDeploymentBanner />
     <header class="application-header">
       <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
         <PublicBrandMark />

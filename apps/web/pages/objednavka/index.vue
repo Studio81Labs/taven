@@ -241,6 +241,7 @@ function inspectionLabel(status: string | undefined): string {
 
 <template>
   <div class="application-page">
+    <PublicDeploymentBanner />
     <header class="application-header">
       <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
         <PublicBrandMark />

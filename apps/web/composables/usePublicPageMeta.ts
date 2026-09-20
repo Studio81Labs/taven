@@ -1,4 +1,5 @@
 import { publicSite } from "../content/public-site";
+import { isProductionDeployment } from "../utils/deployment-environment";
 import { canonicalTitle, canonicalUrl } from "../utils/site-meta";
 import { toValue, type MaybeRefOrGetter } from "vue";
 
@@ -16,6 +17,9 @@ export function usePublicPageMeta({
   title,
 }: PublicPageMeta): void {
   const config = useRuntimeConfig();
+  const indexableDeployment = isProductionDeployment(
+    config.public.deploymentEnvironment,
+  );
   const resolvedTitle = computed(() =>
     canonicalTitle(
       title === undefined ? undefined : toValue(title),
@@ -33,7 +37,9 @@ export function usePublicPageMeta({
     ogType: "website",
     ogUrl: url,
     robots: computed(() =>
-      toValue(noindex) ? "noindex, nofollow" : "index, follow",
+      toValue(noindex) || !indexableDeployment
+        ? "noindex, nofollow"
+        : "index, follow",
     ),
     twitterCard: "summary",
   });

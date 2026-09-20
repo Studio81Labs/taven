@@ -20,6 +20,7 @@ useSeoMeta({
 
 <template>
   <div class="min-h-screen bg-[#efefea] text-[#1a1a16]">
+    <PublicDeploymentBanner />
     <PublicHeader />
     <main class="mx-auto max-w-3xl px-5 py-20 sm:px-8 sm:py-28">
       <p class="font-mono text-sm text-[#1b44e8]">{{ statusCode }}</p>
