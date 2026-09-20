@@ -76,10 +76,10 @@ automatic-quote switch) with a sandbox provider and a 30-day claim window.
 Import the owner-approved v0.1 legal baseline through the protected workflow in
 `docs/operator/legal-document-management.md` before exercising checkout. Set
 the corresponding variables to `false` when you need to reproduce the
-fail-closed default; the Coolify file keeps every gate disabled unless its
-isolated staging environment explicitly opts in. The public web remains
-acquisition-disabled until its separately approved content manifest and runtime
-gate allow it.
+fail-closed default. Production/staging are managed as independent Coolify
+resources; this local Compose overlay is not their deployment definition. The
+public web remains acquisition-disabled until its separately approved content
+manifest and runtime gate allow it.
 
 Follow logs or stop the stack with `pnpm stack:logs` and `pnpm stack:down`.
 `pnpm stack:reset` also deletes the local PostgreSQL, Redis, MinIO, and Garage

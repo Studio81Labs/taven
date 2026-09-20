@@ -1,7 +1,8 @@
 x-local-payment-environment: &local-payment-environment
   NODE_ENV: development
   # The local stack is the explicitly isolated development/staging test
-  # target. Production and the Coolify file keep these gates fail-closed.
+  # target. Production and staging resources keep these gates fail-closed
+  # unless their Coolify environment explicitly opts in.
   TAVEN_BINDING_QUOTE_FLOWS_ENABLED: ${TAVEN_BINDING_QUOTE_FLOWS_ENABLED:-true}
   TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED: ${TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED:-true}
   TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED: ${TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED:-true}
