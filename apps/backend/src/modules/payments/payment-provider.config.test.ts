@@ -105,6 +105,15 @@ describe("payment provider configuration", () => {
         NODE_ENV: "production",
         TAVEN_ENVIRONMENT: "staging",
         TAVEN_PAYMENT_PROVIDER: "sandbox",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.example.test",
+        TAVEN_API_PUBLIC_URL: "https://staging.example.test",
+      }),
+    ).toThrow("TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET is required in staging");
+    expect(() =>
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_ENVIRONMENT: "staging",
+        TAVEN_PAYMENT_PROVIDER: "sandbox",
         TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "http://localhost:3001",
         TAVEN_API_PUBLIC_URL: "http://localhost:3001",
       }),

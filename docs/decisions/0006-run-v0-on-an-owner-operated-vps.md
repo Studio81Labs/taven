@@ -39,8 +39,9 @@ host before production and either demonstrate that this envelope is available
 or record a replacement capacity decision. Stateful volumes live under
 explicit `/srv/taven` paths and are never anonymous container volumes in
 production. PostgreSQL, Redis, and Garage are reachable only on private
-Coolify-managed networks. Caddy 2 is the selected origin reverse proxy. Only HTTP(S) and
-restricted administrative SSH are exposed by the host firewall.
+Coolify-managed networks. Coolify-managed Traefik is the selected origin reverse
+proxy and TLS boundary. Only HTTP(S) and restricted administrative SSH are
+exposed by the host firewall.
 
 Cloudflare Free provides authoritative DNS, proxying, and edge TLS for
 `taven.cz`. The origin uses strict TLS. Public DNS names and certificates are
@@ -62,7 +63,7 @@ revision and digest set remain available for rollback. Database rollback is
 forward-fix unless a rehearsed compatible restore is explicitly chosen. These
 workflows are implemented only with the real deployment in issue #39.
 
-PostgreSQL 18, Redis 8, Garage v2.3.0, Caddy 2, and the monitoring stack are
+PostgreSQL 18, Redis 8, Garage v2.3.0, Coolify-managed Traefik, and the monitoring stack are
 always available within the owner-operated host. Production pins each image by
 digest and upgrades it only through a reviewed compatibility, backup, and
 restore change. MinIO remains the fast local-development implementation already

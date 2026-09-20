@@ -60,6 +60,11 @@ export function readPaymentProviderConfig(
         "TAVEN_PAYMENT_SANDBOX_PUBLIC_URL must be the public HTTPS staging API origin",
       );
     }
+    if (deploymentEnvironment === "staging" && !sandboxSecret) {
+      throw new Error(
+        "TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET is required in staging",
+      );
+    }
     const webhookSigningSecret = sandboxSecret || DEFAULT_SANDBOX_SECRET;
     if (webhookSigningSecret.length < 32) {
       throw new Error(

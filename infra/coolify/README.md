@@ -34,7 +34,9 @@ The web resource receives:
 For private development/staging testing, enable the existing quote, upload,
 checkout, and sandbox-payment switches in the staging resources only. The
 payment sandbox URL and `TAVEN_API_PUBLIC_URL` must be the same reachable HTTPS
-API origin; production keeps these switches fail-closed.
+API origin, and `TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET` must be an explicit
+staging-only secret of at least 32 characters; production keeps these switches
+fail-closed.
 
 Coolify owns each resource's health check, restart policy, and private network
 attachment. Configure domains, the selected origin proxy/TLS boundary, and
