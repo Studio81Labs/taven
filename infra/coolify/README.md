@@ -8,12 +8,20 @@ shared `.env` interpolation.
 Create the resources separately in each Coolify environment:
 
 - backend API from `apps/backend/Dockerfile` (`runtime` target);
-- one-shot migration from the same Dockerfile (`migration` target);
+- one-shot migration from the same Dockerfile (`migration` target), completed
+  once for the release before activating the API and workers;
 - public web from `apps/web/Dockerfile` (`runtime` target);
 - operator admin from `apps/admin/Dockerfile` (`runtime` target);
 - each required backend worker from the backend runtime image with its worker
   command; and
 - the opt-in slicer worker and pinned Orca runtime from their worker Dockerfiles.
+
+The backend and migration entrypoints write the optional PostgreSQL CA
+certificate before connecting. Coolify should run the migration resource once
+per release under the release workflow's migration credential, then activate
+the backend and workers. The backend runtime command is application-only and
+does not rerun migrations on container restart. The local Compose stack retains
+its one-shot migration service because it models local dependency ordering.
 
 PostgreSQL, Redis, and object storage remain separate Coolify-managed resources
 with environment-specific credentials and private connectivity. Staging and
@@ -24,6 +32,13 @@ production must never share application credentials or databases.
 Configure each Coolify resource explicitly. At minimum, the backend and its
 workers receive the environment variables documented by their `.env.example`
 files, including an exact `TAVEN_ENVIRONMENT` of `staging` or `production`.
+For Coolify-managed PostgreSQL with a private CA, also set
+`TAVEN_DATABASE_CA_CERT_B64` to the base64-encoded CA PEM,
+`TAVEN_DATABASE_CA_CERT_PATH=/etc/secrets/postgres-ca.crt`, and make
+`DATABASE_URL` include
+`sslmode=verify-full&sslrootcert=/etc/secrets/postgres-ca.crt`. The CA path is
+writable by the non-root runtime user and is used by the backend, migrations,
+and workers.
 The web resource receives:
 
 - `NUXT_API_BASE_URL` for its private backend URL;
