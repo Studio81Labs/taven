@@ -14,7 +14,8 @@ Create the resources separately in each Coolify environment:
 - operator admin from `apps/admin/Dockerfile` (`runtime` target);
 - each required backend worker from the backend runtime image with its worker
   command; and
-- the opt-in slicing dispatcher from the backend runtime image;
+- the opt-in slicing dispatcher from the backend runtime image, command
+  `node dist/slicing-dispatch-worker.js`;
 - the opt-in slicer consumer from `apps/slicer-worker/Dockerfile`;
 - the pinned Orca runner from `apps/slicer-worker/Orca.Dockerfile`; and
 - a one-shot volume initializer for the private slicer exchange.
@@ -34,7 +35,7 @@ are an opt-in group for real automatic quotes. The slicer consumer and Orca
 runner must mount the same private exchange volume at `/var/run/taven-orca`.
 Initialize that volume to owner `10001:10001`, mode `0770`, before starting the
 runner or consumer. The one-shot initializer must mount the exchange volume,
-run as `0:0`, override its entrypoint to `/bin/sh`, and run the ownership
+run as `0:0`, override its entrypoint to `/bin/sh -c`, and run the ownership
 command with `CHOWN` capability only:
 
 ```sh
