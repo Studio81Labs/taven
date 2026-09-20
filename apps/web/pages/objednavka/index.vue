@@ -11,7 +11,10 @@ import {
   loadQuoteSession,
 } from "../../utils/quote-session-storage";
 
-definePageMeta({ middleware: "automatic-pricing-gate" });
+definePageMeta({
+  layout: "public",
+  middleware: "automatic-pricing-gate",
+});
 
 usePublicPageMeta({
   path: "/objednavka",

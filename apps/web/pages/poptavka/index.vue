@@ -19,6 +19,8 @@ import { getSessionStorage } from "../../utils/quote-session-storage";
 
 type CreateQuoteRequest = components["schemas"]["CreateQuoteRequestDto"];
 
+definePageMeta({ layout: "public" });
+
 usePublicPageMeta({
   path: "/poptavka",
   title: "Individuální poptávka",
