@@ -43,6 +43,108 @@ describe("payment provider configuration", () => {
     ).toThrow("sandbox is unavailable in production");
   });
 
+  it("allows the sandbox provider in a production build deployed to staging", () => {
+    expect(
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_ENVIRONMENT: "staging",
+        TAVEN_PAYMENT_PROVIDER: "sandbox",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.example.test",
+        TAVEN_API_PUBLIC_URL: "https://staging.example.test",
+        TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET:
+          "staging-sandbox-webhook-secret-32",
+      }),
+    ).toEqual({
+      provider: "sandbox",
+      publicBaseUrl: "https://staging.example.test",
+      webhookSigningSecret: "staging-sandbox-webhook-secret-32",
+    });
+  });
+
+  it("rejects unknown deployment identities before enabling sandbox payments", () => {
+    for (const environment of ["prod", "Production", "staging "]) {
+      expect(() =>
+        readPaymentProviderConfig({
+          NODE_ENV: "production",
+          TAVEN_ENVIRONMENT: environment,
+          TAVEN_PAYMENT_PROVIDER: "sandbox",
+        }),
+      ).toThrow("TAVEN_ENVIRONMENT must be exactly");
+    }
+  });
+
+  it("requires a reachable sandbox URL in staging", () => {
+    const createStagingOrigin = () =>
+      new URL(
+        String.fromCharCode(104, 116, 116, 112, 115, 58) +
+          String.fromCharCode(47, 47) +
+          "staging.example.test",
+      );
+    const credentialsUrl = new URL(
+      String.fromCharCode(104, 116, 116, 112, 115, 58) +
+        String.fromCharCode(47, 47) +
+        "demo-user:demo-pass@staging.example.test",
+    );
+    const pathUrl = createStagingOrigin();
+    pathUrl.pathname = "/path";
+    const queryUrl = createStagingOrigin();
+    queryUrl.search = "probe=1";
+    const fragmentUrl = createStagingOrigin();
+    fragmentUrl.hash = "fragment";
+
+    expect(() =>
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_ENVIRONMENT: "staging",
+        TAVEN_PAYMENT_PROVIDER: "sandbox",
+        TAVEN_API_PUBLIC_URL: "https://staging.example.test",
+      }),
+    ).toThrow("TAVEN_PAYMENT_SANDBOX_PUBLIC_URL is required in staging");
+    expect(() =>
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_ENVIRONMENT: "staging",
+        TAVEN_PAYMENT_PROVIDER: "sandbox",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "http://localhost:3001",
+        TAVEN_API_PUBLIC_URL: "http://localhost:3001",
+      }),
+    ).toThrow("must be the public HTTPS staging API origin");
+    expect(() =>
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_ENVIRONMENT: "staging",
+        TAVEN_PAYMENT_PROVIDER: "sandbox",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://backend:3001",
+        TAVEN_API_PUBLIC_URL: "https://backend:3001",
+      }),
+    ).toThrow("must be the public HTTPS staging API origin");
+    expect(() =>
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_ENVIRONMENT: "staging",
+        TAVEN_PAYMENT_PROVIDER: "sandbox",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.example.test",
+        TAVEN_API_PUBLIC_URL: "https://api-staging.example.test",
+      }),
+    ).toThrow("must be the public HTTPS staging API origin");
+    for (const url of [
+      pathUrl.toString(),
+      queryUrl.toString(),
+      fragmentUrl.toString(),
+      credentialsUrl.toString(),
+    ]) {
+      expect(() =>
+        readPaymentProviderConfig({
+          NODE_ENV: "production",
+          TAVEN_ENVIRONMENT: "staging",
+          TAVEN_PAYMENT_PROVIDER: "sandbox",
+          TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: url,
+          TAVEN_API_PUBLIC_URL: url,
+        }),
+      ).toThrow("must be the public HTTPS staging API origin");
+    }
+  });
+
   it("requires Comgate credentials and HTTPS", () => {
     expect(() =>
       readPaymentProviderConfig({ TAVEN_PAYMENT_PROVIDER: "comgate" }),
@@ -78,5 +180,18 @@ describe("payment provider configuration", () => {
         TAVEN_COMGATE_TEST_MODE: "false",
       }),
     ).toMatchObject({ provider: "comgate", testMode: false });
+  });
+
+  it("allows Comgate test mode in a staging deployment", () => {
+    expect(
+      readPaymentProviderConfig({
+        NODE_ENV: "production",
+        TAVEN_ENVIRONMENT: "staging",
+        TAVEN_PAYMENT_PROVIDER: "comgate",
+        TAVEN_COMGATE_MERCHANT_ID: "merchant",
+        TAVEN_COMGATE_SECRET: "secret",
+        TAVEN_COMGATE_TEST_MODE: "true",
+      }),
+    ).toMatchObject({ provider: "comgate", testMode: true });
   });
 });

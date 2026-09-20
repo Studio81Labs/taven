@@ -16,6 +16,7 @@ export function usePublicPageMeta({
   title,
 }: PublicPageMeta): void {
   const config = useRuntimeConfig();
+  const stagingDeployment = config.public.deploymentEnvironment === "staging";
   const resolvedTitle = computed(() =>
     canonicalTitle(
       title === undefined ? undefined : toValue(title),
@@ -33,7 +34,9 @@ export function usePublicPageMeta({
     ogType: "website",
     ogUrl: url,
     robots: computed(() =>
-      toValue(noindex) ? "noindex, nofollow" : "index, follow",
+      toValue(noindex) || stagingDeployment
+        ? "noindex, nofollow"
+        : "index, follow",
     ),
     twitterCard: "summary",
   });
