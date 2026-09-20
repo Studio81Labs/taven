@@ -19,8 +19,6 @@ import { getSessionStorage } from "../../utils/quote-session-storage";
 
 type CreateQuoteRequest = components["schemas"]["CreateQuoteRequestDto"];
 
-definePageMeta({ layout: "public" });
-
 usePublicPageMeta({
   path: "/poptavka",
   title: "Individuální poptávka",
@@ -284,6 +282,7 @@ function isPositiveDimension(value: number | ""): value is number {
 
 <template>
   <div class="application-page">
+    <PublicDeploymentBanner />
     <header class="application-header">
       <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
         <PublicBrandMark />

@@ -11,10 +11,7 @@ import {
   loadQuoteSession,
 } from "../../utils/quote-session-storage";
 
-definePageMeta({
-  layout: "public",
-  middleware: "automatic-pricing-gate",
-});
+definePageMeta({ middleware: "automatic-pricing-gate" });
 
 usePublicPageMeta({
   path: "/objednavka",
@@ -244,6 +241,7 @@ function inspectionLabel(status: string | undefined): string {
 
 <template>
   <div class="application-page">
+    <PublicDeploymentBanner />
     <header class="application-header">
       <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
         <PublicBrandMark />

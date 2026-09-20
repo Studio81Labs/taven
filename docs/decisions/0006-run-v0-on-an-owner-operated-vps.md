@@ -22,11 +22,13 @@ controls already exist.
 ## Decision
 
 Run v0 as OCI containers on the existing owner-operated VPS. Self-hosted
-Coolify manages the production Docker Compose project; Docker Engine and Compose
-remain the portable runtime contract. `apps/backend`, `apps/web`, `apps/admin`,
-and `apps/slicer-worker` each receive an independent production image in issue
-#39 or #25; PostgreSQL, Redis, Garage, the reverse proxy, and the observability
-components also run as containers with explicit immutable image digests.
+Coolify manages independently created resources for the production and staging
+applications and their stateful services; Docker Engine and Compose remain the
+portable local-development and integration runtime contract. `apps/backend`,
+`apps/web`, `apps/admin`, and `apps/slicer-worker` each receive an independent
+production image in issue #39 or #25; PostgreSQL, Redis, Garage, the reverse
+proxy, and the observability components also run as containers with explicit
+immutable image digests.
 Application images accept configuration through environment variables or
 mounted secret files and do not inspect GitHub, Coolify, Cloudflare, the VPS
 vendor, or Docker-specific metadata.
@@ -36,8 +38,8 @@ RAM, and 200 GB of persistent SSD storage. Issue #39 must measure the existing
 host before production and either demonstrate that this envelope is available
 or record a replacement capacity decision. Stateful volumes live under
 explicit `/srv/taven` paths and are never anonymous container volumes in
-production. PostgreSQL, Redis, and Garage are reachable only on the private
-Compose network. Caddy 2 is the selected origin reverse proxy. Only HTTP(S) and
+production. PostgreSQL, Redis, and Garage are reachable only on private
+Coolify-managed networks. Caddy 2 is the selected origin reverse proxy. Only HTTP(S) and
 restricted administrative SSH are exposed by the host firewall.
 
 Cloudflare Free provides authoritative DNS, proxying, and edge TLS for
@@ -47,17 +49,18 @@ configuration, not assumptions embedded in application code. Only after issue
 separately with WEDOS and delegated to Cloudflare.
 
 Coolify automatic Git deployment is disabled. GitHub Actions serializes the
-production workflow, verifies the selected revision, sets the Coolify
-application's `git_commit_sha` to that exact workflow SHA through the API, and
-reads the pin back before invoking a separate deploy-only webhook. A failed or
-mismatched pin stops before deployment, so a later branch head cannot bypass
-the checks. Coolify then builds and deploys the pinned repository Compose
-revision on the VPS. Issue #39 confirms the completed deployment record carries
-the same commit and records that commit plus every resulting image digest in a
-release manifest. The previous successful revision and digest set remain
-available for rollback. Database rollback is forward-fix unless a rehearsed
-compatible restore is explicitly chosen. These workflows are implemented only
-with the real deployment in issue #39.
+production workflow, verifies the selected revision, sets every Coolify
+application resource to that exact workflow SHA through the API, and reads each
+pin back before invoking a separate deploy-only webhook. A failed or mismatched
+pin stops before deployment, so a later branch head cannot bypass the checks.
+Coolify then builds and deploys the independently managed resources from that
+same pinned revision, applies the migration exactly once before application
+activation, and records the resulting image digests. Issue #39 confirms the
+completed deployment record carries the same commit and records that commit plus
+every resulting image digest in a release manifest. The previous successful
+revision and digest set remain available for rollback. Database rollback is
+forward-fix unless a rehearsed compatible restore is explicitly chosen. These
+workflows are implemented only with the real deployment in issue #39.
 
 PostgreSQL 18, Redis 8, Garage v2.3.0, Caddy 2, and the monitoring stack are
 always available within the owner-operated host. Production pins each image by

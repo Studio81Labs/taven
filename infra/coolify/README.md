@@ -36,11 +36,12 @@ checkout, and sandbox-payment switches in the staging resources only. The
 payment sandbox URL and `TAVEN_API_PUBLIC_URL` must be the same reachable HTTPS
 API origin; production keeps these switches fail-closed.
 
-Coolify owns each resource's health check, restart policy, networks, domains,
-TLS, and access controls. Configure the selected origin proxy and restricted
-staging access in Coolify/host operations; do not add proxy or ingress labels
-to application Compose files. Public production activation remains gated by
-the approved legal and operational release criteria in #39.
+Coolify owns each resource's health check, restart policy, and private network
+attachment. Configure domains, the selected origin proxy/TLS boundary, and
+restricted staging access through the Coolify/host operations path; do not add
+proxy or ingress labels to application Compose files. Public production
+activation remains gated by the approved legal and operational release criteria
+in #39.
 
 ## Local development
 
