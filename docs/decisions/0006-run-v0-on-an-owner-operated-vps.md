@@ -19,6 +19,15 @@ Compose stack, but no production images or deployment workflow. Selecting a
 runtime shape now must not create an empty workflow or pretend the production
 controls already exist.
 
+## Ingress amendment — escalation #164
+
+[ADR 0023](0023-use-coolify-traefik-for-origin-ingress.md) replaces the original
+Caddy choice with Coolify-managed Traefik as the single origin proxy/TLS boundary.
+Cloudflare Full (strict), private services, portable OCI applications and the
+remaining requirements below are preserved. ADR 0023 defines DNS-01 certificate
+ownership, forwarded-address trust, restricted staging and the #39/PR #162 repair.
+It does not require final production legal text before development can continue.
+
 ## Decision
 
 Run v0 as OCI containers on the existing owner-operated VPS. Self-hosted
@@ -37,7 +46,7 @@ host before production and either demonstrate that this envelope is available
 or record a replacement capacity decision. Stateful volumes live under
 explicit `/srv/taven` paths and are never anonymous container volumes in
 production. PostgreSQL, Redis, and Garage are reachable only on the private
-Compose network. Caddy 2 is the selected origin reverse proxy. Only HTTP(S) and
+Compose network. Coolify-managed Traefik is the selected origin reverse proxy (ADR 0023). Only HTTP(S) and
 restricted administrative SSH are exposed by the host firewall.
 
 Cloudflare Free provides authoritative DNS, proxying, and edge TLS for
@@ -59,7 +68,7 @@ available for rollback. Database rollback is forward-fix unless a rehearsed
 compatible restore is explicitly chosen. These workflows are implemented only
 with the real deployment in issue #39.
 
-PostgreSQL 18, Redis 8, Garage v2.3.0, Caddy 2, and the monitoring stack are
+PostgreSQL 18, Redis 8, Garage v2.3.0, Coolify-managed Traefik, and the monitoring stack are
 always available within the owner-operated host. Production pins each image by
 digest and upgrades it only through a reviewed compatibility, backup, and
 restore change. MinIO remains the fast local-development implementation already
