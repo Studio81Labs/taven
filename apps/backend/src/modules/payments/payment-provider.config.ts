@@ -151,7 +151,7 @@ function isBareOrigin(url: URL): boolean {
 }
 
 function isPublicHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
+  const normalized = hostname.toLowerCase().replace(/\.+$/, "");
   if (
     normalized === "localhost" ||
     normalized.endsWith(".localhost") ||
