@@ -1,6 +1,9 @@
 name: taven-dev
 
 x-backend-environment: &backend-environment
+  # The local Compose stack is non-TLS development. Coolify staging/production
+  # uses the runtime image default NODE_ENV=production.
+  NODE_ENV: development
   DATABASE_URL: postgresql://${POSTGRES_USER:-taven}:${POSTGRES_PASSWORD:-taven}@postgres:5432/${POSTGRES_DB:-taven}
   TAVEN_REDIS_URL: redis://redis:6379
   TAVEN_S3_REGION: ${TAVEN_S3_REGION:-us-east-1}

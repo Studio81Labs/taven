@@ -47,7 +47,15 @@ RUN --mount=type=cache,id=taven-pnpm-store,target=/pnpm/store \
 FROM build AS migration
 
 WORKDIR /workspace/apps/backend
+
+COPY --from=build --chown=node:node /workspace/apps/backend/docker-entrypoint.sh /usr/local/bin/taven-backend-entrypoint.sh
+
+RUN chmod 755 /usr/local/bin/taven-backend-entrypoint.sh && \
+  mkdir -p /etc/secrets && \
+  chown node:node /etc/secrets
+
 USER node
+ENTRYPOINT ["/usr/local/bin/taven-backend-entrypoint.sh"]
 CMD ["node", "node_modules/prisma/build/index.js", "migrate", "deploy"]
 
 FROM build AS test
@@ -60,7 +68,13 @@ ENV NODE_ENV=production
 WORKDIR /opt/taven/backend
 
 COPY --from=build --chown=node:node /opt/taven/backend ./
+COPY --from=build --chown=node:node /workspace/apps/backend/docker-entrypoint.sh /usr/local/bin/taven-backend-entrypoint.sh
+
+RUN chmod 755 /usr/local/bin/taven-backend-entrypoint.sh && \
+  mkdir -p /etc/secrets && \
+  chown node:node /etc/secrets
 
 USER node
 EXPOSE 3001
+ENTRYPOINT ["/usr/local/bin/taven-backend-entrypoint.sh"]
 CMD ["node", "dist/main.js"]
