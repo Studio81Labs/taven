@@ -152,18 +152,28 @@ function isBareOrigin(url: URL): boolean {
 
 function isPublicHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/\.+$/, "");
+  const labels = normalized.split(".");
+  const validLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  const ipVersion = isIP(normalized);
   if (
+    (ipVersion === 0 &&
+      (normalized.length > 253 ||
+        labels.length < 2 ||
+        labels.some((label) => !validLabel.test(label)))) ||
     normalized === "localhost" ||
     normalized.endsWith(".localhost") ||
     normalized.endsWith(".local") ||
+    normalized.endsWith(".test") ||
+    normalized.endsWith(".invalid") ||
+    normalized.endsWith(".example") ||
+    normalized === "example.com" ||
+    normalized.endsWith(".example.com") ||
     normalized === "0.0.0.0" ||
     normalized === "::" ||
     normalized === "[::]"
   ) {
     return false;
   }
-  if (!normalized.includes(".")) return false;
-  const ipVersion = isIP(normalized);
   if (ipVersion === 4) {
     const octets = normalized.split(".").map(Number);
     const value = octets.reduce((result, octet) => result * 256 + octet, 0);

@@ -49,14 +49,14 @@ describe("payment provider configuration", () => {
         NODE_ENV: "production",
         TAVEN_ENVIRONMENT: "staging",
         TAVEN_PAYMENT_PROVIDER: "sandbox",
-        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.example.test",
-        TAVEN_API_PUBLIC_URL: "https://staging.example.test",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.taven.cz",
+        TAVEN_API_PUBLIC_URL: "https://staging.taven.cz",
         TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET:
           "staging-sandbox-webhook-secret-32",
       }),
     ).toEqual({
       provider: "sandbox",
-      publicBaseUrl: "https://staging.example.test",
+      publicBaseUrl: "https://staging.taven.cz",
       webhookSigningSecret: "staging-sandbox-webhook-secret-32",
     });
   });
@@ -78,12 +78,12 @@ describe("payment provider configuration", () => {
       new URL(
         String.fromCharCode(104, 116, 116, 112, 115, 58) +
           String.fromCharCode(47, 47) +
-          "staging.example.test",
+          "staging.taven.cz",
       );
     const credentialsUrl = new URL(
       String.fromCharCode(104, 116, 116, 112, 115, 58) +
         String.fromCharCode(47, 47) +
-        "demo-user:demo-pass@staging.example.test",
+        "demo-user:demo-pass@staging.taven.cz",
     );
     const pathUrl = createStagingOrigin();
     pathUrl.pathname = "/path";
@@ -97,7 +97,7 @@ describe("payment provider configuration", () => {
         NODE_ENV: "production",
         TAVEN_ENVIRONMENT: "staging",
         TAVEN_PAYMENT_PROVIDER: "sandbox",
-        TAVEN_API_PUBLIC_URL: "https://staging.example.test",
+        TAVEN_API_PUBLIC_URL: "https://staging.taven.cz",
       }),
     ).toThrow("TAVEN_PAYMENT_SANDBOX_PUBLIC_URL is required in staging");
     expect(() =>
@@ -105,8 +105,8 @@ describe("payment provider configuration", () => {
         NODE_ENV: "production",
         TAVEN_ENVIRONMENT: "staging",
         TAVEN_PAYMENT_PROVIDER: "sandbox",
-        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.example.test",
-        TAVEN_API_PUBLIC_URL: "https://staging.example.test",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.taven.cz",
+        TAVEN_API_PUBLIC_URL: "https://staging.taven.cz",
       }),
     ).toThrow("TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET is required in staging");
     expect(() =>
@@ -154,13 +154,29 @@ describe("payment provider configuration", () => {
         }),
       ).toThrow("must be the public HTTPS staging API origin");
     }
+    for (const hostname of [
+      "api.invalid",
+      "api.example",
+      "api.example.com",
+      "*.example.com",
+    ]) {
+      expect(() =>
+        readPaymentProviderConfig({
+          NODE_ENV: "production",
+          TAVEN_ENVIRONMENT: "staging",
+          TAVEN_PAYMENT_PROVIDER: "sandbox",
+          TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: `https://${hostname}`,
+          TAVEN_API_PUBLIC_URL: `https://${hostname}`,
+        }),
+      ).toThrow("must be the public HTTPS staging API origin");
+    }
     expect(() =>
       readPaymentProviderConfig({
         NODE_ENV: "production",
         TAVEN_ENVIRONMENT: "staging",
         TAVEN_PAYMENT_PROVIDER: "sandbox",
-        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.example.test",
-        TAVEN_API_PUBLIC_URL: "https://api-staging.example.test",
+        TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: "https://staging.taven.cz",
+        TAVEN_API_PUBLIC_URL: "https://api-staging.taven.cz",
       }),
     ).toThrow("must be the public HTTPS staging API origin");
     for (const url of [
