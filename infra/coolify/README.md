@@ -33,6 +33,9 @@ dependency ordering.
 The slicing dispatcher, slicer consumer, Orca runner, and volume initializer
 are an opt-in group for real automatic quotes. The slicer consumer and Orca
 runner must mount the same private exchange volume at `/var/run/taven-orca`.
+Use a bounded 1 GiB tmpfs for that mount (or an equivalent filesystem quota no
+larger than 1 GiB); do not use an unbounded persistent volume. The per-process
+file-size limit does not bound aggregate request-directory growth.
 Initialize that volume to owner `10001:10001`, mode `0770`, before starting the
 runner or consumer. The one-shot initializer must mount the exchange volume,
 run as `0:0`, override its entrypoint to `/bin/sh -c`, and run the ownership
