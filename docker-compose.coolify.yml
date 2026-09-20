@@ -105,6 +105,8 @@ services:
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-backend.entrypoints=https
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-backend.tls=true
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-backend.tls.certresolver=letsencrypt
+      - traefik.http.middlewares.taven-${TAVEN_ENVIRONMENT}-access.ipallowlist.sourcerange=${TAVEN_INGRESS_ACCESS_CIDRS:-127.0.0.1/32}
+      - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-backend.middlewares=taven-${TAVEN_ENVIRONMENT}-access
       - traefik.http.services.taven-${TAVEN_ENVIRONMENT}-backend.loadbalancer.server.port=3001
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-backend.service=taven-${TAVEN_ENVIRONMENT}-backend
     mem_limit: 512m
@@ -152,6 +154,8 @@ services:
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-web.entrypoints=https
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-web.tls=true
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-web.tls.certresolver=letsencrypt
+      - traefik.http.middlewares.taven-${TAVEN_ENVIRONMENT}-access.ipallowlist.sourcerange=${TAVEN_INGRESS_ACCESS_CIDRS:-127.0.0.1/32}
+      - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-web.middlewares=taven-${TAVEN_ENVIRONMENT}-access
       - traefik.http.services.taven-${TAVEN_ENVIRONMENT}-web.loadbalancer.server.port=3000
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-web.service=taven-${TAVEN_ENVIRONMENT}-web
     mem_limit: 384m
@@ -193,6 +197,8 @@ services:
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-admin.entrypoints=https
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-admin.tls=true
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-admin.tls.certresolver=letsencrypt
+      - traefik.http.middlewares.taven-${TAVEN_ENVIRONMENT}-access.ipallowlist.sourcerange=${TAVEN_INGRESS_ACCESS_CIDRS:-127.0.0.1/32}
+      - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-admin.middlewares=taven-${TAVEN_ENVIRONMENT}-access
       - traefik.http.services.taven-${TAVEN_ENVIRONMENT}-admin.loadbalancer.server.port=8080
       - traefik.http.routers.taven-${TAVEN_ENVIRONMENT}-admin.service=taven-${TAVEN_ENVIRONMENT}-admin
     mem_limit: 96m

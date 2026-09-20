@@ -108,6 +108,10 @@ imported through the protected admin workflow. Keep these variables unset or
 The web runtime receives `TAVEN_ENVIRONMENT` as its public deployment identity;
 staging pages emit `noindex, nofollow` and `/robots.txt` disallows the whole
 site, while production keeps normal indexing behavior.
+Every optional router is also behind a Traefik IP allowlist. The default
+`TAVEN_INGRESS_ACCESS_CIDRS=127.0.0.1/32` denies public access; configure an
+explicit trusted CIDR list only after the proxy source address and staging
+access procedure have been verified. Do not enable staging ingress without it.
 
 `TAVEN_DEPLOYMENT_ENABLED` is a handoff flag for the future workflow, not an
 existing enforcement mechanism. Current enforcement is stopped applications,

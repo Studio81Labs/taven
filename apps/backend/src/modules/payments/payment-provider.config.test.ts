@@ -118,6 +118,22 @@ describe("payment provider configuration", () => {
         TAVEN_API_PUBLIC_URL: "https://backend:3001",
       }),
     ).toThrow("must be the public HTTPS staging API origin");
+    for (const address of [
+      "100.64.0.1",
+      "192.0.0.1",
+      "198.18.0.1",
+      "224.0.0.1",
+    ]) {
+      expect(() =>
+        readPaymentProviderConfig({
+          NODE_ENV: "production",
+          TAVEN_ENVIRONMENT: "staging",
+          TAVEN_PAYMENT_PROVIDER: "sandbox",
+          TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: `https://${address}`,
+          TAVEN_API_PUBLIC_URL: `https://${address}`,
+        }),
+      ).toThrow("must be the public HTTPS staging API origin");
+    }
     expect(() =>
       readPaymentProviderConfig({
         NODE_ENV: "production",

@@ -161,15 +161,24 @@ function isPublicHostname(hostname: string): boolean {
   const ipVersion = isIP(normalized);
   if (ipVersion === 4) {
     const octets = normalized.split(".").map(Number);
-    const first = octets[0] ?? -1;
-    const second = octets[1] ?? -1;
+    const value = octets.reduce((result, octet) => result * 256 + octet, 0);
     return !(
-      first === 10 ||
-      first === 127 ||
-      (first === 169 && second === 254) ||
-      (first === 172 && second >= 16 && second <= 31) ||
-      (first === 192 && second === 168)
-    );
+      [
+        [0x00000000, 0x00ffffff], // "this" network
+        [0x0a000000, 0x0affffff], // private use
+        [0x64400000, 0x647fffff], // shared address space
+        [0x7f000000, 0x7fffffff], // loopback
+        [0xa9fe0000, 0xa9feffff], // link-local
+        [0xac100000, 0xac1fffff], // private use
+        [0xc0000000, 0xc00000ff], // protocol assignments
+        [0xc0000200, 0xc00002ff], // documentation
+        [0xc0a80000, 0xc0a8ffff], // private use
+        [0xc6120000, 0xc613ffff], // benchmarking
+        [0xc6336400, 0xc63364ff], // documentation
+        [0xcb007100, 0xcb0071ff], // documentation
+        [0xe0000000, 0xffffffff], // multicast and reserved
+      ] as const
+    ).some(([start, end]) => value >= start && value <= end);
   }
   if (ipVersion === 6) {
     return !normalized.startsWith("fc") && !normalized.startsWith("fd");
