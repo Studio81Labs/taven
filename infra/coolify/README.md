@@ -33,11 +33,26 @@ The slicing dispatcher, slicer consumer, Orca runner, and volume initializer
 are an opt-in group for real automatic quotes. The slicer consumer and Orca
 runner must mount the same private exchange volume at `/var/run/taven-orca`.
 Initialize that volume to owner `10001:10001`, mode `0770`, before starting the
-runner or consumer. The Orca runner must use the command
-`/bin/sh /usr/local/bin/taven-orca-runner`, `network_mode: none`, a read-only
-root, the bounded `/tmp` and `/work` tmpfs mounts, and the capabilities/security
-profile documented in the slicer worker README. It must not receive Redis, S3,
-database, or other application credentials.
+runner or consumer. The one-shot initializer must mount the exchange volume,
+run as `0:0`, override its entrypoint to `/bin/sh`, and run the ownership
+command with `CHOWN` capability only:
+
+```sh
+chown 0:0 /var/run/taven-orca && chmod 0770 /var/run/taven-orca
+for request in /var/run/taven-orca/request-*; do
+  [ -d "$request" ] || continue
+  chown 0:0 "$request" && chown -R 0:0 "$request" && rm -rf "$request"
+done
+chown 10001:10001 /var/run/taven-orca
+```
+
+The Orca runner must mount that initialized volume, set its user to `0:10001`,
+override the image entrypoint to `/bin/sh`, and set the command to
+`/usr/local/bin/taven-orca-runner` (entrypoint and command are separate Coolify
+settings). It also needs `network_mode: none`, a read-only root, the bounded
+`/tmp` and `/work` tmpfs mounts, and the capabilities/security profile
+documented in the slicer worker README. It must not receive Redis, S3, database,
+or other application credentials.
 
 PostgreSQL, Redis, and object storage remain separate Coolify-managed resources
 with environment-specific credentials and private connectivity. Staging and
