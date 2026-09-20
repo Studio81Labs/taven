@@ -47,6 +47,20 @@ done
 chown 10001:10001 /var/run/taven-orca
 ```
 
+Before enabling automatic quotes, verify the identity of the image actually
+deployed for the Orca runner. A Coolify Dockerfile build can have a different
+OCI manifest digest from the canonical digest in
+`tools/slicing-fixtures/runtime.lock.json`; the Docker image/config ID and the
+upstream AppImage digest are not substitutes for that manifest digest. Resolve
+the deployed runner's immutable `linux/amd64` manifest digest from the registry
+or Coolify deployment metadata and compare it with the lock. If it matches,
+leave `TAVEN_ORCA_IMAGE_SHA256` at the lock value. If it differs, do not use
+the default silently: either publish the reviewed canonical OCI artifact, or
+set `TAVEN_ORCA_IMAGE_SHA256` on the slicer consumer to the verified deployed
+manifest digest (without the `sha256:` prefix) and record that value with the
+release. Never set this variable to an image config ID or an AppImage digest.
+The runner and consumer must be promoted together after this identity check.
+
 The Orca runner must mount that initialized volume, set its user to `0:10001`,
 override the image entrypoint to `/bin/sh`, and set the command to
 `/usr/local/bin/taven-orca-runner` (entrypoint and command are separate Coolify
