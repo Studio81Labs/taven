@@ -39,6 +39,13 @@ COPY --from=build --chown=10001:10001 /opt/taven/slicer-worker ./
 # The compiled worker imports the canonical lock from this location. Keep the
 # deployed runtime self-contained without introducing a second identity file.
 COPY --from=build --chown=10001:10001 /workspace/tools/slicing-fixtures/runtime.lock.json /opt/tools/slicing-fixtures/runtime.lock.json
+COPY --from=build --chown=10001:10001 /workspace/apps/slicer-worker/docker-entrypoint.sh /usr/local/bin/taven-slicer-entrypoint.sh
+
+USER root
+RUN chmod 755 /usr/local/bin/taven-slicer-entrypoint.sh && \
+  mkdir -p /etc/secrets && \
+  chown 10001:10001 /etc/secrets
 
 USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/taven-slicer-entrypoint.sh"]
 CMD ["node", "dist/main.js"]

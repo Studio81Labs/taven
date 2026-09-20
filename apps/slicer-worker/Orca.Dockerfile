@@ -53,6 +53,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=appimage-extract /opt/orca /opt/orca
+COPY apps/slicer-worker/orca-runner.sh /usr/local/bin/taven-orca-runner
 COPY tools/slicing-fixtures/profiles/resolved /opt/taven/profiles
 COPY tools/slicing-fixtures/licenses /usr/share/doc/taven-orca/licenses
 COPY tools/slicing-fixtures/fixtures/LICENSE.txt /usr/share/doc/taven-orca/licenses/Taven-fixtures-LICENSE.txt
@@ -69,6 +70,7 @@ RUN rm -rf /var/cache/* /var/log/* /var/lib/apt/lists/* \
       \( -path /dev -o -path /proc -o -path /sys \
          -o -path /etc/hostname -o -path /etc/hosts -o -path /etc/resolv.conf \) \
       -prune -o -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + \
+    && chmod 0555 /usr/local/bin/taven-orca-runner \
     && touch -h -d "@${SOURCE_DATE_EPOCH}" /
 
 FROM scratch AS runtime

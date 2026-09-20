@@ -14,14 +14,63 @@ Create the resources separately in each Coolify environment:
 - operator admin from `apps/admin/Dockerfile` (`runtime` target);
 - each required backend worker from the backend runtime image with its worker
   command; and
-- the opt-in slicer worker and pinned Orca runtime from their worker Dockerfiles.
+- the opt-in slicing dispatcher from the backend runtime image, command
+  `node dist/slicing-dispatch-worker.js`;
+- the opt-in slicer consumer from `apps/slicer-worker/Dockerfile`;
+- the pinned Orca runner from `apps/slicer-worker/Orca.Dockerfile`; and
+- a one-shot volume initializer for the private slicer exchange.
 
-The backend and migration entrypoints write the optional PostgreSQL CA
-certificate before connecting. Coolify should run the migration resource once
-per release under the release workflow's migration credential, then activate
-the backend and workers. The backend runtime command is application-only and
-does not rerun migrations on container restart. The local Compose stack retains
-its one-shot migration service because it models local dependency ordering.
+The backend and migration entrypoints write the optional PostgreSQL and Redis CA
+certificates before connecting. For `rediss://`, set the Redis CA pair on the
+backend and every backend worker resource (or reuse the PostgreSQL pair when
+Coolify uses one CA for both services). Coolify should run the migration
+resource once per release under the release workflow's migration credential,
+then activate the backend and workers. The backend runtime command is
+application-only and does not rerun migrations on container restart. The local
+Compose stack retains its one-shot migration service because it models local
+dependency ordering.
+
+The slicing dispatcher, slicer consumer, Orca runner, and volume initializer
+are an opt-in group for real automatic quotes. The slicer consumer and Orca
+runner must mount the same private exchange volume at `/var/run/taven-orca`.
+Use a bounded 1 GiB tmpfs for that mount (or an equivalent filesystem quota no
+larger than 1 GiB); do not use an unbounded persistent volume. The per-process
+file-size limit does not bound aggregate request-directory growth.
+Initialize that volume to owner `10001:10001`, mode `0770`, before starting the
+runner or consumer. The one-shot initializer must mount the exchange volume,
+run as `0:0`, override its entrypoint to `/bin/sh -c`, and run the ownership
+command with `CHOWN` capability only:
+
+```sh
+chown 0:0 /var/run/taven-orca && chmod 0770 /var/run/taven-orca
+for request in /var/run/taven-orca/request-*; do
+  [ -d "$request" ] || continue
+  chown 0:0 "$request" && chown -R 0:0 "$request" && rm -rf "$request"
+done
+chown 10001:10001 /var/run/taven-orca
+```
+
+Before enabling automatic quotes, verify the identity of the image actually
+deployed for the Orca runner. A Coolify Dockerfile build can have a different
+OCI manifest digest from the canonical digest in
+`tools/slicing-fixtures/runtime.lock.json`; the Docker image/config ID and the
+upstream AppImage digest are not substitutes for that manifest digest. Resolve
+the deployed runner's immutable `linux/amd64` manifest digest from the registry
+or Coolify deployment metadata and compare it with the lock. If it matches,
+leave `TAVEN_ORCA_IMAGE_SHA256` at the lock value. If it differs, do not use
+the default silently: either publish the reviewed canonical OCI artifact, or
+set `TAVEN_ORCA_IMAGE_SHA256` on the slicer consumer to the verified deployed
+manifest digest (without the `sha256:` prefix) and record that value with the
+release. Never set this variable to an image config ID or an AppImage digest.
+The runner and consumer must be promoted together after this identity check.
+
+The Orca runner must mount that initialized volume, set its user to `0:10001`,
+override the image entrypoint to `/bin/sh`, and set the command to
+`/usr/local/bin/taven-orca-runner` (entrypoint and command are separate Coolify
+settings). It also needs `network_mode: none`, a read-only root, the bounded
+`/tmp` and `/work` tmpfs mounts, and the capabilities/security profile
+documented in the slicer worker README. It must not receive Redis, S3, database,
+or other application credentials.
 
 PostgreSQL, Redis, and object storage remain separate Coolify-managed resources
 with environment-specific credentials and private connectivity. Staging and
@@ -33,12 +82,17 @@ Configure each Coolify resource explicitly. At minimum, the backend and its
 workers receive the environment variables documented by their `.env.example`
 files, including an exact `TAVEN_ENVIRONMENT` of `staging` or `production`.
 For Coolify-managed PostgreSQL with a private CA, also set
-`TAVEN_DATABASE_CA_CERT_B64` to the base64-encoded CA PEM,
+`TAVEN_DATABASE_CA_CERT_B64` to the base64-encoded PostgreSQL CA PEM,
 `TAVEN_DATABASE_CA_CERT_PATH=/etc/secrets/postgres-ca.crt`, and make
 `DATABASE_URL` include
 `sslmode=verify-full&sslrootcert=/etc/secrets/postgres-ca.crt`. The CA path is
-writable by the non-root runtime user and is used by the backend, migrations,
-and workers.
+written by the non-root runtime user and is used by the backend, migrations,
+and backend workers. For a distinct Redis CA, also set
+`TAVEN_REDIS_CA_CERT_B64` and `TAVEN_REDIS_CA_CERT_PATH=/etc/secrets/redis-ca.crt`
+on those resources; the backend entrypoint combines both PEMs before Node
+starts. The slicer consumer follows the same Redis CA rule through its own
+entrypoint. Keep
+`TAVEN_REDIS_URL` a root URL with no database path or query string.
 The web resource receives:
 
 - `NUXT_API_BASE_URL` for its private backend URL;
