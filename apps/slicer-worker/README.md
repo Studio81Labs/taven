@@ -36,13 +36,22 @@ reclaim every job workspace after its terminal result or lease expiry. The
 one-shot volume initializer has only `CHOWN`; it exits before either app starts.
 All worker services remain opt-in.
 
+The approved chain is `prlimit → timeout → unshare --net → bwrap → setpriv →
+AppRun`. Bubblewrap performs setup as container UID 0/GID 10001; `setpriv` runs
+inside the completed sandbox and clears groups and all capability sets before
+Orca starts. Do not move that identity drop before Bubblewrap, install setuid
+or file capabilities, or require globally enabled unprivileged user namespaces.
+See the [#171 handoff amendment in ADR 0008](../../docs/decisions/0008-pin-orcaslicer-v2-4-2.md#root-setup-and-unprivileged-engine-handoff-2026-09-21-171)
+for the exact boundary and mandatory real-runtime validation.
+
 The broker must be allowed to create that stronger per-request Bubblewrap
 sandbox. On AppArmor hosts its Compose service therefore uses
 `apparmor=unconfined`; this exemption applies only to `orca-runner`, not the
 Node worker or the initializer. It does not add capabilities or make the
 container privileged: the broker remains networkless and read-only with only
-`SYS_ADMIN`, `SETUID`, `SETGID`, and `SETPCAP`, and Bubblewrap removes every
-capability from the Orca child. A SELinux-enforcing production host needs the
+`SYS_ADMIN`, `SETUID`, `SETGID`, and `SETPCAP`, and the mandatory inner `setpriv`
+removes every capability and changes to UID/GID 10001 before executing Orca.
+A SELinux-enforcing production host needs the
 equivalent exemption expressed through its host policy (for example
 `label=disable` or a tailored policy); do not substitute a broader Docker
 privilege setting.

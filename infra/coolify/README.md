@@ -72,6 +72,15 @@ settings). It also needs `network_mode: none`, a read-only root, the bounded
 documented in the slicer worker README. It must not receive Redis, S3, database,
 or other application credentials.
 
+Bubblewrap setup runs as the broker's container UID 0/GID 10001 with only
+`SYS_ADMIN`, `SETUID`, `SETGID`, and `SETPCAP`; the container is never Docker
+privileged. The fixed inner `setpriv` drops to UID/GID 10001 and empties every
+capability set before Orca runs. Match the broker-only LSM/security settings
+from ADR 0008 and verify the actual engine state and a real slice after deploy.
+Do not enable global unprivileged-user-namespace sysctls to support a
+pre-Bubblewrap identity drop. The [#171 ADR amendment](../../docs/decisions/0008-pin-orcaslicer-v2-4-2.md#root-setup-and-unprivileged-engine-handoff-2026-09-21-171)
+defines the fail-closed boundary, runtime validation and rollout requirements.
+
 PostgreSQL, Redis, and object storage remain separate Coolify-managed resources
 with environment-specific credentials and private connectivity. Staging and
 production must never share application credentials or databases.
