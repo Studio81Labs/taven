@@ -112,7 +112,7 @@ jobs:
               /bin/mkdir -m 770 "$probe_root"
             /usr/bin/setpriv --reuid=10001 --regid=10001 --clear-groups \
               --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
-              /bin/mkdir -m 770 "$probe_root/input" "$probe_root/output" "$probe_root/scratch"
+              /bin/mkdir -m 770 "$probe_root/input" "$probe_root/input/output" "$probe_root/output" "$probe_root/scratch"
             printf "%s\\n" hidden > "$probe_root/input/visible.txt"
             printf "%s\\n" sibling > "$probe_root/sibling-secret"
           '
