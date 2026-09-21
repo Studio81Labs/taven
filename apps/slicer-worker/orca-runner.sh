@@ -204,6 +204,14 @@ while true; do
          --fsize="$maximum_artifact_bytes" \
          -- /usr/bin/timeout --signal=KILL "$timeout_seconds" \
          /usr/bin/unshare --net -- \
+         /usr/bin/setpriv \
+         --reuid=10001 \
+         --regid=10001 \
+         --clear-groups \
+         --bounding-set=-all \
+         --inh-caps=-all \
+         --ambient-caps=-all \
+         --no-new-privs \
          /usr/bin/bwrap \
          --unshare-pid \
          --unshare-ipc \
@@ -225,14 +233,6 @@ while true; do
          --setenv XDG_CONFIG_HOME /tmp/config \
          --setenv XDG_DATA_HOME /tmp/data \
          --setenv LC_ALL C \
-         /usr/bin/setpriv \
-         --reuid=10001 \
-         --regid=10001 \
-         --clear-groups \
-         --bounding-set=-all \
-         --inh-caps=-all \
-         --ambient-caps=-all \
-         --no-new-privs \
          /opt/orca/AppRun "$@" \
          >"$diagnostics_fifo" 2>&1; then
       engine_status=0

@@ -51,6 +51,9 @@ describe("Orca runner lifecycle", () => {
     expect(unshare).toBeGreaterThanOrEqual(0);
     expect(bubblewrap).toBeGreaterThanOrEqual(0);
     expect(unshare).toBeLessThan(bubblewrap);
+    const sandboxIdentityDrop = runner.indexOf("/usr/bin/setpriv", unshare);
+    expect(sandboxIdentityDrop).toBeGreaterThanOrEqual(0);
+    expect(sandboxIdentityDrop).toBeLessThan(bubblewrap);
     expect(runner).not.toContain("--unshare-net");
   });
 
