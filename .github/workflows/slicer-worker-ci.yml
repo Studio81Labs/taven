@@ -84,7 +84,15 @@ jobs:
           docker inspect "$container" --format 'AppArmorProfile: {{.AppArmorProfile}}'
           test "$(docker inspect "$container" --format '{{.AppArmorProfile}}')" = "unconfined"
           broker_network_namespace="$(docker exec "$container" /usr/bin/readlink /proc/self/ns/net)"
-          docker exec --env BROKER_NETWORK_NAMESPACE="$broker_network_namespace" "$container" /usr/bin/unshare --net -- /usr/bin/bwrap \
+          docker exec --env BROKER_NETWORK_NAMESPACE="$broker_network_namespace" "$container" /usr/bin/unshare --net -- /usr/bin/setpriv \
+            --reuid=10001 \
+            --regid=10001 \
+            --clear-groups \
+            --bounding-set=-all,+sys_admin \
+            --inh-caps=-all \
+            --ambient-caps=-all \
+            --no-new-privs \
+            /usr/bin/bwrap \
             --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try \
             --die-with-parent --new-session \
             --ro-bind / / \
@@ -95,15 +103,7 @@ jobs:
             --chdir /tmp \
             --clearenv \
             --setenv BROKER_NETWORK_NAMESPACE "$broker_network_namespace" \
-            /usr/bin/setpriv \
-              --reuid=10001 \
-              --regid=10001 \
-              --clear-groups \
-              --bounding-set=-all \
-              --inh-caps=-all \
-              --ambient-caps=-all \
-              --no-new-privs \
-              /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1'
+            /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1'
           fixture_root="$RUNNER_TEMP/taven-worker-reference-gcode"
           export FIXTURE_ROOT="$fixture_root"
           node --input-type=module <<'NODE'
