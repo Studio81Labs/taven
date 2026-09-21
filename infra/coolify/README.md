@@ -23,18 +23,55 @@ by its dedicated bootstrap module. Their commands are kept in the Compose file
 so adding or changing a Coolify worker does not require manually reconstructing
 a command in the dashboard.
 
-The release workflow must run `prisma migrate deploy` once for the release
-before activating this Compose resource. The Compose file intentionally does
-not keep a long-running migration service or make workers depend on Compose
-service names; PostgreSQL, Redis, and object storage are independently managed
-Coolify resources addressed through their configured URLs.
+## Coolify deployment settings
 
-The backend entrypoint writes the PostgreSQL and Redis CA certificates before
-connecting. For `rediss://`, the shared Compose environment passes the Redis CA
-pair to the backend and every backend-image worker. Coolify should run the
-migration target once per release, then activate the backend and workers. The
-backend runtime command is application-only and does not rerun migrations on
-container restart.
+Use a Git-based **Docker Compose** application with **Raw Compose Deployment**
+enabled. The normal parser in the deployed Coolify version injects the complete
+`.env` into every service, defeating the scoped worker environments above.
+Raw mode is required; verify the resulting container environments after changes
+or Coolify upgrades. Never add a service-level `env_file: .env`.
+
+- Base directory: `/` (repository root).
+- Compose location: `/infra/coolify/docker-compose.yml`.
+- Custom build command: `docker compose build backend migration`.
+- Custom start command: `sh infra/coolify/release.sh`.
+- Disable automatic Dockerfile ARG injection; enable build secrets and inclusion
+  of `SOURCE_COMMIT` at build time. The Dockerfile does not consume application
+  secrets as build args or mounts.
+- Make interpolation variables available at build and runtime. Build-time
+  availability is needed to parse Compose, not to put secrets in the images.
+- Set `TAVEN_DOCKER_NETWORK` to the existing environment-specific Docker network
+  and `TAVEN_BACKEND_NETWORK_ALIAS` to its unique private API alias.
+- Keep build and deployment on the same Docker host unless a separate image
+  publication/transfer step is configured. Images use environment + commit tags.
+
+Compose paths are relative to the repository root because Coolify sets
+`--project-directory`. For manual commands also pass `--project-directory .`
+from that root. Only the API service declares the runtime build; all six workers
+reuse its image. The migration target is built separately from the same source.
+
+The release script runs the `migration` profile task with `run --rm` and only
+starts API/workers after successful `prisma migrate deploy`. It then waits for
+all seven health checks. A failed migration must be resolved before retrying;
+never bypass this step. Coolify stops the previous Compose containers before
+its custom start command, so deployment has a short outage and a migration
+failure requires recovery; this is not a rolling or automatic rollback deploy.
+Normal container restarts do not run migrations or seeds. Do not activate the
+`release` profile in the normal Compose startup command.
+
+The backend entrypoint writes PostgreSQL/Redis CA certificates. Each worker
+health check verifies a Node worker process and database connectivity, plus
+Redis/S3 when that service receives them. These checks do not prove that a
+worker's polling loop is progressing; inspect worker logs/queue state as well.
+
+Provision the retention database LOGIN separately and apply
+`retention-grants.sql` as the database owner, after migrations. The script grants
+only the current retention tables/operations; future retention schema changes
+must update these grants. Provision separate retention and dispatcher S3 keys
+restricted to the environment's bucket, without bucket-owner/admin access.
+Garage's bucket ACLs expose read/write permissions, not full AWS-style
+prefix/action policies: distinct keys provide isolation/revocation but cannot
+fully enforce the narrower application operations within that bucket.
 
 The slicing dispatcher, slicer consumer, Orca runner, and volume initializer
 are an opt-in group for real automatic quotes. The slicer consumer and Orca
