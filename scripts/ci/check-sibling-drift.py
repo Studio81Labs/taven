@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ported from Studio81Labs/nexcue@2bc9444403fe6f45a2bbf02be506c455ca2ecbac
+# ported from Studio81Labs/nexcue@6c449db5
 """Report infra drift between this repository and a sibling built from the same template.
 
 Why this exists: drift between Nexcue and TableTap is currently found by someone
@@ -325,7 +325,6 @@ CAPABILITY_MARKER_PATHS = {
         "apps/backend/pyproject.toml",
     ),
     "capability:semgrep-fixture": (
-        ".semgrep/poker-hero-worker.js",
         ".semgrep/nexcue-dart.dart",
         ".semgrep/tabletap-dart.dart",
         ".semgrep/tarmoto-rn.ts",
@@ -433,52 +432,6 @@ EXPECTED_JOB_DIFFS = {
     # now build `--no-codesign`; the flavor flag still differs and is real
     # topology, but it lives in the step rather than the job name.
     (".github/workflows/mobile-ci.yml", "mobile"): "android flavor topology",
-}
-
-# Poker Hero's Python backend and always-emitted contract gate use different
-# job layouts from the Node siblings. Encode both sides' exact claims instead
-# of exempting their job IDs: deletion or arbitrary renaming is still drift.
-POKER_JOB_LAYOUTS = {
-    ".github/workflows/backend-ci.yml": {
-        "python": {
-            "prepare-openapi": "contract: openapi spec",
-            "test": "backend: tests and solver",
-            "image": "backend: immutable image",
-        },
-        "node": {"build": "backend: lint, typecheck, test & build"},
-    },
-    ".github/workflows/openapi-check.yml": {
-        "python": {
-            "changes": "contract: detect inputs",
-            "prepare-openapi": "contract: openapi spec",
-            "validate": "contract: generated artifacts",
-            "gate": "contract: gate",
-        },
-        "node": {"validate": "contract: emit + validate"},
-    },
-}
-
-# Actions that are deliberately one-sided at the same Python/Node boundary.
-# This is an exact contract, not a workflow-wide exemption: every listed
-# action must remain on its owning stack only, while any other one-sided action
-# (including a removed shared checkout) is ordinary drift.
-POKER_ACTION_LAYOUTS = {
-    ".github/workflows/_build-openapi.yml": {
-        "python": frozenset({"actions/setup-python"}),
-        "node": frozenset(),
-    },
-    ".github/workflows/backend-ci.yml": {
-        "python": frozenset({"actions/setup-python", "actions/download-artifact"}),
-        "node": frozenset(),
-    },
-    ".github/workflows/backend-deploy.yml": {
-        "python": frozenset({"actions/setup-node", "pnpm/action-setup"}),
-        "node": frozenset(),
-    },
-    ".github/workflows/openapi-check.yml": {
-        "python": frozenset({"actions/download-artifact"}),
-        "node": frozenset(),
-    },
 }
 
 # Every expected difference has a marker that identifies the topology forcing
@@ -1955,46 +1908,6 @@ def compare(local_read, sibling_read) -> list[dict]:
         # empty; this closes the quieter case where both sides still share at
         # least one other action and a set intersection would discard the new
         # action.
-        poker_topology_actions: set[str] = set()
-        if (
-            here
-            and there
-            and our_file_pins
-            and their_file_pins
-            and path in POKER_ACTION_LAYOUTS
-        ):
-            python_sides = marker_sides("apps/backend/pyproject.toml")
-            if python_sides[0] != python_sides[1]:
-                layouts = POKER_ACTION_LAYOUTS[path]
-                poker_topology_actions = set(layouts["python"]) | set(layouts["node"])
-                for action in sorted(poker_topology_actions):
-                    expected = (
-                        action in layouts["python" if python_sides[0] else "node"],
-                        action in layouts["python" if python_sides[1] else "node"],
-                    )
-                    actual = (action in our_file_pins, action in their_file_pins)
-                    if actual == expected:
-                        continue
-                    expected_side = "here" if expected[0] else "there"
-                    actual_side = (
-                        "here and there"
-                        if all(actual)
-                        else "here"
-                        if actual[0]
-                        else "there"
-                        if actual[1]
-                        else "nowhere"
-                    )
-                    findings.append(
-                        {
-                            "kind": "action",
-                            "name": f"{action} — {name}",
-                            "detail": (
-                                f"topology expects the action {expected_side} only, "
-                                f"but it is present {actual_side}"
-                            ),
-                        }
-                    )
         if (
             here
             and there
@@ -2003,8 +1916,6 @@ def compare(local_read, sibling_read) -> list[dict]:
             and action_shapes_comparable(path)
         ):
             for action in sorted(set(our_file_pins) ^ set(their_file_pins)):
-                if action in poker_topology_actions:
-                    continue
                 # Capability-owned entries were asserted above, including
                 # ownership polarity and owner-side deletion. Do not add a
                 # second generic one-sided finding for the same violation.
@@ -2141,60 +2052,6 @@ def compare(local_read, sibling_read) -> list[dict]:
         handled_topology_jobs.update(
             validate_local_topology_jobs(path, theirs, 1, "there")
         )
-        poker_pair = marker_sides("apps/backend/pyproject.toml")[0] != marker_sides(
-            "apps/backend/pyproject.toml"
-        )[1]
-        if poker_pair and path in POKER_JOB_LAYOUTS:
-            python_sides = marker_sides("apps/backend/pyproject.toml")
-            layouts = POKER_JOB_LAYOUTS[path]
-            controlled_jobs = set(layouts["python"]) | set(layouts["node"])
-            if path == ".github/workflows/backend-ci.yml":
-                database_pair = EXPECTED_TOPOLOGY_JOB_PAIRS[
-                    (path, "apps/backend/src/data-source.ts")
-                ]
-                controlled_jobs.update((database_pair[0][0], database_pair[1][0]))
-            for names, is_python, side_index, side in (
-                (ours, python_sides[0], 0, "here"),
-                (theirs, python_sides[1], 1, "there"),
-            ):
-                if names is None:
-                    continue
-                expected = dict(layouts["python" if is_python else "node"])
-                if path == ".github/workflows/backend-ci.yml" and not is_python:
-                    database_marker = marker_sides("apps/backend/src/data-source.ts")
-                    marked, unmarked = EXPECTED_TOPOLOGY_JOB_PAIRS[
-                        (path, "apps/backend/src/data-source.ts")
-                    ]
-                    job_id, expected_name = marked if database_marker[side_index] else unmarked
-                    expected[job_id] = expected_name
-                for job_id in sorted(controlled_jobs):
-                    actual_name = names.get(job_id)
-                    expected_name = expected.get(job_id)
-                    if expected_name is None and actual_name is not None:
-                        findings.append(
-                            {
-                                "kind": "jobname",
-                                "name": path,
-                                "detail": f"topology expects no job `{job_id}` {side}, found `{actual_name}`",
-                            }
-                        )
-                    elif expected_name is not None and actual_name is None:
-                        findings.append(
-                            {
-                                "kind": "jobname",
-                                "name": path,
-                                "detail": f"topology expects job `{job_id}` {side}, but it is absent",
-                            }
-                        )
-                    elif expected_name is not None and actual_name != expected_name:
-                        findings.append(
-                            {
-                                "kind": "jobname",
-                                "name": path,
-                                "detail": f"job `{job_id}` {side}: expected `{expected_name}`, found `{actual_name}`",
-                            }
-                        )
-            handled_topology_jobs.update(controlled_jobs)
         if path in invalid_topology_paths:
             continue
         if topology_skips_artifact(path, local_text, sibling_text):
@@ -2218,8 +2075,6 @@ def compare(local_read, sibling_read) -> list[dict]:
             continue
         for (pair_path, marker), (marked, unmarked) in EXPECTED_TOPOLOGY_JOB_PAIRS.items():
             if pair_path != path:
-                continue
-            if poker_pair and pair_path == ".github/workflows/backend-ci.yml":
                 continue
             our_marked, their_marked = marker_sides(marker)
             if our_marked == their_marked:
@@ -3741,7 +3596,7 @@ def self_test() -> int:
         if f["name"] == RELEASE_HELPER
     ]
     assert found == [], f"cross-stack release guard contents are topology: {found}"
-    poker_release = {
+    python_release = {
         MARKER: None,
         MOBILE_MARKER: None,
         "apps/backend/pyproject.toml": "[project]\nname = \"backend\"\n",
@@ -3751,20 +3606,20 @@ def self_test() -> int:
         f
         for f in compare(
             repo(**react_native_release).get,
-            repo(**poker_release).get,
+            repo(**python_release).get,
         )
         if f["name"] == RELEASE_HELPER
     ]
     assert found == [], f"React Native/Python release helpers are source topology: {found}"
-    changed_poker_release = {
-        **poker_release,
+    changed_python_release = {
+        **python_release,
         RELEASE_HELPER: "changed python guard\n",
     }
     found = [
         f
         for f in compare(
-            repo(**poker_release).get,
-            repo(**changed_poker_release).get,
+            repo(**python_release).get,
+            repo(**changed_python_release).get,
         )
         if f["name"] == RELEASE_HELPER
     ]
@@ -4003,18 +3858,6 @@ def self_test() -> int:
         if f["name"] == SEMGREP_HELPER
     ]
     assert len(found) == 1, f"an incidental marker deletion must not hide drift: {found}"
-    poker_helper = {
-        SEMGREP_HELPER: "poker copy\n",
-        MOBILE_MARKER: None,
-        MARKER: None,
-        ".semgrep/poker-hero-worker.js": "// fixture\n",
-    }
-    found = [
-        f
-        for f in compare(repo(**flutter_helper).get, repo(**poker_helper).get)
-        if f["name"] == SEMGREP_HELPER
-    ]
-    assert len(found) == 1, f"Poker's non-mobile verifier must remain comparable: {found}"
     no_semgrep_markers = {
         marker: None
         for marker in CAPABILITY_MARKER_PATHS["capability:semgrep-fixture"]
@@ -4024,13 +3867,6 @@ def self_test() -> int:
         MOBILE_MARKER: None,
         SEMGREP_HELPER: None,
     }
-    poker_missing_helper = {**poker_helper, SEMGREP_HELPER: None}
-    found = [
-        f
-        for f in compare(repo(**poker_missing_helper).get, repo(**no_mobile_helper).get)
-        if f["name"] == SEMGREP_HELPER
-    ]
-    assert len(found) == 1 and "expects an artifact here" in found[0]["detail"], found
     found = [
         f for f in compare(repo().get, repo(**no_mobile_helper).get)
         if f["name"] == SEMGREP_HELPER
@@ -4198,213 +4034,13 @@ def self_test() -> int:
     found = [f for f in compare(repo(**extra).get, repo(**base).get) if f["kind"] == "jobname"]
     assert len(found) == 1 and "present here, absent there" in found[0]["detail"], found
 
-    # Python and Node workflows have a small exact set of one-sided actions.
-    # Everything else remains shared policy, including presence and pin refs.
-    python_backend_actions = {
-        JOB_WF: wf(
-            "actions/checkout@1111111 # v1",
-            "actions/setup-node@3333333 # v3",
-            "pnpm/action-setup@4444444 # v4",
-            "actions/setup-python@2222222 # v2",
-            "actions/download-artifact@5555555 # v5",
-        ),
-        "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
-    }
-    node_backend_actions = {
-        JOB_WF: wf(
-            "actions/checkout@1111111 # v1",
-            "actions/setup-node@3333333 # v3",
-            "pnpm/action-setup@4444444 # v4",
-        ),
-    }
-    found = [
-        f
-        for f in compare(
-            repo(**python_backend_actions).get,
-            repo(**node_backend_actions).get,
-        )
-        if f["kind"] == "action" and "backend-ci.yml" in f["name"]
-    ]
-    assert found == [], f"backend setup actions are stack topology: {found}"
-    node_backend_with_stale_checkout = {
-        JOB_WF: wf(
-            "actions/checkout@6666666 # v6",
-            "actions/setup-node@3333333 # v3",
-            "pnpm/action-setup@4444444 # v4",
-        ),
-    }
-    found = [
-        f
-        for f in compare(
-            repo(**python_backend_actions).get,
-            repo(**node_backend_with_stale_checkout).get,
-        )
-        if f["kind"] == "action" and f["name"].startswith("actions/checkout")
-    ]
-    assert len(found) == 1, f"shared cross-stack action pins remain strict: {found}"
-    node_backend_without_checkout = {
-        JOB_WF: wf(
-            "actions/setup-node@3333333 # v3",
-            "pnpm/action-setup@4444444 # v4",
-        ),
-    }
-    found = [
-        f
-        for f in compare(
-            repo(**python_backend_actions).get,
-            repo(**node_backend_without_checkout).get,
-        )
-        if f["kind"] == "action" and f["name"].startswith("actions/checkout")
-    ]
-    assert len(found) == 1, f"removing a shared cross-stack action must report: {found}"
-    python_backend_without_setup = {
-        **python_backend_actions,
-        JOB_WF: wf(
-            "actions/checkout@1111111 # v1",
-            "actions/setup-node@3333333 # v3",
-            "pnpm/action-setup@4444444 # v4",
-            "actions/download-artifact@5555555 # v5",
-        ),
-    }
-    found = [
-        f
-        for f in compare(
-            repo(**python_backend_without_setup).get,
-            repo(**node_backend_actions).get,
-        )
-        if f["kind"] == "action" and f["name"].startswith("actions/setup-python")
-    ]
-    assert len(found) == 1 and "expects the action here only" in found[0]["detail"], found
-
-    for workflow, python_only_action in (
-        (".github/workflows/_build-openapi.yml", "actions/setup-python"),
-        (".github/workflows/backend-deploy.yml", "pnpm/action-setup"),
-    ):
-        python_owner = {
-            workflow: wf(
-                "actions/checkout@1111111 # v1",
-                *(
-                    f"{action}@2222222 # v2"
-                    for action in sorted(POKER_ACTION_LAYOUTS[workflow]["python"])
-                ),
-            ),
-            "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
-            "apps/marketing/package.json": None,
-        }
-        node_owner = {
-            workflow: wf("actions/checkout@1111111 # v1"),
-            "apps/backend/pyproject.toml": None,
-            "apps/marketing/package.json": "{}\n",
-        }
-        found = [
-            f
-            for f in compare(repo(**python_owner).get, repo(**node_owner).get)
-            if f["kind"] == "action" and f["name"].startswith(python_only_action)
-        ]
-        assert found == [], f"{workflow} Python setup is stack topology: {found}"
-        python_owner_missing_setup = {
-            **python_owner,
-            workflow: wf(
-                "actions/checkout@1111111 # v1",
-                *(
-                    f"{action}@2222222 # v2"
-                    for action in sorted(POKER_ACTION_LAYOUTS[workflow]["python"])
-                    if action != python_only_action
-                ),
-            ),
-        }
-        found = [
-            f
-            for f in compare(
-                repo(**python_owner_missing_setup).get,
-                repo(**node_owner).get,
-            )
-            if f["kind"] == "action" and f["name"].startswith(python_only_action)
-        ]
-        assert len(found) == 1 and "expects the action here only" in found[0]["detail"], found
-
-    # Poker-only layout exemptions must activate for Python-vs-Node, but the
-    # same job IDs remain strict between two Node siblings.
-    poker_backend = {
-        JOB_WF: jobs_yaml(
-            ("prepare-openapi", "contract: openapi spec"),
-            ("test", "backend: tests and solver"),
-            ("image", "backend: immutable image"),
-        ),
-        "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
-    }
+    # Job names remain strict between two Node siblings.
     node_backend = {
         JOB_WF: jobs_yaml(
             ("build", "backend: lint, typecheck, test & build"),
             ("test-e2e", "backend: e2e (real postgres)"),
         )
     }
-    found = [
-        f
-        for f in compare(repo(**poker_backend).get, repo(**node_backend).get)
-        if f["kind"] == "jobname" and f["name"] == JOB_WF
-    ]
-    assert found == [], f"Python-vs-Node job layout is pair topology: {found}"
-    poker_without_image = {
-        **poker_backend,
-        JOB_WF: jobs_yaml(
-            ("prepare-openapi", "contract: openapi spec"),
-            ("test", "backend: tests and solver"),
-        ),
-    }
-    found = [
-        f
-        for f in compare(repo(**poker_without_image).get, repo(**node_backend).get)
-        if f["kind"] == "jobname" and f["name"] == JOB_WF
-    ]
-    assert len(found) == 1 and "expects job `image` here" in found[0]["detail"], found
-    poker_renamed_test = {
-        **poker_backend,
-        JOB_WF: jobs_yaml(
-            ("prepare-openapi", "contract: openapi spec"),
-            ("test", "backend: renamed tests"),
-            ("image", "backend: immutable image"),
-        ),
-    }
-    found = [
-        f
-        for f in compare(repo(**poker_renamed_test).get, repo(**node_backend).get)
-        if f["kind"] == "jobname" and f["name"] == JOB_WF
-    ]
-    assert len(found) == 1 and "expected `backend: tests and solver`" in found[0]["detail"], found
-    POKER_OPENAPI_WF = ".github/workflows/openapi-check.yml"
-    poker_openapi = {
-        POKER_OPENAPI_WF: jobs_yaml(
-            ("changes", "contract: detect inputs"),
-            ("prepare-openapi", "contract: openapi spec"),
-            ("validate", "contract: generated artifacts"),
-            ("gate", "contract: gate"),
-        ),
-        "apps/backend/pyproject.toml": "[project]\nname = 'fixture'\n",
-    }
-    node_openapi = {
-        POKER_OPENAPI_WF: jobs_yaml(("validate", "contract: emit + validate"))
-    }
-    found = [
-        f
-        for f in compare(repo(**poker_openapi).get, repo(**node_openapi).get)
-        if f["kind"] == "jobname" and f["name"] == POKER_OPENAPI_WF
-    ]
-    assert found == [], f"Python-vs-Node OpenAPI layout is topology: {found}"
-    poker_without_gate = {
-        **poker_openapi,
-        POKER_OPENAPI_WF: jobs_yaml(
-            ("changes", "contract: detect inputs"),
-            ("prepare-openapi", "contract: openapi spec"),
-            ("validate", "contract: generated artifacts"),
-        ),
-    }
-    found = [
-        f
-        for f in compare(repo(**poker_without_gate).get, repo(**node_openapi).get)
-        if f["kind"] == "jobname" and f["name"] == POKER_OPENAPI_WF
-    ]
-    assert len(found) == 1 and "expects job `gate` here" in found[0]["detail"], found
     other_node = {
         JOB_WF: jobs_yaml(
             ("build", "backend: lint, test & build"),
@@ -4615,7 +4251,7 @@ def self_test() -> int:
         if f["kind"] == "jobname" and f["name"] == RELEASE_GATE_WF
     ]
     assert found == [], f"version-source topology may rename the check: {found}"
-    poker_release_gate = {
+    python_release_gate = {
         RELEASE_GATE_WF: jobs_yaml(("check", "release: tag matches root version")),
         "apps/mobile/package.json": None,
         "apps/mobile/pubspec.yaml": None,
@@ -4623,24 +4259,24 @@ def self_test() -> int:
     }
     found = [
         f
-        for f in compare(repo(**flutter_gate).get, repo(**poker_release_gate).get)
+        for f in compare(repo(**flutter_gate).get, repo(**python_release_gate).get)
         if f["kind"] == "jobname" and f["name"] == RELEASE_GATE_WF
     ]
     assert found == [], f"Python release-gate naming is version-source topology: {found}"
-    renamed_poker_release_gate = {
-        **poker_release_gate,
+    renamed_python_release_gate = {
+        **python_release_gate,
         RELEASE_GATE_WF: jobs_yaml(("check", "release: unrelated Python claim")),
     }
     found = [
         f
         for f in compare(
-            repo(**poker_release_gate).get,
-            repo(**renamed_poker_release_gate).get,
+            repo(**python_release_gate).get,
+            repo(**renamed_python_release_gate).get,
         )
         if f["kind"] == "jobname" and f["name"] == RELEASE_GATE_WF
     ]
     assert len(found) == 1, f"Python release-gate naming must remain exact: {found}"
-    poker_missing_release_gate = {
+    python_missing_release_gate = {
         RELEASE_GATE_WF: None,
         "apps/mobile/package.json": None,
         "apps/mobile/pubspec.yaml": None,
@@ -4650,7 +4286,7 @@ def self_test() -> int:
         f
         for f in compare(
             repo(**flutter_gate).get,
-            repo(**poker_missing_release_gate).get,
+            repo(**python_missing_release_gate).get,
         )
         if f["name"] == RELEASE_GATE_WF
     ]

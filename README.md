@@ -119,7 +119,7 @@ pnpm overrides:check
 ```
 
 Run `pnpm sibling:check` to compare shared infrastructure against Nexcue,
-Tarmoto, TableTap, and Poker Hero through GitHub. It uses `SIBLING_TOKEN`, or the
+Tarmoto, and TableTap through GitHub. It uses `SIBLING_TOKEN`, or the
 token from an authenticated `gh` CLI, and provisions its locked Python
 dependency in a temporary directory. For the narrower local Nexcue runtime
 baseline, check out Nexcue beside this repository and run `pnpm baseline:check`;
