@@ -70,6 +70,17 @@ describe("Orca runner lifecycle", () => {
     expect(runner).toContain('chmod 0660 "$diagnostics_fifo"');
   });
 
+  it("keeps the sandbox filesystem boundary explicit", async () => {
+    const runner = await readFile(path.resolve("orca-runner.sh"), "utf8");
+
+    expect(runner).toContain("--ro-bind / /");
+    expect(runner).toContain('--ro-bind "$request" /work');
+    expect(runner).toContain('--bind "$request/output" /work/output');
+    expect(runner).toContain('--tmpfs "$runner_root"');
+    expect(runner).toContain('--bind "$request/tmp" /tmp');
+    expect(runner).toContain("--proc /proc");
+  });
+
   it("recovers restart markers and reaps cancelled or expired requests", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "taven-runner-lifecycle-"));
     cleanup.push(root);

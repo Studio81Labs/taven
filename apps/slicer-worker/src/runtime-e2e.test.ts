@@ -373,7 +373,6 @@ async function monitorRequestWorkspace(): Promise<{
     "done;",
     '[ "$namespace_ok" = true ] || continue;',
     'child_network_namespace=$(readlink "/proc/$sandbox_pid/ns/net");',
-    "broker_network_namespace=$(readlink /proc/self/ns/net);",
     'sandbox_egress=$(/usr/bin/nsenter -t "$sandbox_pid" -n /bin/sh -ec \'test "$(readlink /proc/self/ns/net)" = "$1"; if /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1; then exit 1; fi; printf blocked\' /bin/sh "$child_network_namespace" 2>/dev/null || true);',
     '[ "$sandbox_egress" = "blocked" ] || continue;',
     'printf "%s\\n" "$modes";',
@@ -407,7 +406,7 @@ async function monitorRequestWorkspace(): Promise<{
   return {
     modes: observation.slice(0, 7),
     childSecurity: observation.slice(7, 16),
-    sandboxIsolation: observation.slice(16),
+    sandboxIsolation: observation.slice(16, 21),
   };
 }
 
