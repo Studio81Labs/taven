@@ -47,6 +47,13 @@ equivalent exemption expressed through its host policy (for example
 `label=disable` or a tailored policy); do not substitute a broader Docker
 privilege setting.
 
+The host must also permit unprivileged user namespaces for the broker
+container. Bubblewrap is not installed setuid: after the broker changes to
+UID/GID 10001, it uses the host's user-namespace support to create its mount
+namespace. A host that rejects that operation fails closed with
+`ENGINE_UNAVAILABLE`; enabling it is a deployment prerequisite, not a reason
+to grant the container `privileged` or a Docker socket.
+
 Every Orca invocation runs through `prlimit`, `timeout`,
 `/usr/bin/unshare --net --`, `setpriv`, and Bubblewrap. `unshare(1)` creates
 the child network namespace before Bubblewrap without configuring loopback;

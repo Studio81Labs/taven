@@ -121,6 +121,13 @@ AppArmor requires the equivalent host-policy exemption; provisioning that
 policy belongs to deployment work and must not be replaced by `privileged` or
 additional capabilities.
 
+Because the pinned Bubblewrap binary is not setuid, the deployment host must
+permit unprivileged user namespaces. The broker changes to UID/GID 10001
+before invoking Bubblewrap and retains only the mount capability needed for
+namespace setup; a host that rejects the user-namespace operation fails the
+request closed with `ENGINE_UNAVAILABLE`. Granting `privileged` or a Docker
+socket is not an acceptable workaround.
+
 ## Child network namespace (2026-09-11)
 
 Each Orca child receives a separate network namespace through
