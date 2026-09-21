@@ -1,7 +1,7 @@
 import "dotenv/config";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { AppModule } from "./app.module";
+import { SlicingDispatchWorkerModule } from "./slicing-dispatch-worker.module";
 import {
   readSlicingQueueConfig,
   type SlicingQueueConfig,
@@ -34,9 +34,12 @@ async function poll(
 }
 
 async function main(): Promise<void> {
-  const application = await NestFactory.createApplicationContext(AppModule, {
-    logger: ["error", "warn", "log"],
-  });
+  const application = await NestFactory.createApplicationContext(
+    SlicingDispatchWorkerModule,
+    {
+      logger: ["error", "warn", "log"],
+    },
+  );
   const publisher = application.get(SlicingQueuePublisher);
   const config: SlicingQueueConfig = readSlicingQueueConfig();
   let stopping = false;

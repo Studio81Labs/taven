@@ -1,34 +1,40 @@
 # Coolify service layout
 
-Production and staging are managed by Coolify as independent resources. This
-repository does not provide a production/staging Compose project, and
-application containers must not rely on Compose networking, Traefik labels, or
-shared `.env` interpolation.
+Production and staging are managed by Coolify. The backend API and every
+backend-image worker are maintained together in
+`infra/coolify/docker-compose.yml`; Coolify should deploy that file as the
+backend application resource. The web site, operator admin, PostgreSQL, Redis,
+Garage/object storage, slicer consumer, Orca runner, and slicer exchange
+initializer remain separate Coolify resources.
 
-Create the resources separately in each Coolify environment:
+The backend Compose resource contains:
 
-- backend API from `apps/backend/Dockerfile` (`runtime` target);
-- one-shot migration from the same Dockerfile (`migration` target), completed
-  once for the release before activating the API and workers;
-- public web from `apps/web/Dockerfile` (`runtime` target);
-- operator admin from `apps/admin/Dockerfile` (`runtime` target);
-- each required backend worker from the backend runtime image with its worker
-  command; and
-- the opt-in slicing dispatcher from the backend runtime image, command
-  `node dist/slicing-dispatch-worker.js`;
-- the opt-in slicer consumer from `apps/slicer-worker/Dockerfile`;
-- the pinned Orca runner from `apps/slicer-worker/Orca.Dockerfile`; and
-- a one-shot volume initializer for the private slicer exchange.
+- `backend` (`apps/backend/Dockerfile`, `runtime` target);
+- `balance-payment-worker`;
+- `checkout-payment-worker`;
+- `resource-reservation-worker`;
+- `retention-worker`;
+- `operator-auth-expiry-worker`; and
+- `slicing-dispatcher`.
 
-The backend and migration entrypoints write the optional PostgreSQL and Redis CA
-certificates before connecting. For `rediss://`, set the Redis CA pair on the
-backend and every backend worker resource (or reuse the PostgreSQL pair when
-Coolify uses one CA for both services). Coolify should run the migration
-resource once per release under the release workflow's migration credential,
-then activate the backend and workers. The backend runtime command is
-application-only and does not rerun migrations on container restart. The local
-Compose stack retains its one-shot migration service because it models local
-dependency ordering.
+All worker services use the same backend runtime image, but each receives only
+the database, payment, operator, queue, or object-storage configuration needed
+by its dedicated bootstrap module. Their commands are kept in the Compose file
+so adding or changing a Coolify worker does not require manually reconstructing
+a command in the dashboard.
+
+The release workflow must run `prisma migrate deploy` once for the release
+before activating this Compose resource. The Compose file intentionally does
+not keep a long-running migration service or make workers depend on Compose
+service names; PostgreSQL, Redis, and object storage are independently managed
+Coolify resources addressed through their configured URLs.
+
+The backend entrypoint writes the PostgreSQL and Redis CA certificates before
+connecting. For `rediss://`, the shared Compose environment passes the Redis CA
+pair to the backend and every backend-image worker. Coolify should run the
+migration target once per release, then activate the backend and workers. The
+backend runtime command is application-only and does not rerun migrations on
+container restart.
 
 The slicing dispatcher, slicer consumer, Orca runner, and volume initializer
 are an opt-in group for real automatic quotes. The slicer consumer and Orca
@@ -114,7 +120,28 @@ checkout, and sandbox-payment switches in the staging resources only. The
 payment sandbox URL and `TAVEN_API_PUBLIC_URL` must be the same reachable HTTPS
 API origin, and `TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET` must be an explicit
 staging-only secret of at least 32 characters; production keeps these switches
-fail-closed.
+fail-closed. If Comgate is selected, set `TAVEN_COMGATE_TEST_MODE` explicitly
+(`true` for staging and `false` for production); the Compose file passes an
+empty value through for sandbox or disabled payment deployments, where the
+setting is not used. Configure
+`TAVEN_RETENTION_S3_ACCESS_KEY_ID` and `TAVEN_RETENTION_S3_SECRET_ACCESS_KEY`
+as a separate least-privilege pair for the retention worker, and set
+`TAVEN_RETENTION_DATABASE_URL` to its separate database role. All other
+backend-image services use scoped configuration for their dedicated bootstrap:
+payment credentials only go to the checkout worker, operator credentials only
+go to the operator-expiry worker, and
+`TAVEN_SLICER_S3_ACCESS_KEY_ID`/
+`TAVEN_SLICER_S3_SECRET_ACCESS_KEY` plus Redis go only to the slicing
+dispatcher. The retention worker receives only its database and object-storage
+configuration through a minimal environment and uses a dedicated bootstrap
+module, so it does not receive payment, quote, OAuth, or other request-time
+application secrets and does not initialize slicing-profile snapshots.
+
+Set `TAVEN_DELIVERY_SELECTOR_MODE` explicitly. `CONFIGURED` requires a non-empty
+`TAVEN_DELIVERY_ENDPOINTS_JSON`; `PACKETA` requires the Packeta widget account
+and may omit configured endpoints. The Compose file uses an empty JSON array as
+the Packeta-compatible fallback, while the backend rejects that value if
+`CONFIGURED` is selected.
 
 Coolify owns each resource's health check, restart policy, and private network
 attachment. Configure domains, the selected origin proxy/TLS boundary, and
@@ -125,18 +152,20 @@ in #39.
 
 ## Local development
 
-Use `infra/docker/docker-compose.yml` with the local overlay for local
-development and integration tests. That Compose stack is intentionally
-separate from Coolify and is the only place where the repository supplies a
-multi-container application topology.
+Use only `infra/docker/docker-compose.yml` for local development and
+integration tests. It contains the local PostgreSQL, Redis, MinIO, Garage
+contract, backend, web, admin, slicer, and all backend-image worker services.
+Its local-only defaults enable the private test flows. `garage.toml` is used
+only by the local Garage contract service; it is not a Coolify deployment
+definition.
 
 Validate local configuration with:
 
 ```sh
 docker compose -f infra/docker/docker-compose.yml \
-  -f infra/docker/docker-compose.local.yml --profile app --profile worker \
+  --profile app --profile worker \
   config --quiet
 ```
 
-Do not use the local Compose files as a production/staging deployment
-definition.
+Do not use the local Compose file as a production/staging deployment
+definition; use `infra/coolify/docker-compose.yml` for the backend resource.
