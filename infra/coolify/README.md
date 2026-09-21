@@ -118,8 +118,10 @@ setting is not used. Configure
 as a separate least-privilege pair for the retention worker, and set
 `TAVEN_RETENTION_DATABASE_URL` to its separate database role. All other
 backend-image services use the application database and S3 pairs. The
-retention worker uses a dedicated bootstrap module, so it does not initialize
-slicing-profile snapshots or other request-time application modules.
+retention worker receives only its database and object-storage configuration
+through a minimal environment and uses a dedicated bootstrap module, so it does
+not receive payment, quote, or other request-time application secrets and does
+not initialize slicing-profile snapshots.
 
 Set `TAVEN_DELIVERY_SELECTOR_MODE` explicitly. `CONFIGURED` requires a non-empty
 `TAVEN_DELIVERY_ENDPOINTS_JSON`; `PACKETA` requires the Packeta widget account
