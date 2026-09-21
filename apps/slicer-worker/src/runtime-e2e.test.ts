@@ -568,6 +568,20 @@ async function assertSandboxSetupFailureClosed(): Promise<void> {
       readFile(path.join(exchangeRoot, "orca-invoked"), "utf8"),
     ).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
+    await compose([
+      "run",
+      "--rm",
+      "--no-deps",
+      "--cap-add",
+      "CHOWN",
+      "--volume",
+      `${exchangeRoot}:/var/run/taven-orca`,
+      "--entrypoint",
+      "/bin/sh",
+      "orca-runner",
+      "-ec",
+      "chmod -R a+rwx /var/run/taven-orca",
+    ]).catch(() => undefined);
     await compose(["up", "--detach", "orca-runner"]).catch(() => undefined);
     await rm(fixtureRoot, { recursive: true, force: true });
   }
