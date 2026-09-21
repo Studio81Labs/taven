@@ -110,7 +110,9 @@ checkout, and sandbox-payment switches in the staging resources only. The
 payment sandbox URL and `TAVEN_API_PUBLIC_URL` must be the same reachable HTTPS
 API origin, and `TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET` must be an explicit
 staging-only secret of at least 32 characters; production keeps these switches
-fail-closed.
+fail-closed. If Comgate is selected, set `TAVEN_COMGATE_TEST_MODE` explicitly
+(`true` for staging and `false` for production); the Coolify Compose file does
+not default this safety-sensitive value.
 
 Set `TAVEN_DELIVERY_SELECTOR_MODE` explicitly. `CONFIGURED` requires a non-empty
 `TAVEN_DELIVERY_ENDPOINTS_JSON`; `PACKETA` requires the Packeta widget account
