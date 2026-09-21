@@ -31,6 +31,23 @@ remove_tree() {
   fi
 }
 
+read_exchange_file() {
+  file=$1
+  if [ "$(id -u)" -eq 0 ] && [ -x /usr/bin/setpriv ]; then
+    /usr/bin/setpriv \
+      --reuid=10001 \
+      --regid=10001 \
+      --clear-groups \
+      --bounding-set=-all \
+      --inh-caps=-all \
+      --ambient-caps=-all \
+      --no-new-privs \
+      /bin/cat "$file"
+  else
+    cat "$file"
+  fi
+}
+
 result_return_code() {
   result_file=$1/output/result.json
   [ -f "$result_file" ] || return 1
@@ -57,7 +74,7 @@ preserve_result_return_code() {
 
 request_expired() {
   request_directory=$1
-  lease=$(cat "$request_directory/lease-expires-at" 2>/dev/null || true)
+  lease=$(read_exchange_file "$request_directory/lease-expires-at" 2>/dev/null || true)
   case "$lease" in
     ''|*[!0-9]*)
       if [ -f "$request_directory/lease-expires-at" ]; then
@@ -115,9 +132,9 @@ while true; do
       continue
     fi
 
-    copies=$(cat "$request/copies" 2>/dev/null || true)
-    artifact_format=$(cat "$request/artifact-format" 2>/dev/null || true)
-    timeout_seconds=$(cat "$request/timeout-seconds" 2>/dev/null || true)
+    copies=$(read_exchange_file "$request/copies" 2>/dev/null || true)
+    artifact_format=$(read_exchange_file "$request/artifact-format" 2>/dev/null || true)
+    timeout_seconds=$(read_exchange_file "$request/timeout-seconds" 2>/dev/null || true)
     case "$copies" in
       ''|*[!0-9]*) fail_request "$request" ENGINE_UNAVAILABLE; continue ;;
     esac
@@ -176,6 +193,7 @@ while true; do
 
     diagnostics_fifo="$request/diagnostics.pipe"
     mkfifo "$diagnostics_fifo"
+    chmod 0660 "$diagnostics_fifo"
     /usr/bin/head -c "$maximum_diagnostic_bytes" "$diagnostics_fifo" \
       > "$request/diagnostics" &
     diagnostic_reader_pid=$!
