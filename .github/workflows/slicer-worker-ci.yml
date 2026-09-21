@@ -117,8 +117,8 @@ jobs:
                 sleep 0.01
               done
               child=${children%% *}
-              printf "0 0 1\\n10001 10001 1\\n" > "/proc/$child/uid_map"
-              printf "0 0 1\\n10001 10001 1\\n" > "/proc/$child/gid_map"
+              printf "0 0 65536\\n" > "/proc/$child/uid_map"
+              printf "0 0 65536\\n" > "/proc/$child/gid_map"
               touch /tmp/taven-userns-ready
               wait "$launcher"
             ')"
@@ -257,8 +257,8 @@ jobs:
                   sleep 0.01
                 done
                 child=${children%% *}
-                printf "0 0 1\\n10001 10001 1\\n" > "/proc/$child/uid_map"
-                printf "0 0 1\\n10001 10001 1\\n" > "/proc/$child/gid_map"
+                printf "0 0 65536\\n" > "/proc/$child/uid_map"
+                printf "0 0 65536\\n" > "/proc/$child/gid_map"
                 touch /tmp/taven-userns-ready
                 wait "$launcher"
           YAML
