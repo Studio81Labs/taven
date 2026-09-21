@@ -112,6 +112,12 @@ API origin, and `TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET` must be an explicit
 staging-only secret of at least 32 characters; production keeps these switches
 fail-closed.
 
+Set `TAVEN_DELIVERY_SELECTOR_MODE` explicitly. `CONFIGURED` requires a non-empty
+`TAVEN_DELIVERY_ENDPOINTS_JSON`; `PACKETA` requires the Packeta widget account
+and may omit configured endpoints. The Compose file uses an empty JSON array as
+the Packeta-compatible fallback, while the backend rejects that value if
+`CONFIGURED` is selected.
+
 Coolify owns each resource's health check, restart policy, and private network
 attachment. Configure domains, the selected origin proxy/TLS boundary, and
 restricted staging access through the Coolify/host operations path; do not add
