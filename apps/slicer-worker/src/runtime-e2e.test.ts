@@ -503,6 +503,7 @@ async function assertSandboxSetupFailureClosed(): Promise<void> {
   const request = "/var/run/taven-orca/request-setup-failure";
   const requestOnHost = path.join(exchangeRoot, "request-setup-failure");
   await mkdir(exchangeRoot, { mode: 0o770 });
+  await chmod(exchangeRoot, 0o777);
   await writeFile(
     fakeBubblewrap,
     "#!/bin/sh\nprintf '%s\\n' attempted > /var/run/taven-orca/bwrap-attempted\nexit 42\n",
