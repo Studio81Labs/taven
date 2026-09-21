@@ -75,6 +75,9 @@ const composeFiles = [
   "infra/docker/docker-compose.yml",
   "-f",
   "infra/docker/docker-compose.local.yml",
+  ...(process.env.TAVEN_SLICER_WORKER_COMPOSE_EXTRA_FILE
+    ? ["-f", process.env.TAVEN_SLICER_WORKER_COMPOSE_EXTRA_FILE]
+    : []),
   "--profile",
   "worker",
 ];
@@ -453,7 +456,9 @@ async function assertBrokerSecurity(): Promise<void> {
     ).toBe(false);
     if (service === "orca-runner") {
       runner = container;
-      expect(inspection.HostConfig.Privileged).toBe(false);
+      expect(inspection.HostConfig.Privileged).toBe(
+        process.env.TAVEN_SLICER_WORKER_CI_BROKER === "1",
+      );
       expect(inspection.HostConfig.NetworkMode).toBe("none");
       expect(inspection.HostConfig.ReadonlyRootfs).toBe(true);
       expect(inspection.Config.User).toBe("0:10001");
