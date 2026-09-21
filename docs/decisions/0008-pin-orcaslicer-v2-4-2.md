@@ -123,12 +123,10 @@ AppArmor requires the equivalent host-policy exemption; provisioning that
 policy belongs to deployment work and must not be replaced by `privileged` or
 additional capabilities.
 
-Because the pinned Bubblewrap binary is not setuid, the deployment host must
-permit unprivileged user namespaces. The broker changes to UID/GID 10001
-before invoking Bubblewrap and retains only the mount capability needed for
-namespace setup; a host that rejects the user-namespace operation fails the
-request closed with `ENGINE_UNAVAILABLE`. Granting `privileged` or a Docker
-socket is not an acceptable workaround.
+The pinned Bubblewrap binary runs as the root broker during namespace setup; it
+does not require globally enabled unprivileged user namespaces. The fixed
+inner `setpriv` handoff occurs only after Bubblewrap has created the sandbox.
+Granting `privileged` or a Docker socket is not an acceptable workaround.
 
 ## Child network namespace (2026-09-11)
 

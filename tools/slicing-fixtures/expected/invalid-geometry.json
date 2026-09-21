@@ -1,7 +1,7 @@
 {
   "case": "invalid-geometry",
   "engine": {
-    "imageDigest": "sha256:d043f5cf80fc3a52e78106c8bacd5e37bff0117e99fb03493429849344bc04fd",
+    "imageDigest": "sha256:d78716c79fbbda2bee2521186d28608e152d30190f236e9dab76066b29f27e2f",
     "invocationBundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44",
     "name": "orca-slicer",
     "version": "2.4.2"

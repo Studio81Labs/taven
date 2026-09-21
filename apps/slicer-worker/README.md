@@ -56,21 +56,19 @@ equivalent exemption expressed through its host policy (for example
 `label=disable` or a tailored policy); do not substitute a broader Docker
 privilege setting.
 
-The host must also permit unprivileged user namespaces for the broker
-container. Bubblewrap is not installed setuid: after the broker changes to
-UID/GID 10001, it uses the host's user-namespace support to create its mount
-namespace. A host that rejects that operation fails closed with
-`ENGINE_UNAVAILABLE`; enabling it is a deployment prerequisite, not a reason
-to grant the container `privileged` or a Docker socket.
+Bubblewrap runs as the container-root broker while it creates the mount
+namespace; this path does not require globally enabled unprivileged user
+namespaces. The fixed inner `setpriv` handoff occurs only after the sandbox is
+complete. A setup or handoff failure fails closed with `ENGINE_UNAVAILABLE`,
+not by granting the container `privileged` or a Docker socket.
 
 Every Orca invocation runs through `prlimit`, `timeout`,
 `/usr/bin/unshare --net --`, `setpriv`, and Bubblewrap. `unshare(1)` creates
 the child network namespace before Bubblewrap without configuring loopback;
 Bubblewrap's `--unshare-net` is deliberately not used because it configures
 loopback and would require `CAP_NET_ADMIN`. `setpriv` changes to UID/GID
-10001 and clears every capability except `SYS_ADMIN`, which Bubblewrap needs
-for its initial mount namespace setup; the child then has no capabilities and
-receives no outbound network access.
+10001 and clears every capability set before Orca starts; the child then has no
+capabilities and receives no outbound network access.
 
 Profile and configuration revisions are provider-neutral immutable S3 objects
 at `slicer-revisions/<content-sha256>/settings.json`. Their bytes must hash to

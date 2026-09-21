@@ -197,8 +197,9 @@ while true; do
     /usr/bin/head -c "$maximum_diagnostic_bytes" "$diagnostics_fifo" \
       > "$request/diagnostics" &
     diagnostic_reader_pid=$!
-    # Bubblewrap needs SYS_ADMIN for its initial mount setup; it drops it
-    # before starting the Orca child.
+    # Keep the broker's setup authority through Bubblewrap. The fixed inner
+    # setpriv handoff is the first process inside the completed sandbox and
+    # must finish before Orca starts.
     if /usr/bin/prlimit \
          --as=8589934592 \
          --cpu=1800 \
@@ -206,14 +207,6 @@ while true; do
          --fsize="$maximum_artifact_bytes" \
          -- /usr/bin/timeout --signal=KILL "$timeout_seconds" \
          /usr/bin/unshare --net -- \
-         /usr/bin/setpriv \
-         --reuid=10001 \
-         --regid=10001 \
-         --clear-groups \
-         --bounding-set=-all,+sys_admin \
-         --inh-caps=-all \
-         --ambient-caps=-all \
-         --no-new-privs \
          /usr/bin/bwrap \
          --unshare-pid \
          --unshare-ipc \
@@ -235,6 +228,14 @@ while true; do
          --setenv XDG_CONFIG_HOME /tmp/config \
          --setenv XDG_DATA_HOME /tmp/data \
          --setenv LC_ALL C \
+         /usr/bin/setpriv \
+         --reuid=10001 \
+         --regid=10001 \
+         --clear-groups \
+         --bounding-set=-all \
+         --inh-caps=-all \
+         --ambient-caps=-all \
+         --no-new-privs \
          /opt/orca/AppRun "$@" \
          >"$diagnostics_fifo" 2>&1; then
       engine_status=0
