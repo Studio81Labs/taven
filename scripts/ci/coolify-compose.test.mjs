@@ -103,16 +103,16 @@ for (const migrationExit of [0, 1]) {
     try {
       writeFileSync(
         join(dir, "docker"),
-        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALL_LOG"\ncase "$*" in *"run --rm --no-deps migration"*) exit "$MIGRATION_EXIT";; esac\n',
+        '#!/bin/sh\n[ -z "${TAVEN_REDIS_URL+x}" ] || exit 9\nprintf "%s\\n" "$*" >> "$0.calls"\ncase "$*" in *"run --rm --no-deps migration"*) exit "$(cat "$0.exit")";; esac\n',
         { mode: 0o755 },
       );
-      const log = join(dir, "calls");
+      const log = join(dir, "docker.calls");
+      writeFileSync(join(dir, "docker.exit"), String(migrationExit));
       const result = spawnSync("sh", ["infra/coolify/release.sh"], {
         cwd: root,
         env: {
           PATH: `${dir}:${process.env.PATH}`,
-          CALL_LOG: log,
-          MIGRATION_EXIT: String(migrationExit),
+          TAVEN_REDIS_URL: "must-not-leak-from-build-helper",
         },
       });
       assert.equal(result.status, migrationExit);

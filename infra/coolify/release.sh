@@ -4,7 +4,10 @@ set -eu
 # Coolify executes this from the repository root, after writing runtime .env.
 # Do not source .env: Compose handles quoting/interpolation without shell eval.
 compose() {
-  docker compose --project-directory "$PWD" --env-file .env \
+  # Coolify's build-secret helper exports prequoted values. Shell environment
+  # takes precedence over --env-file, so never inherit application variables.
+  env -i PATH="$PATH" HOME="${HOME:-/root}" DOCKER_HOST=unix:///var/run/docker.sock \
+    docker compose --project-directory "$PWD" --env-file .env \
     -f infra/coolify/docker-compose.yml "$@"
 }
 

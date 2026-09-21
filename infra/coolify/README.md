@@ -51,7 +51,9 @@ from that root. Only the API service declares the runtime build; all six workers
 reuse its image. The migration target is built separately from the same source.
 
 The release script runs the `migration` profile task with `run --rm` and only
-starts API/workers after successful `prisma migrate deploy`. It then waits for
+starts API/workers after successful `prisma migrate deploy`. It clears inherited
+helper-container application variables so the runtime `.env` is authoritative,
+and uses the local host Docker socket. It then waits for
 all seven health checks. A failed migration must be resolved before retrying;
 never bypass this step. Coolify stops the previous Compose containers before
 its custom start command, so deployment has a short outage and a migration
