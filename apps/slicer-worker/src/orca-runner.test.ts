@@ -42,6 +42,112 @@ async function makeRootCleanupFixtureAccessible(
   await chmod(directory, 0o770);
 }
 
+async function runSandboxFailureFixture(
+  failureStage: "bubblewrap" | "identity-drop",
+): Promise<{ failureCode: string; appRunInvoked: boolean }> {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), `taven-runner-${failureStage}-`),
+  );
+  cleanup.push(fixtureRoot);
+  const bin = path.join(fixtureRoot, "bin");
+  const request = path.join(fixtureRoot, "request-failure");
+  const appRunMarker = path.join(fixtureRoot, "orca-invoked");
+  await mkdir(bin);
+  await mkdir(path.join(request, "output"), { recursive: true });
+  await mkdir(path.join(request, "tmp", "data"), { recursive: true });
+  await mkdir(path.join(request, "profiles", "settings"), {
+    recursive: true,
+  });
+  await mkdir(path.join(request, "profiles", "filaments"), {
+    recursive: true,
+  });
+  const commandPath = (name: string): string => path.join(bin, name);
+  const paths = {
+    prlimit: commandPath("prlimit"),
+    timeout: commandPath("timeout"),
+    unshare: commandPath("unshare"),
+    bwrap: commandPath("bwrap"),
+    setpriv: commandPath("setpriv"),
+    appRun: commandPath("AppRun"),
+  };
+  const writeExecutable = async (file: string, source: string) => {
+    await writeFile(file, source);
+    await chmod(file, 0o755);
+  };
+  await writeExecutable(
+    paths.prlimit,
+    '#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n',
+  );
+  await writeExecutable(paths.timeout, '#!/bin/sh\nshift 2\nexec "$@"\n');
+  await writeExecutable(paths.unshare, '#!/bin/sh\nshift 2\nexec "$@"\n');
+  await writeExecutable(
+    paths.bwrap,
+    failureStage === "bubblewrap"
+      ? "#!/bin/sh\nexit 42\n"
+      : `#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != ${paths.setpriv} ]; do shift; done\nshift\nexec ${paths.setpriv} "$@"\n`,
+  );
+  await writeExecutable(
+    paths.setpriv,
+    failureStage === "identity-drop"
+      ? "#!/bin/sh\nexit 126\n"
+      : '#!/bin/sh\nexec "$@"\n',
+  );
+  await writeExecutable(
+    paths.appRun,
+    `#!/bin/sh\nprintf '%s\\n' invoked > ${appRunMarker}\nexit 0\n`,
+  );
+  await writeExecutable(
+    commandPath("stat"),
+    "#!/bin/sh\nprintf '%s\\n' 10001:10001:770\n",
+  );
+  await writeExecutable(
+    commandPath("find"),
+    `#!/bin/sh
+case "$1" in
+  */profiles/settings) printf '%s\\n' /work/profiles/settings/0.json ;;
+  */profiles/filaments) : ;;
+  *) : ;;
+esac
+`,
+  );
+
+  const runner = path.join(fixtureRoot, "orca-runner.sh");
+  const source = await readFile(path.resolve("orca-runner.sh"), "utf8");
+  const runnerSource = [
+    ["/usr/bin/prlimit", paths.prlimit],
+    ["/usr/bin/timeout", paths.timeout],
+    ["/usr/bin/unshare", paths.unshare],
+    ["/usr/bin/bwrap", paths.bwrap],
+    ["/usr/bin/setpriv", paths.setpriv],
+    ["/opt/orca/AppRun", paths.appRun],
+  ].reduce((current, [from, to]) => current.replaceAll(from, to), source);
+  await writeExecutable(runner, runnerSource);
+  await writeFile(path.join(request, "profiles", "settings", "0.json"), "{}\n");
+  await writeFile(path.join(request, "geometry.stl"), "solid test\n");
+  await writeFile(path.join(request, "copies"), "1\n");
+  await writeFile(path.join(request, "artifact-format"), "gcode\n");
+  await writeFile(path.join(request, "timeout-seconds"), "60\n");
+  await writeFile(
+    path.join(request, "lease-expires-at"),
+    `${Math.ceil(Date.now() / 1_000) + 120}\n`,
+  );
+  await writeFile(path.join(request, "ready"), "\n");
+
+  await execute("/bin/sh", [runner], {
+    cwd: path.resolve("."),
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      TAVEN_ORCA_RUNNER_ROOT: fixtureRoot,
+      TAVEN_ORCA_RUNNER_ONCE: "true",
+    },
+  });
+  return {
+    failureCode: await readFile(path.join(request, "failure-code"), "utf8"),
+    appRunInvoked: await exists(appRunMarker),
+  };
+}
+
 describe("Orca runner lifecycle", () => {
   it("creates a network namespace before Bubblewrap", async () => {
     const runner = await readFile(path.resolve("orca-runner.sh"), "utf8");
@@ -80,6 +186,16 @@ describe("Orca runner lifecycle", () => {
     expect(runner).toContain('--bind "$request/tmp" /tmp');
     expect(runner).toContain("--proc /proc");
   });
+
+  it.each(["bubblewrap", "identity-drop"] as const)(
+    "fails closed when %s fails",
+    async (failureStage) => {
+      await expect(runSandboxFailureFixture(failureStage)).resolves.toEqual({
+        failureCode: "ENGINE_UNAVAILABLE\n",
+        appRunInvoked: false,
+      });
+    },
+  );
 
   it("recovers restart markers and reaps cancelled or expired requests", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "taven-runner-lifecycle-"));

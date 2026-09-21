@@ -104,6 +104,36 @@ jobs:
               --ambient-caps=-all \
               --no-new-privs \
               /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1'
+          docker exec "$container" /bin/sh -ec '
+            probe_root=/tmp/taven-sandbox-probe
+            rm -rf "$probe_root"
+            mkdir -p "$probe_root/input" "$probe_root/output" "$probe_root/scratch"
+            printf "%s\\n" hidden > "$probe_root/input/visible.txt"
+            printf "%s\\n" sibling > "$probe_root/sibling-secret"
+            chown -R 10001:10001 "$probe_root/output" "$probe_root/scratch"
+          '
+          docker exec --env BROKER_NETWORK_NAMESPACE="$broker_network_namespace" "$container" /usr/bin/unshare --net -- /usr/bin/bwrap \
+            --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try \
+            --die-with-parent --new-session \
+            --ro-bind / / \
+            --ro-bind /tmp/taven-sandbox-probe/input /work \
+            --bind /tmp/taven-sandbox-probe/output /work/output \
+            --bind /tmp/taven-sandbox-probe/scratch /tmp \
+            --proc /proc \
+            --dev /dev \
+            --chdir /tmp \
+            --clearenv \
+            --setenv BROKER_NETWORK_NAMESPACE "$broker_network_namespace" \
+            /usr/bin/setpriv \
+              --reuid=10001 \
+              --regid=10001 \
+              --clear-groups \
+              --bounding-set=-all \
+              --inh-caps=-all \
+              --ambient-caps=-all \
+              --no-new-privs \
+              /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! touch /etc/taven-sandbox-root-write; ! touch /work/input-write; ! test -e /work-sibling/secret; printf "%s\\n" output > /work/output/output.txt; printf "%s\\n" scratch > /tmp/scratch.txt'
+          docker exec "$container" /bin/sh -ec 'rm -rf /tmp/taven-sandbox-probe'
           fixture_root="$RUNNER_TEMP/taven-worker-reference-gcode"
           export FIXTURE_ROOT="$fixture_root"
           node --input-type=module <<'NODE'
