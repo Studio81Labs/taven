@@ -114,12 +114,16 @@ jobs:
               --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
               /bin/mkdir -m 770 "$probe_root/input" "$probe_root/input/output" "$probe_root/output" "$probe_root/scratch"
             printf "%s\\n" hidden > "$probe_root/input/visible.txt"
-            printf "%s\\n" sibling > "$probe_root/sibling-secret"
+            /usr/bin/setpriv --reuid=10001 --regid=10001 --clear-groups \
+              --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+              /bin/mkdir -m 770 /var/run/taven-orca/request-sibling
+            printf "%s\\n" sibling > /var/run/taven-orca/request-sibling/secret
           '
           docker exec --env BROKER_NETWORK_NAMESPACE="$broker_network_namespace" "$container" /usr/bin/unshare --net -- /usr/bin/bwrap \
             --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try \
             --die-with-parent --new-session \
             --ro-bind / / \
+            --tmpfs /run/taven-orca \
             --ro-bind /tmp/taven-sandbox-probe/input /work \
             --bind /tmp/taven-sandbox-probe/output /work/output \
             --bind /tmp/taven-sandbox-probe/scratch /tmp \
@@ -136,7 +140,7 @@ jobs:
               --inh-caps=-all \
               --ambient-caps=-all \
               --no-new-privs \
-              /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! touch /etc/taven-sandbox-root-write; ! touch /work/input-write; ! test -e /work-sibling/secret; printf "%s\\n" output > /work/output/output.txt; printf "%s\\n" scratch > /tmp/scratch.txt'
+              /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! touch /etc/taven-sandbox-root-write; ! touch /work/input-write; ! test -e /var/run/taven-orca/request-sibling/secret; printf "%s\\n" output > /work/output/output.txt; printf "%s\\n" scratch > /tmp/scratch.txt'
           docker exec "$container" /bin/sh -ec 'rm -rf /tmp/taven-sandbox-probe'
           fixture_root="$RUNNER_TEMP/taven-worker-reference-gcode"
           export FIXTURE_ROOT="$fixture_root"
