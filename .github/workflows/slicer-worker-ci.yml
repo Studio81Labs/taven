@@ -75,60 +75,21 @@ jobs:
         run: |
           docker info --format 'SecurityOptions: {{json .SecurityOptions}}'
           compose_args=(-f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker)
-          # GitHub-hosted Docker blocks user namespaces for ordinary containers.
-          # Run this CI-only broker container privileged so the boundary is still
-          # exercised; the production Compose service remains non-privileged and
-          # requires the host user-namespace prerequisite documented above.
-          # The outer user namespace is bootstrapped by root because the
-          # hosted Docker daemon disables unprivileged user namespaces in its
-          # initial namespace; the runner still drops to UID 10001 before
-          # invoking Bubblewrap inside that namespace.
-          docker compose "${compose_args[@]}" up slicer-volume-init
-          container="$(docker run --detach --privileged \
-            --name taven-runtime-lsm-orca-runner \
-            --init \
-            --user 0:10001 \
-            --network none \
-            --read-only \
-            --cap-drop ALL \
-            --cap-add SYS_ADMIN \
-            --cap-add SETUID \
-            --cap-add SETGID \
-            --cap-add SETPCAP \
-            --tmpfs /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001,mode=0770 \
-            --tmpfs /work:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=0770 \
-            --security-opt no-new-privileges:true \
-            --security-opt seccomp=unconfined \
-            --security-opt apparmor=unconfined \
-            --pids-limit 320 \
-            --volume "${COMPOSE_PROJECT_NAME}_slicerexchange:/var/run/taven-orca" \
-            --env TAVEN_ORCA_RUNNER_ROOT=/var/run/taven-orca \
-            --env TAVEN_SLICER_MAX_ARTIFACT_BYTES=536870912 \
-            --env TAVEN_SLICER_MAX_DIAGNOSTIC_BYTES=1048576 \
-            --entrypoint /bin/sh \
-            taven/orca-slicer:2.4.2-fixtures \
-            -ec '
-              set -eu
-              /usr/bin/unshare --user --fork --keep-caps /bin/sh -ec "while [ ! -e /tmp/taven-userns-ready ]; do sleep 0.01; done; exec /bin/sh /usr/local/bin/taven-orca-runner" &
-              launcher=$!
-              for i in $(seq 1 100); do
-                children=$(cat "/proc/$launcher/task/$launcher/children" 2>/dev/null || true)
-                [ -n "$children" ] && break
-                sleep 0.01
-              done
-              child=${children%% *}
-              printf "0 0 65536\\n" > "/proc/$child/uid_map"
-              printf "0 0 65536\\n" > "/proc/$child/gid_map"
-              touch /tmp/taven-userns-ready
-              wait "$launcher"
-            ')"
+          # Ubuntu's AppArmor user-namespace restriction blocks Bubblewrap on
+          # the hosted runner. Configure this ephemeral CI host explicitly;
+          # failure is intentional because the broker prerequisite is required.
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          docker compose "${compose_args[@]}" up -d slicer-volume-init orca-runner
           cleanup() {
-            if [ -n "${container:-}" ]; then
-              docker rm -f "$container" >/dev/null 2>&1 || true
-            fi
             docker compose "${compose_args[@]}" down --volumes --remove-orphans
           }
           trap cleanup EXIT
+          container="$(docker compose "${compose_args[@]}" ps -q orca-runner)"
           test -n "$container"
           docker inspect "$container" --format 'AppArmorProfile: {{.AppArmorProfile}}'
           test "$(docker inspect "$container" --format '{{.AppArmorProfile}}')" = "unconfined"
@@ -237,31 +198,4 @@ jobs:
             throw new Error(`Sandboxed fixture hash drifted: expected ${expected}, received ${actual}`);
           }
           NODE
-      - name: Configure userns-compatible integration broker
-        run: |
-          override="$RUNNER_TEMP/taven-worker-ci-compose.yml"
-          cat > "$override" <<'YAML'
-          services:
-            orca-runner:
-              privileged: true
-              cap_drop: ["ALL"]
-              cap_add: ["SYS_ADMIN", "SETUID", "SETGID", "SETPCAP"]
-              entrypoint: ["/bin/sh", "-ec"]
-              command: |
-                set -eu
-                /usr/bin/unshare --user --fork --keep-caps /bin/sh -ec "while [ ! -e /tmp/taven-userns-ready ]; do sleep 0.01; done; exec /bin/sh /usr/local/bin/taven-orca-runner" &
-                launcher=$!
-                for i in $(seq 1 100); do
-                  children=$(cat "/proc/$launcher/task/$launcher/children" 2>/dev/null || true)
-                  [ -n "$children" ] && break
-                  sleep 0.01
-                done
-                child=${children%% *}
-                printf "0 0 65536\\n" > "/proc/$child/uid_map"
-                printf "0 0 65536\\n" > "/proc/$child/gid_map"
-                touch /tmp/taven-userns-ready
-                wait "$launcher"
-          YAML
-          echo "TAVEN_SLICER_WORKER_COMPOSE_EXTRA_FILE=$override" >> "$GITHUB_ENV"
-          echo "TAVEN_SLICER_WORKER_CI_BROKER=1" >> "$GITHUB_ENV"
       - run: pnpm slicer-worker:integration
