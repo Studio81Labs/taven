@@ -42,7 +42,9 @@ x-backend-environment: &backend-environment
   TAVEN_COMGATE_SECRET: ${TAVEN_COMGATE_SECRET:-}
   TAVEN_COMGATE_TEST_MODE: ${TAVEN_COMGATE_TEST_MODE:-true}
   TAVEN_COMGATE_API_BASE_URL: ${TAVEN_COMGATE_API_BASE_URL:-https://payments.comgate.cz/v2.0}
-  TAVEN_DELIVERY_ENDPOINTS_JSON: ${TAVEN_DELIVERY_ENDPOINTS_JSON:-[{"providerEndpointId":"local-zbox","endpointType":"pickup_point","addressSnapshot":{"country":"CZ","city":"Praha","label":"Local development Z-BOX"},"supportedCategoryIds":["zbox"],"provider":"local-development"}]}
+  # Let the backend's development fallback provide the local endpoint. Keeping
+  # the Compose value empty avoids interpolation parsing the JSON's braces.
+  TAVEN_DELIVERY_ENDPOINTS_JSON: ${TAVEN_DELIVERY_ENDPOINTS_JSON:-}
   TAVEN_DELIVERY_SELECTOR_MODE: ${TAVEN_DELIVERY_SELECTOR_MODE:-CONFIGURED}
   TAVEN_CLAIM_POLICY_REVISION: ${TAVEN_CLAIM_POLICY_REVISION:-claim-policy-draft-v0}
   TAVEN_TERMS_REVISION: ${TAVEN_TERMS_REVISION:-terms-pending}
