@@ -1,8 +1,7 @@
-"use strict";
-const fs = require("node:fs");
-const net = require("node:net");
-const tls = require("node:tls");
-const { createRequire } = require("node:module");
+import fs from "node:fs";
+import net from "node:net";
+import tls from "node:tls";
+import { createRequire } from "node:module";
 const load = createRequire(process.cwd() + "/package.json");
 const deadline = setTimeout(() => {
   console.error("Worker dependency check timed out");
@@ -32,7 +31,8 @@ function redisPing() {
       settled = true;
       socket.setTimeout(0);
       socket.destroy();
-      error ? reject(error) : resolve();
+      if (error) reject(error);
+      else resolve();
     };
     socket.setTimeout(3000, () => finish(new Error("Redis timeout")));
     socket.once("error", () => finish(new Error("Redis connection or TLS")));

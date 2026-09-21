@@ -68,7 +68,7 @@ ENV NODE_ENV=production
 WORKDIR /opt/taven/backend
 
 COPY --from=build --chown=node:node /opt/taven/backend ./
-COPY --from=build --chown=node:node /workspace/apps/backend/worker-healthcheck.cjs ./worker-healthcheck.cjs
+COPY --from=build --chown=node:node /workspace/apps/backend/worker-healthcheck.mjs ./worker-healthcheck.mjs
 COPY --from=build --chown=node:node /workspace/apps/backend/docker-entrypoint.sh /usr/local/bin/taven-backend-entrypoint.sh
 
 RUN chmod 755 /usr/local/bin/taven-backend-entrypoint.sh && \

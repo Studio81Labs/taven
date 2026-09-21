@@ -134,7 +134,7 @@ x-backend-runtime: &backend-runtime
   restart: unless-stopped
   environment: *backend-environment
   healthcheck:
-    test: ["CMD", "node", "worker-healthcheck.cjs"]
+    test: ["CMD", "node", "worker-healthcheck.mjs"]
     interval: 60s
     timeout: 12s
     retries: 3
