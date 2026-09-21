@@ -63,7 +63,7 @@ complete. A setup or handoff failure fails closed with `ENGINE_UNAVAILABLE`,
 not by granting the container `privileged` or a Docker socket.
 
 Every Orca invocation runs through `prlimit`, `timeout`,
-`/usr/bin/unshare --net --`, `setpriv`, and Bubblewrap. `unshare(1)` creates
+`/usr/bin/unshare --net --`, Bubblewrap, the inner `setpriv`, and AppRun. `unshare(1)` creates
 the child network namespace before Bubblewrap without configuring loopback;
 Bubblewrap's `--unshare-net` is deliberately not used because it configures
 loopback and would require `CAP_NET_ADMIN`. `setpriv` changes to UID/GID

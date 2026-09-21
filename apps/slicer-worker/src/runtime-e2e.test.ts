@@ -1,6 +1,13 @@
 import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -357,9 +364,16 @@ async function monitorRequestWorkspace(): Promise<{
     "child_groups=$(awk '/^Groups:/{print $2}' \"$child_status\" 2>/dev/null || true);",
     '[ -z "$child_groups" ] || continue;',
     'sandbox_pid=$(basename "${status%/status}");',
-    "broker_network_namespace=$(readlink /proc/self/ns/net);",
+    "namespace_ok=true;",
+    "for namespace in mnt pid ipc uts net; do",
+    'child_namespace=$(readlink "/proc/$sandbox_pid/ns/$namespace" 2>/dev/null || true);',
+    'broker_namespace=$(readlink "/proc/self/ns/$namespace" 2>/dev/null || true);',
+    '[ -n "$child_namespace" ] || namespace_ok=false;',
+    '[ "$namespace" != net ] || [ "$child_namespace" != "$broker_namespace" ] || namespace_ok=false;',
+    "done;",
+    '[ "$namespace_ok" = true ] || continue;',
     'child_network_namespace=$(readlink "/proc/$sandbox_pid/ns/net");',
-    '[ "$child_network_namespace" != "$broker_network_namespace" ] || continue;',
+    "broker_network_namespace=$(readlink /proc/self/ns/net);",
     'sandbox_egress=$(/usr/bin/nsenter -t "$sandbox_pid" -n /bin/sh -ec \'test "$(readlink /proc/self/ns/net)" = "$1"; if /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1; then exit 1; fi; printf blocked\' /bin/sh "$child_network_namespace" 2>/dev/null || true);',
     '[ "$sandbox_egress" = "blocked" ] || continue;',
     'printf "%s\\n" "$modes";',
@@ -367,7 +381,7 @@ async function monitorRequestWorkspace(): Promise<{
     'printf "%s\\n" "$child_gid" "groups:empty";',
     'for name in CapInh CapPrm CapEff CapBnd CapAmb; do awk -v name="$name" \'$1 == name ":" { print $2 }\' "$child_status"; done;',
     "awk '/^NoNewPrivs:/{print $2}' \"$child_status\";",
-    'printf "%s\\n" "mnt:isolated" "pid:isolated" "ipc:isolated" "uts:isolated" "net:isolated";',
+    'for namespace in mnt pid ipc uts net; do printf "%s\\n" "$namespace:isolated"; done;',
     "exit 0;",
     "done;; esac;",
     "done;",
@@ -478,6 +492,85 @@ async function assertBrokerSecurity(): Promise<void> {
       "/var/run/taven-orca",
     ]),
   ).toBe("10001:10001:770");
+}
+
+async function assertSandboxSetupFailureClosed(): Promise<void> {
+  const fixtureRoot = await mkdtemp(
+    path.join(tmpdir(), "taven-orca-setup-failure-"),
+  );
+  const fakeBubblewrap = path.join(fixtureRoot, "bwrap");
+  const fakeAppRun = path.join(fixtureRoot, "AppRun");
+  const exchangeRoot = path.join(fixtureRoot, "exchange");
+  const request = "/var/run/taven-orca/request-setup-failure";
+  const requestOnHost = path.join(exchangeRoot, "request-setup-failure");
+  await mkdir(exchangeRoot, { mode: 0o770 });
+  await writeFile(
+    fakeBubblewrap,
+    "#!/bin/sh\nprintf '%s\\n' attempted > /var/run/taven-orca/bwrap-attempted\nexit 42\n",
+  );
+  await writeFile(
+    fakeAppRun,
+    "#!/bin/sh\nprintf '%s\\n' executed > /var/run/taven-orca/orca-invoked\nexit 0\n",
+  );
+  await Promise.all([chmod(fakeBubblewrap, 0o555), chmod(fakeAppRun, 0o555)]);
+  const leaseExpiresAt = Math.ceil(Date.now() / 1_000) + 120;
+  const setup = [
+    `request=${request}`,
+    'mkdir -m 770 -p "$request/output" "$request/tmp/data" "$request/profiles/settings" "$request/profiles/filaments"',
+    "printf '%s\\n' '{}' > \"$request/profiles/settings/0.json\"",
+    "printf '%s\\n' 'solid test' 'endsolid test' > \"$request/geometry.stl\"",
+    "printf '%s\\n' 1 > \"$request/copies\"",
+    "printf '%s\\n' gcode > \"$request/artifact-format\"",
+    "printf '%s\\n' 120 > \"$request/timeout-seconds\"",
+    `printf '%s\\n' ${leaseExpiresAt} > "$request/lease-expires-at"`,
+    'touch "$request/ready"',
+    'chown -R 10001:10001 "$request"',
+  ].join("; ");
+
+  try {
+    await compose(["stop", "orca-runner"]);
+    await compose([
+      "run",
+      "--rm",
+      "--no-deps",
+      "--cap-add",
+      "CHOWN",
+      "--volume",
+      `${exchangeRoot}:/var/run/taven-orca`,
+      "--entrypoint",
+      "/bin/sh",
+      "orca-runner",
+      "-ec",
+      setup,
+    ]);
+    await compose([
+      "run",
+      "--rm",
+      "--no-deps",
+      "--env",
+      "TAVEN_ORCA_RUNNER_ONCE=true",
+      "--volume",
+      `${exchangeRoot}:/var/run/taven-orca`,
+      "--volume",
+      `${fakeBubblewrap}:/usr/bin/bwrap:ro`,
+      "--volume",
+      `${fakeAppRun}:/opt/orca/AppRun:ro`,
+      "--entrypoint",
+      "/bin/sh",
+      "orca-runner",
+      "-ec",
+      "/bin/sh /usr/local/bin/taven-orca-runner",
+    ]);
+    await expect(
+      readFile(path.join(requestOnHost, "failure-code"), "utf8"),
+    ).resolves.toBe("ENGINE_UNAVAILABLE\n");
+    await expect(
+      readFile(path.join(exchangeRoot, "orca-invoked"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await compose(["up", "--detach", "orca-runner"]).catch(() => undefined);
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
 }
 
 async function runnerDiagnostics(): Promise<string> {
@@ -937,6 +1030,7 @@ describe.skipIf(!integrationEnabled)("pinned Orca runtime end to end", () => {
   it(
     "uses the production v2 worker, broker, and pinned image twice from clean workspaces",
     async () => {
+      await assertSandboxSetupFailureClosed();
       await assertBrokerSecurity();
       const first = await runSequence(true);
       expect(first.workspaceModes).toEqual(Array(7).fill("10001:10001:770"));
