@@ -1,0 +1,186 @@
+name: taven-backend
+
+# This file is the Coolify backend application topology. PostgreSQL, Redis,
+# Garage/object storage, web, admin, Orca, and the slicer consumer remain
+# independently managed Coolify resources. Every state-store URL below is
+# therefore supplied by the Coolify environment; no service-name dependency
+# from the local Compose project is used here.
+
+x-backend-build: &backend-build
+  context: ../..
+  dockerfile: apps/backend/Dockerfile
+  target: runtime
+
+x-backend-environment: &backend-environment
+  NODE_ENV: ${NODE_ENV:-production}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  TAVEN_DATABASE_CA_CERT_B64: ${TAVEN_DATABASE_CA_CERT_B64:-}
+  TAVEN_DATABASE_CA_CERT_PATH: ${TAVEN_DATABASE_CA_CERT_PATH:-/etc/secrets/postgres-ca.crt}
+  TAVEN_REDIS_URL: ${TAVEN_REDIS_URL:?TAVEN_REDIS_URL is required}
+  TAVEN_REDIS_CA_CERT_B64: ${TAVEN_REDIS_CA_CERT_B64:-}
+  TAVEN_REDIS_CA_CERT_PATH: ${TAVEN_REDIS_CA_CERT_PATH:-/etc/secrets/redis-ca.crt}
+  TAVEN_S3_ENDPOINT: ${TAVEN_S3_ENDPOINT:?TAVEN_S3_ENDPOINT is required}
+  TAVEN_S3_PUBLIC_ENDPOINT: ${TAVEN_S3_PUBLIC_ENDPOINT:?TAVEN_S3_PUBLIC_ENDPOINT is required}
+  TAVEN_S3_REGION: ${TAVEN_S3_REGION:-us-east-1}
+  TAVEN_S3_BUCKET: ${TAVEN_S3_BUCKET:?TAVEN_S3_BUCKET is required}
+  TAVEN_S3_ACCESS_KEY_ID: ${TAVEN_S3_ACCESS_KEY_ID:?TAVEN_S3_ACCESS_KEY_ID is required}
+  TAVEN_S3_SECRET_ACCESS_KEY: ${TAVEN_S3_SECRET_ACCESS_KEY:?TAVEN_S3_SECRET_ACCESS_KEY is required}
+  TAVEN_S3_FORCE_PATH_STYLE: ${TAVEN_S3_FORCE_PATH_STYLE:-false}
+  TAVEN_S3_SIGNED_URL_TTL_SECONDS: ${TAVEN_S3_SIGNED_URL_TTL_SECONDS:-900}
+  TAVEN_UPLOAD_CLIENT_HASH_KEY: ${TAVEN_UPLOAD_CLIENT_HASH_KEY:?TAVEN_UPLOAD_CLIENT_HASH_KEY is required}
+  TAVEN_QUOTE_CAPABILITY_KEY: ${TAVEN_QUOTE_CAPABILITY_KEY:?TAVEN_QUOTE_CAPABILITY_KEY is required}
+  TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS: ${TAVEN_QUOTE_CAPABILITY_PREVIOUS_KEYS:-[]}
+  TAVEN_AUTOMATIC_PRICE_LIST_REVISION: ${TAVEN_AUTOMATIC_PRICE_LIST_REVISION:-automatic-v0-czk}
+  TAVEN_BINDING_QUOTE_FLOWS_ENABLED: ${TAVEN_BINDING_QUOTE_FLOWS_ENABLED:-false}
+  TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED: ${TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED:-false}
+  TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED: ${TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED:-false}
+  TAVEN_CLAIM_WINDOW_DAYS: ${TAVEN_CLAIM_WINDOW_DAYS:-}
+  TAVEN_PAYMENT_PROVIDER: ${TAVEN_PAYMENT_PROVIDER:-}
+  TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: ${TAVEN_PAYMENT_SANDBOX_PUBLIC_URL:-}
+  TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET: ${TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET:-}
+  TAVEN_API_PUBLIC_URL: ${TAVEN_API_PUBLIC_URL:-}
+  TAVEN_PUBLIC_SITE_URL: ${TAVEN_PUBLIC_SITE_URL:-}
+  TAVEN_CLAIM_POLICY_REVISION: ${TAVEN_CLAIM_POLICY_REVISION:-claim-policy-draft-v0}
+  TAVEN_TERMS_REVISION: ${TAVEN_TERMS_REVISION:-terms-pending}
+  TAVEN_PHOTO_CONSENT_REVISION: ${TAVEN_PHOTO_CONSENT_REVISION:-photo-consent-pending}
+  # CONFIGURED mode requires a non-empty endpoint list; PACKETA mode requires
+  # its widget account instead and may leave this default empty JSON value.
+  TAVEN_DELIVERY_ENDPOINTS_JSON: ${TAVEN_DELIVERY_ENDPOINTS_JSON:-[]}
+  TAVEN_DELIVERY_SELECTOR_MODE: ${TAVEN_DELIVERY_SELECTOR_MODE:?TAVEN_DELIVERY_SELECTOR_MODE is required}
+  TAVEN_PACKETA_WIDGET_ACCOUNT_ID: ${TAVEN_PACKETA_WIDGET_ACCOUNT_ID:-}
+  TAVEN_PACKETA_WIDGET_OPTIONS_JSON: ${TAVEN_PACKETA_WIDGET_OPTIONS_JSON:-}
+  TAVEN_TRUSTED_PROXY_CIDRS: ${TAVEN_TRUSTED_PROXY_CIDRS:-}
+  TAVEN_ENVIRONMENT: ${TAVEN_ENVIRONMENT:?TAVEN_ENVIRONMENT is required}
+  TAVEN_ADMIN_ORIGINS: ${TAVEN_ADMIN_ORIGINS:?TAVEN_ADMIN_ORIGINS is required}
+  TAVEN_ADMIN_CSRF_KEY: ${TAVEN_ADMIN_CSRF_KEY:?TAVEN_ADMIN_CSRF_KEY is required}
+  TAVEN_ADMIN_CLIENT_HASH_KEY: ${TAVEN_ADMIN_CLIENT_HASH_KEY:?TAVEN_ADMIN_CLIENT_HASH_KEY is required}
+  TAVEN_GITHUB_APP_CLIENT_ID: ${TAVEN_GITHUB_APP_CLIENT_ID:?TAVEN_GITHUB_APP_CLIENT_ID is required}
+  TAVEN_GITHUB_APP_CLIENT_SECRET: ${TAVEN_GITHUB_APP_CLIENT_SECRET:?TAVEN_GITHUB_APP_CLIENT_SECRET is required}
+  TAVEN_GITHUB_APP_CALLBACK_URL: ${TAVEN_GITHUB_APP_CALLBACK_URL:?TAVEN_GITHUB_APP_CALLBACK_URL is required}
+  TAVEN_ADMIN_COMPLETION_URL: ${TAVEN_ADMIN_COMPLETION_URL:?TAVEN_ADMIN_COMPLETION_URL is required}
+  TAVEN_GITHUB_LOGIN_ATTEMPT_ENCRYPTION_KEY: ${TAVEN_GITHUB_LOGIN_ATTEMPT_ENCRYPTION_KEY:?TAVEN_GITHUB_LOGIN_ATTEMPT_ENCRYPTION_KEY is required}
+  TAVEN_COMGATE_MERCHANT_ID: ${TAVEN_COMGATE_MERCHANT_ID:-}
+  TAVEN_COMGATE_SECRET: ${TAVEN_COMGATE_SECRET:-}
+  TAVEN_COMGATE_TEST_MODE: ${TAVEN_COMGATE_TEST_MODE:-}
+  TAVEN_COMGATE_API_BASE_URL: ${TAVEN_COMGATE_API_BASE_URL:-https://payments.comgate.cz/v2.0}
+  TAVEN_SLICING_DISPATCH_POLL_MILLISECONDS: ${TAVEN_SLICING_DISPATCH_POLL_MILLISECONDS:-1000}
+  TAVEN_SLICING_DISPATCH_CLAIM_LIMIT: ${TAVEN_SLICING_DISPATCH_CLAIM_LIMIT:-25}
+
+x-retention-environment: &retention-environment
+  NODE_ENV: ${NODE_ENV:-production}
+  TAVEN_ENVIRONMENT: ${TAVEN_ENVIRONMENT:?TAVEN_ENVIRONMENT is required}
+  DATABASE_URL: ${TAVEN_RETENTION_DATABASE_URL:?TAVEN_RETENTION_DATABASE_URL is required}
+  TAVEN_DATABASE_CA_CERT_B64: ${TAVEN_DATABASE_CA_CERT_B64:-}
+  TAVEN_DATABASE_CA_CERT_PATH: ${TAVEN_DATABASE_CA_CERT_PATH:-/etc/secrets/postgres-ca.crt}
+  TAVEN_S3_ENDPOINT: ${TAVEN_S3_ENDPOINT:?TAVEN_S3_ENDPOINT is required}
+  TAVEN_S3_REGION: ${TAVEN_S3_REGION:-us-east-1}
+  TAVEN_S3_BUCKET: ${TAVEN_S3_BUCKET:?TAVEN_S3_BUCKET is required}
+  TAVEN_S3_ACCESS_KEY_ID: ${TAVEN_RETENTION_S3_ACCESS_KEY_ID:?TAVEN_RETENTION_S3_ACCESS_KEY_ID is required}
+  TAVEN_S3_SECRET_ACCESS_KEY: ${TAVEN_RETENTION_S3_SECRET_ACCESS_KEY:?TAVEN_RETENTION_S3_SECRET_ACCESS_KEY is required}
+  TAVEN_S3_FORCE_PATH_STYLE: ${TAVEN_S3_FORCE_PATH_STYLE:-false}
+  TAVEN_S3_SIGNED_URL_TTL_SECONDS: ${TAVEN_S3_SIGNED_URL_TTL_SECONDS:-900}
+
+x-worker-database-environment: &worker-database-environment
+  NODE_ENV: ${NODE_ENV:-production}
+  TAVEN_ENVIRONMENT: ${TAVEN_ENVIRONMENT:?TAVEN_ENVIRONMENT is required}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  TAVEN_DATABASE_CA_CERT_B64: ${TAVEN_DATABASE_CA_CERT_B64:-}
+  TAVEN_DATABASE_CA_CERT_PATH: ${TAVEN_DATABASE_CA_CERT_PATH:-/etc/secrets/postgres-ca.crt}
+
+x-payment-worker-environment: &payment-worker-environment
+  <<: *worker-database-environment
+  TAVEN_PAYMENT_PROVIDER: ${TAVEN_PAYMENT_PROVIDER:-}
+  TAVEN_PAYMENT_SANDBOX_PUBLIC_URL: ${TAVEN_PAYMENT_SANDBOX_PUBLIC_URL:-}
+  TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET: ${TAVEN_PAYMENT_SANDBOX_WEBHOOK_SECRET:-}
+  TAVEN_API_PUBLIC_URL: ${TAVEN_API_PUBLIC_URL:-}
+  TAVEN_COMGATE_MERCHANT_ID: ${TAVEN_COMGATE_MERCHANT_ID:-}
+  TAVEN_COMGATE_SECRET: ${TAVEN_COMGATE_SECRET:-}
+  TAVEN_COMGATE_TEST_MODE: ${TAVEN_COMGATE_TEST_MODE:-}
+  TAVEN_COMGATE_API_BASE_URL: ${TAVEN_COMGATE_API_BASE_URL:-https://payments.comgate.cz/v2.0}
+
+x-operator-worker-environment: &operator-worker-environment
+  <<: *worker-database-environment
+  TAVEN_ADMIN_ORIGINS: ${TAVEN_ADMIN_ORIGINS:?TAVEN_ADMIN_ORIGINS is required}
+  TAVEN_ADMIN_CSRF_KEY: ${TAVEN_ADMIN_CSRF_KEY:?TAVEN_ADMIN_CSRF_KEY is required}
+  TAVEN_ADMIN_CLIENT_HASH_KEY: ${TAVEN_ADMIN_CLIENT_HASH_KEY:?TAVEN_ADMIN_CLIENT_HASH_KEY is required}
+  TAVEN_GITHUB_APP_CLIENT_ID: ${TAVEN_GITHUB_APP_CLIENT_ID:?TAVEN_GITHUB_APP_CLIENT_ID is required}
+  TAVEN_GITHUB_APP_CLIENT_SECRET: ${TAVEN_GITHUB_APP_CLIENT_SECRET:?TAVEN_GITHUB_APP_CLIENT_SECRET is required}
+  TAVEN_GITHUB_APP_CALLBACK_URL: ${TAVEN_GITHUB_APP_CALLBACK_URL:?TAVEN_GITHUB_APP_CALLBACK_URL is required}
+  TAVEN_ADMIN_COMPLETION_URL: ${TAVEN_ADMIN_COMPLETION_URL:?TAVEN_ADMIN_COMPLETION_URL is required}
+  TAVEN_GITHUB_LOGIN_ATTEMPT_ENCRYPTION_KEY: ${TAVEN_GITHUB_LOGIN_ATTEMPT_ENCRYPTION_KEY:?TAVEN_GITHUB_LOGIN_ATTEMPT_ENCRYPTION_KEY is required}
+
+x-slicing-worker-environment: &slicing-worker-environment
+  <<: *worker-database-environment
+  TAVEN_REDIS_URL: ${TAVEN_REDIS_URL:?TAVEN_REDIS_URL is required}
+  TAVEN_REDIS_CA_CERT_B64: ${TAVEN_REDIS_CA_CERT_B64:-}
+  TAVEN_REDIS_CA_CERT_PATH: ${TAVEN_REDIS_CA_CERT_PATH:-/etc/secrets/redis-ca.crt}
+  TAVEN_S3_ENDPOINT: ${TAVEN_S3_ENDPOINT:?TAVEN_S3_ENDPOINT is required}
+  TAVEN_S3_PUBLIC_ENDPOINT: ${TAVEN_S3_PUBLIC_ENDPOINT:?TAVEN_S3_PUBLIC_ENDPOINT is required}
+  TAVEN_S3_REGION: ${TAVEN_S3_REGION:-us-east-1}
+  TAVEN_S3_BUCKET: ${TAVEN_S3_BUCKET:?TAVEN_S3_BUCKET is required}
+  TAVEN_S3_ACCESS_KEY_ID: ${TAVEN_SLICER_S3_ACCESS_KEY_ID:?TAVEN_SLICER_S3_ACCESS_KEY_ID is required}
+  TAVEN_S3_SECRET_ACCESS_KEY: ${TAVEN_SLICER_S3_SECRET_ACCESS_KEY:?TAVEN_SLICER_S3_SECRET_ACCESS_KEY is required}
+  TAVEN_S3_FORCE_PATH_STYLE: ${TAVEN_S3_FORCE_PATH_STYLE:-false}
+  TAVEN_S3_SIGNED_URL_TTL_SECONDS: ${TAVEN_S3_SIGNED_URL_TTL_SECONDS:-900}
+  TAVEN_SLICING_DISPATCH_POLL_MILLISECONDS: ${TAVEN_SLICING_DISPATCH_POLL_MILLISECONDS:-1000}
+  TAVEN_SLICING_DISPATCH_CLAIM_LIMIT: ${TAVEN_SLICING_DISPATCH_CLAIM_LIMIT:-25}
+
+x-backend-runtime: &backend-runtime
+  image: taven/backend:coolify
+  build:
+    <<: *backend-build
+  init: true
+  restart: unless-stopped
+  environment: *backend-environment
+
+services:
+  backend:
+    <<: *backend-runtime
+    expose:
+      - "3001"
+    environment:
+      <<: *backend-environment
+      PORT: "3001"
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  balance-payment-worker:
+    <<: *backend-runtime
+    environment: *worker-database-environment
+    command: ["node", "dist/balance-payment-deadline-worker.js"]
+
+  checkout-payment-worker:
+    <<: *backend-runtime
+    environment: *payment-worker-environment
+    command: ["node", "dist/checkout-payment-worker.js"]
+
+  resource-reservation-worker:
+    <<: *backend-runtime
+    environment: *worker-database-environment
+    command: ["node", "dist/resource-reservation-expiry-worker.js"]
+
+  retention-worker:
+    <<: *backend-runtime
+    environment: *retention-environment
+    command: ["node", "dist/retention-worker.js"]
+
+  operator-auth-expiry-worker:
+    <<: *backend-runtime
+    environment: *operator-worker-environment
+    command: ["node", "dist/operator-auth-expiry-worker.js"]
+
+  slicing-dispatcher:
+    <<: *backend-runtime
+    environment: *slicing-worker-environment
+    command: ["node", "dist/slicing-dispatch-worker.js"]

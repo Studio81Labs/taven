@@ -1,14 +1,16 @@
 import "dotenv/config";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { AppModule } from "./app.module";
+import { CheckoutPaymentWorkerModule } from "./checkout-payment-worker.module";
 import { CheckoutPaymentDeadlineService } from "./modules/payments/checkout-payment-deadline.service";
 import { PaymentOutboxDispatcherService } from "./modules/payments/payment-outbox-dispatcher.service";
 
 const IDLE_POLL_MILLISECONDS = 5_000;
 
 async function main(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(AppModule);
+  const app = await NestFactory.createApplicationContext(
+    CheckoutPaymentWorkerModule,
+  );
   const deadlines = app.get(CheckoutPaymentDeadlineService);
   const outbox = app.get(PaymentOutboxDispatcherService);
   let stopping = false;

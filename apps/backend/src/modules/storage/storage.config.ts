@@ -67,6 +67,7 @@ function parseEndpoint(value: string, name: string): string {
 
 export function readObjectStorageConfig(
   env: NodeJS.ProcessEnv = process.env,
+  options: Readonly<{ requireUploadClientHashKey?: boolean }> = {},
 ): ObjectStorageConfig {
   const endpoint = parseEndpoint(
     required(env, "TAVEN_S3_ENDPOINT"),
@@ -82,8 +83,19 @@ export function readObjectStorageConfig(
     throw new Error("TAVEN_S3_BUCKET must be a valid bucket name");
   }
 
-  const uploadClientHashKey = required(env, "TAVEN_UPLOAD_CLIENT_HASH_KEY");
-  if (uploadClientHashKey.length < MIN_UPLOAD_CLIENT_HASH_KEY_LENGTH) {
+  const uploadClientHashKey = env.TAVEN_UPLOAD_CLIENT_HASH_KEY?.trim() ?? "";
+  if (
+    options.requireUploadClientHashKey !== false &&
+    uploadClientHashKey.length === 0
+  ) {
+    throw new Error(
+      "TAVEN_UPLOAD_CLIENT_HASH_KEY is required for object storage",
+    );
+  }
+  if (
+    uploadClientHashKey.length > 0 &&
+    uploadClientHashKey.length < MIN_UPLOAD_CLIENT_HASH_KEY_LENGTH
+  ) {
     throw new Error(
       `TAVEN_UPLOAD_CLIENT_HASH_KEY must be at least ${MIN_UPLOAD_CLIENT_HASH_KEY_LENGTH} characters`,
     );
@@ -104,3 +116,11 @@ export function readObjectStorageConfig(
     uploadClientHashKey,
   };
 }
+
+export function readWorkerObjectStorageConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): ObjectStorageConfig {
+  return readObjectStorageConfig(env, { requireUploadClientHashKey: false });
+}
+
+export const readRetentionObjectStorageConfig = readWorkerObjectStorageConfig;

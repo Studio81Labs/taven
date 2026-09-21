@@ -1,14 +1,14 @@
 import "dotenv/config";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { AppModule } from "./app.module";
 import { MetricsRetentionService } from "./modules/metrics/metrics-retention.service";
 import { RetentionService } from "./modules/storage/retention.service";
+import { RetentionWorkerModule } from "./retention-worker.module";
 
 const IDLE_POLL_MILLISECONDS = 5_000;
 
 async function main(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(AppModule);
+  const app = await NestFactory.createApplicationContext(RetentionWorkerModule);
   const retention = app.get(RetentionService);
   const metricsRetention = app.get(MetricsRetentionService);
   let stopping = false;

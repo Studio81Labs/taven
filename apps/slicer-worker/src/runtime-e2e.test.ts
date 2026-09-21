@@ -73,8 +73,6 @@ const composeFiles = [
   "compose",
   "-f",
   "infra/docker/docker-compose.yml",
-  "-f",
-  "infra/docker/docker-compose.local.yml",
   "--profile",
   "worker",
 ];

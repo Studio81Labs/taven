@@ -1,13 +1,15 @@
 import "dotenv/config";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { AppModule } from "./app.module";
+import { ResourceReservationWorkerModule } from "./resource-reservation-worker.module";
 import { ResourceReservationExpiryService } from "./modules/resources/resource-reservation-expiry.service";
 
 const IDLE_POLL_MILLISECONDS = 5_000;
 
 async function main(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(AppModule);
+  const app = await NestFactory.createApplicationContext(
+    ResourceReservationWorkerModule,
+  );
   const expiry = app.get(ResourceReservationExpiryService);
   let stopping = false;
   const stop = (): void => {
