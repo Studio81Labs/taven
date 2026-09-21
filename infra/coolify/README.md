@@ -68,8 +68,16 @@ worker's polling loop is progressing; inspect worker logs/queue state as well.
 
 Provision the retention database LOGIN separately and apply
 `retention-grants.sql` as the database owner, after migrations. The script grants
-only the current retention tables/operations; future retention schema changes
-must update these grants. Provision separate retention and dispatcher S3 keys
+the current retention operations, including the column-level reads needed by
+security-invoker capacity/order/claim triggers and `model_geometries.deleted_at`
+updates. The reads cover identifiers, statuses, capacity deadlines and captured
+payment amounts used by those guards; they exclude unrelated customer/payment
+fields and do not allow writes to those business tables.
+Reapply the script to existing dedicated roles
+when these dependencies change; deploying the application does not apply grants.
+Future retention or trigger changes must update these grants and the fresh-role
+regression test (`apps/backend/test/retention-role.e2e.test.ts`).
+Provision separate retention and dispatcher S3 keys
 restricted to the environment's bucket, without bucket-owner/admin access.
 Garage's bucket ACLs expose read/write permissions, not full AWS-style
 prefix/action policies: distinct keys provide isolation/revocation but cannot
