@@ -1,7 +1,7 @@
 {
   "case": "worker-production-gcode-3mf",
   "engine": {
-    "imageDigest": "sha256:38f80bae85eca7bd844fd52576bd209c8a8833dc46c96ed22ba370ff288fb1b0",
+    "imageDigest": "sha256:8b3c61cd706fcb13cab3288057c3f0a1a92980c11faae4ef5f4f978bf7e2afc6",
     "invocationBundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44",
     "name": "orca-slicer",
     "version": "2.4.2"
