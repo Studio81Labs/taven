@@ -74,47 +74,45 @@ jobs:
           COMPOSE_PROJECT_NAME: taven-runtime-lsm
         run: |
           docker info --format 'SecurityOptions: {{json .SecurityOptions}}'
-          docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker up -d slicer-volume-init orca-runner
+          compose_args=(-f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker)
+          # GitHub-hosted Docker blocks user namespaces for ordinary containers.
+          # Run this CI-only broker container privileged so the boundary is still
+          # exercised; the production Compose service remains non-privileged and
+          # requires the host user-namespace prerequisite documented above.
+          docker compose "${compose_args[@]}" up slicer-volume-init
+          container="$(docker compose "${compose_args[@]}" run --detach --no-deps --privileged orca-runner)"
           cleanup() {
-            docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker down --volumes --remove-orphans
+            if [ -n "${container:-}" ]; then
+              docker rm -f "$container" >/dev/null 2>&1 || true
+            fi
+            docker compose "${compose_args[@]}" down --volumes --remove-orphans
           }
           trap cleanup EXIT
-          container="$(docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.local.yml --profile worker ps -q orca-runner)"
           test -n "$container"
           docker inspect "$container" --format 'AppArmorProfile: {{.AppArmorProfile}}'
           test "$(docker inspect "$container" --format '{{.AppArmorProfile}}')" = "unconfined"
           broker_network_namespace="$(docker exec "$container" /usr/bin/readlink /proc/self/ns/net)"
-          if ! docker exec "$container" /usr/bin/unshare --user --map-root-user /bin/true; then
-            {
-              echo "### Broker LSM boundary"
-              echo
-              echo "Skipped the namespace probe: this CI Docker host disallows user namespaces."
-              echo "Staging/production hosts must allow them for the unprivileged Bubblewrap broker."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::Docker host disallows user namespaces; broker LSM probe skipped."
-            echo "TAVEN_ORCA_USERNS_AVAILABLE=false" >> "$GITHUB_ENV"
-          else
-            echo "TAVEN_ORCA_USERNS_AVAILABLE=true" >> "$GITHUB_ENV"
-            docker exec --env BROKER_NETWORK_NAMESPACE="$broker_network_namespace" "$container" /usr/bin/unshare --net -- /usr/bin/setpriv \
-              --reuid=10001 \
-              --regid=10001 \
-              --clear-groups \
-              --bounding-set=-all,+sys_admin \
-              --inh-caps=-all \
-              --ambient-caps=-all \
-              --no-new-privs \
-              /usr/bin/bwrap \
-              --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try \
-              --die-with-parent --new-session \
-              --ro-bind / / \
-              --tmpfs /run/taven-orca \
-              --tmpfs /tmp \
-              --proc /proc \
-              --dev /dev \
-              --chdir /tmp \
-              --clearenv \
-              --setenv BROKER_NETWORK_NAMESPACE "$broker_network_namespace" \
-              /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1'
+          docker exec "$container" /usr/bin/unshare --user --map-root-user /bin/true
+          docker exec --env BROKER_NETWORK_NAMESPACE="$broker_network_namespace" "$container" /usr/bin/unshare --net -- /usr/bin/setpriv \
+            --reuid=10001 \
+            --regid=10001 \
+            --clear-groups \
+            --bounding-set=-all,+sys_admin \
+            --inh-caps=-all \
+            --ambient-caps=-all \
+            --no-new-privs \
+            /usr/bin/bwrap \
+            --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try \
+            --die-with-parent --new-session \
+            --ro-bind / / \
+            --tmpfs /run/taven-orca \
+            --tmpfs /tmp \
+            --proc /proc \
+            --dev /dev \
+            --chdir /tmp \
+            --clearenv \
+            --setenv BROKER_NETWORK_NAMESPACE "$broker_network_namespace" \
+            /bin/sh -ec 'test "$(/usr/bin/readlink /proc/self/ns/net)" != "$BROKER_NETWORK_NAMESPACE"; ! /usr/bin/timeout 2 /usr/bin/openssl s_client -connect 1.1.1.1:443 < /dev/null > /dev/null 2>&1'
           fixture_root="$RUNNER_TEMP/taven-worker-reference-gcode"
           export FIXTURE_ROOT="$fixture_root"
           node --input-type=module <<'NODE'
@@ -220,6 +218,4 @@ jobs:
             throw new Error(`Sandboxed fixture hash drifted: expected ${expected}, received ${actual}`);
           }
           NODE
-          fi
-      - if: env.TAVEN_ORCA_USERNS_AVAILABLE != 'false'
-        run: pnpm slicer-worker:integration
+      - run: pnpm slicer-worker:integration
