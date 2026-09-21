@@ -1,7 +1,7 @@
 {
   "case": "worker-reference-gcode",
   "engine": {
-    "imageDigest": "sha256:a70504060dc8d69219b3440710d5b20f3133a1b216a6b5ff2f9db4c8a8ac3433",
+    "imageDigest": "sha256:38f80bae85eca7bd844fd52576bd209c8a8833dc46c96ed22ba370ff288fb1b0",
     "invocationBundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44",
     "name": "orca-slicer",
     "version": "2.4.2"
