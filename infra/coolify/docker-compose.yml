@@ -68,6 +68,7 @@ x-backend-environment: &backend-environment
 
 x-retention-environment: &retention-environment
   NODE_ENV: ${NODE_ENV:-production}
+  TAVEN_ENVIRONMENT: ${TAVEN_ENVIRONMENT:?TAVEN_ENVIRONMENT is required}
   DATABASE_URL: ${TAVEN_RETENTION_DATABASE_URL:?TAVEN_RETENTION_DATABASE_URL is required}
   TAVEN_DATABASE_CA_CERT_B64: ${TAVEN_DATABASE_CA_CERT_B64:-}
   TAVEN_DATABASE_CA_CERT_PATH: ${TAVEN_DATABASE_CA_CERT_PATH:-/etc/secrets/postgres-ca.crt}
