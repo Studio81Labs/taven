@@ -48,12 +48,13 @@ equivalent exemption expressed through its host policy (for example
 privilege setting.
 
 Every Orca invocation runs through `prlimit`, `timeout`,
-`/usr/bin/unshare --net --`, Bubblewrap, then `setpriv`. `unshare(1)` creates
+`/usr/bin/unshare --net --`, `setpriv`, and Bubblewrap. `unshare(1)` creates
 the child network namespace before Bubblewrap without configuring loopback;
 Bubblewrap's `--unshare-net` is deliberately not used because it configures
-loopback and would require `CAP_NET_ADMIN`. The broker retains its approved
-four capabilities, while the child has no capabilities and receives no
-outbound network access.
+loopback and would require `CAP_NET_ADMIN`. `setpriv` changes to UID/GID
+10001 and clears every capability except `SYS_ADMIN`, which Bubblewrap needs
+for its initial mount namespace setup; the child then has no capabilities and
+receives no outbound network access.
 
 Profile and configuration revisions are provider-neutral immutable S3 objects
 at `slicer-revisions/<content-sha256>/settings.json`. Their bytes must hash to

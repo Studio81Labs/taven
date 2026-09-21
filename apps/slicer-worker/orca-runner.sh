@@ -208,7 +208,7 @@ while true; do
          --reuid=10001 \
          --regid=10001 \
          --clear-groups \
-         --bounding-set=-all \
+         --bounding-set=-all,+sys_admin \
          --inh-caps=-all \
          --ambient-caps=-all \
          --no-new-privs \
