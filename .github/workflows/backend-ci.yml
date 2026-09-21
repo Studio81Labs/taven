@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths: &backend-paths
       - "apps/backend/**"
+      - "infra/coolify/retention-grants.sql"
       - "packages/core/**"
       - "packages/slicer-contracts/**"
       - "scripts/ci/check-boundaries.mjs"
