@@ -115,8 +115,9 @@ fail-closed. If Comgate is selected, set `TAVEN_COMGATE_TEST_MODE` explicitly
 empty value through for sandbox or disabled payment deployments, where the
 setting is not used. Configure
 `TAVEN_RETENTION_S3_ACCESS_KEY_ID` and `TAVEN_RETENTION_S3_SECRET_ACCESS_KEY`
-as a separate least-privilege pair for the retention worker; all other
-backend-image services use the application S3 pair.
+as a separate least-privilege pair for the retention worker, and set
+`TAVEN_RETENTION_DATABASE_URL` to its separate database role. All other
+backend-image services use the application database and S3 pairs.
 
 Set `TAVEN_DELIVERY_SELECTOR_MODE` explicitly. `CONFIGURED` requires a non-empty
 `TAVEN_DELIVERY_ENDPOINTS_JSON`; `PACKETA` requires the Packeta widget account
