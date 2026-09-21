@@ -1,4 +1,4 @@
-name: taven-backend
+name: taven-backend-${TAVEN_ENVIRONMENT:?TAVEN_ENVIRONMENT is required}
 
 # This file is the Coolify backend application topology. PostgreSQL, Redis,
 # Garage/object storage, web, admin, Orca, and the slicer consumer remain
@@ -7,7 +7,7 @@ name: taven-backend
 # from the local Compose project is used here.
 
 x-backend-build: &backend-build
-  context: ../..
+  context: .
   dockerfile: apps/backend/Dockerfile
   target: runtime
 
@@ -126,16 +126,45 @@ x-slicing-worker-environment: &slicing-worker-environment
   TAVEN_SLICING_DISPATCH_CLAIM_LIMIT: ${TAVEN_SLICING_DISPATCH_CLAIM_LIMIT:-25}
 
 x-backend-runtime: &backend-runtime
-  image: taven/backend:coolify
-  build:
-    <<: *backend-build
+  image: taven/backend:${TAVEN_ENVIRONMENT:?}-${SOURCE_COMMIT:?SOURCE_COMMIT is required}
+  pull_policy: never
+  networks:
+    - application
   init: true
   restart: unless-stopped
   environment: *backend-environment
+  healthcheck:
+    test: ["CMD", "node", "worker-healthcheck.mjs"]
+    interval: 60s
+    timeout: 12s
+    retries: 3
+    start_period: 30s
+
+networks:
+  application:
+    external: true
+    name: ${TAVEN_DOCKER_NETWORK:?TAVEN_DOCKER_NETWORK is required}
 
 services:
+  # Explicit release-only task; removed after completion, never a daemon.
+  migration:
+    image: taven/backend-migration:${TAVEN_ENVIRONMENT:?}-${SOURCE_COMMIT:?}
+    build:
+      <<: *backend-build
+      target: migration
+    pull_policy: never
+    profiles: ["release"]
+    restart: "no"
+    networks: [application]
+    environment: *worker-database-environment
+
   backend:
     <<: *backend-runtime
+    build: *backend-build
+    networks:
+      application:
+        aliases:
+          - ${TAVEN_BACKEND_NETWORK_ALIAS:?TAVEN_BACKEND_NETWORK_ALIAS is required}
     expose:
       - "3001"
     environment:

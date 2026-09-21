@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths: &ci-paths
       - "scripts/ci/**"
+      - "infra/coolify/**"
       - ".github/workflows/**"
       - "package.json"
       - "pnpm-lock.yaml"
@@ -32,6 +33,7 @@ jobs:
           node-version-file: .nvmrc
       - run: pnpm install --frozen-lockfile
       - run: node scripts/ci/check-workflow-coverage.mjs
+      - run: node --test scripts/ci/coolify-compose.test.mjs
       - run: node scripts/ci/check-boundaries.mjs
       - run: pnpm exec vitest run scripts/ci/check-boundaries.test.mjs
       - run: node scripts/ci/assert-local-database-url.mjs --self-test
