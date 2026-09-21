@@ -197,6 +197,8 @@ while true; do
     /usr/bin/head -c "$maximum_diagnostic_bytes" "$diagnostics_fifo" \
       > "$request/diagnostics" &
     diagnostic_reader_pid=$!
+    # Bubblewrap needs SYS_ADMIN for its initial mount setup; it drops it
+    # before starting the Orca child.
     if /usr/bin/prlimit \
          --as=8589934592 \
          --cpu=1800 \
