@@ -80,7 +80,25 @@ jobs:
           # exercised; the production Compose service remains non-privileged and
           # requires the host user-namespace prerequisite documented above.
           docker compose "${compose_args[@]}" up slicer-volume-init
-          container="$(docker compose "${compose_args[@]}" run --detach --no-deps --privileged orca-runner)"
+          container="$(docker run --detach --privileged \
+            --name taven-runtime-lsm-orca-runner \
+            --init \
+            --user 0:10001 \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=512m,uid=10001,gid=10001,mode=0770 \
+            --tmpfs /work:rw,noexec,nosuid,size=64m,uid=10001,gid=10001,mode=0770 \
+            --security-opt no-new-privileges:true \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            --pids-limit 320 \
+            --volume "${COMPOSE_PROJECT_NAME}_slicerexchange:/var/run/taven-orca" \
+            --env TAVEN_ORCA_RUNNER_ROOT=/var/run/taven-orca \
+            --env TAVEN_SLICER_MAX_ARTIFACT_BYTES=536870912 \
+            --env TAVEN_SLICER_MAX_DIAGNOSTIC_BYTES=1048576 \
+            --entrypoint /bin/sh \
+            taven/orca-slicer:2.4.2-fixtures \
+            /usr/local/bin/taven-orca-runner)"
           cleanup() {
             if [ -n "${container:-}" ]; then
               docker rm -f "$container" >/dev/null 2>&1 || true
