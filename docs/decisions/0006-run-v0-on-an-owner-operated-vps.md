@@ -22,13 +22,16 @@ controls already exist.
 ## Decision
 
 Run v0 as OCI containers on the existing owner-operated VPS. Self-hosted
-Coolify manages independently created resources for the production and staging
-applications and their stateful services; Docker Engine and Compose remain the
-portable local-development and integration runtime contract. `apps/backend`,
-`apps/web`, `apps/admin`, and `apps/slicer-worker` each receive an independent
-production image in issue #39 or #25; PostgreSQL, Redis, Garage, the reverse
-proxy, and the observability components also run as containers with explicit
-immutable image digests.
+Coolify manages independently versioned resources for the production and staging
+applications and their stateful services; the backend API and all backend-image
+workers are deployed together as one Coolify Compose application resource, while
+web, admin, PostgreSQL, Redis, Garage, the reverse proxy, and observability
+remain separate resources. Docker Engine and Compose remain the portable
+local-development and integration runtime contract. `apps/backend`, `apps/web`,
+`apps/admin`, and `apps/slicer-worker` each receive an independently buildable
+production image in issue #39 or #25; the backend image is run by the grouped
+Coolify worker resource and the other components run as separate containers with
+explicit immutable image digests.
 Application images accept configuration through environment variables or
 mounted secret files and do not inspect GitHub, Coolify, Cloudflare, the VPS
 vendor, or Docker-specific metadata.

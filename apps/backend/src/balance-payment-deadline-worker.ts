@@ -1,13 +1,15 @@
 import "dotenv/config";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { AppModule } from "./app.module";
+import { BalancePaymentWorkerModule } from "./balance-payment-worker.module";
 import { BalancePaymentDeadlineService } from "./modules/payments/balance-payment-deadline.service";
 
 const IDLE_POLL_MILLISECONDS = 5_000;
 
 async function main(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(AppModule);
+  const app = await NestFactory.createApplicationContext(
+    BalancePaymentWorkerModule,
+  );
   const deadlines = app.get(BalancePaymentDeadlineService);
   let stopping = false;
   const stop = (): void => {

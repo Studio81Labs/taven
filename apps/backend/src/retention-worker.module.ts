@@ -5,7 +5,7 @@ import { OBJECT_STORAGE } from "./modules/storage/object-storage.port";
 import { S3ObjectStorageAdapter } from "./modules/storage/s3-object-storage.adapter";
 import {
   OBJECT_STORAGE_CONFIG,
-  readObjectStorageConfig,
+  readWorkerObjectStorageConfig,
   type ObjectStorageConfig,
 } from "./modules/storage/storage.config";
 import { RetentionService } from "./modules/storage/retention.service";
@@ -20,7 +20,7 @@ import { RetentionService } from "./modules/storage/retention.service";
   providers: [
     {
       provide: OBJECT_STORAGE_CONFIG,
-      useFactory: (): ObjectStorageConfig => readObjectStorageConfig(),
+      useFactory: (): ObjectStorageConfig => readWorkerObjectStorageConfig(),
     },
     {
       provide: OBJECT_STORAGE,

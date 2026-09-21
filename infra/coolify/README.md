@@ -17,10 +17,11 @@ The backend Compose resource contains:
 - `operator-auth-expiry-worker`; and
 - `slicing-dispatcher`.
 
-All worker services use the same backend runtime image and receive the same
-external state-store and application configuration. Their commands are kept in
-the Compose file so adding or changing a Coolify worker does not require
-manually reconstructing a command in the dashboard.
+All worker services use the same backend runtime image, but each receives only
+the database, payment, operator, queue, or object-storage configuration needed
+by its dedicated bootstrap module. Their commands are kept in the Compose file
+so adding or changing a Coolify worker does not require manually reconstructing
+a command in the dashboard.
 
 The release workflow must run `prisma migrate deploy` once for the release
 before activating this Compose resource. The Compose file intentionally does
@@ -117,11 +118,15 @@ setting is not used. Configure
 `TAVEN_RETENTION_S3_ACCESS_KEY_ID` and `TAVEN_RETENTION_S3_SECRET_ACCESS_KEY`
 as a separate least-privilege pair for the retention worker, and set
 `TAVEN_RETENTION_DATABASE_URL` to its separate database role. All other
-backend-image services use the application database and S3 pairs. The
-retention worker receives only its database and object-storage configuration
-through a minimal environment and uses a dedicated bootstrap module, so it does
-not receive payment, quote, or other request-time application secrets and does
-not initialize slicing-profile snapshots.
+backend-image services use scoped configuration for their dedicated bootstrap:
+payment credentials only go to the checkout worker, operator credentials only
+go to the operator-expiry worker, and
+`TAVEN_SLICER_S3_ACCESS_KEY_ID`/
+`TAVEN_SLICER_S3_SECRET_ACCESS_KEY` plus Redis go only to the slicing
+dispatcher. The retention worker receives only its database and object-storage
+configuration through a minimal environment and uses a dedicated bootstrap
+module, so it does not receive payment, quote, OAuth, or other request-time
+application secrets and does not initialize slicing-profile snapshots.
 
 Set `TAVEN_DELIVERY_SELECTOR_MODE` explicitly. `CONFIGURED` requires a non-empty
 `TAVEN_DELIVERY_ENDPOINTS_JSON`; `PACKETA` requires the Packeta widget account

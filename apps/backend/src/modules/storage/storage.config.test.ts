@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readObjectStorageConfig } from "./storage.config";
+import {
+  readObjectStorageConfig,
+  readRetentionObjectStorageConfig,
+} from "./storage.config";
 
 const environment = {
   TAVEN_S3_ENDPOINT: "http://127.0.0.1:9010",
@@ -67,5 +70,16 @@ describe("readObjectStorageConfig", () => {
         TAVEN_UPLOAD_CLIENT_HASH_KEY: "too-short",
       }),
     ).toThrow("TAVEN_UPLOAD_CLIENT_HASH_KEY");
+  });
+
+  it("allows retention configuration without the upload signing key", () => {
+    const { uploadClientHashKey, ...config } = readRetentionObjectStorageConfig(
+      {
+        ...environment,
+        TAVEN_UPLOAD_CLIENT_HASH_KEY: undefined,
+      },
+    );
+    expect(uploadClientHashKey).toBe("");
+    expect(config.bucket).toBe("taven");
   });
 });

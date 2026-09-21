@@ -1,13 +1,15 @@
 import "dotenv/config";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { AppModule } from "./app.module";
+import { OperatorAuthWorkerModule } from "./operator-auth-worker.module";
 import { OperatorAuthService } from "./modules/admin-access/operator-auth.service";
 
 const POLL_MILLISECONDS = 15 * 60 * 1_000;
 
 async function main(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(AppModule);
+  const app = await NestFactory.createApplicationContext(
+    OperatorAuthWorkerModule,
+  );
   const auth = app.get(OperatorAuthService);
   let stopping = false;
   let wake: (() => void) | undefined;
