@@ -54,6 +54,17 @@ describe("Orca runner lifecycle", () => {
     expect(runner).not.toContain("--unshare-net");
   });
 
+  it("reads exchange metadata through the worker identity", async () => {
+    const runner = await readFile(path.resolve("orca-runner.sh"), "utf8");
+
+    expect(runner).toContain("read_exchange_file() {");
+    expect(runner).toContain('read_exchange_file "$request/copies"');
+    expect(runner).toContain('read_exchange_file "$request/artifact-format"');
+    expect(runner).toContain('read_exchange_file "$request/timeout-seconds"');
+    expect(runner).toContain("--reuid=10001");
+    expect(runner).toContain('chmod 0660 "$diagnostics_fifo"');
+  });
+
   it("recovers restart markers and reaps cancelled or expired requests", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "taven-runner-lifecycle-"));
     cleanup.push(root);
