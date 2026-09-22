@@ -40,18 +40,25 @@ immutable slice metrics through the same `prepareAutomaticQuote` path used by
 the automatic binding price, so the comparison does not introduce a second
 pricing formula.
 
+The effective process profile is reproducible from the checked-in resolved
+profile by changing only `sparse_infill_density` from `15%` to `20%`. The
+fixture records the source digest, effective digest, override, and exact
+generation command. The runtime profile bundle itself remains unchanged.
+
 ## Results
 
-The estimate returned `30,000` minor units (300 CZK). The same-assumption
-slice-derived price was `30,000` minor units: delta `0.00%`, within the ±20%
-target.
+The estimate returned `30,000` minor units (300 CZK), including the configured
+minimum-print and small-order floor. The accuracy comparison therefore uses
+the non-floor `ITEM_PRODUCTION` component: the estimate returned `4,066` minor
+units and the same-assumption slice-derived production component was `4,787`
+minor units, delta `-15.06%`, within the ±20% target. The customer totals are
+also recorded for checkout context but are not used to hide estimator error
+behind the order floor.
 
-Four warm HTTP samples after one warm-up request measured 230.91, 149.41,
-149.56 and 143.60 ms. Median warm latency was 149.56 ms, meeting the ≤200 ms
-post-parse target. The first sample includes connection/pool warm-up; the
-reported target is the median of the subsequent warm path. The p95 of this
-small sample was 230.91 ms and is retained as an operational observation, not
-as a customer-facing performance promise.
+Four warm HTTP samples after one warm-up request measured 127.22, 130.53,
+147.15 and 133.99 ms. Median warm latency was 132.26 ms, meeting the ≤200 ms
+post-parse target. The p95 of this small sample was 145.18 ms and is retained
+as an operational observation, not as a customer-facing performance promise.
 
 ## Reproduction
 

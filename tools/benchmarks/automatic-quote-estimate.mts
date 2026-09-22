@@ -20,12 +20,22 @@ type CorpusCase = {
   slicer: string;
   runtimeImageDigest: string;
   profileBundleSha256: string;
+  effectiveProcessProfile: {
+    source: string;
+    sourceSha256: string;
+    override: { sparse_infill_density: string };
+    sha256: string;
+    generationCommand: string;
+  };
   printConfigRevisionId: string;
   referenceProfileId: string;
 };
 
 type EstimateResponse = {
-  price: { totalMinor: number };
+  price: {
+    totalMinor: number;
+    components: Array<{ kind: string; amountMinor: number }>;
+  };
   priceListRevision: string;
   assumptions: Record<string, unknown>;
 };
@@ -124,9 +134,31 @@ try {
   const estimateMinor = Number(estimate.price.totalMinor);
   const sliceMinor = Number(prepared.prepared.price.customerTotal.minorUnits);
   const deltaPercent = ((estimateMinor - sliceMinor) / sliceMinor) * 100;
+  const estimateProductionMinor = estimate.price.components.find(
+    (component) => component.kind === "ITEM_PRODUCTION",
+  )?.amountMinor;
+  const sliceProductionMinor = Number(
+    prepared.prepared.price.components.find(
+      (component) => component.kind === "ITEM_PRODUCTION",
+    )?.amount.minorUnits ?? 0n,
+  );
+  if (estimateProductionMinor === undefined || sliceProductionMinor === 0) {
+    throw new Error(
+      "production price component is missing from the comparison",
+    );
+  }
+  const productionDeltaPercent =
+    ((estimateProductionMinor - sliceProductionMinor) / sliceProductionMinor) *
+    100;
   const sorted = [...samples].sort((left, right) => left - right);
-  const percentile = (value: number) =>
-    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * value))]!;
+  const percentile = (value: number) => {
+    const position = (sorted.length - 1) * value;
+    const lower = Math.floor(position);
+    const upper = Math.ceil(position);
+    return (
+      sorted[lower]! + (sorted[upper]! - sorted[lower]!) * (position - lower)
+    );
+  };
 
   console.log(
     JSON.stringify(
@@ -148,12 +180,16 @@ try {
           slicerEngine: corpus.slicer,
           runtimeImageDigest: corpus.runtimeImageDigest,
           profileBundleSha256: corpus.profileBundleSha256,
+          effectiveProcessProfile: corpus.effectiveProcessProfile,
         },
         assumptions: estimate.assumptions,
         priceListRevision: estimate.priceListRevision,
         estimateTotalMinor: estimateMinor,
         sliceDerivedTotalMinor: sliceMinor,
         deltaPercent: Number(deltaPercent.toFixed(2)),
+        estimateProductionMinor,
+        sliceDerivedProductionMinor: sliceProductionMinor,
+        productionDeltaPercent: Number(productionDeltaPercent.toFixed(2)),
         latencyMs: {
           samples: samples.map((value) => Number(value.toFixed(2))),
           median: Number(percentile(0.5).toFixed(2)),
