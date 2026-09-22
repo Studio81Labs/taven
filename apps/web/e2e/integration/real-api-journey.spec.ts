@@ -4,6 +4,7 @@ import { test, expect } from "@playwright/test";
 
 const INTEGRATION_API_URL =
   process.env.INTEGRATION_API_URL || "https://api-staging.taven.cz";
+const integrationTest = process.env.INTEGRATION_TEST === "true";
 const FIXTURE_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../tools/slicing-fixtures/fixtures/single-pla/cube.stl",
@@ -11,7 +12,7 @@ const FIXTURE_PATH = path.resolve(
 
 test.describe("Real API Integration Journey", () => {
   test.skip(
-    !process.env.INTEGRATION_TEST,
+    !integrationTest,
     "Skipped unless INTEGRATION_TEST=true environment variable is present",
   );
 

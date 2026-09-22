@@ -12,6 +12,18 @@ const budgets = {
 };
 const enforceBudgets = process.env.TAVEN_LIGHTHOUSE_ENFORCE_BUDGETS === "true";
 
+let previewError = "";
+let mockBackendError = "";
+const mockBackend = spawn(
+  process.execPath,
+  ["e2e/fixtures/mock-backend-server.mjs"],
+  { stdio: ["ignore", "ignore", "pipe"] },
+);
+mockBackend.stderr.setEncoding("utf8");
+mockBackend.stderr.on("data", (chunk) => {
+  mockBackendError += chunk;
+});
+
 const preview = spawn(process.execPath, [".output/server/index.mjs"], {
   env: {
     ...process.env,
@@ -23,19 +35,13 @@ const preview = spawn(process.execPath, [".output/server/index.mjs"], {
   },
   stdio: ["ignore", "ignore", "pipe"],
 });
-const mockBackend = spawn(
-  process.execPath,
-  ["e2e/fixtures/mock-backend-server.mjs"],
-  { stdio: ["ignore", "ignore", "pipe"] },
-);
-
-let previewError = "";
 preview.stderr.setEncoding("utf8");
 preview.stderr.on("data", (chunk) => {
   previewError += chunk;
 });
 
 try {
+  await waitForApi();
   await waitForPreview();
 
   for (const mode of ["mobile", "desktop"]) {
@@ -64,6 +70,36 @@ try {
 } finally {
   preview.kill("SIGTERM");
   mockBackend.kill("SIGTERM");
+}
+
+async function waitForApi() {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (mockBackend.exitCode !== null) {
+      throw new Error(
+        `Mock backend exited before Lighthouse started.\n${mockBackendError}`,
+      );
+    }
+    if (await apiIsReady()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(
+    `Mock backend did not start within 10 seconds.\n${mockBackendError}`,
+  );
+}
+
+function apiIsReady() {
+  return new Promise((resolve) => {
+    const request = get(`${apiOrigin}/health`, (response) => {
+      response.resume();
+      resolve(response.statusCode === 200);
+    });
+    request.setTimeout(250, () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.once("error", () => resolve(false));
+  });
 }
 
 async function waitForPreview() {

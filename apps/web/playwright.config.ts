@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const integrationTest = process.env.INTEGRATION_TEST === "true";
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
@@ -12,7 +14,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL: process.env.INTEGRATION_TEST
+    baseURL: integrationTest
       ? (process.env.INTEGRATION_WEB_URL ?? "https://staging.taven.cz")
       : "http://127.0.0.1:4174",
     trace: "on-first-retry",
@@ -42,7 +44,7 @@ export default defineConfig({
       testMatch: ["**/integration/**/*.spec.ts"],
     },
   ],
-  webServer: process.env.INTEGRATION_TEST
+  webServer: integrationTest
     ? undefined
     : [
         {
