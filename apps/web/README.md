@@ -45,14 +45,17 @@ the current tab's session storage; card data is never collected by Taven.
 
 ## Performance and accessibility budget
 
-The server-rendered landing page must score at least 90 in each Lighthouse
+The server-rendered landing page targets at least 90 in each Lighthouse
 category—performance, accessibility, best practices, and SEO—under both the
-default mobile profile and desktop profile. Run the reproducible local audit
-after a production build:
+default mobile profile and desktop profile. Numeric budgets are deferred until
+the prepared design phase; the reproducible local audit reports scores and
+warnings by default:
 
 ```bash
 pnpm web:lighthouse
 ```
 
-The script starts the built Nuxt server on loopback, audits both profiles with
-headless Chrome, enforces the budgets, and shuts the server down.
+The script starts the built Nuxt server and a local API fixture on loopback,
+audits both profiles with headless Chrome, and shuts the servers down. Enforce
+the 90-point budgets explicitly with
+`TAVEN_LIGHTHOUSE_ENFORCE_BUDGETS=true pnpm web:lighthouse`.

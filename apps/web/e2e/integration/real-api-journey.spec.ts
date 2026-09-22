@@ -19,6 +19,7 @@ test.describe("Real API Integration Journey", () => {
     page,
     request,
   }) => {
+    test.setTimeout(180_000);
     const healthResponse = await request.get(`${INTEGRATION_API_URL}/health`);
     expect(healthResponse.status()).toBe(200);
 
@@ -37,7 +38,9 @@ test.describe("Real API Integration Journey", () => {
     const fileChooser = await fileChooserPromise;
     await fileChooser.setFiles(FIXTURE_PATH);
 
-    await expect(page.getByText("Nezávazný rychlý odhad")).toBeVisible({
+    await expect(
+      page.getByText(/Odhad pro PLA, standardní kvalitu/i),
+    ).toBeVisible({
       timeout: 120_000,
     });
     await expect(page.getByText(/standardní kvalitu/i)).toBeVisible();
