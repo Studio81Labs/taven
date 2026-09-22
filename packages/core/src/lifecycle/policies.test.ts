@@ -6283,6 +6283,8 @@ function verifyEveryStatePair<S extends string>(
   for (const current of states) {
     for (const target of states) {
       const allowed = (policy.transitions[current] ?? []).includes(target);
+      const guardedSameState =
+        current === target && policy.sameStateReconciliationGuard !== undefined;
       const name = `${policy.name}: ${current} -> ${target}`;
       const requiresLateRefundFailureEvidence =
         (policy.name === "Payment" &&
@@ -6297,7 +6299,7 @@ function verifyEveryStatePair<S extends string>(
         (policy.name === "OrderPhase(single)" &&
           current === "cancelled_refunded" &&
           target === "cancelled");
-      if (current === target || !allowed) {
+      if ((current === target && !guardedSameState) || !allowed) {
         expect(
           () =>
             transition(policy, {
@@ -6309,7 +6311,7 @@ function verifyEveryStatePair<S extends string>(
             }),
           name,
         ).toThrow(InvalidTransitionError);
-      } else if (requiresLateRefundFailureEvidence) {
+      } else if (requiresLateRefundFailureEvidence || guardedSameState) {
         expect(
           () =>
             transition(policy, {
