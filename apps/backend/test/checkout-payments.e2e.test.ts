@@ -2990,8 +2990,11 @@ describe("checkout payment capture protocol", () => {
           where: { paymentId: created.paymentId },
         });
 
-      const sendSandboxOutcome = (outcome: string) =>
-        fetch(`${created.checkoutUrl}/${outcome}`, { method: "POST" });
+      const sendSandboxOutcome = (outcome: string) => {
+        const url = new URL(created.checkoutUrl);
+        url.pathname = `${url.pathname}/${outcome}`;
+        return fetch(url, { method: "POST" });
+      };
       const eligibilityPlanService = app.get(EligibilityPlanService);
       const createCompletePlan = eligibilityPlanService.createCompletePlan.bind(
         eligibilityPlanService,

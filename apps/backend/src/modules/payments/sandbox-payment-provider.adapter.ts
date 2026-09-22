@@ -34,9 +34,19 @@ export class SandboxPaymentProviderAdapter implements PaymentProviderPort {
     input: CreatePaymentIntentInput,
   ): Promise<CreatedPaymentIntent> {
     const providerIntentId = `sandbox-${input.paymentId}`;
+    const returnToken = sandboxReturnToken(input.returnUrls);
+    const checkoutUrl = new URL(
+      `/payments/sandbox/${encodeURIComponent(providerIntentId)}`,
+      `${this.config.publicBaseUrl}/`,
+    );
+    checkoutUrl.searchParams.set("returnToken", returnToken);
+    checkoutUrl.searchParams.set(
+      "returnSignature",
+      sandboxReturnSignature(returnToken, this.config.webhookSigningSecret),
+    );
     return {
       providerIntentId,
-      checkoutUrl: `${this.config.publicBaseUrl}/payments/sandbox/${encodeURIComponent(providerIntentId)}`,
+      checkoutUrl: checkoutUrl.toString(),
     };
   }
 
@@ -169,6 +179,16 @@ export function sandboxEventSignature(body: unknown, secret: string): string {
   return `sha256=${createHmac("sha256", secret)
     .update(canonicalSandboxJson(body))
     .digest("hex")}`;
+}
+
+export function sandboxReturnToken(
+  returnUrls: CreatePaymentIntentInput["returnUrls"],
+): string {
+  return Buffer.from(JSON.stringify(returnUrls), "utf8").toString("base64url");
+}
+
+export function sandboxReturnSignature(token: string, secret: string): string {
+  return `sha256=${createHmac("sha256", secret).update(token).digest("hex")}`;
 }
 
 export function canonicalSandboxJson(value: unknown): string {

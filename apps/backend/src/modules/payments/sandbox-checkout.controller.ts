@@ -2,12 +2,14 @@ import {
   Controller,
   Get,
   Header,
-  HttpCode,
   Inject,
   NotFoundException,
   Param,
   Post,
+  Query,
+  Res,
 } from "@nestjs/common";
+import { timingSafeEqual } from "node:crypto";
 import { ApiExcludeController } from "@nestjs/swagger";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
@@ -15,9 +17,19 @@ import {
   type PaymentProviderConfig,
 } from "./payment-provider.config";
 import { PaymentsService } from "./payments.service";
-import { sandboxEventSignature } from "./sandbox-payment-provider.adapter";
+import {
+  sandboxEventSignature,
+  sandboxReturnSignature,
+} from "./sandbox-payment-provider.adapter";
 
 type SandboxOutcome = "capture" | "decline" | "pending";
+
+type ResponseLike = {
+  redirect(status: number, url: string): unknown;
+  send(body: string): unknown;
+  setHeader(name: string, value: string): ResponseLike;
+  status(code: number): ResponseLike;
+};
 
 @ApiExcludeController()
 @Controller("payments/sandbox")
@@ -33,17 +45,29 @@ export class SandboxCheckoutController {
   @Header("Content-Type", "text/html; charset=utf-8")
   async checkout(
     @Param("providerIntentId") providerIntentId: string,
+    @Query("returnToken") returnToken?: string | string[],
+    @Query("returnSignature") returnSignature?: string | string[],
   ): Promise<string> {
-    return checkoutPage(await this.payment(providerIntentId));
+    const token = singleQueryValue(returnToken);
+    const signature = singleQueryValue(returnSignature);
+    return checkoutPage(
+      await this.payment(providerIntentId),
+      undefined,
+      token,
+      signature,
+    );
   }
 
   @Post(":providerIntentId/:outcome")
-  @HttpCode(200)
-  @Header("Content-Type", "text/html; charset=utf-8")
   async complete(
     @Param("providerIntentId") providerIntentId: string,
     @Param("outcome") outcomeInput: string,
-  ): Promise<string> {
+    @Res() response: ResponseLike,
+    @Query("returnToken") returnToken?: string | string[],
+    @Query("returnSignature") returnSignature?: string | string[],
+  ): Promise<void> {
+    const token = singleQueryValue(returnToken);
+    const signature = singleQueryValue(returnSignature);
     const outcome = sandboxOutcome(outcomeInput);
     const config = sandboxConfig(this.config);
     const payment = await this.payment(providerIntentId);
@@ -71,7 +95,25 @@ export class SandboxCheckoutController {
       },
       body,
     );
-    return checkoutPage(await this.payment(providerIntentId), result.outcome);
+    const returnUrls = verifiedReturnUrls(
+      token,
+      signature,
+      config.webhookSigningSecret,
+    );
+    const redirectTarget = returnUrls?.[outcomeReturnKey(outcome)];
+    if (redirectTarget) {
+      response.redirect(303, redirectTarget);
+      return;
+    }
+    response.status(200).setHeader("Content-Type", "text/html; charset=utf-8");
+    response.send(
+      checkoutPage(
+        await this.payment(providerIntentId),
+        result.outcome,
+        token,
+        signature,
+      ),
+    );
   }
 
   private async payment(providerIntentId: string) {
@@ -99,6 +141,12 @@ export class SandboxCheckoutController {
   }
 }
 
+function singleQueryValue(
+  value: string | string[] | undefined,
+): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 function sandboxOutcome(value: string): SandboxOutcome {
   if (value === "capture" || value === "decline" || value === "pending") {
     return value;
@@ -115,8 +163,19 @@ function checkoutPage(
     currency: string;
   }>,
   outcome?: string,
+  returnToken?: string,
+  returnSignature?: string,
 ): string {
   const path = `/payments/sandbox/${encodeURIComponent(payment.providerIntentId ?? "")}`;
+  const returnQuery = new URLSearchParams();
+  if (returnToken && returnSignature) {
+    returnQuery.set("returnToken", returnToken);
+    returnQuery.set("returnSignature", returnSignature);
+  }
+  const action = (outcome: SandboxOutcome) =>
+    returnQuery.size > 0
+      ? `${path}/${outcome}?${returnQuery}`
+      : `${path}/${outcome}`;
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -131,12 +190,70 @@ function checkoutPage(
       <p>Amount: ${escapeHtml(payment.requestedAmountMinor.toString())} minor units ${escapeHtml(payment.currency)}</p>
       <p>Current status: <strong>${escapeHtml(payment.status)}</strong></p>
       ${outcome ? `<p>Webhook outcome: <strong>${escapeHtml(outcome)}</strong></p>` : ""}
-      <form method="post" action="${path}/capture"><button type="submit">Capture payment</button></form>
-      <form method="post" action="${path}/pending"><button type="submit">Keep pending</button></form>
-      <form method="post" action="${path}/decline"><button type="submit">Decline payment</button></form>
+      <form method="post" action="${action("capture")}"><button type="submit">Capture payment</button></form>
+      <form method="post" action="${action("pending")}"><button type="submit">Keep pending</button></form>
+      <form method="post" action="${action("decline")}"><button type="submit">Decline payment</button></form>
     </main>
   </body>
 </html>`;
+}
+
+function outcomeReturnKey(
+  outcome: SandboxOutcome,
+): "success" | "cancelled" | "pending" {
+  if (outcome === "capture") return "success";
+  if (outcome === "decline") return "cancelled";
+  return "pending";
+}
+
+function verifiedReturnUrls(
+  token: string | undefined,
+  signature: string | undefined,
+  secret: string,
+): Readonly<{
+  success: string;
+  cancelled: string;
+  pending: string;
+}> | null {
+  if (!token || !signature) return null;
+  const expected = sandboxReturnSignature(token, secret).replace(
+    /^sha256=/,
+    "",
+  );
+  const actual = signature.replace(/^sha256=/, "");
+  const expectedBytes = Buffer.from(expected, "hex");
+  const actualBytes = Buffer.from(actual, "hex");
+  if (
+    actualBytes.length !== expectedBytes.length ||
+    !timingSafeEqual(actualBytes, expectedBytes)
+  ) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(
+      Buffer.from(token, "base64url").toString("utf8"),
+    ) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const candidate = parsed as Record<string, unknown>;
+    const values = [candidate.success, candidate.cancelled, candidate.pending];
+    if (
+      values.some(
+        (value) =>
+          typeof value !== "string" || !value || !/^https?:\/\//.test(value),
+      )
+    ) {
+      return null;
+    }
+    return {
+      success: candidate.success as string,
+      cancelled: candidate.cancelled as string,
+      pending: candidate.pending as string,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function sandboxConfig(config: PaymentProviderConfig) {
