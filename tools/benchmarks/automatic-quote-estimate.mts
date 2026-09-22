@@ -31,9 +31,7 @@ const request = {
 };
 
 if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 4) {
-  throw new Error(
-    "TAVEN_BENCHMARK_SAMPLES must be an integer between 1 and 4",
-  );
+  throw new Error("TAVEN_BENCHMARK_SAMPLES must be an integer between 1 and 4");
 }
 
 const corpus = JSON.parse(
