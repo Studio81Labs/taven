@@ -1,4 +1,4 @@
-import { ServiceUnavailableException } from "@nestjs/common";
+import { ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { describe, expect, it, vi } from "vitest";
@@ -25,6 +25,115 @@ const legalReader: OperatorContext = {
 };
 
 describe("legal documents helper functions", () => {
+  it.each([
+    {
+      operation: "cancellation",
+      message: "Cannot cancel a publication that has already started",
+    },
+    {
+      operation: "archive",
+      message: "Can only archive a currently active publication",
+    },
+  ])(
+    "maps adapter-wrapped $operation boundary errors to HTTP 409 with rollback",
+    async ({ operation, message }) => {
+      const transaction = {
+        $queryRaw: vi
+          .fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ now: new Date("2026-01-01T00:00:00Z") }])
+          .mockResolvedValueOnce([
+            {
+              id: "22222222-2222-4222-8222-222222222222",
+              key: "terms",
+              documentId: "55555555-5555-4555-8555-555555555555",
+              generation: 1,
+            },
+          ])
+          .mockResolvedValueOnce([{ now: new Date("2026-01-01T00:00:00Z") }]),
+        idempotencyRecord: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue({ id: "idempotency-record" }),
+          update: vi.fn(),
+        },
+        legalDocumentPublication: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: "33333333-3333-4333-8333-333333333333",
+            documentId: "22222222-2222-4222-8222-222222222222",
+            revisionId: "44444444-4444-4444-8444-444444444444",
+            startsAt: new Date(
+              operation === "cancellation"
+                ? "2026-01-01T00:00:01Z"
+                : "2025-12-31T23:59:59Z",
+            ),
+            endsAt: null,
+            cancelledAt: null,
+            publishedBy: "operator",
+            reason: "scheduled",
+            revision: { contentHash: "hash" },
+          }),
+          findFirst: vi.fn().mockResolvedValue(null),
+          update: vi.fn().mockRejectedValue({
+            code: "P2010",
+            meta: {
+              driverAdapterError: {
+                message,
+                cause: {
+                  originalCode: "23514",
+                  originalMessage: message,
+                },
+              },
+            },
+          }),
+        },
+      };
+      const prisma = {
+        $transaction: vi.fn(
+          async (callback: (tx: typeof transaction) => unknown) =>
+            callback(transaction),
+        ),
+      };
+      const service = new LegalDocumentsService(
+        prisma as never,
+        { recordLegalOperator: vi.fn() } as never,
+      );
+
+      const operator = {
+        ...legalReader,
+        permissions: [OPERATOR_PERMISSIONS.LEGAL_WRITE],
+      };
+      const operationPromise =
+        operation === "cancellation"
+          ? service.cancelPublication(
+              operator,
+              "terms",
+              "33333333-3333-4333-8333-333333333333",
+              {
+                expectedGeneration: 1,
+                reason: "boundary test",
+                reasonCode: "BOUNDARY_TEST",
+              },
+              "boundary-idempotency-key",
+            )
+          : service.archivePublication(
+              operator,
+              "terms",
+              "33333333-3333-4333-8333-333333333333",
+              {
+                expectedGeneration: 1,
+                reason: "boundary test",
+                reasonCode: "BOUNDARY_TEST",
+              },
+              "boundary-idempotency-key",
+            );
+      const error = await operationPromise.catch((reason: unknown) => reason);
+
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getStatus()).toBe(409);
+      expect(transaction.idempotencyRecord.update).not.toHaveBeenCalled();
+    },
+  );
+
   it("maps an unavailable idempotent legal datastore to 503", async () => {
     const service = new LegalDocumentsService(
       {

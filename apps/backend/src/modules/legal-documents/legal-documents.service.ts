@@ -46,6 +46,10 @@ const PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT =
   "legal_document_publications_cancellation_boundary_check";
 const PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT =
   "legal_document_publications_archive_boundary_check";
+const PUBLICATION_CANCELLATION_BOUNDARY_MESSAGE =
+  "Cannot cancel a publication that has already started";
+const PUBLICATION_ARCHIVE_BOUNDARY_MESSAGE =
+  "Can only archive a currently active publication";
 const PUBLICATION_DOCUMENT_LOCK_CONFLICT =
   "legal_document_publications_document_lock_conflict";
 const RFC3339_DATE_TIME_PATTERN =
@@ -114,6 +118,7 @@ function isPublicationCancellationBoundaryError(error: unknown): boolean {
   return isPublicationBoundaryError(
     error,
     PUBLICATION_CANCELLATION_BOUNDARY_CONSTRAINT,
+    PUBLICATION_CANCELLATION_BOUNDARY_MESSAGE,
   );
 }
 
@@ -121,6 +126,7 @@ function isPublicationArchiveBoundaryError(error: unknown): boolean {
   return isPublicationBoundaryError(
     error,
     PUBLICATION_ARCHIVE_BOUNDARY_CONSTRAINT,
+    PUBLICATION_ARCHIVE_BOUNDARY_MESSAGE,
   );
 }
 
@@ -172,17 +178,56 @@ export function isPublicationDocumentLockConflict(error: unknown): boolean {
 function isPublicationBoundaryError(
   error: unknown,
   constraintName: string,
+  boundaryMessage: string,
 ): boolean {
   if (!error || typeof error !== "object") return false;
   const record = error as {
+    code?: unknown;
     message?: unknown;
-    meta?: { constraint?: unknown };
+    meta?: {
+      code?: unknown;
+      constraint?: unknown;
+      driverAdapterError?: {
+        message?: unknown;
+        cause?: {
+          code?: unknown;
+          originalCode?: unknown;
+          message?: unknown;
+          originalMessage?: unknown;
+          constraint?: unknown;
+          originalConstraint?: unknown;
+        };
+      };
+    };
   };
-  const constraint = record.meta?.constraint;
+  const adapterError = record.meta?.driverAdapterError;
+  const adapterCause = adapterError?.cause;
+  const codes = [
+    record.code,
+    record.meta?.code,
+    adapterCause?.code,
+    adapterCause?.originalCode,
+  ];
+  const identifiers = [
+    record.meta?.constraint,
+    record.message,
+    adapterError?.message,
+    adapterCause?.message,
+    adapterCause?.originalMessage,
+    adapterCause?.constraint,
+    adapterCause?.originalConstraint,
+  ];
+  const hasBoundaryConstraint = identifiers.some(
+    (identifier) =>
+      identifier === constraintName ||
+      (typeof identifier === "string" && identifier.includes(constraintName)),
+  );
+  const hasBoundaryMessage = identifiers.some(
+    (identifier) =>
+      typeof identifier === "string" && identifier.includes(boundaryMessage),
+  );
   return (
-    constraint === constraintName ||
-    (typeof record.message === "string" &&
-      record.message.includes(constraintName))
+    hasBoundaryConstraint || (codes.includes("23514") && hasBoundaryMessage)
   );
 }
 
