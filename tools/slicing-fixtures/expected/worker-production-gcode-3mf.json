@@ -1,8 +1,8 @@
 {
   "case": "worker-production-gcode-3mf",
   "engine": {
-    "imageDigest": "sha256:0a2073fb9efeab91949fde5fb66e8b936e6db8a82e3ef6c350321b1474ee914c",
-    "invocationBundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44",
+    "imageDigest": "sha256:9b2d78073d052b6caa31303c21bf1da88201ec73ef0a523ded078c655c847953",
+    "invocationBundleSha256": "9fe022e378c40faf8bdda91248b23ef192ab3bb7e43e6ff04b7c89104fa6d8cb",
     "name": "orca-slicer",
     "version": "2.4.2"
   },
@@ -79,7 +79,7 @@
             }
           ],
           "file": "Metadata/plate_1.gcode",
-          "normalizedSha256": "13f386d8cd3a3ab5146711eae8aa7f7638acbbaea3af1b7fa14772d4418574bb"
+          "normalizedSha256": "1ab2279b02b85c87651fd24dca68d50bf22e5cfb101a11363593958ea73917a0"
         },
         {
           "estimatedSeconds": 1242,
@@ -92,13 +92,14 @@
             }
           ],
           "file": "Metadata/plate_2.gcode",
-          "normalizedSha256": "568f6187c8ed80850b90bfed8c044e853e644a5efed904395d5849e9a6b74ff8"
+          "normalizedSha256": "e333e046659d1865b55d9c6d25803c8065d500ce4820cb54e005fb0d7f5f5318"
         }
       ]
     }
   ],
   "profiles": {
-    "bundleSha256": "1f9861ea7f9b4e0f4259932bd3dca7801d0416a1d0ff4842076b781ac0eb9a0c",
+    "bundleSha256": "80de8b9bfffe3452b8202ed76e3a4bba73b2108e436900930c46a032e3481962",
+    "catalogProfile": null,
     "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
   },
   "schemaVersion": 1

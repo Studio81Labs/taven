@@ -59,6 +59,14 @@ const cases = [
     trianglesPerObject: 12,
   },
   {
+    name: "single-petg",
+    fixture: "cube.stl",
+    operation: "slice",
+    cloneCount: 1,
+    trianglesPerObject: 12,
+    filamentProfile: "filament-petg.json",
+  },
+  {
     name: "quantity-pla",
     fixture: "cube.stl",
     operation: "slice",
@@ -162,7 +170,9 @@ function slicerArguments(fixtureCase) {
     "--load-filaments",
     fixtureCase.filamentCount === 2
       ? `${filamentPath};/input/filament-secondary.json`
-      : filamentPath,
+      : fixtureCase.filamentProfile
+        ? `/input/${fixtureCase.filamentProfile}`
+        : filamentPath,
   ];
   if (fixtureCase.cloneCount > 1) {
     arguments_.push(
@@ -582,6 +592,22 @@ async function runCase(runRoot, fixtureCase) {
     );
     secondaryFilamentDigest = digest(secondaryContents);
   }
+  let catalogProfileProvenance = null;
+  if (fixtureCase.filamentProfile) {
+    const catalogProfilePath = path.join(
+      catalogProfileDirectory,
+      fixtureCase.filamentProfile,
+    );
+    const catalogProfileContents = await readFile(catalogProfilePath, "utf8");
+    await copyFile(
+      catalogProfilePath,
+      path.join(inputDirectory, fixtureCase.filamentProfile),
+    );
+    catalogProfileProvenance = {
+      file: fixtureCase.filamentProfile,
+      sha256: digest(catalogProfileContents),
+    };
+  }
 
   const command = slicerArguments(fixtureCase);
 
@@ -675,6 +701,7 @@ async function runCase(runRoot, fixtureCase) {
     profiles: {
       upstreamRevision: manifest.upstream.revision,
       bundleSha256: manifest.bundleSha256,
+      catalogProfile: catalogProfileProvenance,
     },
     input: {
       file: fixtureCase.fixture,

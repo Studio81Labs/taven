@@ -1,5 +1,5 @@
 {
-  "case": "worker-cloned-gcode",
+  "case": "single-petg",
   "engine": {
     "imageDigest": "sha256:9b2d78073d052b6caa31303c21bf1da88201ec73ef0a523ded078c655c847953",
     "invocationBundleSha256": "9fe022e378c40faf8bdda91248b23ef192ab3bb7e43e6ff04b7c89104fa6d8cb",
@@ -16,11 +16,11 @@
       "slicedPlates": [
         {
           "id": 1,
-          "triangleCount": 24,
+          "triangleCount": 12,
           "warning": ""
         }
       ],
-      "sparseInfillDensity": 10,
+      "sparseInfillDensity": 15,
       "wallLoops": 2
     },
     "signal": null,
@@ -28,7 +28,7 @@
     "stdout": []
   },
   "input": {
-    "cloneCount": 2,
+    "cloneCount": 1,
     "expectedInvalidGeometry": false,
     "file": "cube.stl",
     "paintedExtruders": [],
@@ -46,35 +46,34 @@
       "--datadir",
       "/tmp/data",
       "--load-settings",
-      "/input/profiles/settings/0.json;/input/profiles/settings/1.json",
+      "/opt/taven/profiles/process.json;/opt/taven/profiles/machine.json",
       "--load-filaments",
-      "/input/profiles/filaments/0.json",
-      "--arrange",
-      "1",
-      "--clone-objects",
-      "2",
-      "/input/geometry.stl"
+      "/input/filament-petg.json",
+      "/input/cube.stl"
     ],
-    "sha256": "c6caa1b859354b33fabdd84a1d6d40f7b2665441171d1f801957e09455e27bb5"
+    "sha256": "58cdc4b0fca2019f7ae5fa270e435d991ae6c91e65250bc6c5fa818328bd87b1"
   },
   "outputs": [
     {
-      "estimatedSeconds": 1409,
+      "estimatedSeconds": 1632,
       "filamentUsage": [
         {
-          "cubicCentimeters": 5.05,
-          "grams": 6.26,
-          "millimeters": 2099.09,
+          "cubicCentimeters": 2.82,
+          "grams": 3.58,
+          "millimeters": 1172.7,
           "slot": 1
         }
       ],
       "file": "plate_1.gcode",
-      "normalizedSha256": "a005a6ab585929a513baaceedb4a5cae3aae0189202b9ffb5394789218d9988f"
+      "normalizedSha256": "daeee49da175e2138fb567bfed2b34af707f73353c4ed425c9c4c16cc4a2979a"
     }
   ],
   "profiles": {
     "bundleSha256": "80de8b9bfffe3452b8202ed76e3a4bba73b2108e436900930c46a032e3481962",
-    "catalogProfile": null,
+    "catalogProfile": {
+      "file": "filament-petg.json",
+      "sha256": "369cfd1476b42920d9a771fabefd36303029d03870274519b0f3c63766809c81"
+    },
     "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
   },
   "schemaVersion": 1

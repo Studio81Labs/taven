@@ -55,9 +55,9 @@ pnpm slicer-worker:orca:build
 pnpm slicer-worker:orca:test
 ```
 
-The corpus covers a single-material PLA cube, two arranged copies, an
-Orca-recognized painted two-material 3MF, and open invalid geometry. Each case
-runs twice from clean directories. Normalized result metadata, diagnostics,
+The corpus covers single-material PLA and PETG cubes, two arranged PLA copies,
+an Orca-recognized painted two-material 3MF, and open invalid geometry. Each
+case runs twice from clean directories. Normalized result metadata, diagnostics,
 plate decisions, per-filament material usage, the exact CLI arguments,
 estimated time, and timestamp-normalized G-code hashes must match both runs and
 the reviewed JSON under `expected/`. The invalid fixture also requires Orca's

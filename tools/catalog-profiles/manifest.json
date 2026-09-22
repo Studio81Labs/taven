@@ -1,11 +1,11 @@
 {
-  "bundleSha256": "d00e65cfc25a260fe6ceacb97dfdb16092cf3f67d75f46c1141f0f7a2c0c1a3e",
+  "bundleSha256": "5548a735410fcfcefa479687734b9965343db4dbc3f8d46fc8aa8d76d17dfad5",
   "resolvedProfiles": [
     {
       "file": "machine.json",
       "kind": "machine",
       "name": "Bambu Lab H2S 0.4 nozzle",
-      "sha256": "377cb092937347e65cba41d286da009f96d79882123146388f5e629e367da650"
+      "sha256": "387d864a29026defc4ac3d3e29b674074e9c22f35421698e6cff06fc38eb686e"
     },
     {
       "file": "process.json",
@@ -68,7 +68,7 @@
     },
     {
       "path": "slicing-fixtures/machine/Bambu Lab H2S 0.4 nozzle.json",
-      "sha256": "fab2329da667f18cc2bc658338a14c9dbe23a44ceddd06bb775bb55621994af7"
+      "sha256": "8f85a58a3ac15f164f6f576ca6510008d417e9a897d2610627043b78367e4951"
     },
     {
       "path": "slicing-fixtures/machine/fdm_bbl_3dp_001_common.json",

@@ -265,7 +265,11 @@ while true; do
         137) failure_code=ENGINE_TIMEOUT ;;
         141|152|153) failure_code=RESOURCE_LIMIT_EXCEEDED ;;
         *)
-          if [ "${result_code:-}" = -5 ]; then
+          if [ "${result_code:-}" = -5 ] || [ "${result_code:-}" = -61 ]; then
+            # Orca uses -61 for a deterministic bed/filament compatibility
+            # failure (for example PETG on the default Cool Plate). Treat it
+            # like the other profile failures so the backend stops retrying
+            # and exposes a terminal assisted-quote handoff.
             failure_code=INVALID_PROFILE
           elif [ "${result_code:-}" = -6 ]; then
             failure_code=INVALID_GEOMETRY

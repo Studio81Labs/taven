@@ -43,7 +43,7 @@ async function makeRootCleanupFixtureAccessible(
 }
 
 async function runSandboxFailureFixture(
-  failureStage: "bubblewrap" | "identity-drop",
+  failureStage: "bubblewrap" | "identity-drop" | "engine",
 ): Promise<{ failureCode: string; appRunInvoked: boolean }> {
   const fixtureRoot = await mkdtemp(
     path.join(tmpdir(), `taven-runner-${failureStage}-`),
@@ -90,11 +90,18 @@ async function runSandboxFailureFixture(
     paths.setpriv,
     failureStage === "identity-drop"
       ? "#!/bin/sh\nexit 126\n"
-      : '#!/bin/sh\nexec "$@"\n',
+      : `#!/bin/sh
+while [ "$#" -gt 0 ] && [ "$1" != ${paths.appRun} ]; do shift; done
+exec "$@"
+`,
   );
   await writeExecutable(
     paths.appRun,
-    `#!/bin/sh\nprintf '%s\\n' invoked > ${appRunMarker}\nexit 0\n`,
+    `#!/bin/sh\nprintf '%s\\n' invoked > ${appRunMarker}\n${
+      failureStage === "engine"
+        ? `printf '%s\\n' '{"return_code": -61}' > ${path.join(request, "output", "result.json")}\nexit 1\n`
+        : "exit 0\n"
+    }`,
   );
   await writeExecutable(
     commandPath("stat"),
@@ -196,6 +203,13 @@ describe("Orca runner lifecycle", () => {
       });
     },
   );
+
+  it("classifies Orca return code -61 as an invalid profile", async () => {
+    await expect(runSandboxFailureFixture("engine")).resolves.toEqual({
+      failureCode: "INVALID_PROFILE\n",
+      appRunInvoked: true,
+    });
+  });
 
   it("recovers restart markers and reaps cancelled or expired requests", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "taven-runner-lifecycle-"));

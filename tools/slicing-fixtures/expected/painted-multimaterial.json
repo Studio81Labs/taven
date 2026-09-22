@@ -1,8 +1,8 @@
 {
   "case": "painted-multimaterial",
   "engine": {
-    "imageDigest": "sha256:0a2073fb9efeab91949fde5fb66e8b936e6db8a82e3ef6c350321b1474ee914c",
-    "invocationBundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44",
+    "imageDigest": "sha256:9b2d78073d052b6caa31303c21bf1da88201ec73ef0a523ded078c655c847953",
+    "invocationBundleSha256": "9fe022e378c40faf8bdda91248b23ef192ab3bb7e43e6ff04b7c89104fa6d8cb",
     "name": "orca-slicer",
     "version": "2.4.2"
   },
@@ -75,11 +75,12 @@
         }
       ],
       "file": "plate_1.gcode",
-      "normalizedSha256": "0b29d8cef810bd831c16299a088ede82991cf150618bd6132bebe5d839f4600b"
+      "normalizedSha256": "657add38634facf91b8f71119a375080264fd3ec8418d1bd837dda6443bcacee"
     }
   ],
   "profiles": {
-    "bundleSha256": "1f9861ea7f9b4e0f4259932bd3dca7801d0416a1d0ff4842076b781ac0eb9a0c",
+    "bundleSha256": "80de8b9bfffe3452b8202ed76e3a4bba73b2108e436900930c46a032e3481962",
+    "catalogProfile": null,
     "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
   },
   "schemaVersion": 1
