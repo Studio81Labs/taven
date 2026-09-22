@@ -95,6 +95,7 @@ describe("public site launch boundaries", () => {
 
   it("identifies the approval record behind the public content", () => {
     expect(publicSite.contentRevision).toBe("launch-approvals-v0.1");
+    expect(publicSite.commercial.status).toBe("approved");
   });
 
   it("does not invent unapproved commercial values", () => {
