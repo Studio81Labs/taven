@@ -23,7 +23,7 @@ type CorpusCase = {
   effectiveProcessProfile: {
     source: string;
     sourceSha256: string;
-    override: { sparse_infill_density: string };
+    override: { brim_width: string; sparse_infill_density: string };
     sha256: string;
     generationCommand: string;
   };

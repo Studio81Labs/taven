@@ -32,16 +32,18 @@ Fixture and assumptions:
 The reproducible slice evidence is recorded in
 `tools/benchmarks/standard-cube-slice.json`: 1,262 seconds and 3.93 g of PLA,
 with normalized G-code hash
-`e9132ced540121135e8eb50c35226656ed93eb3315efd9486ac48116a3b5738b`. The
+`f1f03d6131d662aacde05abc34947d79f977ac84ae9e4bb76182637c43736257`. The
 slice uses the checked-in cube and OrcaSlicer 2.4.2 runtime, with the resolved
-process profile's sparse infill density set to 20% to match print configuration
-revision `00451f99-2f50-4358-8015-bbce478db957`. The benchmark feeds those
+process profile's brim width set to 0 and sparse infill density set to 20% to
+match seeded print configuration revision
+`92222222-2222-4222-8222-222222222222`. The benchmark feeds those
 immutable slice metrics through the same `prepareAutomaticQuote` path used by
 the automatic binding price, so the comparison does not introduce a second
 pricing formula.
 
 The effective process profile is reproducible from the checked-in resolved
-profile by changing only `sparse_infill_density` from `15%` to `20%`. The
+profile by changing only `brim_width` from `5` to `0` and
+`sparse_infill_density` from `15%` to `20%`. The
 fixture records the source digest, effective digest, override, and exact
 generation command. The runtime profile bundle itself remains unchanged.
 

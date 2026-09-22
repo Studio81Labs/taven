@@ -10,17 +10,17 @@
   "quantity": 1,
   "estimatedSeconds": 1262,
   "filamentUsageGrams": 3.93,
-  "normalizedGcodeSha256": "e9132ced540121135e8eb50c35226656ed93eb3315efd9486ac48116a3b5738b",
+  "normalizedGcodeSha256": "f1f03d6131d662aacde05abc34947d79f977ac84ae9e4bb76182637c43736257",
   "slicer": "orca-slicer 2.4.2",
   "runtimeImageDigest": "sha256:9b2d78073d052b6caa31303c21bf1da88201ec73ef0a523ded078c655c847953",
   "profileBundleSha256": "80de8b9bfffe3452b8202ed76e3a4bba73b2108e436900930c46a032e3481962",
   "effectiveProcessProfile": {
     "source": "tools/slicing-fixtures/profiles/resolved/process.json",
     "sourceSha256": "a7fceee9360f71d75a45294847024f115aa7acd556f00822e74539febc7d3bb5",
-    "override": { "sparse_infill_density": "20%" },
-    "sha256": "fbe8d06ce7f0daaf7d2e8df78f2cfbacdbf803476dad9d8d9be5469f72817307",
-    "generationCommand": "cp tools/slicing-fixtures/profiles/resolved/process.json /tmp/process.json && sed -i.bak 's/\"sparse_infill_density\": \"15%\"/\"sparse_infill_density\": \"20%\"/' /tmp/process.json && rm /tmp/process.json.bak"
+    "override": { "brim_width": "0", "sparse_infill_density": "20%" },
+    "sha256": "2daf0c7f3e512a786c0672153288e1a5b577e2fe53d371fdfe35ec66f4257813",
+    "generationCommand": "cp tools/slicing-fixtures/profiles/resolved/process.json /tmp/process.json && sed -i.bak -e 's/\"brim_width\": \"5\"/\"brim_width\": \"0\"/' -e 's/\"sparse_infill_density\": \"15%\"/\"sparse_infill_density\": \"20%\"/' /tmp/process.json && rm /tmp/process.json.bak"
   },
-  "printConfigRevisionId": "00451f99-2f50-4358-8015-bbce478db957",
+  "printConfigRevisionId": "92222222-2222-4222-8222-222222222222",
   "referenceProfileId": "61111111-1111-4111-8111-111111111111"
 }
