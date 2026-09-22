@@ -8776,6 +8776,13 @@ export const quoteRequestPolicy: TransitionPolicy<QuoteRequestStatus> = {
   name: "QuoteRequest",
   initial: ["new"],
   terminal: ["accepted", "rejected", "expired"],
+  sameStateReconciliationGuard: (command) => {
+    if (command.current !== "quoted" || command.target !== "quoted") {
+      return false;
+    }
+    requireAtomicIssuedQuoteCreation("QuoteRequest", command);
+    return true;
+  },
   transitions: {
     new: ["in_review"],
     in_review: ["quoted"],

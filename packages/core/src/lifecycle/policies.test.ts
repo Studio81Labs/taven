@@ -6283,6 +6283,8 @@ function verifyEveryStatePair<S extends string>(
   for (const current of states) {
     for (const target of states) {
       const allowed = (policy.transitions[current] ?? []).includes(target);
+      const guardedSameState =
+        current === target && policy.sameStateReconciliationGuard !== undefined;
       const name = `${policy.name}: ${current} -> ${target}`;
       const requiresLateRefundFailureEvidence =
         (policy.name === "Payment" &&
@@ -6297,7 +6299,7 @@ function verifyEveryStatePair<S extends string>(
         (policy.name === "OrderPhase(single)" &&
           current === "cancelled_refunded" &&
           target === "cancelled");
-      if (current === target || !allowed) {
+      if ((current === target && !guardedSameState) || !allowed) {
         expect(
           () =>
             transition(policy, {
@@ -6309,7 +6311,7 @@ function verifyEveryStatePair<S extends string>(
             }),
           name,
         ).toThrow(InvalidTransitionError);
-      } else if (requiresLateRefundFailureEvidence) {
+      } else if (requiresLateRefundFailureEvidence || guardedSameState) {
         expect(
           () =>
             transition(policy, {
@@ -11192,6 +11194,33 @@ describe("v0 lifecycle policy tables", () => {
         context: contextForTransition("quoted", "in_review"),
       }),
     ).toEqual({ kind: "changed", previous: "in_review", current: "quoted" });
+  });
+
+  it("reconciles a complete atomic quoted-to-quoted offer reissue", () => {
+    const context = contextForTransition("quoted", "quoted");
+    expect(
+      transition(quoteRequestPolicy, {
+        aggregateId: "quote-request-1",
+        currentStateCommandKey: "quote-request-quoted-command-1",
+        currentStateResultId: "quote-request-quoted-result-1",
+        current: "quoted",
+        target: "quoted",
+        idempotencyKey: "quote-reissue-complete",
+        context: {
+          ...context,
+          quoteIssuanceQuoteRequestPreviousStatus: "quoted",
+          quoteIssuancePreviousQuoteRequestResultId:
+            "quote-request-quoted-result-1",
+          quoteIssuanceCurrentStateCommandKey: "quote-request-quoted-command-1",
+          quoteIssuanceExpectedQuoteRequest: {
+            ...context.quoteIssuanceExpectedQuoteRequest,
+            status: "quoted",
+            resultId: "quote-request-quoted-result-1",
+            currentStateCommandKey: "quote-request-quoted-command-1",
+          },
+        },
+      }),
+    ).toEqual({ kind: "reconciled", current: "quoted" });
   });
 
   it.each([
