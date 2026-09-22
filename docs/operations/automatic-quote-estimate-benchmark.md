@@ -22,7 +22,7 @@ Fixture and assumptions:
 - material `PLA`, quality `STANDARD`, infill `STANDARD`, quantity `1`
 - price list `automatic-v0-czk`
 - selected print configuration revision
-  `00451f99-2f50-4358-8015-bbce478db957`
+  `92222222-2222-4222-8222-222222222222`
 - selected STANDARD reference profile
   `61111111-1111-4111-8111-111111111111`
 - OrcaSlicer 2.4.2, profile bundle

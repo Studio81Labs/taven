@@ -43,6 +43,7 @@ type EstimateResponse = {
 const endpoint =
   process.env.TAVEN_ESTIMATE_URL ??
   "https://api-staging.taven.cz/automatic-quote-estimates";
+const benchmarkPriceListRevision = "automatic-v0-czk";
 const sampleCount = Number(process.env.TAVEN_BENCHMARK_SAMPLES ?? 4);
 const request = {
   volumeMm3: 8_000,
@@ -89,6 +90,11 @@ if (
 ) {
   throw new Error("estimate selected an unexpected print configuration");
 }
+if (estimate.priceListRevision !== benchmarkPriceListRevision) {
+  throw new Error(
+    `estimate selected unexpected price list ${estimate.priceListRevision}`,
+  );
+}
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl)
@@ -100,7 +106,10 @@ const prisma = new PrismaClient({
 try {
   const priceList = await prisma.priceList.findUniqueOrThrow({
     where: {
-      currency_revision: { currency: "CZK", revision: "automatic-v0-czk" },
+      currency_revision: {
+        currency: "CZK",
+        revision: estimate.priceListRevision,
+      },
     },
   });
   const prepared = await prepareAutomaticQuote({
