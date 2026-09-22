@@ -2,7 +2,7 @@
   "case": "quantity-pla",
   "engine": {
     "imageDigest": "sha256:9b2d78073d052b6caa31303c21bf1da88201ec73ef0a523ded078c655c847953",
-    "invocationBundleSha256": "ad84eeab05335341d75fb77cb67484bdabb58a2e3b5c59aaa560c0dbd4573d44",
+    "invocationBundleSha256": "9fe022e378c40faf8bdda91248b23ef192ab3bb7e43e6ff04b7c89104fa6d8cb",
     "name": "orca-slicer",
     "version": "2.4.2"
   },

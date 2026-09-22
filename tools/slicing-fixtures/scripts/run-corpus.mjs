@@ -59,6 +59,14 @@ const cases = [
     trianglesPerObject: 12,
   },
   {
+    name: "single-petg",
+    fixture: "cube.stl",
+    operation: "slice",
+    cloneCount: 1,
+    trianglesPerObject: 12,
+    filamentProfile: "filament-petg.json",
+  },
+  {
     name: "quantity-pla",
     fixture: "cube.stl",
     operation: "slice",
@@ -162,7 +170,9 @@ function slicerArguments(fixtureCase) {
     "--load-filaments",
     fixtureCase.filamentCount === 2
       ? `${filamentPath};/input/filament-secondary.json`
-      : filamentPath,
+      : fixtureCase.filamentProfile
+        ? `/input/${fixtureCase.filamentProfile}`
+        : filamentPath,
   ];
   if (fixtureCase.cloneCount > 1) {
     arguments_.push(
@@ -581,6 +591,12 @@ async function runCase(runRoot, fixtureCase) {
       secondaryContents,
     );
     secondaryFilamentDigest = digest(secondaryContents);
+  }
+  if (fixtureCase.filamentProfile) {
+    await copyFile(
+      path.join(catalogProfileDirectory, fixtureCase.filamentProfile),
+      path.join(inputDirectory, fixtureCase.filamentProfile),
+    );
   }
 
   const command = slicerArguments(fixtureCase);

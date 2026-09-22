@@ -1,5 +1,5 @@
 {
-  "case": "single-pla",
+  "case": "single-petg",
   "engine": {
     "imageDigest": "sha256:9b2d78073d052b6caa31303c21bf1da88201ec73ef0a523ded078c655c847953",
     "invocationBundleSha256": "9fe022e378c40faf8bdda91248b23ef192ab3bb7e43e6ff04b7c89104fa6d8cb",
@@ -48,24 +48,24 @@
       "--load-settings",
       "/opt/taven/profiles/process.json;/opt/taven/profiles/machine.json",
       "--load-filaments",
-      "/opt/taven/profiles/filament.json",
+      "/input/filament-petg.json",
       "/input/cube.stl"
     ],
-    "sha256": "b731c7064279fde99d3c46eb8fda03f91965f420bedf7f0b48b4eb76703c68ed"
+    "sha256": "58cdc4b0fca2019f7ae5fa270e435d991ae6c91e65250bc6c5fa818328bd87b1"
   },
   "outputs": [
     {
-      "estimatedSeconds": 1249,
+      "estimatedSeconds": 1632,
       "filamentUsage": [
         {
-          "cubicCentimeters": 2.91,
-          "grams": 3.61,
-          "millimeters": 1209.1,
+          "cubicCentimeters": 2.82,
+          "grams": 3.58,
+          "millimeters": 1172.7,
           "slot": 1
         }
       ],
       "file": "plate_1.gcode",
-      "normalizedSha256": "d629d4aafb0ef6c2c12300982543842c5b14b61cb0d3dc7999f97c62fe90d066"
+      "normalizedSha256": "daeee49da175e2138fb567bfed2b34af707f73353c4ed425c9c4c16cc4a2979a"
     }
   ],
   "profiles": {
