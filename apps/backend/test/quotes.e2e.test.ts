@@ -1089,6 +1089,193 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(accepted.response.status).toBe(200);
   });
 
+  it("reissues an active offer without changing its numerical provenance", async () => {
+    const created = await quotes.createRequest(
+      requestInput("reissue-provenance"),
+      "198.51.100.90",
+      key("reissue-provenance-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("reissue-provenance-review"),
+    );
+    const initialExpiry = new Date(Date.now() + 60 * 60 * 1_000);
+    const initialIssueKey = key("reissue-provenance-issue");
+    const initial = await issueOffer(
+      created.requestId,
+      initialIssueKey,
+      initialExpiry,
+    );
+    expect(initial.response.status, JSON.stringify(initial.body)).toBe(201);
+    const initialSnapshot = await prisma.quote.findUniqueOrThrow({
+      where: { id: initial.body.quoteId },
+      include: {
+        priceBinding: { include: { priceSnapshot: true } },
+        items: { orderBy: { ordinal: "asc" } },
+      },
+    });
+
+    const reissueKey = key("reissue-provenance-command");
+    const reissueExpiry = new Date(Date.now() + 2 * 60 * 60 * 1_000);
+    const reissued = await reissueOffer(
+      created.requestId,
+      reissueKey,
+      initial.body.quoteId,
+      initial.body.version,
+      reissueExpiry,
+    );
+    expect(reissued.response.status, JSON.stringify(reissued.body)).toBe(201);
+    expect(reissued.body).toMatchObject({ version: 2 });
+    expect(reissued.body.quoteId).not.toBe(initial.body.quoteId);
+    expect(reissued.body.offerToken).not.toBe(initial.body.offerToken);
+
+    const replay = await reissueOffer(
+      created.requestId,
+      reissueKey,
+      initial.body.quoteId,
+      initial.body.version,
+      reissueExpiry,
+    );
+    expect(replay.response.status).toBe(201);
+    expect(replay.body).toEqual(reissued.body);
+
+    const current = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: created.requestId },
+      select: { status: true, currentQuoteId: true },
+    });
+    expect(current).toEqual({
+      status: "QUOTED",
+      currentQuoteId: reissued.body.quoteId,
+    });
+    const versions = await prisma.quote.findMany({
+      where: { quoteRequestId: created.requestId },
+      orderBy: { version: "asc" },
+      include: {
+        priceBinding: { include: { priceSnapshot: true } },
+        items: { orderBy: { ordinal: "asc" } },
+      },
+    });
+    expect(versions.map((quote) => quote.version)).toEqual([1, 2]);
+    const reissuedSnapshot = versions[1]!.priceBinding!.priceSnapshot!;
+    expect(reissuedSnapshot).toMatchObject({
+      currency: initialSnapshot.priceBinding!.priceSnapshot!.currency,
+      contractTotalMinor:
+        initialSnapshot.priceBinding!.priceSnapshot!.contractTotalMinor,
+      netAmountMinor:
+        initialSnapshot.priceBinding!.priceSnapshot!.netAmountMinor,
+      vatAmountMinor:
+        initialSnapshot.priceBinding!.priceSnapshot!.vatAmountMinor,
+    });
+    const initialInputSnapshot = initialSnapshot.priceBinding!.priceSnapshot!
+      .inputSnapshot as Record<string, unknown>;
+    const reissuedInputSnapshot = reissuedSnapshot.inputSnapshot as Record<
+      string,
+      unknown
+    >;
+    expect({
+      ...reissuedInputSnapshot,
+      quoteVersion: initialInputSnapshot.quoteVersion,
+    }).toEqual(initialInputSnapshot);
+    expect(
+      versions[1]!.items.map(
+        ({ id: _id, quoteId: _quoteId, createdAt: _createdAt, ...item }) =>
+          item,
+      ),
+    ).toEqual(
+      versions[0]!.items.map(
+        ({ id: _id, quoteId: _quoteId, createdAt: _createdAt, ...item }) =>
+          item,
+      ),
+    );
+
+    const oldPreview = await apiJson(`offers/${initial.body.quoteId}`, {
+      headers: bearer(initial.body.offerToken),
+    });
+    expect(oldPreview.response.status).toBe(410);
+    const oldIssueReplay = await issueOffer(
+      created.requestId,
+      initialIssueKey,
+      initialExpiry,
+    );
+    expect(
+      oldIssueReplay.response.status,
+      JSON.stringify(oldIssueReplay.body),
+    ).toBe(201);
+    expect(oldIssueReplay.body).toEqual(initial.body);
+
+    const accepted = await acceptOffer(
+      reissued.body,
+      key("reissue-provenance-accept"),
+    );
+    expect(accepted.response.status).toBe(200);
+    expect(accepted.body.status).toBe("DRAFT");
+    await expect(
+      prisma.individualOrderOrigin.findMany({
+        where: { quote: { quoteRequestId: created.requestId } },
+        select: { quoteId: true },
+      }),
+    ).resolves.toEqual([{ quoteId: reissued.body.quoteId }]);
+  });
+
+  it("serializes concurrent reissues against one current offer", async () => {
+    const created = await quotes.createRequest(
+      requestInput("reissue-race"),
+      "198.51.100.91",
+      key("reissue-race-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("reissue-race-review"),
+    );
+    const initial = await issueOffer(
+      created.requestId,
+      key("reissue-race-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
+
+    const [left, right] = await Promise.all([
+      reissueOffer(
+        created.requestId,
+        key("reissue-race-left"),
+        initial.body.quoteId,
+        initial.body.version,
+        new Date(Date.now() + 2 * 60 * 60 * 1_000),
+        "Reissue race left",
+        "RACE_LEFT",
+      ),
+      reissueOffer(
+        created.requestId,
+        key("reissue-race-right"),
+        initial.body.quoteId,
+        initial.body.version,
+        new Date(Date.now() + 2 * 60 * 60 * 1_000),
+        "Reissue race right",
+        "RACE_RIGHT",
+      ),
+    ]);
+    expect([left.response.status, right.response.status].sort()).toEqual([
+      201, 409,
+    ]);
+    const successful = left.response.status === 201 ? left : right;
+    expect(successful.body.version).toBe(2);
+    const persisted = await prisma.quote.findMany({
+      where: { quoteRequestId: created.requestId },
+      orderBy: { version: "asc" },
+      select: { id: true, version: true },
+    });
+    expect(persisted).toHaveLength(2);
+    expect(persisted.map((quote) => quote.version)).toEqual([1, 2]);
+    await expect(
+      prisma.quoteRequest.findUniqueOrThrow({
+        where: { id: created.requestId },
+        select: { status: true, currentQuoteId: true },
+      }),
+    ).resolves.toEqual({
+      status: "QUOTED",
+      currentQuoteId: successful.body.quoteId,
+    });
+  });
+
   it("accepts and canonicalizes uppercase UUIDs allowed by the API contract", async () => {
     const created = await quotes.createRequest(
       requestInput("uppercase-uuid"),
@@ -2440,6 +2627,13 @@ describe("QuoteRequest and tokenized individual offers", () => {
       vatAmountMinor?: number;
     } = {},
   ) {
+    const offer = offerInput(
+      expiresAt,
+      components,
+      items,
+      selectedPriceListId,
+      options,
+    );
     return apiJson<{
       quoteId: string;
       offerToken: string;
@@ -2455,28 +2649,86 @@ describe("QuoteRequest and tokenized individual offers", () => {
         origin: "http://localhost:3002",
         "x-csrf-token": operatorCsrfToken,
       },
+      body: JSON.stringify(offer),
+    });
+  }
+
+  function offerInput(
+    expiresAt: Date | string,
+    components: Array<{
+      kind: string;
+      amountMinor: number;
+      quoteItemOrdinal?: number;
+    }> = defaultComponents(),
+    items: Array<Record<string, unknown>> = defaultItems(),
+    selectedPriceListId = priceListId,
+    options: {
+      contractTotalMinor?: number;
+      depositMinor?: number;
+      deliveryDestination?: ReturnType<typeof defaultDeliveryDestination>;
+      shipmentPlans?: ReturnType<typeof defaultShipmentPlans>;
+      paymentPolicy?: ReturnType<typeof defaultPaymentPolicy>;
+      taxRegime?: "NON_VAT_PAYER" | "VAT_PAYER";
+      vatRateBasisPoints?: number;
+      netAmountMinor?: number;
+      vatAmountMinor?: number;
+    } = {},
+  ): Record<string, unknown> {
+    return {
+      summary: "Custom modelling and production offer",
+      expiresAt:
+        typeof expiresAt === "string" ? expiresAt : expiresAt.toISOString(),
+      promisedDate: "2026-10-01",
+      priceListId: selectedPriceListId,
+      contractTotalMinor: options.contractTotalMinor ?? 110_000,
+      taxRegime: options.taxRegime ?? "NON_VAT_PAYER",
+      vatRateBasisPoints: options.vatRateBasisPoints ?? 0,
+      netAmountMinor:
+        options.netAmountMinor ?? options.contractTotalMinor ?? 110_000,
+      vatAmountMinor: options.vatAmountMinor ?? 0,
+      depositMinor: options.depositMinor ?? 33_000,
+      termsSnapshot,
+      inputSnapshot: { operatorEstimate: "manual-v0" },
+      deliveryDestination:
+        options.deliveryDestination ?? defaultDeliveryDestination(),
+      shipmentPlans:
+        options.shipmentPlans ?? defaultShipmentPlansForItems(items),
+      paymentPolicy: options.paymentPolicy ?? defaultPaymentPolicy(),
+      items,
+      components,
+    };
+  }
+
+  async function reissueOffer(
+    requestId: string,
+    idempotencyKey: string,
+    expectedQuoteId: string,
+    expectedVersion: number,
+    expiresAt: Date | string,
+    reason = "Refresh immutable offer after legal rotation",
+    reasonCode = "LEGAL_ROTATION",
+  ) {
+    return apiJson<{
+      quoteId: string;
+      offerToken: string;
+      version: number;
+      termsRevision: string;
+      expiresAt: string;
+    }>(`admin/quote-requests/${requestId}/offers/reissue`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": idempotencyKey,
+        cookie: operatorCookie,
+        origin: "http://localhost:3002",
+        "x-csrf-token": operatorCsrfToken,
+      },
       body: JSON.stringify({
-        summary: "Custom modelling and production offer",
-        expiresAt:
-          typeof expiresAt === "string" ? expiresAt : expiresAt.toISOString(),
-        promisedDate: "2026-10-01",
-        priceListId: selectedPriceListId,
-        contractTotalMinor: options.contractTotalMinor ?? 110_000,
-        taxRegime: options.taxRegime ?? "NON_VAT_PAYER",
-        vatRateBasisPoints: options.vatRateBasisPoints ?? 0,
-        netAmountMinor:
-          options.netAmountMinor ?? options.contractTotalMinor ?? 110_000,
-        vatAmountMinor: options.vatAmountMinor ?? 0,
-        depositMinor: options.depositMinor ?? 33_000,
-        termsSnapshot,
-        inputSnapshot: { operatorEstimate: "manual-v0" },
-        deliveryDestination:
-          options.deliveryDestination ?? defaultDeliveryDestination(),
-        shipmentPlans:
-          options.shipmentPlans ?? defaultShipmentPlansForItems(items),
-        paymentPolicy: options.paymentPolicy ?? defaultPaymentPolicy(),
-        items,
-        components,
+        expectedQuoteId,
+        expectedVersion,
+        reason,
+        reasonCode,
+        offer: offerInput(expiresAt),
       }),
     });
   }

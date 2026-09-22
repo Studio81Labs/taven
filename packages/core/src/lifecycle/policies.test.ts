@@ -11194,6 +11194,33 @@ describe("v0 lifecycle policy tables", () => {
     ).toEqual({ kind: "changed", previous: "in_review", current: "quoted" });
   });
 
+  it("reconciles a complete atomic quoted-to-quoted offer reissue", () => {
+    const context = contextForTransition("quoted", "quoted");
+    expect(
+      transition(quoteRequestPolicy, {
+        aggregateId: "quote-request-1",
+        currentStateCommandKey: "quote-request-quoted-command-1",
+        currentStateResultId: "quote-request-quoted-result-1",
+        current: "quoted",
+        target: "quoted",
+        idempotencyKey: "quote-reissue-complete",
+        context: {
+          ...context,
+          quoteIssuanceQuoteRequestPreviousStatus: "quoted",
+          quoteIssuancePreviousQuoteRequestResultId:
+            "quote-request-quoted-result-1",
+          quoteIssuanceCurrentStateCommandKey: "quote-request-quoted-command-1",
+          quoteIssuanceExpectedQuoteRequest: {
+            ...context.quoteIssuanceExpectedQuoteRequest,
+            status: "quoted",
+            resultId: "quote-request-quoted-result-1",
+            currentStateCommandKey: "quote-request-quoted-command-1",
+          },
+        },
+      }),
+    ).toEqual({ kind: "reconciled", current: "quoted" });
+  });
+
   it.each([
     ["blank request", { quoteRequestId: " " }],
     ["foreign issued-quote owner", { issuedQuoteRequestId: "another-request" }],
