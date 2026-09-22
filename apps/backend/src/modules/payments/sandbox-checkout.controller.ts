@@ -7,7 +7,7 @@ import {
   Param,
   Post,
   Query,
-  Redirect,
+  Res,
 } from "@nestjs/common";
 import { timingSafeEqual } from "node:crypto";
 import { ApiExcludeController } from "@nestjs/swagger";
@@ -23,6 +23,13 @@ import {
 } from "./sandbox-payment-provider.adapter";
 
 type SandboxOutcome = "capture" | "decline" | "pending";
+
+type ResponseLike = {
+  redirect(status: number, url: string): unknown;
+  send(body: string): unknown;
+  setHeader(name: string, value: string): ResponseLike;
+  status(code: number): ResponseLike;
+};
 
 @ApiExcludeController()
 @Controller("payments/sandbox")
@@ -50,13 +57,13 @@ export class SandboxCheckoutController {
   }
 
   @Post(":providerIntentId/:outcome")
-  @Redirect()
   async complete(
     @Param("providerIntentId") providerIntentId: string,
     @Param("outcome") outcomeInput: string,
+    @Res() response: ResponseLike,
     @Query("returnToken") returnToken?: string,
     @Query("returnSignature") returnSignature?: string,
-  ): Promise<string | { url: string; statusCode: 303 }> {
+  ): Promise<void> {
     const outcome = sandboxOutcome(outcomeInput);
     const config = sandboxConfig(this.config);
     const payment = await this.payment(providerIntentId);
@@ -90,12 +97,18 @@ export class SandboxCheckoutController {
       config.webhookSigningSecret,
     );
     const redirectTarget = returnUrls?.[outcomeReturnKey(outcome)];
-    if (redirectTarget) return { url: redirectTarget, statusCode: 303 };
-    return checkoutPage(
-      await this.payment(providerIntentId),
-      result.outcome,
-      returnToken,
-      returnSignature,
+    if (redirectTarget) {
+      response.redirect(303, redirectTarget);
+      return;
+    }
+    response.status(200).setHeader("Content-Type", "text/html; charset=utf-8");
+    response.send(
+      checkoutPage(
+        await this.payment(providerIntentId),
+        result.outcome,
+        returnToken,
+        returnSignature,
+      ),
     );
   }
 
