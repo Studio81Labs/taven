@@ -45,14 +45,16 @@ export class SandboxCheckoutController {
   @Header("Content-Type", "text/html; charset=utf-8")
   async checkout(
     @Param("providerIntentId") providerIntentId: string,
-    @Query("returnToken") returnToken?: string,
-    @Query("returnSignature") returnSignature?: string,
+    @Query("returnToken") returnToken?: string | string[],
+    @Query("returnSignature") returnSignature?: string | string[],
   ): Promise<string> {
+    const token = singleQueryValue(returnToken);
+    const signature = singleQueryValue(returnSignature);
     return checkoutPage(
       await this.payment(providerIntentId),
       undefined,
-      returnToken,
-      returnSignature,
+      token,
+      signature,
     );
   }
 
@@ -61,9 +63,11 @@ export class SandboxCheckoutController {
     @Param("providerIntentId") providerIntentId: string,
     @Param("outcome") outcomeInput: string,
     @Res() response: ResponseLike,
-    @Query("returnToken") returnToken?: string,
-    @Query("returnSignature") returnSignature?: string,
+    @Query("returnToken") returnToken?: string | string[],
+    @Query("returnSignature") returnSignature?: string | string[],
   ): Promise<void> {
+    const token = singleQueryValue(returnToken);
+    const signature = singleQueryValue(returnSignature);
     const outcome = sandboxOutcome(outcomeInput);
     const config = sandboxConfig(this.config);
     const payment = await this.payment(providerIntentId);
@@ -92,8 +96,8 @@ export class SandboxCheckoutController {
       body,
     );
     const returnUrls = verifiedReturnUrls(
-      returnToken,
-      returnSignature,
+      token,
+      signature,
       config.webhookSigningSecret,
     );
     const redirectTarget = returnUrls?.[outcomeReturnKey(outcome)];
@@ -106,8 +110,8 @@ export class SandboxCheckoutController {
       checkoutPage(
         await this.payment(providerIntentId),
         result.outcome,
-        returnToken,
-        returnSignature,
+        token,
+        signature,
       ),
     );
   }
@@ -135,6 +139,12 @@ export class SandboxCheckoutController {
     }
     return payment;
   }
+}
+
+function singleQueryValue(
+  value: string | string[] | undefined,
+): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function sandboxOutcome(value: string): SandboxOutcome {
