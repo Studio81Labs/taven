@@ -30,9 +30,9 @@ const request = {
   quantity: 1,
 };
 
-if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 10) {
+if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 4) {
   throw new Error(
-    "TAVEN_BENCHMARK_SAMPLES must be an integer between 1 and 10",
+    "TAVEN_BENCHMARK_SAMPLES must be an integer between 1 and 4",
   );
 }
 
