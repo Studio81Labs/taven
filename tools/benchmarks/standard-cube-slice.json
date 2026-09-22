@@ -1,0 +1,19 @@
+{
+  "fixture": "tools/slicing-fixtures/fixtures/single-pla/cube.stl",
+  "geometrySha256": "25180bbac89a3ad812538e23447b6556c9684b278aec45ca7e015eef21730120",
+  "dimensionsMm": { "width": 20, "depth": 20, "height": 20 },
+  "volumeMm3": 8000,
+  "material": "PLA",
+  "quality": "STANDARD",
+  "infillPreset": "STANDARD",
+  "sparseInfillDensityPercent": 20,
+  "quantity": 1,
+  "estimatedSeconds": 1262,
+  "filamentUsageGrams": 3.93,
+  "normalizedGcodeSha256": "e9132ced540121135e8eb50c35226656ed93eb3315efd9486ac48116a3b5738b",
+  "slicer": "orca-slicer 2.4.2",
+  "runtimeImageDigest": "sha256:9b2d78073d052b6caa31303c21bf1da88201ec73ef0a523ded078c655c847953",
+  "profileBundleSha256": "80de8b9bfffe3452b8202ed76e3a4bba73b2108e436900930c46a032e3481962",
+  "printConfigRevisionId": "00451f99-2f50-4358-8015-bbce478db957",
+  "referenceProfileId": "61111111-1111-4111-8111-111111111111"
+}

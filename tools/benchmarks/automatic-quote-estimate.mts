@@ -5,10 +5,23 @@ import { PrismaClient } from "../../apps/backend/node_modules/@prisma/client/def
 import { prepareAutomaticQuote } from "../../apps/backend/src/modules/automatic-quotes/automatic-quote-pricing";
 
 type CorpusCase = {
-  outputs: Array<{
-    estimatedSeconds: number;
-    filamentUsage: Array<{ grams: number }>;
-  }>;
+  fixture: string;
+  geometrySha256: string;
+  dimensionsMm: { width: number; depth: number; height: number };
+  volumeMm3: number;
+  material: string;
+  quality: string;
+  infillPreset: string;
+  sparseInfillDensityPercent: number;
+  quantity: number;
+  estimatedSeconds: number;
+  filamentUsageGrams: number;
+  normalizedGcodeSha256: string;
+  slicer: string;
+  runtimeImageDigest: string;
+  profileBundleSha256: string;
+  printConfigRevisionId: string;
+  referenceProfileId: string;
 };
 
 type EstimateResponse = {
@@ -20,7 +33,7 @@ type EstimateResponse = {
 const endpoint =
   process.env.TAVEN_ESTIMATE_URL ??
   "https://api-staging.taven.cz/automatic-quote-estimates";
-const sampleCount = Number(process.env.TAVEN_BENCHMARK_SAMPLES ?? 5);
+const sampleCount = Number(process.env.TAVEN_BENCHMARK_SAMPLES ?? 4);
 const request = {
   volumeMm3: 8_000,
   dimensionsMm: { width: 20, depth: 20, height: 20 },
@@ -36,12 +49,18 @@ if (!Number.isInteger(sampleCount) || sampleCount < 1 || sampleCount > 4) {
 
 const corpus = JSON.parse(
   await readFile(
-    new URL("../slicing-fixtures/expected/single-pla.json", import.meta.url),
+    new URL("./standard-cube-slice.json", import.meta.url),
     "utf8",
   ),
 ) as CorpusCase;
-const slice = corpus.outputs[0];
-if (!slice) throw new Error("single-pla corpus output is missing");
+if (
+  corpus.material !== request.material ||
+  corpus.quality !== request.quality ||
+  corpus.infillPreset !== request.infillPreset ||
+  corpus.sparseInfillDensityPercent !== 20
+) {
+  throw new Error("benchmark slice does not match the STANDARD request");
+}
 
 const samples: number[] = [];
 let estimate: EstimateResponse;
@@ -50,6 +69,15 @@ for (let index = 0; index < sampleCount; index += 1) {
   const started = performance.now();
   estimate = await fetchEstimate();
   samples.push(performance.now() - started);
+}
+
+if (estimate.assumptions.referenceProfileId !== corpus.referenceProfileId) {
+  throw new Error("estimate selected an unexpected reference profile");
+}
+if (
+  estimate.assumptions.printConfigRevisionId !== corpus.printConfigRevisionId
+) {
+  throw new Error("estimate selected an unexpected print configuration");
 }
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -75,9 +103,9 @@ try {
         quantity: 1,
         referencePartsPerPlate: 1,
         primary: {
-          estimatedPrintSeconds: BigInt(slice.estimatedSeconds),
+          estimatedPrintSeconds: BigInt(corpus.estimatedSeconds),
           estimatedMaterialMilligrams: BigInt(
-            Math.round((slice.filamentUsage[0]?.grams ?? 0) * 1_000),
+            Math.round(corpus.filamentUsageGrams * 1_000),
           ),
         },
         tail: null,
@@ -105,16 +133,21 @@ try {
       {
         endpoint,
         fixture: {
-          file: "tools/slicing-fixtures/fixtures/single-pla/cube.stl",
-          dimensionsMm: request.dimensionsMm,
-          volumeMm3: request.volumeMm3,
-          material: request.material,
-          quality: request.quality,
-          infillPreset: request.infillPreset,
-          quantity: request.quantity,
-          slicerEstimatedSeconds: slice.estimatedSeconds,
-          slicerFilamentGrams: slice.filamentUsage[0]?.grams,
-          slicerEngine: "orca-slicer 2.4.2",
+          file: corpus.fixture,
+          geometrySha256: corpus.geometrySha256,
+          dimensionsMm: corpus.dimensionsMm,
+          volumeMm3: corpus.volumeMm3,
+          material: corpus.material,
+          quality: corpus.quality,
+          infillPreset: corpus.infillPreset,
+          sparseInfillDensityPercent: corpus.sparseInfillDensityPercent,
+          quantity: corpus.quantity,
+          slicerEstimatedSeconds: corpus.estimatedSeconds,
+          slicerFilamentGrams: corpus.filamentUsageGrams,
+          normalizedGcodeSha256: corpus.normalizedGcodeSha256,
+          slicerEngine: corpus.slicer,
+          runtimeImageDigest: corpus.runtimeImageDigest,
+          profileBundleSha256: corpus.profileBundleSha256,
         },
         assumptions: estimate.assumptions,
         priceListRevision: estimate.priceListRevision,
