@@ -53,7 +53,7 @@
   },
   "outputs": [],
   "profiles": {
-    "bundleSha256": "1f9861ea7f9b4e0f4259932bd3dca7801d0416a1d0ff4842076b781ac0eb9a0c",
+    "bundleSha256": "80de8b9bfffe3452b8202ed76e3a4bba73b2108e436900930c46a032e3481962",
     "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
   },
   "schemaVersion": 1

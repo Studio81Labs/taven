@@ -121,6 +121,20 @@ describe("automatic quote handoff", () => {
       }),
     ).toBe(true);
   });
+
+  it("treats deterministic preprocessing failures as terminal", () => {
+    expect(
+      isTerminalQuoteHandoff({
+        express: { eligible: false, reasons: [], requested: false },
+        handoff: {
+          kind: "INDIVIDUAL_QUOTE_REQUEST",
+          reasons: ["PREPROCESSING_FAILED"],
+          safeContext: {},
+        },
+        phase: "HANDOFF_REQUIRED",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("upload command idempotency", () => {

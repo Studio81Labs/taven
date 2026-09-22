@@ -69,11 +69,11 @@
         }
       ],
       "file": "plate_1.gcode",
-      "normalizedSha256": "d1459aa59340ad8ecf7a5792fdeafc519c300e1407e5baf9b17704903da2479c"
+      "normalizedSha256": "a005a6ab585929a513baaceedb4a5cae3aae0189202b9ffb5394789218d9988f"
     }
   ],
   "profiles": {
-    "bundleSha256": "1f9861ea7f9b4e0f4259932bd3dca7801d0416a1d0ff4842076b781ac0eb9a0c",
+    "bundleSha256": "80de8b9bfffe3452b8202ed76e3a4bba73b2108e436900930c46a032e3481962",
     "upstreamRevision": "8500fcdccaa10b5099ac20d252af3a7c560046f1"
   },
   "schemaVersion": 1
