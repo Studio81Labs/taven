@@ -592,11 +592,21 @@ async function runCase(runRoot, fixtureCase) {
     );
     secondaryFilamentDigest = digest(secondaryContents);
   }
+  let catalogProfileProvenance = null;
   if (fixtureCase.filamentProfile) {
+    const catalogProfilePath = path.join(
+      catalogProfileDirectory,
+      fixtureCase.filamentProfile,
+    );
+    const catalogProfileContents = await readFile(catalogProfilePath, "utf8");
     await copyFile(
-      path.join(catalogProfileDirectory, fixtureCase.filamentProfile),
+      catalogProfilePath,
       path.join(inputDirectory, fixtureCase.filamentProfile),
     );
+    catalogProfileProvenance = {
+      file: fixtureCase.filamentProfile,
+      sha256: digest(catalogProfileContents),
+    };
   }
 
   const command = slicerArguments(fixtureCase);
@@ -691,6 +701,7 @@ async function runCase(runRoot, fixtureCase) {
     profiles: {
       upstreamRevision: manifest.upstream.revision,
       bundleSha256: manifest.bundleSha256,
+      catalogProfile: catalogProfileProvenance,
     },
     input: {
       file: fixtureCase.fixture,
