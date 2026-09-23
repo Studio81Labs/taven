@@ -271,7 +271,9 @@ export class OperatorWarningsService {
            AND reservation.candidate_capacity_interval_id <> interval.id
            AND reservation.starts_at < interval.ends_at
            AND interval.starts_at < reservation.ends_at
+           AND reservation.ends_at > ${now}
            AND reservation.status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+           AND (reservation.status <> 'RESERVED' OR reservation.expires_at > ${now})
           WHERE candidate.node_id = ${nodeId}::uuid
             AND candidate.expires_at > ${now}
           ORDER BY candidate.calculated_at DESC, candidate.id DESC

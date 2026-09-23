@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import { Prisma } from "@prisma/client";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -421,6 +422,151 @@ describe("operator read contracts", () => {
       ).status,
     ).toBe(400);
   });
+
+  it("does not warn about an expired RESERVED interval as a live conflict", async () => {
+    const client = await pool.connect();
+    let warningNodeId: string;
+    let planned: ProductionReservationFixture;
+    let reservationExpiresAt: Date;
+    try {
+      await client.query("BEGIN");
+      const factory = new PersistenceFactory(
+        client,
+        `warning-expiry-${randomUUID()}`,
+      );
+      const timing = {
+        createdAt: new Date(Date.now() - 24 * 60 * 60 * 1_000),
+        expiresAt: new Date(Date.now() + 10_000),
+      };
+      reservationExpiresAt = timing.expiresAt;
+      const interval = {
+        startsAt: testTimes.capacityStart,
+        endsAt: testTimes.capacityEnd,
+      };
+      const graph = await factory.createReservationGraph(
+        "warning-expiry",
+        [interval],
+        {},
+        {},
+        timing,
+      );
+      const foundation = graph.foundation;
+      const production = graph.productions[0];
+      if (!production) throw new Error("reservation graph is missing a job");
+      planned = production;
+      await client.query(
+        "INSERT INTO inventory_reservations (id, node_id, production_reservation_id, inventory_id, reserved_milligrams, expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        [
+          production.inventoryReservationId,
+          foundation.nodeId,
+          production.productionReservationId,
+          foundation.inventoryId,
+          60,
+          timing.expiresAt,
+          timing.createdAt,
+          timing.createdAt,
+        ],
+      );
+      await client.query(
+        "INSERT INTO capacity_reservations (id, node_id, production_reservation_id, candidate_capacity_interval_id, machine_id, starts_at, ends_at, expires_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+        [
+          randomUUID(),
+          foundation.nodeId,
+          production.productionReservationId,
+          production.candidateCapacityIntervalId,
+          foundation.machineId,
+          interval.startsAt,
+          interval.endsAt,
+          timing.expiresAt,
+          timing.createdAt,
+          timing.createdAt,
+        ],
+      );
+      await client.query(
+        "UPDATE inventories SET reserved_milligrams = 60 WHERE id = $1",
+        [foundation.inventoryId],
+      );
+      await client.query(
+        "UPDATE phase_reservation_sets SET status = 'RESERVED' WHERE id = $1",
+        [foundation.phaseReservationSetId],
+      );
+      warningNodeId = foundation.nodeId;
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    const warningCookie = (await sessionCookie("ADMIN", warningNodeId)).cookie;
+    const source = await prisma.candidateResourceEstimate.findUniqueOrThrow({
+      where: { id: planned.candidateResourceEstimateId },
+      include: { capacityIntervals: true },
+    });
+    const interval = source.capacityIntervals[0];
+    if (!interval) throw new Error("candidate interval fixture is missing");
+    const candidateId = randomUUID();
+    await prisma.candidateResourceEstimate.create({
+      data: {
+        id: candidateId,
+        nodeId: source.nodeId,
+        estimateKey: `warning-conflict-${candidateId}`,
+        modelGeometryId: source.modelGeometryId,
+        primarySliceResultId: source.primarySliceResultId,
+        tailSliceResultId: source.tailSliceResultId,
+        printConfigRevisionId: source.printConfigRevisionId,
+        machineProfileId: source.machineProfileId,
+        machineCalibrationId: source.machineCalibrationId,
+        machineId: source.machineId,
+        machineAvailabilityRevisionId: source.machineAvailabilityRevisionId,
+        machineAvailabilitySelectionVersion:
+          source.machineAvailabilitySelectionVersion,
+        inventoryId: source.inventoryId,
+        shipmentPlanId: source.shipmentPlanId,
+        arrangementRevisionId: source.arrangementRevisionId,
+        quantity: source.quantity,
+        partsPerPlate: source.partsPerPlate,
+        requiredMaterialMilligrams: source.requiredMaterialMilligrams,
+        requiredMachineSeconds: source.requiredMachineSeconds,
+        resourceSnapshot: source.resourceSnapshot as Prisma.InputJsonObject,
+        calculatedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
+        capacityIntervals: {
+          create: [
+            {
+              id: randomUUID(),
+              intervalIndex: 0,
+              startsAt: interval.startsAt,
+              endsAt: interval.endsAt,
+            },
+          ],
+        },
+      },
+    });
+    const warningCodes = async () => {
+      const response = await fetch(
+        new URL("/admin/warnings?limit=100", baseUrl),
+        {
+          headers: { cookie: warningCookie },
+        },
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        items: Array<{ code: string; sourceId: string }>;
+      };
+      return body.items.filter((item) => item.sourceId === candidateId);
+    };
+    await expect(warningCodes()).resolves.toEqual([
+      expect.objectContaining({ code: "RESERVATION_CONFLICT" }),
+    ]);
+    await new Promise((resolve) =>
+      setTimeout(
+        resolve,
+        Math.max(0, reservationExpiresAt.getTime() - Date.now() + 250),
+      ),
+    );
+    await expect(warningCodes()).resolves.toEqual([]);
+  }, 30_000);
 
   it("enforces the trusted node scope and capacity query boundary", async () => {
     const unavailableNode = await read(`/admin/nodes/${randomUUID()}/machines`);
