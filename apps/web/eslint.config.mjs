@@ -5,6 +5,7 @@ import { base } from "../../eslint.config.mjs";
 
 export default [
   ...base,
+  { ignores: ["**/.output-fixture/**"] },
   ...pluginVue.configs["flat/recommended"],
   {
     files: ["**/*.{ts,vue}"],

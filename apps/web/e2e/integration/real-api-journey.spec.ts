@@ -10,6 +10,8 @@ import {
 import {
   archiveE2eCheckoutDocumentsForBrowser,
   readE2eCheckoutEffectsForBrowser,
+  readE2eParcelAllocationsForBrowser,
+  resetE2eAnonymousAdmissionLimitsForBrowser,
 } from "../../../backend/test/support/publish-e2e-legal-fixtures";
 
 const INTEGRATION_API_URL =
@@ -21,6 +23,10 @@ const requireCheckout =
 const FIXTURE_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../tools/slicing-fixtures/fixtures/single-pla/cube.stl",
+);
+const TWO_BODY_FIXTURE_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../../tools/slicing-fixtures/fixtures/two-body/two-body.3mf",
 );
 
 async function startSandboxPayment(
@@ -168,6 +174,17 @@ test.describe("Real API Integration Journey", () => {
     !integrationTest,
     "Skipped unless INTEGRATION_TEST=true environment variable is present",
   );
+
+  test.beforeEach(async () => {
+    if (
+      integrationTest &&
+      process.env.INTEGRATION_MUTABLE_FIXTURES === "true"
+    ) {
+      await resetE2eAnonymousAdmissionLimitsForBrowser(
+        process.env.DATABASE_URL!,
+      );
+    }
+  });
 
   test("runs a browser upload through the live API and estimate path", async ({
     page,
@@ -403,6 +420,162 @@ test.describe("Real API Integration Journey", () => {
       method: "BANK_TRANSFER",
       status: "CAPTURED",
     });
+  });
+
+  test("accepts two inspected bodies as separate items across compatible parcels", async ({
+    page,
+    request,
+  }) => {
+    test.skip(
+      !completePayment || process.env.INTEGRATION_MUTABLE_FIXTURES !== "true",
+      "Requires the isolated fixture-worker and browser database profile",
+    );
+    test.setTimeout(360_000);
+
+    await page.goto("/");
+    await page
+      .locator('input[type="file"]')
+      .setInputFiles(TWO_BODY_FIXTURE_PATH);
+    const proceed = page.getByRole("button", {
+      name: "Nahrát a pokračovat ke konfiguraci",
+    });
+    await expect(proceed).toBeEnabled({ timeout: 120_000 });
+    await proceed.click();
+    await expect(page).toHaveURL(/\/objednavka/, { timeout: 120_000 });
+    const secondBody = page.getByRole("combobox", {
+      name: /Položka pro body-0002 v Soubor 1 · 3MF/,
+    });
+    await expect(secondBody).toHaveValue("0");
+    await page.getByRole("button", { name: "Přidat položku" }).click();
+    await secondBody.selectOption({ label: "Položka 2" });
+    const firstItem = page.locator("section.item-configuration").filter({
+      has: page.getByText("POLOŽKA 1", { exact: true }),
+    });
+    const secondItem = page.locator("section.item-configuration").filter({
+      has: page.getByText("POLOŽKA 2", { exact: true }),
+    });
+    await firstItem.getByRole("spinbutton", { name: "Jiné" }).fill("30");
+    await secondItem
+      .getByRole("combobox", { name: "Materiál" })
+      .selectOption("PLA");
+    await secondItem.getByRole("spinbutton", { name: "Jiné" }).fill("30");
+    const configurationResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().includes("/configuration"),
+    );
+    await page.getByRole("button", { name: "Uložit a přepočítat" }).click();
+    const configured = await configurationResponse;
+    expect(configured.status(), await configured.text()).toBe(200);
+    expect(configured.request().postDataJSON().items).toMatchObject([
+      { ordinal: 0, bodyIds: ["body-0001"], quantity: 30 },
+      { ordinal: 1, bodyIds: ["body-0002"], quantity: 30 },
+    ]);
+    const verifyDelivery = page.getByRole("button", {
+      name: "Ověřit dopravu a závaznou cenu",
+    });
+    await expect(verifyDelivery).toBeEnabled({ timeout: 120_000 });
+    await verifyDelivery.click();
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible({ timeout: 120_000 });
+    const checkoutSession = await page.evaluate(() => {
+      const raw = sessionStorage.getItem("taven:automatic-quote-session:v1");
+      return raw
+        ? (JSON.parse(raw) as { sessionId: string; sessionToken: string })
+        : null;
+    });
+    if (!checkoutSession) throw new Error("Multi-body session is unavailable");
+    const sessionResponse = await request.get(
+      `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}`,
+      {
+        headers: { Authorization: `Bearer ${checkoutSession.sessionToken}` },
+      },
+    );
+    expect(sessionResponse.status()).toBe(200);
+    const session = await sessionResponse.json();
+    expect(session.items).toMatchObject([
+      {
+        bodyIds: ["body-0001"],
+        quantity: 30,
+        material: "PETG",
+        quality: "STANDARD",
+      },
+      {
+        bodyIds: ["body-0002"],
+        quantity: 30,
+        material: "PLA",
+        quality: "STANDARD",
+      },
+    ]);
+    const shipmentComponents = session.bindingQuote.components.filter(
+      (component: { kind: string }) => component.kind === "SHIPMENT",
+    );
+    expect(shipmentComponents.length).toBeGreaterThan(1);
+    expect(
+      shipmentComponents.map(
+        (component: { shipmentPlanOrdinal: number }) =>
+          component.shipmentPlanOrdinal,
+      ),
+    ).toEqual(shipmentComponents.map((_: unknown, index: number) => index + 1));
+    await page.getByText("Rozpis ceny").click();
+    await expect(
+      page.locator(".price-list li").filter({ hasText: "Doprava" }),
+    ).toHaveCount(shipmentComponents.length);
+
+    await page.getByLabel("Jméno kontaktní osoby").fill("E2E Parcel Test");
+    await page.getByLabel("E-mail").fill("browser-144-parcels@example.test");
+    await page
+      .getByLabel("Fakturační jméno nebo název")
+      .fill("E2E Parcel Test");
+    await page.getByLabel("Ulice a číslo").fill("Testovací 123");
+    await page.getByLabel("Město").fill("Brno");
+    await page.getByLabel("PSČ").fill("60200");
+    await page.getByRole("checkbox", { name: /VOP/i }).check();
+    await page.getByRole("checkbox", { name: /reklamačním řádem/i }).check();
+    await page.getByRole("checkbox", { name: /výjimka/i }).check();
+    await page.getByRole("button", { name: /Objednat a zaplatit/i }).click();
+    await expect(
+      page.getByRole("heading", { name: "TAVEN. sandbox checkout" }),
+    ).toBeVisible({ timeout: 120_000 });
+    const allocations = await readE2eParcelAllocationsForBrowser(
+      process.env.DATABASE_URL!,
+      checkoutSession.sessionId,
+    );
+    expect(allocations.itemBoundsMicrometers).toEqual([
+      {
+        ordinal: 0,
+        bodyIds: ["body-0001"],
+        x: "20000",
+        y: "20000",
+        z: "20000",
+      },
+      {
+        ordinal: 1,
+        bodyIds: ["body-0002"],
+        x: "20000",
+        y: "20000",
+        z: "20000",
+      },
+    ]);
+    expect(allocations.destinationCount).toBe(1);
+    expect(allocations.parcels.length).toBe(shipmentComponents.length);
+    expect(
+      allocations.parcels.reduce(
+        (total, parcel) => total + parcel.slotCount,
+        0,
+      ),
+    ).toBe(60);
+    expect(allocations.parcels.every((parcel) => parcel.slotCount > 0)).toBe(
+      true,
+    );
+    for (const parcel of allocations.parcels) {
+      expect(parcel.supportedCategoryIds).toContain(parcel.category);
+    }
+    await page.getByRole("button", { name: "Capture payment" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Platba byla potvrzena." }),
+    ).toBeVisible({ timeout: 120_000 });
   });
 
   test("keeps a declined card payment unpaid and offers a retry", async ({

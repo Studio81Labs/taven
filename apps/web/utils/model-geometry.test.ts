@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { parseModelGeometry } from "./model-geometry";
@@ -306,6 +309,20 @@ describe("3MF geometry", () => {
 
     expect(geometry.objectCount).toBe(2);
     expect(geometry.dimensions).toEqual({ width: 30, depth: 10, height: 10 });
+  });
+
+  it("parses the two-body integration archive used by the real API browser", async () => {
+    const fixturePath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../tools/slicing-fixtures/fixtures/two-body/two-body.3mf",
+    );
+    const bytes = Uint8Array.from(readFileSync(fixturePath));
+    const geometry = await parseModelGeometry("3MF", bytes.buffer);
+    expect(geometry).toMatchObject({
+      objectCount: 2,
+      bodyNames: ["cube", "cube"],
+      dimensions: { width: 50, depth: 20, height: 20 },
+    });
   });
 
   it("sums mirrored instance volumes instead of cancelling them", async () => {

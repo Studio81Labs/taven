@@ -63,6 +63,17 @@ estimated time, and timestamp-normalized G-code hashes must match both runs and
 the reviewed JSON under `expected/`. The invalid fixture also requires Orca's
 specific parser failure code and message before a baseline can be recorded.
 
+## Isolated browser/API fixture
+
+`fixtures/two-body/two-body.3mf` contains two separated instances of one
+20 mm cube. It is not an Orca corpus baseline. The isolated browser CI uploads
+its actual bytes through the API and object store; the deterministic fixture
+consumer recognizes its exact SHA-256 and reports two discovered bodies. That
+allows the browser test to exercise separate item configuration, persisted
+multi-parcel allocation, and sandbox payment without claiming an Orca result.
+When changing the source XML, regenerate the archive with `writeStoredZip` in
+`scripts/zip-store.mjs` and update the fixture consumer's pinned hash and test.
+
 ## Determinism corrections
 
 The profile-bundle digest covers canonically serialized provenance as well as

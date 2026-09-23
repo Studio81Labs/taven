@@ -134,6 +134,115 @@ export async function readE2eCheckoutEffectsForBrowser(
   }
 }
 
+/** Reads the accepted binding's actual parcel allocations, not UI-derived counts. */
+export async function readE2eParcelAllocationsForBrowser(
+  databaseUrl: string,
+  sessionId: string,
+): Promise<{
+  acceptedBindingId: string;
+  destinationCount: number;
+  parcels: Array<{
+    ordinal: number;
+    category: string;
+    slotCount: number;
+    supportedCategoryIds: string[];
+  }>;
+  itemBoundsMicrometers: Array<{
+    ordinal: number;
+    bodyIds: string[];
+    x: string;
+    y: string;
+    z: string;
+  }>;
+}> {
+  assertIsolatedBrowserDatabase(databaseUrl);
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const result = await pool.query<{
+      accepted_binding_id: string;
+      ordinal: number;
+      category: string;
+      slot_count: number;
+      destination_id: string;
+      supported_category_ids: string[];
+    }>(
+      `SELECT target.accepted_order_price_binding_id AS accepted_binding_id,
+              plan.ordinal,
+              plan.category,
+              plan.delivery_destination_id AS destination_id,
+              destination.capability_snapshot->'supportedCategoryIds' AS supported_category_ids,
+              count(allocation.fulfilment_slot_id)::int AS slot_count
+       FROM automatic_order_origins origin
+       JOIN orders target ON target.id = origin.order_id
+       JOIN shipment_plans plan
+         ON plan.order_price_binding_id = target.accepted_order_price_binding_id
+       JOIN delivery_destinations destination
+         ON destination.id = plan.delivery_destination_id
+       LEFT JOIN shipment_plan_fulfilment_slots allocation
+         ON allocation.shipment_plan_id = plan.id
+       WHERE origin.quote_session_id = $1
+       GROUP BY target.accepted_order_price_binding_id, plan.id, destination.id
+       ORDER BY plan.ordinal`,
+      [sessionId],
+    );
+    if (result.rows.length === 0) {
+      throw new Error("Isolated browser accepted parcel plan is unavailable");
+    }
+    const itemBounds = await pool.query<{
+      ordinal: number;
+      body_ids: string[];
+      x: string;
+      y: string;
+      z: string;
+    }>(
+      `SELECT item.ordinal, item.body_ids,
+              geometry.bounds_x_micrometers::text AS x,
+              geometry.bounds_y_micrometers::text AS y,
+              geometry.bounds_z_micrometers::text AS z
+       FROM automatic_order_origins origin
+       JOIN automatic_quote_item_drafts item ON item.order_id = origin.order_id
+       JOIN model_geometries geometry ON geometry.id = item.target_model_geometry_id
+       WHERE origin.quote_session_id = $1
+       ORDER BY item.ordinal`,
+      [sessionId],
+    );
+    return {
+      acceptedBindingId: result.rows[0]!.accepted_binding_id,
+      destinationCount: new Set(result.rows.map((row) => row.destination_id))
+        .size,
+      parcels: result.rows.map((row) => ({
+        ordinal: row.ordinal,
+        category: row.category,
+        slotCount: row.slot_count,
+        supportedCategoryIds: row.supported_category_ids,
+      })),
+      itemBoundsMicrometers: itemBounds.rows.map((row) => ({
+        ordinal: row.ordinal,
+        bodyIds: row.body_ids,
+        x: row.x,
+        y: row.y,
+        z: row.z,
+      })),
+    };
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Starts each serial browser scenario with a fresh anonymous admission budget. */
+export async function resetE2eAnonymousAdmissionLimitsForBrowser(
+  databaseUrl: string,
+): Promise<void> {
+  assertIsolatedBrowserDatabase(databaseUrl);
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    await pool.query("DELETE FROM anonymous_upload_limits");
+    await pool.query("DELETE FROM anonymous_quote_limits");
+  } finally {
+    await pool.end();
+  }
+}
+
 function assertIsolatedBrowserDatabase(databaseUrl: string): void {
   const url = new URL(databaseUrl);
   if (url.hostname !== "127.0.0.1" || url.pathname !== "/taven_web_browser") {
