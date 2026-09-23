@@ -11,6 +11,8 @@ import {
   RevisionKind,
   RevisionState,
   MachineStatus,
+  InventoryMountStatus,
+  InventoryReceiptKind,
   InventoryStatus,
 } from "@prisma/client";
 import {
@@ -196,7 +198,37 @@ async function main() {
       ] as const)
         if (!same(machine[key], machineData[key]))
           throw new Error(`Seed machine ${ids.machine} does not match`);
-    } else await tx.machine.create({ data: machineData });
+    } else {
+      await tx.machine.create({ data: machineData });
+      // A fresh demo machine has an explicit planning window. Existing machines
+      // retain their selected policy (or their unconfigured migration state).
+      const revision = await tx.machineAvailabilityRevision.create({
+        data: {
+          nodeId: ids.node,
+          machineId: ids.machine,
+          reason: "Initial demo machine availability",
+        },
+      });
+      const now = Date.now();
+      await tx.machineAvailabilityWindow.create({
+        data: {
+          revisionId: revision.id,
+          nodeId: ids.node,
+          machineId: ids.machine,
+          ordinal: 0,
+          startsAt: new Date(now - 60_000),
+          endsAt: new Date(now + 360 * 86_400_000),
+        },
+      });
+      await tx.machineAvailabilitySelection.create({
+        data: {
+          nodeId: ids.node,
+          machineId: ids.machine,
+          revisionId: revision.id,
+          selectionVersion: 1,
+        },
+      });
+    }
 
     for (const [id, material, sku] of [
       [ids.inventoryPla, Material.PLA, "PLA-NATURAL"],
@@ -217,6 +249,7 @@ async function main() {
         remainingMilligrams: BigInt(1000000),
         reservedMilligrams: BigInt(0),
         status: InventoryStatus.AVAILABLE,
+        mountStatus: InventoryMountStatus.MOUNTED,
         createdAt: at,
         updatedAt: at,
       };
@@ -246,7 +279,25 @@ async function main() {
         ] as const)
           if (!same(existing[key], data[key]))
             throw new Error(`Seed inventory ${sku} does not match`);
-      } else await tx.inventory.create({ data });
+      } else {
+        await tx.inventory.create({ data });
+        // These are new, known fixture lots; a migrated lot remains UNKNOWN
+        // until an operator records its real purchase and mount evidence.
+        await tx.inventoryReceipt.create({
+          data: {
+            nodeId: ids.node,
+            machineId: ids.machine,
+            inventoryId: id,
+            kind: InventoryReceiptKind.INITIAL,
+            receivedMilligrams: data.remainingMilligrams,
+            vendor: data.vendor,
+            currency: data.currency,
+            priceMinorUnitsNumerator: data.priceMinorUnitsNumerator,
+            priceMinorUnitsDenominator: data.priceMinorUnitsDenominator,
+            purchasedAt: at,
+          },
+        });
+      }
     }
 
     const refs = [
