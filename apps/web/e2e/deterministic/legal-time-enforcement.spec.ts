@@ -27,6 +27,36 @@ test.describe("Legal Time & Availability Enforcement", () => {
     ).not.toBeVisible();
   });
 
+  test("SSR serves the rotated exact revision and retains pinned historical text", async ({
+    page,
+    request,
+  }) => {
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { legalRevisionVersion: 2 },
+    });
+    const current = await page.goto("/vop");
+    expect(await current?.text()).toContain("Test terms v2");
+    await expect(
+      page.getByRole("heading", { name: "Test terms v2", level: 1 }),
+    ).toBeVisible();
+
+    const historical = await page.goto(
+      `/vop?revision=terms-test-v1&contentHash=${"a".repeat(64)}`,
+    );
+    expect(await historical?.text()).toContain("Test terms");
+    await expect(page.getByText("HISTORICKÉ · terms-test-v1")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Test terms", level: 1 }),
+    ).toBeVisible();
+
+    await page.goto(
+      `/vop?revision=terms-test-v1&contentHash=${"9".repeat(64)}`,
+    );
+    await expect(
+      page.getByText("NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI"),
+    ).toBeVisible();
+  });
+
   test("a slow successful availability read still enables the approved journey", async ({
     page,
   }) => {
