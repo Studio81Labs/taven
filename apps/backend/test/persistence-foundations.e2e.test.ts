@@ -456,6 +456,51 @@ async function createSiblingMachineFoundation(
     ],
   );
   await client.query(
+    'UPDATE "inventories" SET "mount_status" = $2 WHERE "id" = $1',
+    [inventoryId, "MOUNTED"],
+  );
+  await client.query(
+    'INSERT INTO "inventory_receipts" ("id", "node_id", "machine_id", "inventory_id", "kind", "received_milligrams", "vendor", "currency", "price_minor_units_numerator", "price_minor_units_denominator", "purchased_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+    [
+      fixtures.id(`${name}:receipt`),
+      foundation.nodeId,
+      machineId,
+      inventoryId,
+      "INITIAL",
+      100,
+      "Test vendor",
+      "EUR",
+      1,
+      1,
+      testTimes.createdAt,
+    ],
+  );
+  const availabilityRevisionId = fixtures.id(`${name}:availability-revision`);
+  await client.query(
+    'INSERT INTO "machine_availability_revisions" ("id", "node_id", "machine_id", "reason") VALUES ($1, $2, $3, $4)',
+    [
+      availabilityRevisionId,
+      foundation.nodeId,
+      machineId,
+      "test fixture availability",
+    ],
+  );
+  await client.query(
+    'INSERT INTO "machine_availability_windows" ("id", "revision_id", "node_id", "machine_id", "ordinal", "starts_at", "ends_at") VALUES ($1, $2, $3, $4, 0, $5, $6)',
+    [
+      fixtures.id(`${name}:availability-window`),
+      availabilityRevisionId,
+      foundation.nodeId,
+      machineId,
+      testTimes.createdAt,
+      testTimes.expiresAt,
+    ],
+  );
+  await client.query(
+    'INSERT INTO "machine_availability_selections" ("machine_id", "node_id", "revision_id", "selection_version") VALUES ($1, $2, $3, 1)',
+    [machineId, foundation.nodeId, availabilityRevisionId],
+  );
+  await client.query(
     'INSERT INTO "model_files" ("id", "format", "original_filename", "storage_object_key", "content_hash", "size_bytes", "uploaded_at", "source_delete_after", "retention_hold") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
     [
       modelFileId,
@@ -3257,29 +3302,84 @@ describe("persistence foundations", () => {
     );
   });
 
+  it("keeps the receipt pinned to an existing reservation after correction", async () => {
+    await inRollbackTransaction(
+      "pinned-inventory-receipt",
+      async (client, fixtures) => {
+        const { foundation, production } =
+          await createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "pinned-inventory-receipt",
+            {
+              startsAt: testTimes.capacityStart,
+              endsAt: testTimes.capacityEnd,
+            },
+          );
+        const initial = await client.query<{ id: string }>(
+          'SELECT "id" FROM "inventory_receipts" WHERE "inventory_id" = $1 AND "kind" = $2',
+          [foundation.inventoryId, "INITIAL"],
+        );
+        const initialId = initial.rows[0]?.id;
+        if (!initialId) throw new Error("initial receipt is missing");
+        const correctionId = fixtures.id("corrected-receipt");
+        await client.query(
+          'INSERT INTO "inventory_receipts" ("id", "node_id", "machine_id", "inventory_id", "kind", "supersedes_receipt_id", "received_milligrams", "vendor", "currency", "price_minor_units_numerator", "price_minor_units_denominator", "purchased_at", "reason") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+          [
+            correctionId,
+            foundation.nodeId,
+            foundation.machineId,
+            foundation.inventoryId,
+            "CORRECTION",
+            initialId,
+            1_000_000,
+            "Corrected vendor",
+            "EUR",
+            2,
+            1,
+            testTimes.createdAt,
+            "Correct invoice",
+          ],
+        );
+        const reserved = await client.query<{ receipt_id: string | null }>(
+          'SELECT "receipt_id" FROM "inventory_reservations" WHERE "id" = $1',
+          [production.inventoryReservationId],
+        );
+        expect(reserved.rows).toEqual([{ receipt_id: initialId }]);
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $1 WHERE "id" = $2',
+          ["HELD", production.inventoryReservationId],
+        );
+        await expect(
+          client.query(
+            'UPDATE "inventory_reservations" SET "receipt_id" = $1 WHERE "id" = $2',
+            [correctionId, production.inventoryReservationId],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "inventory_reservation_receipt_immutable",
+        });
+      },
+    );
+  });
+
   it("revalidates capacity, geometry, resources, and snapshots at confirmation", async () => {
     await inRollbackTransaction(
       "past-capacity-confirmation",
       async (client, fixtures) => {
-        const { foundation } = await createCompleteSingleReservationGraph(
-          client,
-          fixtures,
-          "past-capacity-confirmation",
-          {
-            startsAt: new Date(Date.now() - 120_000),
-            endsAt: new Date(Date.now() - 60_000),
-          },
-        );
-        await client.query(
-          'UPDATE "phase_reservation_sets" SET "status" = $2 WHERE "id" = $1',
-          [foundation.phaseReservationSetId, "RESERVED"],
-        );
-
         await expect(
-          client.query("SET CONSTRAINTS ALL IMMEDIATE"),
+          createCompleteSingleReservationGraph(
+            client,
+            fixtures,
+            "past-capacity-confirmation",
+            {
+              startsAt: new Date(testTimes.beforeCreatedAt.getTime() - 120_000),
+              endsAt: new Date(testTimes.beforeCreatedAt.getTime() - 60_000),
+            },
+          ),
         ).rejects.toMatchObject({
           code: "23514",
-          constraint: "phase_reservation_set_capacity_window_check",
+          constraint: "capacity_reservation_availability_window",
         });
       },
     );

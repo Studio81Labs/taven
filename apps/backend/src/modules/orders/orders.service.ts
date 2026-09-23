@@ -518,10 +518,51 @@ export class OrdersService {
         }
         const reservation = await tx.productionReservation.findFirst({
           where: { jobId, status: "HELD" },
-          select: { id: true },
+          select: {
+            id: true,
+            inventoryId: true,
+            machineId: true,
+            nodeId: true,
+          },
         });
         if (!reservation) {
           throw new ConflictException("Job has no held production reservation");
+        }
+        const availableMachine = await tx.$queryRaw<Array<{ ready: boolean }>>`
+          SELECT machine.status = 'ACTIVE'
+             AND selection.revision_id IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM capacity_reservations interval
+               WHERE interval.production_reservation_id = ${reservation.id}::uuid
+                 AND NOT EXISTS (
+                   SELECT 1 FROM machine_availability_windows available
+                   WHERE available.revision_id = selection.revision_id
+                     AND available.starts_at <= interval.starts_at
+                     AND available.ends_at >= interval.ends_at
+                 )
+             ) AS ready
+          FROM machines machine
+          LEFT JOIN machine_availability_selections selection
+            ON selection.machine_id = machine.id AND selection.node_id = machine.node_id
+          WHERE machine.id = ${reservation.machineId}::uuid
+            AND machine.node_id = ${reservation.nodeId}::uuid
+          FOR UPDATE OF machine
+        `;
+        if (availableMachine[0]?.ready !== true) {
+          throw new ConflictException("Machine is unavailable for printing");
+        }
+        const mountedInventory = await tx.$queryRaw<
+          Array<{ mount_status: string }>
+        >`
+          SELECT mount_status::text AS mount_status FROM inventories
+          WHERE id = ${reservation.inventoryId}::uuid
+            AND node_id = ${reservation.nodeId}::uuid
+          FOR UPDATE
+        `;
+        if (mountedInventory[0]?.mount_status !== "MOUNTED") {
+          throw new ConflictException(
+            "Required material must be mounted before printing",
+          );
         }
         const at = await databaseNow(tx);
         await tx.inventoryReservation.updateMany({

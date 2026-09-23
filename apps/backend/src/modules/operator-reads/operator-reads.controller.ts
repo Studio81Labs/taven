@@ -31,6 +31,7 @@ import {
   MachineCalibrationPageDto,
   MachineCapabilityPageDto,
   MachinePageDto,
+  MachineAvailabilityReadDto,
   MachineProfilePageDto,
   MachineProfileDetailDto,
   OperatorJobPageDto,
@@ -487,6 +488,38 @@ export class OperatorReadsController {
         machineId?: string;
         status?: string;
       },
+    );
+  }
+
+  @Get("admin/nodes/:nodeId/machines/:machineId/availability")
+  @ApiOperation({
+    summary: "Read selected machine availability and occupied intervals",
+  })
+  @ApiParam({ name: "nodeId", type: String, format: "uuid" })
+  @ApiParam({ name: "machineId", type: String, format: "uuid" })
+  @ApiQuery({ name: "from", required: true, type: String, format: "date-time" })
+  @ApiQuery({ name: "to", required: true, type: String, format: "date-time" })
+  @ApiOkResponse({ type: MachineAvailabilityReadDto })
+  machineAvailability(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("nodeId") nodeId: string,
+    @Param("machineId") machineId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<MachineAvailabilityReadDto> {
+    for (const key of Object.keys(query)) {
+      if (key !== "from" && key !== "to") {
+        throw new BadRequestException(`unexpected query parameter ${key}`);
+      }
+    }
+    if (typeof query.from !== "string" || typeof query.to !== "string") {
+      throw new BadRequestException("from and to are required");
+    }
+    return this.reads.machineAvailability(
+      operator,
+      nodeId,
+      machineId,
+      query.from,
+      query.to,
     );
   }
 }

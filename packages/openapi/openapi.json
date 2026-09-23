@@ -2373,6 +2373,62 @@
         ],
         "type": "object"
       },
+      "CorrectInventoryReceiptDto": {
+        "properties": {
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "priceMinorUnitsDenominator": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "priceMinorUnitsNumerator": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "purchasedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "receivedMilligrams": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "supersedesReceiptId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "vendor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "supersedesReceiptId",
+          "receivedMilligrams",
+          "vendor",
+          "priceMinorUnitsNumerator",
+          "priceMinorUnitsDenominator",
+          "currency",
+          "purchasedAt"
+        ],
+        "type": "object"
+      },
       "CreateAutomaticQuoteEstimateDto": {
         "additionalProperties": false,
         "properties": {
@@ -4587,6 +4643,14 @@
           "material": {
             "type": "string"
           },
+          "mountStatus": {
+            "enum": [
+              "UNKNOWN",
+              "UNMOUNTED",
+              "MOUNTED"
+            ],
+            "type": "string"
+          },
           "nodeId": {
             "format": "uuid",
             "type": "string"
@@ -4598,6 +4662,19 @@
           "priceMinorUnitsNumerator": {
             "pattern": "^-?[0-9]+$",
             "type": "string"
+          },
+          "receiptCoverage": {
+            "enum": [
+              "UNKNOWN",
+              "RECORDED"
+            ],
+            "type": "string"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/InventoryReceiptReadDto"
+            },
+            "type": "array"
           },
           "remainingMilligrams": {
             "pattern": "^-?[0-9]+$",
@@ -4626,11 +4703,36 @@
           "reservedMilligrams",
           "availableMilligrams",
           "status",
+          "mountStatus",
+          "receiptCoverage",
           "nodeId",
           "vendor",
           "priceMinorUnitsNumerator",
           "priceMinorUnitsDenominator",
-          "currency"
+          "currency",
+          "receipts"
+        ],
+        "type": "object"
+      },
+      "InventoryMountDto": {
+        "properties": {
+          "mountStatus": {
+            "enum": [
+              "MOUNTED",
+              "UNMOUNTED"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "mountStatus"
         ],
         "type": "object"
       },
@@ -4672,6 +4774,21 @@
           "material": {
             "type": "string"
           },
+          "mountStatus": {
+            "enum": [
+              "UNKNOWN",
+              "UNMOUNTED",
+              "MOUNTED"
+            ],
+            "type": "string"
+          },
+          "receiptCoverage": {
+            "enum": [
+              "UNKNOWN",
+              "RECORDED"
+            ],
+            "type": "string"
+          },
           "remainingMilligrams": {
             "pattern": "^-?[0-9]+$",
             "type": "string"
@@ -4695,7 +4812,71 @@
           "remainingMilligrams",
           "reservedMilligrams",
           "availableMilligrams",
-          "status"
+          "status",
+          "mountStatus",
+          "receiptCoverage"
+        ],
+        "type": "object"
+      },
+      "InventoryReceiptReadDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "INITIAL",
+              "CORRECTION"
+            ],
+            "type": "string"
+          },
+          "priceMinorUnitsDenominator": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "priceMinorUnitsNumerator": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "purchasedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "receivedMilligrams": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "supersedesReceiptId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "receivedMilligrams",
+          "vendor",
+          "currency",
+          "priceMinorUnitsNumerator",
+          "priceMinorUnitsDenominator",
+          "purchasedAt",
+          "createdAt"
         ],
         "type": "object"
       },
@@ -5398,6 +5579,80 @@
           "key",
           "revision",
           "contentHash"
+        ],
+        "type": "object"
+      },
+      "MachineAvailabilityReadDto": {
+        "properties": {
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "occupiedIntervals": {
+            "items": {
+              "$ref": "#/components/schemas/CapacityReservationReadDto"
+            },
+            "type": "array"
+          },
+          "revisionId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "selectionVersion": {
+            "nullable": true,
+            "type": "number"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/MachineAvailabilityWindowReadDto"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "machineId",
+          "windows",
+          "occupiedIntervals"
+        ],
+        "type": "object"
+      },
+      "MachineAvailabilityWindowDto": {
+        "properties": {
+          "endsAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "startsAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "startsAt",
+          "endsAt"
+        ],
+        "type": "object"
+      },
+      "MachineAvailabilityWindowReadDto": {
+        "properties": {
+          "endsAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "ordinal": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "startsAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ordinal",
+          "startsAt",
+          "endsAt"
         ],
         "type": "object"
       },
@@ -7107,6 +7362,18 @@
             "format": "uuid",
             "type": "string"
           },
+          "inventoryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "inventoryMountStatus": {
+            "enum": [
+              "UNKNOWN",
+              "UNMOUNTED",
+              "MOUNTED"
+            ],
+            "type": "string"
+          },
           "machineCalibrationId": {
             "format": "uuid",
             "type": "string"
@@ -7118,6 +7385,10 @@
           "machineProfileId": {
             "format": "uuid",
             "type": "string"
+          },
+          "mountReadyForPrinting": {
+            "description": "Material must be mounted before printing.",
+            "type": "boolean"
           },
           "partsPerPlate": {
             "minimum": 1,
@@ -7155,6 +7426,9 @@
         "required": [
           "candidateResourceEstimateId",
           "machineId",
+          "inventoryId",
+          "inventoryMountStatus",
+          "mountReadyForPrinting",
           "printConfigRevisionId",
           "machineProfileId",
           "machineCalibrationId",
@@ -8888,6 +9162,82 @@
         ],
         "type": "object"
       },
+      "ReceiveInventoryDto": {
+        "properties": {
+          "color": {
+            "maxLength": 100,
+            "nullable": true,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "lotCode": {
+            "maxLength": 100,
+            "nullable": true,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "enum": [
+              "PLA",
+              "PETG"
+            ],
+            "type": "string"
+          },
+          "priceMinorUnitsDenominator": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "priceMinorUnitsNumerator": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "purchasedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "remainingMilligrams": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "sku": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "vendor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "machineId",
+          "sku",
+          "material",
+          "vendor",
+          "priceMinorUnitsNumerator",
+          "priceMinorUnitsDenominator",
+          "currency",
+          "remainingMilligrams",
+          "purchasedAt"
+        ],
+        "type": "object"
+      },
       "RecordAcquisitionSpendDto": {
         "properties": {
           "amountMinor": {
@@ -9032,6 +9382,57 @@
         },
         "required": [
           "eventType"
+        ],
+        "type": "object"
+      },
+      "RecordInitialInventoryReceiptDto": {
+        "properties": {
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "priceMinorUnitsDenominator": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "priceMinorUnitsNumerator": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "purchasedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "receivedMilligrams": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "vendor": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "receivedMilligrams",
+          "vendor",
+          "priceMinorUnitsNumerator",
+          "priceMinorUnitsDenominator",
+          "currency",
+          "purchasedAt"
         ],
         "type": "object"
       },
@@ -9472,6 +9873,35 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "ReplaceMachineAvailabilityDto": {
+        "properties": {
+          "expectedVersion": {
+            "maximum": 2147483646,
+            "minimum": 1,
+            "nullable": true,
+            "type": "integer"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/MachineAvailabilityWindowDto"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          }
+        },
+        "required": [
+          "reason",
+          "expectedVersion",
+          "windows"
         ],
         "type": "object"
       },
@@ -13674,6 +14104,237 @@
         ]
       }
     },
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/initial-receipt": {
+      "post": {
+        "operationId": "OperatorCatalogController_recordInitialInventoryReceipt",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "inventoryId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordInitialInventoryReceiptDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record attested initial purchase evidence for a legacy lot",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/mount": {
+      "post": {
+        "operationId": "OperatorCatalogController_setInventoryMount",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "inventoryId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryMountDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record whether a machine lot is physically mounted",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/receipt-corrections": {
+      "post": {
+        "operationId": "OperatorCatalogController_correctInventoryReceipt",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "inventoryId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectInventoryReceiptDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Supersede a lot's immutable purchase receipt",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
     "/admin/nodes/{nodeId}/inventories/{inventoryId}/status": {
       "post": {
         "operationId": "OperatorCatalogController_updateInventoryStatus",
@@ -13746,6 +14407,74 @@
           }
         ],
         "summary": "Record an inventory status correction",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/inventory-receipts": {
+      "post": {
+        "operationId": "OperatorCatalogController_receiveInventory",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiveInventoryDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Receive a new immutable material lot",
         "tags": [
           "operator catalog"
         ]
@@ -13879,6 +14608,156 @@
           }
         ],
         "summary": "Register a node machine with an immutable capability",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/nodes/{nodeId}/machines/{machineId}/availability": {
+      "get": {
+        "operationId": "OperatorReadsController_machineAvailability",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "machineId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineAvailabilityReadDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read selected machine availability and occupied intervals",
+        "tags": [
+          "operator reads"
+        ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_replaceMachineAvailability",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "machineId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceMachineAvailabilityDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Replace a machine's bounded availability windows",
         "tags": [
           "operator catalog"
         ]

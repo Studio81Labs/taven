@@ -129,6 +129,21 @@ enum InventoryStatus {
   @@map("inventory_status")
 }
 
+enum InventoryMountStatus {
+  UNKNOWN
+  UNMOUNTED
+  MOUNTED
+
+  @@map("inventory_mount_status")
+}
+
+enum InventoryReceiptKind {
+  INITIAL
+  CORRECTION
+
+  @@map("inventory_receipt_kind")
+}
+
 enum SliceKind {
   REFERENCE
   ANALYSIS
@@ -1265,12 +1280,62 @@ model Machine {
   candidateEstimates     CandidateResourceEstimate[]
   productionReservations ProductionReservation[]
   capacityReservations   CapacityReservation[]
+  availabilityRevisions  MachineAvailabilityRevision[]
+  availabilitySelection  MachineAvailabilitySelection?
 
   @@unique([nodeId, code])
   @@unique([id, nodeId])
   @@index([machineCapabilityId])
   @@index([nodeId, status])
   @@map("machines")
+}
+
+model MachineAvailabilityRevision {
+  id        String   @id @default(uuid()) @db.Uuid
+  nodeId    String   @map("node_id") @db.Uuid
+  machineId String   @map("machine_id") @db.Uuid
+  reason    String   @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  machine            Machine                       @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  windows            MachineAvailabilityWindow[]
+  activeSelection    MachineAvailabilitySelection?
+  candidateEstimates CandidateResourceEstimate[]
+
+  @@unique([id, nodeId, machineId])
+  @@index([nodeId, machineId, createdAt])
+  @@map("machine_availability_revisions")
+}
+
+model MachineAvailabilityWindow {
+  id         String   @id @default(uuid()) @db.Uuid
+  revisionId String   @map("revision_id") @db.Uuid
+  nodeId     String   @map("node_id") @db.Uuid
+  machineId  String   @map("machine_id") @db.Uuid
+  ordinal    Int
+  startsAt   DateTime @map("starts_at") @db.Timestamptz(3)
+  endsAt     DateTime @map("ends_at") @db.Timestamptz(3)
+
+  revision MachineAvailabilityRevision @relation(fields: [revisionId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+
+  @@unique([revisionId, ordinal])
+  @@index([nodeId, machineId, startsAt, endsAt])
+  @@map("machine_availability_windows")
+}
+
+model MachineAvailabilitySelection {
+  machineId        String   @map("machine_id") @db.Uuid
+  nodeId           String   @map("node_id") @db.Uuid
+  revisionId       String   @map("revision_id") @db.Uuid
+  selectionVersion Int      @default(1) @map("selection_version")
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  machine  Machine                     @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  revision MachineAvailabilityRevision @relation(fields: [revisionId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+
+  @@id([machineId, nodeId])
+  @@unique([revisionId, nodeId, machineId])
+  @@map("machine_availability_selections")
 }
 
 model MachineCalibration {
@@ -1314,6 +1379,7 @@ model Inventory {
   remainingMilligrams        BigInt          @map("remaining_milligrams")
   reservedMilligrams         BigInt          @default(0) @map("reserved_milligrams")
   status                     InventoryStatus @default(AVAILABLE)
+  mountStatus                InventoryMountStatus @default(UNKNOWN) @map("mount_status")
   createdAt                  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                  DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -1322,12 +1388,39 @@ model Inventory {
   candidateEstimates     CandidateResourceEstimate[]
   productionReservations ProductionReservation[]
   inventoryReservations  InventoryReservation[]
+  receipts               InventoryReceipt[]
 
   @@unique([nodeId, machineId, sku])
   @@unique([id, nodeId])
   @@unique([id, nodeId, machineId])
   @@index([nodeId, machineId, material, status])
   @@map("inventories")
+}
+
+model InventoryReceipt {
+  id                         String               @id @default(uuid()) @db.Uuid
+  nodeId                     String               @map("node_id") @db.Uuid
+  machineId                  String               @map("machine_id") @db.Uuid
+  inventoryId                String               @map("inventory_id") @db.Uuid
+  kind                       InventoryReceiptKind
+  supersedesReceiptId        String?              @unique @map("supersedes_receipt_id") @db.Uuid
+  receivedMilligrams         BigInt               @map("received_milligrams")
+  vendor                     String               @db.VarChar(200)
+  currency                   String               @db.Char(3)
+  priceMinorUnitsNumerator   BigInt               @map("price_minor_units_numerator")
+  priceMinorUnitsDenominator BigInt               @map("price_minor_units_denominator")
+  purchasedAt                DateTime             @map("purchased_at") @db.Timestamptz(3)
+  reason                     String?              @db.VarChar(500)
+  createdAt                  DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  inventory              Inventory              @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  supersedes             InventoryReceipt?      @relation("InventoryReceiptCorrection", fields: [supersedesReceiptId], references: [id], onDelete: Restrict)
+  corrections            InventoryReceipt[]     @relation("InventoryReceiptCorrection")
+  inventoryReservations  InventoryReservation[]
+
+  @@unique([id, nodeId, inventoryId])
+  @@index([nodeId, inventoryId, createdAt])
+  @@map("inventory_receipts")
 }
 
 model ArrangementRevision {
@@ -1395,6 +1488,8 @@ model CandidateResourceEstimate {
   machineCalibrationId       String   @map("machine_calibration_id") @db.Uuid
   machineId                  String   @map("machine_id") @db.Uuid
   inventoryId                String   @map("inventory_id") @db.Uuid
+  machineAvailabilityRevisionId String? @map("machine_availability_revision_id") @db.Uuid
+  machineAvailabilitySelectionVersion Int? @map("machine_availability_selection_version")
   shipmentPlanId             String   @map("shipment_plan_id") @db.Uuid
   arrangementRevisionId      String   @map("arrangement_revision_id") @db.Uuid
   quantity                   Int
@@ -1414,6 +1509,7 @@ model CandidateResourceEstimate {
   machineCalibration    MachineCalibration               @relation(fields: [machineCalibrationId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
   machine               Machine                          @relation(fields: [machineId, nodeId], references: [id, nodeId], onDelete: Restrict)
   inventory             Inventory                        @relation(fields: [inventoryId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
+  machineAvailabilityRevision MachineAvailabilityRevision? @relation(fields: [machineAvailabilityRevisionId, nodeId, machineId], references: [id, nodeId, machineId], onDelete: Restrict)
   shipmentPlan          ShipmentPlan                     @relation(fields: [shipmentPlanId], references: [id], onDelete: Restrict)
   arrangementRevision   ArrangementRevision              @relation(fields: [arrangementRevisionId], references: [id], onDelete: Restrict)
   capacityIntervals     CandidateCapacityInterval[]
@@ -1614,6 +1710,7 @@ model InventoryReservation {
   nodeId                  String                     @map("node_id") @db.Uuid
   productionReservationId String                     @map("production_reservation_id") @db.Uuid
   inventoryId             String                     @map("inventory_id") @db.Uuid
+  receiptId               String?                    @map("receipt_id") @db.Uuid
   reservedMilligrams      BigInt                     @map("reserved_milligrams")
   consumedMilligrams      BigInt?                    @map("consumed_milligrams")
   status                  InventoryReservationStatus @default(RESERVED)
@@ -1624,6 +1721,7 @@ model InventoryReservation {
   node                  Node                  @relation(fields: [nodeId], references: [id], onDelete: Restrict)
   productionReservation ProductionReservation @relation(fields: [productionReservationId, nodeId], references: [id, nodeId], onDelete: Restrict)
   inventory             Inventory             @relation(fields: [inventoryId, nodeId], references: [id, nodeId], onDelete: Restrict)
+  receipt               InventoryReceipt?     @relation(fields: [receiptId, nodeId, inventoryId], references: [id, nodeId, inventoryId], onDelete: Restrict)
 
   @@unique([id, nodeId])
   @@unique([productionReservationId, nodeId])
