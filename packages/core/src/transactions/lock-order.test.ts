@@ -10,6 +10,7 @@ describe("orderLockTargets", () => {
       { kind: "order_phase", id: "phase-1" },
       { kind: "order", id: "order-1" },
       { kind: "legal_document", id: "doc-1" },
+      { kind: "commercial_policy_selection", id: "CZK" },
       { kind: "idempotency_record", id: "idemp-1" },
       { kind: "job", id: "job-a", nodeId: "node-1" },
       { kind: "shipment", id: "shipment-1" },
@@ -27,6 +28,7 @@ describe("orderLockTargets", () => {
     ).toEqual([
       "idempotency_record:idemp-1",
       "legal_document:doc-1",
+      "commercial_policy_selection:CZK",
       "order:order-1",
       "order_phase:phase-1",
       "shipment_plan:shipment-plan-1",
@@ -48,14 +50,16 @@ describe("orderLockTargets", () => {
     );
   });
 
-  it.each(["legal_document", "payment", "shipment"] as const)(
-    "rejects node scope on globally scoped %s targets",
-    (kind) => {
-      expect(() =>
-        orderLockTargets([{ kind, id: `${kind}-1`, nodeId: "node-1" }]),
-      ).toThrow(/must not include node scope/);
-    },
-  );
+  it.each([
+    "legal_document",
+    "commercial_policy_selection",
+    "payment",
+    "shipment",
+  ] as const)("rejects node scope on globally scoped %s targets", (kind) => {
+    expect(() =>
+      orderLockTargets([{ kind, id: `${kind}-1`, nodeId: "node-1" }]),
+    ).toThrow(/must not include node scope/);
+  });
 
   it("keeps a phase reservation set and its children in one node scope", () => {
     const targets = [

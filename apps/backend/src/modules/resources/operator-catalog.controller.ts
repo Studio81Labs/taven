@@ -26,6 +26,8 @@ import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import {
   CatalogCommandResultDto,
+  ActivateCommercialPolicyDto,
+  CommercialPolicyActivationResultDto,
   CatalogReasonDto,
   CreateInventoryDto,
   CreateMachineCapabilityDto,
@@ -108,6 +110,23 @@ export class OperatorCatalogController {
     @Headers("idempotency-key") key?: string,
   ) {
     return this.catalog.createPriceList(operator, body, key);
+  }
+
+  @Post("admin/catalog/price-lists/:id/activate")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Activate an immutable commercial price list" })
+  @ApiParam(RESOURCE_ID)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ActivateCommercialPolicyDto })
+  @ApiOkResponse({ type: CommercialPolicyActivationResultDto })
+  @ApiConflictResponse({ description: "Selection version changed" })
+  activateCommercialPolicy(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("id") id: string,
+    @Body() body: ActivateCommercialPolicyDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.activateCommercialPolicy(operator, id, body, key);
   }
 
   @Post("admin/nodes/:nodeId/machines")

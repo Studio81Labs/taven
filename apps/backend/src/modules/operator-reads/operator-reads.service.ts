@@ -753,6 +753,31 @@ export class OperatorReadsService {
     };
   }
 
+  async commercialPolicySelection(
+    operator: OperatorContext,
+    currency: string,
+  ): Promise<{
+    currency: string;
+    priceListId: string;
+    selectionVersion: number;
+  }> {
+    this.requireRead(operator);
+    if (currency !== "CZK") {
+      throw new NotFoundException("Commercial policy selection was not found");
+    }
+    const selected = await this.prisma.commercialPolicySelection.findUnique({
+      where: { currency },
+    });
+    if (!selected) {
+      throw new NotFoundException("Commercial policy selection was not found");
+    }
+    return {
+      currency: selected.currency,
+      priceListId: selected.priceListId,
+      selectionVersion: selected.selectionVersion,
+    };
+  }
+
   async machineCapabilities(
     operator: OperatorContext,
     input: PageInput,

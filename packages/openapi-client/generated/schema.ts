@@ -124,6 +124,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/catalog/commercial-policy-selections/{currency}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current commercial policy selection */
+        get: operations["OperatorReadsController_commercialPolicySelection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/catalog/machine-capabilities": {
         parameters: {
             query?: never;
@@ -257,6 +274,23 @@ export interface paths {
         get: operations["OperatorReadsController_priceListDetail"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/price-lists/{id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate an immutable commercial price list */
+        post: operations["OperatorCatalogController_activateCommercialPolicy"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2102,6 +2136,10 @@ export interface components {
             repeatRate: components["schemas"]["MetricRatioDto"];
             unknownCustomerOrAttribution: number;
         };
+        ActivateCommercialPolicyDto: {
+            expectedSelectionVersion: number;
+            reason: string;
+        };
         ActualCostBreakdownDto: {
             carrier: components["schemas"]["MetricMoneyDto"];
             material: components["schemas"]["MetricMoneyDto"];
@@ -2597,6 +2635,20 @@ export interface components {
             refundsAndAdjustments: components["schemas"]["RefundMetricsDto"];
             /** @enum {string} */
             scope: "PLATFORM";
+        };
+        CommercialPolicyActivationResultDto: {
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            priceListId: string;
+            selectionVersion: number;
+        };
+        CommercialPolicySelectionDto: {
+            currency: string;
+            /** Format: uuid */
+            priceListId: string;
+            selectionVersion: number;
         };
         CompleteHandlingSessionDto: {
             allocations: components["schemas"]["HandlingAllocationInputDto"][];
@@ -4969,6 +5021,30 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_commercialPolicySelection: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                currency: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommercialPolicySelectionDto"];
+                };
+            };
+        };
+    };
     OperatorReadsController_machineCapabilities: {
         parameters: {
             query?: {
@@ -5266,6 +5342,42 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PriceListDetailDto"];
                 };
+            };
+        };
+    };
+    OperatorCatalogController_activateCommercialPolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivateCommercialPolicyDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommercialPolicyActivationResultDto"];
+                };
+            };
+            /** @description Selection version changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

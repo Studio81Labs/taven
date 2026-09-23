@@ -23,6 +23,7 @@ import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
+import { CommercialPolicySelectionDto } from "../resources/operator-catalog.dto";
 import {
   CapacityReservationPageDto,
   InventoryPageDto,
@@ -306,6 +307,17 @@ export class OperatorReadsController {
     @Param("id") id: string,
   ): Promise<PriceListDetailDto> {
     return this.reads.priceListDetail(operator, id);
+  }
+
+  @Get("admin/catalog/commercial-policy-selections/:currency")
+  @ApiOperation({ summary: "Read the current commercial policy selection" })
+  @ApiParam({ name: "currency", type: String })
+  @ApiOkResponse({ type: CommercialPolicySelectionDto })
+  commercialPolicySelection(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("currency") currency: string,
+  ) {
+    return this.reads.commercialPolicySelection(operator, currency);
   }
 
   @Get("admin/catalog/machine-capabilities")

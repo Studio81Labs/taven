@@ -310,6 +310,130 @@ describe("operator catalog commands", () => {
     ).toBe(403);
   });
 
+  it("publishes one selected list with version CAS, replay, audit and a shared-row fence", async () => {
+    const original = await prisma.commercialPolicySelection.findUniqueOrThrow({
+      where: { currency: "CZK" },
+      include: { priceList: true },
+    });
+    const body = {
+      currency: "CZK",
+      revision: `publication-${randomUUID()}`,
+      termsRevision: original.priceList.termsRevision,
+      parameters: original.priceList.parameters,
+    };
+    const created = await responseBody(
+      command(
+        "/admin/catalog/price-lists",
+        body,
+        `catalog-price-${randomUUID()}`,
+      ),
+    );
+    const path = `/admin/catalog/price-lists/${created.id}/activate`;
+    const input = {
+      expectedSelectionVersion: original.selectionVersion,
+      reason: "Publish tested commercial list",
+    };
+    const key = `commercial-activation-${randomUUID()}`;
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        `SELECT currency FROM commercial_policy_selections
+         WHERE currency = 'CZK' FOR SHARE`,
+      );
+      let settled = false;
+      const activation = command(path, input, key).then(async (response) => {
+        settled = true;
+        expect(response.status).toBe(200);
+        return response.json() as Promise<{
+          priceListId: string;
+          selectionVersion: number;
+        }>;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(settled).toBe(false);
+      await holder.query("COMMIT");
+      const result = await activation;
+      expect(result).toMatchObject({
+        priceListId: created.id,
+        selectionVersion: original.selectionVersion + 1,
+      });
+      const selected = await prisma.commercialPolicySelection.findUniqueOrThrow(
+        {
+          where: { currency: "CZK" },
+        },
+      );
+      expect(selected.priceListId).toBe(created.id);
+      expect(selected.selectionVersion).toBe(original.selectionVersion + 1);
+      const replay = await command(path, input, key);
+      expect(replay.status).toBe(200);
+      await expect(replay.json()).resolves.toEqual(result);
+      expect(
+        (
+          await prisma.commercialPolicySelection.findUniqueOrThrow({
+            where: { currency: "CZK" },
+          })
+        ).selectionVersion,
+      ).toBe(original.selectionVersion + 1);
+      expect(
+        await prisma.auditEvent.count({
+          where: { eventType: "catalog.commercial-policy.activated" },
+        }),
+      ).toBeGreaterThan(0);
+      expect(
+        (await command(path, input, `commercial-stale-${randomUUID()}`)).status,
+      ).toBe(409);
+      expect(
+        (
+          await commandAs(
+            viewerCookie,
+            viewerCsrfToken,
+            path,
+            { ...input, expectedSelectionVersion: result.selectionVersion },
+            `commercial-viewer-${randomUUID()}`,
+          )
+        ).status,
+      ).toBe(403);
+      const read = await fetch(
+        new URL("/admin/catalog/commercial-policy-selections/CZK", baseUrl),
+        { headers: { cookie: adminCookie } },
+      );
+      expect(read.status).toBe(200);
+      await expect(read.json()).resolves.toMatchObject({
+        currency: "CZK",
+        priceListId: created.id,
+        selectionVersion: result.selectionVersion,
+      });
+      const sameTarget = await command(
+        path,
+        {
+          expectedSelectionVersion: result.selectionVersion,
+          reason: "Confirm same revision",
+        },
+        `commercial-same-${randomUUID()}`,
+      );
+      expect(sameTarget.status).toBe(200);
+      const same = (await sameTarget.json()) as { selectionVersion: number };
+      expect(same.selectionVersion).toBe(result.selectionVersion + 1);
+      const rollback = await command(
+        `/admin/catalog/price-lists/${original.priceListId}/activate`,
+        {
+          expectedSelectionVersion: same.selectionVersion,
+          reason: "Restore baseline policy after publication test",
+        },
+        `commercial-restore-${randomUUID()}`,
+      );
+      expect(rollback.status).toBe(200);
+      await expect(rollback.json()).resolves.toMatchObject({
+        priceListId: original.priceListId,
+        selectionVersion: same.selectionVersion + 1,
+      });
+    } finally {
+      await holder.query("ROLLBACK");
+      holder.release();
+    }
+  });
+
   it("writes revision and node catalog resources with idempotency and audit evidence", async () => {
     const referenceKey = `catalog-reference-${randomUUID()}`;
     const referenceBody = {

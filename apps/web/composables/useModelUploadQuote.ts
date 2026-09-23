@@ -244,6 +244,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   let pollController: AbortController | undefined;
   let commandController: AbortController | undefined;
   let disposed = false;
+  let destinationReselectionRequired = false;
   let uploadIntent: UploadIntent | undefined;
   let confirmedUpload: ConfirmedUpload | undefined;
   let createdSession: CreatedQuoteSession | undefined;
@@ -328,6 +329,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   }
 
   function resetState(clearStoredSession = true): void {
+    destinationReselectionRequired = false;
     selectionRevision += 1;
     uploadController?.abort();
     uploadController = undefined;
@@ -632,7 +634,10 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
         return;
       }
       if (!applyQuote(result.data)) {
-        if (requiresPreparationAdvance(result.data.phase)) {
+        if (
+          requiresPreparationAdvance(result.data.phase) &&
+          !destinationReselectionRequired
+        ) {
           if (!(await prepareQuote())) scheduleQuoteRefresh(3_000);
         } else {
           scheduleQuoteRefresh(1_500);
@@ -653,7 +658,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     operation: (
       signal: AbortSignal,
       key: string,
-    ) => Promise<{ data?: QuoteSession; response: Response }>,
+    ) => Promise<{ data?: QuoteSession; error?: unknown; response: Response }>,
   ): Promise<boolean> {
     if (!quote.value?.sessionId || !sessionToken.value || disposed)
       return false;
@@ -675,7 +680,25 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       )
         return false;
       if (!result.response.ok || !result.data) {
-        commandError.value = quoteCommandMessage(result.response.status);
+        const failureMessage =
+          result.error &&
+          typeof result.error === "object" &&
+          "message" in result.error &&
+          typeof result.error.message === "string"
+            ? result.error.message
+            : "";
+        if (
+          result.response.status === 409 &&
+          (failureMessage.startsWith("Commercial policy changed") ||
+            failureMessage.startsWith("Delivery validation is stale") ||
+            failureMessage.startsWith("Delivery changed"))
+        ) {
+          destinationReselectionRequired = true;
+          commandError.value =
+            "Cena nebo doprava se změnila. Zkontrolujte kalkulaci a vyberte výdejní místo znovu.";
+        } else {
+          commandError.value = quoteCommandMessage(result.response.status);
+        }
         if (result.response.status === 410) {
           phase.value = "expired";
           if (import.meta.client) {
@@ -686,6 +709,9 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
         return false;
       }
       quoteCommandKeys.complete(scope, input);
+      if (scope === "delivery-destination") {
+        destinationReselectionRequired = false;
+      }
       if (!applyQuote(result.data)) scheduleQuoteRefresh(1_500);
       return true;
     } catch {

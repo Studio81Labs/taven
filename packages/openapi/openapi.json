@@ -151,6 +151,26 @@
         ],
         "type": "object"
       },
+      "ActivateCommercialPolicyDto": {
+        "properties": {
+          "expectedSelectionVersion": {
+            "maximum": 2147483646,
+            "minimum": 1,
+            "type": "number"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "expectedSelectionVersion"
+        ],
+        "type": "object"
+      },
       "ActualCostBreakdownDto": {
         "properties": {
           "carrier": {
@@ -2085,6 +2105,51 @@
           "refundsAndAdjustments",
           "acquisitionAndRepeat",
           "assistedSla"
+        ],
+        "type": "object"
+      },
+      "CommercialPolicyActivationResultDto": {
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "priceListId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionVersion": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currency",
+          "priceListId",
+          "selectionVersion",
+          "id"
+        ],
+        "type": "object"
+      },
+      "CommercialPolicySelectionDto": {
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "priceListId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionVersion": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currency",
+          "priceListId",
+          "selectionVersion"
         ],
         "type": "object"
       },
@@ -10123,6 +10188,53 @@
         ]
       }
     },
+    "/admin/catalog/commercial-policy-selections/{currency}": {
+      "get": {
+        "operationId": "OperatorReadsController_commercialPolicySelection",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "currency",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommercialPolicySelectionDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read the current commercial policy selection",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/catalog/machine-capabilities": {
       "get": {
         "operationId": "OperatorReadsController_machineCapabilities",
@@ -10751,6 +10863,77 @@
         "summary": "Read immutable price-list parameters",
         "tags": [
           "operator reads"
+        ]
+      }
+    },
+    "/admin/catalog/price-lists/{id}/activate": {
+      "post": {
+        "operationId": "OperatorCatalogController_activateCommercialPolicy",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateCommercialPolicyDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommercialPolicyActivationResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Selection version changed"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Activate an immutable commercial price list",
+        "tags": [
+          "operator catalog"
         ]
       }
     },

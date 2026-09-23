@@ -51,6 +51,8 @@ import {
 import type {
   CatalogCommandResultDto,
   CatalogReasonDto,
+  ActivateCommercialPolicyDto,
+  CommercialPolicyActivationResultDto,
   CreateInventoryDto,
   CreateMachineCapabilityDto,
   CreateMachineCalibrationDto,
@@ -64,6 +66,7 @@ import type {
   RegisterMachineDto,
 } from "./operator-catalog.dto";
 import { validatePriceListParameters } from "./price-list-validation";
+import { currentCommercialPolicy } from "./commercial-policy-selection";
 
 type Transaction = Prisma.TransactionClient;
 type CatalogResult = CatalogCommandResultDto;
@@ -215,6 +218,82 @@ export class OperatorCatalogService {
           },
         });
         return { id: priceList.id };
+      },
+    );
+  }
+
+  async activateCommercialPolicy(
+    operator: OperatorContext,
+    priceListId: string,
+    body: ActivateCommercialPolicyDto,
+    key?: string,
+  ): Promise<CommercialPolicyActivationResultDto> {
+    const nodeId = this.globalNode(operator);
+    priceListId = uuid(priceListId, "priceListId");
+    const reason = reasonText(body);
+    const expectedSelectionVersion = positiveInteger(
+      body.expectedSelectionVersion,
+      "expectedSelectionVersion",
+    );
+    if (expectedSelectionVersion >= MAX_INT32) {
+      throw new BadRequestException("selection version is exhausted");
+    }
+    return this.command(
+      operator,
+      "catalog:commercial-policy:activate",
+      key,
+      { nodeId, priceListId, expectedSelectionVersion, reason },
+      async (tx, idempotencyKey) => {
+        const rows = await tx.$queryRaw<Array<{ currency: string }>>`
+          SELECT "currency" FROM "commercial_policy_selections"
+          WHERE "currency" = 'CZK' FOR UPDATE
+        `;
+        if (rows.length !== 1) {
+          throw new ServiceUnavailableException(
+            "Commercial policy selection is unavailable",
+          );
+        }
+        const selection = await currentCommercialPolicy(tx);
+        if (selection.selectionVersion !== expectedSelectionVersion) {
+          throw new ConflictException("Commercial policy selection changed");
+        }
+        const target = await tx.priceList.findUnique({
+          where: { id: priceListId },
+        });
+        if (!target) throw new NotFoundException("Price list was not found");
+        if (target.currency !== selection.currency) {
+          throw new BadRequestException("Price list currency does not match");
+        }
+        validatePriceListParameters(
+          target.parameters as Prisma.InputJsonObject,
+        );
+        const updated = await tx.commercialPolicySelection.update({
+          where: { currency: selection.currency },
+          data: {
+            priceListId,
+            selectionVersion: { increment: 1 },
+            updatedAt: new Date(),
+          },
+        });
+        await this.record(tx, operator, nodeId, idempotencyKey, priceListId, {
+          eventType: "catalog.commercial-policy.activated",
+          reason,
+          reasonCode: "COMMERCIAL_POLICY_ACTIVATION",
+          payload: {
+            operation: "activate",
+            currency: updated.currency,
+            previousPriceListId: selection.priceListId,
+            priceListId,
+            previousSelectionVersion: selection.selectionVersion,
+            selectionVersion: updated.selectionVersion,
+          },
+        });
+        return {
+          id: priceListId,
+          currency: updated.currency,
+          priceListId,
+          selectionVersion: updated.selectionVersion,
+        };
       },
     );
   }

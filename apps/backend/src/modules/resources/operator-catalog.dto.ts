@@ -75,6 +75,27 @@ export class CatalogReasonDto {
   reason!: string;
 }
 
+export class ActivateCommercialPolicyDto extends CatalogReasonDto {
+  @ApiProperty({ type: Number, minimum: 1, maximum: 2147483646 })
+  expectedSelectionVersion!: number;
+}
+
+export class CommercialPolicySelectionDto {
+  @ApiProperty({ type: String })
+  currency!: string;
+
+  @ApiProperty(UUID)
+  priceListId!: string;
+
+  @ApiProperty({ type: Number })
+  selectionVersion!: number;
+}
+
+export class CommercialPolicyActivationResultDto extends CommercialPolicySelectionDto {
+  @ApiProperty(UUID)
+  id!: string;
+}
+
 export class CreateReferenceProfileDto {
   @ApiProperty({ type: String, enum: MATERIALS })
   material!: string;
