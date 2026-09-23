@@ -141,6 +141,12 @@ export class OperatorJobEstimateDto {
   @ApiProperty({ type: Number, minimum: 1 })
   quantity!: number;
 
+  @ApiProperty({ type: Number, minimum: 1 })
+  partsPerPlate!: number;
+
+  @ApiProperty({ type: Number, minimum: 1 })
+  plateCount!: number;
+
   @ApiProperty({ ...DECIMAL, description: "Estimated machine seconds" })
   requiredMachineSeconds!: string;
 

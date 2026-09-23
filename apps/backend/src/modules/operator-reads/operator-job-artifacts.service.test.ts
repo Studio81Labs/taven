@@ -171,6 +171,22 @@ function harness() {
 }
 
 describe("operator job artifact downloads", () => {
+  it("reports plate count from the frozen estimate for a multi-plate job", async () => {
+    const test = harness();
+    const planned = test.job.phaseResourcePlanJob;
+    planned.candidateResourceEstimate.quantity = 2;
+    planned.slots.push({
+      fulfilmentSlot: {
+        ...planned.slots[0]!.fulfilmentSlot,
+        id: "16161616-1616-4616-8616-161616161616",
+        quantityOrdinal: 2,
+      },
+    });
+    await expect(test.service.detail(operator, jobId)).resolves.toMatchObject({
+      estimate: { quantity: 2, partsPerPlate: 1, plateCount: 2 },
+    });
+  });
+
   it("returns exact job, parcel, geometry and accepted risk evidence", async () => {
     const test = harness();
     test.job.order.automaticQuoteDraft = {

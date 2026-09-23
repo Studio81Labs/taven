@@ -6567,6 +6567,14 @@
             "format": "uuid",
             "type": "string"
           },
+          "partsPerPlate": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "plateCount": {
+            "minimum": 1,
+            "type": "number"
+          },
           "printConfigRevisionId": {
             "format": "uuid",
             "type": "string"
@@ -6599,6 +6607,8 @@
           "machineProfileId",
           "machineCalibrationId",
           "quantity",
+          "partsPerPlate",
+          "plateCount",
           "requiredMachineSeconds",
           "requiredMaterialMilligrams",
           "calculatedAt",

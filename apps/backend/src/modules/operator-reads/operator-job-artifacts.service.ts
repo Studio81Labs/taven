@@ -254,6 +254,8 @@ export class OperatorJobArtifactsService {
         machineProfileId: estimate.machineProfileId,
         machineCalibrationId: estimate.machineCalibrationId,
         quantity: estimate.quantity,
+        partsPerPlate: estimate.partsPerPlate,
+        plateCount: Math.ceil(estimate.quantity / estimate.partsPerPlate),
         requiredMachineSeconds: estimate.requiredMachineSeconds.toString(),
         requiredMaterialMilligrams:
           estimate.requiredMaterialMilligrams.toString(),

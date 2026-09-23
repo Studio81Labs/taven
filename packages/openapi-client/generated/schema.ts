@@ -3759,6 +3759,8 @@ export interface components {
             machineId: string;
             /** Format: uuid */
             machineProfileId: string;
+            partsPerPlate: number;
+            plateCount: number;
             /** Format: uuid */
             printConfigRevisionId: string;
             /** @enum {string} */

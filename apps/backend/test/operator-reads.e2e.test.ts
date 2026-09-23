@@ -251,6 +251,8 @@ describe("operator read contracts", () => {
       estimate: {
         candidateResourceEstimateId: fixtureJob.candidateResourceEstimateId,
         machineId: fixture.machineId,
+        partsPerPlate: expect.any(Number),
+        plateCount: expect.any(Number),
         provenance: "CANDIDATE_RESOURCE_ESTIMATE",
       },
       deadline: { date: null, provenance: "NO_PROMISED_DATE" },
