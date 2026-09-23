@@ -202,7 +202,8 @@ async function loadCosts(): Promise<void> {
     actualCursor.value = page.nextCursor ?? null;
     costOrderId.value = id;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === costReadGeneration && id === orderId.value)
+      error.value = errorMessage(cause);
   }
 }
 

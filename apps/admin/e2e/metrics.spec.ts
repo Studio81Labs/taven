@@ -350,4 +350,46 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   await expect(spend.getByRole("button", { name: "Další výdaje" })).toHaveCount(
     0,
   );
+  const staleOrderId = "00000000-0000-0000-0000-000000000041";
+  const freshOrderId = "00000000-0000-0000-0000-000000000042";
+  let releaseStaleCost: (() => void) | undefined;
+  await page.route("**/admin/orders/*/actual-costs*", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.includes(staleOrderId)) {
+      await new Promise<void>((resolve) => {
+        releaseStaleCost = resolve;
+      });
+      return route.fulfill({
+        status: 503,
+        json: { message: "old read failed" },
+      });
+    }
+    if (path.includes(freshOrderId))
+      return route.fulfill({ json: { orderId: freshOrderId, items: [] } });
+    return route.fallback();
+  });
+  const orderInput = page
+    .getByRole("textbox", { name: "ID objednávky" })
+    .first();
+  await orderInput.fill(staleOrderId);
+  await page.getByRole("button", { name: "Načíst", exact: true }).click();
+  await expect.poll(() => Boolean(releaseStaleCost)).toBe(true);
+  await orderInput.fill(freshOrderId);
+  const freshResponse = page.waitForResponse((response) =>
+    response.url().includes(freshOrderId),
+  );
+  await page.getByRole("button", { name: "Načíst", exact: true }).click();
+  await freshResponse;
+  const staleResponse = page.waitForResponse((response) =>
+    response.url().includes(staleOrderId),
+  );
+  releaseStaleCost?.();
+  await staleResponse;
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });

@@ -276,8 +276,12 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
 }) => {
   const nodeId = "00000000-0000-0000-0000-000000000002";
   const inventoryId = "00000000-0000-0000-0000-000000000004";
+  const otherInventoryId = "00000000-0000-0000-0000-000000000005";
   let failReads = false;
   let adjustmentPosts = 0;
+  let releaseAdjustment: (() => void) | undefined;
+  let releaseOtherDetail: (() => void) | undefined;
+  let delayOtherDetail = true;
   await page.route("**/admin/auth/session", (route) =>
     route.fulfill({
       json: {
@@ -295,12 +299,36 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
   await page.route("**/admin/catalog/machine-capabilities*", (route) =>
     route.fulfill({ json: { items: [] } }),
   );
-  await page.route("**/admin/nodes/**", (route) => {
+  await page.route("**/admin/nodes/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === "POST" && path.endsWith("/adjustments")) {
       adjustmentPosts += 1;
+      await new Promise<void>((resolve) => {
+        releaseAdjustment = resolve;
+      });
       failReads = true;
       return route.fulfill({ json: { id: inventoryId } });
+    }
+    if (path.endsWith(`/inventories/${otherInventoryId}`)) {
+      if (delayOtherDetail) {
+        delayOtherDetail = false;
+        await new Promise<void>((resolve) => {
+          releaseOtherDetail = resolve;
+        });
+      }
+      return route.fulfill({
+        json: {
+          id: otherInventoryId,
+          nodeId,
+          machineId: "machine",
+          sku: "PETG-blue",
+          vendor: "Vendor",
+          currency: "CZK",
+          priceMinorUnitsNumerator: "2",
+          priceMinorUnitsDenominator: "1000",
+          receipts: [],
+        },
+      });
     }
     if (failReads)
       return route.fulfill({ status: 503, json: { message: "read outage" } });
@@ -335,22 +363,49 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
               reservedMilligrams: "0",
               availableMilligrams: "500000",
             },
+            {
+              id: otherInventoryId,
+              nodeId,
+              machineId: "machine",
+              sku: "PETG-blue",
+              material: "PETG",
+              status: "AVAILABLE",
+              mountStatus: "MOUNTED",
+              receiptCoverage: "RECORDED",
+              remainingMilligrams: "500000",
+              reservedMilligrams: "0",
+              availableMilligrams: "500000",
+            },
           ],
         },
       });
     return route.fulfill({ json: { items: [] } });
   });
   await page.goto("/zdroje");
-  await page.getByRole("button", { name: "Detail a rychlé změny" }).click();
+  await page
+    .getByRole("button", { name: "Detail a rychlé změny" })
+    .first()
+    .click();
   await page
     .getByRole("textbox", { name: "Důvod změny" })
     .fill("korekce stavu");
   await page.getByRole("textbox", { name: /Změna množství/ }).fill("1000");
   const adjust = page.getByRole("button", { name: "Upravit množství" });
   await adjust.click();
+  await expect.poll(() => Boolean(releaseAdjustment)).toBe(true);
+  await page
+    .getByRole("button", { name: "Detail a rychlé změny" })
+    .nth(1)
+    .click();
+  await expect.poll(() => Boolean(releaseOtherDetail)).toBe(true);
+  releaseAdjustment?.();
   await expect(page.getByRole("alert")).toContainText(
     "Zápis byl potvrzen, ale obnovení přehledu selhalo",
   );
+  releaseOtherDetail?.();
+  await expect(
+    page.getByRole("heading", { name: "Šarže PETG-blue" }),
+  ).toBeVisible();
   await expect(adjust).toBeDisabled();
   expect(adjustmentPosts).toBe(1);
   failReads = false;

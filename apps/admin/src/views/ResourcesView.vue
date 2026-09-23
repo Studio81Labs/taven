@@ -264,11 +264,12 @@ async function run<Body>(
   busy.value = true;
   error.value = "";
   success.value = "";
+  const hadInventoryDetail = inventory.value !== null;
   let writeConfirmed = false;
   try {
     await journal.submit(action, body, write);
     writeConfirmed = true;
-    if (inventory.value) inventoryRefreshRequired.value = true;
+    if (hadInventoryDetail) inventoryRefreshRequired.value = true;
     form.value = "";
     success.value = message;
     await refresh();
