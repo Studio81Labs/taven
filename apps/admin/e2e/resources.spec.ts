@@ -271,6 +271,93 @@ test("a confirmed receipt closes its form when the following read fails", async 
   expect(receiptPosts).toBe(1);
 });
 
+test("a confirmed adjustment cannot be repeated until inventory detail refreshes", async ({
+  page,
+}) => {
+  const nodeId = "00000000-0000-0000-0000-000000000002";
+  const inventoryId = "00000000-0000-0000-0000-000000000004";
+  let failReads = false;
+  let adjustmentPosts = 0;
+  await page.route("**/admin/auth/session", (route) =>
+    route.fulfill({
+      json: {
+        csrfToken: "csrf-test",
+        operator: {
+          operatorId: "00000000-0000-0000-0000-000000000001",
+          role: "ADMIN",
+          nodeIds: [nodeId],
+          permissions: ["operations:read", "catalog:write"],
+          authenticationMethod: "DEVELOPMENT_PASSWORD",
+        },
+      },
+    }),
+  );
+  await page.route("**/admin/catalog/machine-capabilities*", (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
+  await page.route("**/admin/nodes/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === "POST" && path.endsWith("/adjustments")) {
+      adjustmentPosts += 1;
+      failReads = true;
+      return route.fulfill({ json: { id: inventoryId } });
+    }
+    if (failReads)
+      return route.fulfill({ status: 503, json: { message: "read outage" } });
+    if (path.endsWith(`/inventories/${inventoryId}`))
+      return route.fulfill({
+        json: {
+          id: inventoryId,
+          nodeId,
+          machineId: "machine",
+          sku: "PLA-red",
+          vendor: "Vendor",
+          currency: "CZK",
+          priceMinorUnitsNumerator: "2",
+          priceMinorUnitsDenominator: "1000",
+          receipts: [],
+        },
+      });
+    if (path.endsWith("/inventories"))
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              id: inventoryId,
+              nodeId,
+              machineId: "machine",
+              sku: "PLA-red",
+              material: "PLA",
+              status: "AVAILABLE",
+              mountStatus: "MOUNTED",
+              receiptCoverage: "RECORDED",
+              remainingMilligrams: "500000",
+              reservedMilligrams: "0",
+              availableMilligrams: "500000",
+            },
+          ],
+        },
+      });
+    return route.fulfill({ json: { items: [] } });
+  });
+  await page.goto("/zdroje");
+  await page.getByRole("button", { name: "Detail a rychlé změny" }).click();
+  await page
+    .getByRole("textbox", { name: "Důvod změny" })
+    .fill("korekce stavu");
+  await page.getByRole("textbox", { name: /Změna množství/ }).fill("1000");
+  const adjust = page.getByRole("button", { name: "Upravit množství" });
+  await adjust.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Zápis byl potvrzen, ale obnovení přehledu selhalo",
+  );
+  await expect(adjust).toBeDisabled();
+  expect(adjustmentPosts).toBe(1);
+  failReads = false;
+  await page.getByRole("button", { name: "Obnovit zdroje" }).click();
+  await expect(adjust).toBeEnabled();
+});
+
 test("receipt correction copies only the current evidence and waits for refresh", async ({
   page,
 }) => {

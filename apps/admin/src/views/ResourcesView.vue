@@ -42,6 +42,7 @@ const error = ref("");
 const success = ref("");
 const busy = ref(false);
 const loading = ref(false);
+const inventoryRefreshRequired = ref(false);
 const reason = ref("");
 const form = ref<
   "machine" | "calibration" | "receipt" | "legacy-receipt" | "correction" | ""
@@ -103,6 +104,7 @@ async function refresh(): Promise<void> {
     capabilityCursor.value = capabilityData.nextCursor ?? null;
     if (inventory.value) await inspectInventory(inventory.value.id);
     if (availabilityMachineId.value) await inspectAvailability();
+    if (!error.value) inventoryRefreshRequired.value = false;
   } catch (cause) {
     error.value = errorMessage(cause);
   } finally {
@@ -252,7 +254,13 @@ async function run<Body>(
   write: (body: Readonly<Body>, key: string) => Promise<unknown>,
   message: string,
 ): Promise<void> {
-  if (busy.value || loading.value || !canWrite.value) return;
+  if (
+    busy.value ||
+    loading.value ||
+    inventoryRefreshRequired.value ||
+    !canWrite.value
+  )
+    return;
   busy.value = true;
   error.value = "";
   success.value = "";
@@ -260,6 +268,7 @@ async function run<Body>(
   try {
     await journal.submit(action, body, write);
     writeConfirmed = true;
+    if (inventory.value) inventoryRefreshRequired.value = true;
     form.value = "";
     success.value = message;
     await refresh();
@@ -676,19 +685,25 @@ onMounted(() => void refresh());
           <template v-if="canWrite">
             <button
               type="button"
-              :disabled="busy || loading || !reason.trim()"
+              :disabled="
+                busy || loading || inventoryRefreshRequired || !reason.trim()
+              "
               @click="machineStatus(machine.id, 'ACTIVE')"
             >
               Aktivní</button
             ><button
               type="button"
-              :disabled="busy || loading || !reason.trim()"
+              :disabled="
+                busy || loading || inventoryRefreshRequired || !reason.trim()
+              "
               @click="machineStatus(machine.id, 'MAINTENANCE')"
             >
               Údržba</button
             ><button
               type="button"
-              :disabled="busy || loading || !reason.trim()"
+              :disabled="
+                busy || loading || inventoryRefreshRequired || !reason.trim()
+              "
               @click="machineStatus(machine.id, 'DISABLED')"
             >
               Vypnout
@@ -778,13 +793,17 @@ onMounted(() => void refresh());
           <template v-if="canWrite">
             <button
               type="button"
-              :disabled="busy || loading || !reason.trim()"
+              :disabled="
+                busy || loading || inventoryRefreshRequired || !reason.trim()
+              "
               @click="calibrationAction(item.id, 'activate')"
             >
               Aktivovat</button
             ><button
               type="button"
-              :disabled="busy || loading || !reason.trim()"
+              :disabled="
+                busy || loading || inventoryRefreshRequired || !reason.trim()
+              "
               @click="calibrationAction(item.id, 'retire')"
             >
               Vyřadit
@@ -866,31 +885,41 @@ onMounted(() => void refresh());
         <div class="operator-actions">
           <button
             type="button"
-            :disabled="busy || loading || !reason.trim()"
+            :disabled="
+              busy || loading || inventoryRefreshRequired || !reason.trim()
+            "
             @click="mount('MOUNTED')"
           >
             Nasadit</button
           ><button
             type="button"
-            :disabled="busy || loading || !reason.trim()"
+            :disabled="
+              busy || loading || inventoryRefreshRequired || !reason.trim()
+            "
             @click="mount('UNMOUNTED')"
           >
             Sundat</button
           ><button
             type="button"
-            :disabled="busy || loading || !reason.trim()"
+            :disabled="
+              busy || loading || inventoryRefreshRequired || !reason.trim()
+            "
             @click="changeInventoryStatus('AVAILABLE')"
           >
             Dostupné</button
           ><button
             type="button"
-            :disabled="busy || loading || !reason.trim()"
+            :disabled="
+              busy || loading || inventoryRefreshRequired || !reason.trim()
+            "
             @click="changeInventoryStatus('DEPLETED')"
           >
             Vyčerpané</button
           ><button
             type="button"
-            :disabled="busy || loading || !reason.trim()"
+            :disabled="
+              busy || loading || inventoryRefreshRequired || !reason.trim()
+            "
             @click="changeInventoryStatus('RETIRED')"
           >
             Vyřadit
@@ -900,7 +929,12 @@ onMounted(() => void refresh());
           <label
             >Změna množství v mg (znaménko +/−)
             <input v-model="adjustmentMilligrams" required /></label
-          ><button type="submit" :disabled="busy || loading || !reason.trim()">
+          ><button
+            type="submit"
+            :disabled="
+              busy || loading || inventoryRefreshRequired || !reason.trim()
+            "
+          >
             Upravit množství
           </button>
         </form>
@@ -1058,6 +1092,7 @@ onMounted(() => void refresh());
           :disabled="
             busy ||
             loading ||
+            inventoryRefreshRequired ||
             ((form === 'correction' || form === 'legacy-receipt') &&
               !reason.trim())
           "

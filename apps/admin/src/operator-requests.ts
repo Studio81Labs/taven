@@ -60,8 +60,7 @@ export function errorMessage(error: unknown): string {
 }
 
 export class CommandJournal {
-  private fingerprint = "";
-  private intent: CommandIntent<unknown, unknown> | null = null;
+  private readonly intents = new Map<string, CommandIntent<unknown, unknown>>();
 
   async submit<Body, Result>(
     action: string,
@@ -69,13 +68,15 @@ export class CommandJournal {
     send: (body: Readonly<Body>, key: string) => Promise<Result>,
   ): Promise<Result> {
     const fingerprint = JSON.stringify([action, body]);
-    if (!this.intent || this.fingerprint !== fingerprint) {
-      this.fingerprint = fingerprint;
-      this.intent = new CommandIntent<unknown, unknown>(body);
+    let intent = this.intents.get(fingerprint) as
+      CommandIntent<Body, Result> | undefined;
+    if (!intent) {
+      intent = new CommandIntent<Body, Result>(body);
+      this.intents.set(fingerprint, intent);
     }
-    const intent = this.intent as CommandIntent<Body, Result>;
     const result = await intent.submit(send);
-    if (this.intent === intent) this.intent = null;
+    if (this.intents.get(fingerprint) === intent)
+      this.intents.delete(fingerprint);
     return result;
   }
 }

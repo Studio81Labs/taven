@@ -55,6 +55,30 @@ describe("operator request helpers", () => {
     expect(send.mock.calls[2]?.[1]).not.toBe(send.mock.calls[1]?.[1]);
   });
 
+  it("retains an uncertain command across a different failed command", async () => {
+    const journal = new CommandJournal();
+    const adjustment = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("lost response"))
+      .mockResolvedValue("confirmed");
+    await expect(
+      journal.submit("adjust", { delta: "100" }, adjustment),
+    ).rejects.toThrow("lost response");
+    await expect(
+      journal.submit("mount", { state: "MOUNTED" }, async () => {
+        throw new Error("rejected mount");
+      }),
+    ).rejects.toThrow("rejected mount");
+    await expect(
+      journal.submit("adjust", { delta: "100" }, adjustment),
+    ).resolves.toBe("confirmed");
+    expect(adjustment.mock.calls[0]?.[1]).toBe(adjustment.mock.calls[1]?.[1]);
+    await journal.submit("adjust", { delta: "100" }, adjustment);
+    expect(adjustment.mock.calls[2]?.[1]).not.toBe(
+      adjustment.mock.calls[1]?.[1],
+    );
+  });
+
   it("discards a late page after the filters change", async () => {
     let resolveFirst:
       | ((value: { items: number[]; nextCursor: string | null }) => void)
