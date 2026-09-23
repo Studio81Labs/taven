@@ -271,7 +271,7 @@ test("a confirmed receipt closes its form when the following read fails", async 
   expect(receiptPosts).toBe(1);
 });
 
-test("receipt correction copies the selected evidence and waits for refresh", async ({
+test("receipt correction copies only the current evidence and waits for refresh", async ({
   page,
 }) => {
   const nodeId = "00000000-0000-0000-0000-000000000002";
@@ -369,18 +369,10 @@ test("receipt correction copies the selected evidence and waits for refresh", as
   await expect(
     page.getByRole("textbox", { name: "Přijaté množství mg" }),
   ).toHaveValue("500000");
-  await page
-    .getByRole("combobox", { name: "Nahrazený doklad" })
-    .selectOption(firstId);
-  await expect(page.getByRole("textbox", { name: "Dodavatel" })).toHaveValue(
-    "First vendor",
-  );
-  await expect(page.getByRole("textbox", { name: /Nakoupeno/ })).toHaveValue(
-    "2025-04-03T10:00:00Z",
-  );
+  await expect(page.getByText(`Nahrazený doklad ${secondId}`)).toBeVisible();
   await expect(
-    page.getByRole("textbox", { name: "Přijaté množství mg" }),
-  ).toHaveValue("400000");
+    page.getByRole("combobox", { name: "Nahrazený doklad" }),
+  ).toHaveCount(0);
   await page.getByRole("textbox", { name: "Důvod změny" }).fill("oprava");
   let releaseRead: (() => void) | undefined;
   await page.route(`**/admin/nodes/${nodeId}/machines*`, async (route) => {
@@ -396,7 +388,7 @@ test("receipt correction copies the selected evidence and waits for refresh", as
   ).toBeDisabled();
   releaseRead?.();
   await expect(page.getByRole("textbox", { name: "Dodavatel" })).toHaveValue(
-    "First vendor",
+    "Second vendor",
   );
   await expect(
     page.getByRole("button", { name: "Zapsat", exact: true }),

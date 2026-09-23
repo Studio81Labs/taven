@@ -26,6 +26,12 @@ const inventoryCursor = ref<string | null>(null);
 const calibrationCursor = ref<string | null>(null);
 const capabilityCursor = ref<string | null>(null);
 const inventory = ref<S["InventoryDetailDto"] | null>(null);
+const currentReceipt = computed(() => {
+  const receipts = inventory.value?.receipts ?? [];
+  const superseded = new Set(receipts.map((item) => item.supersedesReceiptId));
+  const leaves = receipts.filter((item) => !superseded.has(item.id));
+  return leaves.length === 1 ? leaves[0] : null;
+});
 const availability = ref<S["MachineAvailabilityReadDto"] | null>(null);
 const availabilityMachineId = ref("");
 const formMachineId = ref("");
@@ -193,22 +199,16 @@ function selectInventory(id: string): void {
   void inspectInventory(id);
 }
 
-function selectCorrectionReceipt(id: string): void {
-  const receipt = inventory.value?.receipts.find((item) => item.id === id);
+function openCorrection(): void {
+  const receipt = currentReceipt.value;
   if (!receipt) return;
+  form.value = "correction";
   supersedesReceiptId.value = receipt.id;
   vendor.value = receipt.vendor;
   purchasedAt.value = receipt.purchasedAt;
   receivedMilligrams.value = receipt.receivedMilligrams;
   priceNumerator.value = receipt.priceMinorUnitsNumerator;
   priceDenominator.value = receipt.priceMinorUnitsDenominator;
-}
-
-function openCorrection(): void {
-  const receipt = inventory.value?.receipts.at(-1);
-  if (!receipt) return;
-  form.value = "correction";
-  selectCorrectionReceipt(receipt.id);
 }
 
 async function inspectAvailability(): Promise<void> {
@@ -911,11 +911,7 @@ onMounted(() => void refresh());
             @click="form = 'legacy-receipt'"
           >
             Doplnit počáteční doklad</button
-          ><button
-            v-if="inventory.receipts.length"
-            type="button"
-            @click="openCorrection"
-          >
+          ><button v-if="currentReceipt" type="button" @click="openCorrection">
             Opravit doklad
           </button>
         </div>
@@ -1053,22 +1049,9 @@ onMounted(() => void refresh());
             >Jednotková cena jmenovatel (mg)
             <input v-model="priceDenominator" inputmode="numeric" required
           /></label>
-          <label v-if="form === 'correction'"
-            >Nahrazený doklad
-            <select
-              v-model="supersedesReceiptId"
-              required
-              @change="selectCorrectionReceipt(supersedesReceiptId)"
-            >
-              <option
-                v-for="item in inventory?.receipts ?? []"
-                :key="item.id"
-                :value="item.id"
-              >
-                {{ item.id }}
-              </option>
-            </select></label
-          >
+          <p v-if="form === 'correction'">
+            Nahrazený doklad {{ supersedesReceiptId }}
+          </p>
         </template>
         <button
           type="submit"

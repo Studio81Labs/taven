@@ -396,6 +396,67 @@ test("catalog writes wait for a manual refresh to finish", async ({ page }) => {
   expect(state.postedVersions).toEqual([]);
 });
 
+test("the price editor waits for the requested detail before cloning", async ({
+  page,
+}) => {
+  const state: CatalogState = {
+    version: 1,
+    selectedPriceId: priceId,
+    feed: [],
+    postedVersions: [],
+    postHeaders: [],
+  };
+  await mockSession(page);
+  await mockCatalog(page, state);
+  await page.goto("/katalog");
+  const clone = page.getByRole("button", { name: "Vytvořit revizi ceníku" });
+  await expect(clone).toBeEnabled();
+  let releaseDetail: (() => void) | undefined;
+  await page.route(
+    `**/admin/catalog/price-lists/${nextPriceId}`,
+    async (route) => {
+      await new Promise<void>((resolve) => {
+        releaseDetail = resolve;
+      });
+      await route.fulfill({
+        json: {
+          id: nextPriceId,
+          revision: "v2",
+          currency: "CZK",
+          termsRevision: "terms-2",
+          createdAt: "2026-09-23T12:00:00Z",
+          parameters: {
+            automaticQuote: {
+              maximumAutomaticAmountMinor: "300000",
+              maximumAutomaticQuantity: "20",
+              expressMaximumPlateCount: "2",
+              expressAvailableProductionWindowSeconds: "86400",
+              freeShippingPrintThresholdMinor: "100000",
+              shipmentCategories: [],
+            },
+            sellerTaxPolicy: {},
+          },
+        },
+      });
+    },
+  );
+  const prices = page
+    .getByRole("heading", { name: "Ceníky a obchodní pravidla" })
+    .locator("..");
+  await prices.getByRole("button", { name: "Detail" }).nth(1).click();
+  await expect.poll(() => Boolean(releaseDetail)).toBe(true);
+  await expect(clone).toBeDisabled();
+  releaseDetail?.();
+  await expect(clone).toBeEnabled();
+  await clone.click();
+  await expect(
+    page.getByRole("textbox", { name: "Revize podmínek" }),
+  ).toHaveValue("terms-2");
+  await expect(
+    page.getByRole("textbox", { name: "Úplné cenové parametry JSON" }),
+  ).toHaveValue(/300000/);
+});
+
 test("two tabs require a fresh deliberate publication after a stale selection", async ({
   context,
 }) => {

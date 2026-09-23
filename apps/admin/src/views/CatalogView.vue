@@ -40,6 +40,8 @@ const configCursor = ref<string | null>(null);
 const capabilityCursor = ref<string | null>(null);
 const selection = ref<S["CommercialPolicySelectionDto"] | null>(null);
 const selectedPrice = ref<S["PriceListDetailDto"] | null>(null);
+const priceDetailPending = ref(false);
+const requestedPriceId = ref("");
 const selectedQuoteParameters = computed(() => {
   const parameters = selectedPrice.value?.parameters;
   return parameters && "automaticQuote" in parameters
@@ -250,6 +252,8 @@ async function moreNotices(): Promise<void> {
 
 async function inspectPrice(id: string): Promise<void> {
   const generation = ++priceReadGeneration;
+  requestedPriceId.value = id;
+  priceDetailPending.value = true;
   try {
     const detail = requireData(
       await apiClient.GET("/admin/catalog/price-lists/{id}", {
@@ -268,6 +272,8 @@ async function inspectPrice(id: string): Promise<void> {
     }
   } catch (cause) {
     if (generation === priceReadGeneration) error.value = errorMessage(cause);
+  } finally {
+    if (generation === priceReadGeneration) priceDetailPending.value = false;
   }
 }
 
@@ -332,6 +338,13 @@ async function inspectCapability(id: string): Promise<void> {
 }
 
 function edit(type: typeof editor.value): void {
+  if (
+    type === "price" &&
+    (priceDetailPending.value ||
+      !selectedPrice.value ||
+      selectedPrice.value.id !== requestedPriceId.value)
+  )
+    return;
   editor.value = type;
   error.value = "";
   success.value = "";
@@ -774,7 +787,16 @@ onUnmounted(() => noticePager.dispose());
         </p>
         <pre>{{ JSON.stringify(selectedPrice.parameters, null, 2) }}</pre>
       </div>
-      <button v-if="canWrite" type="button" @click="edit('price')">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="
+          priceDetailPending ||
+          !selectedPrice ||
+          selectedPrice.id !== requestedPriceId
+        "
+        @click="edit('price')"
+      >
         Vytvořit revizi ceníku
       </button>
     </section>
