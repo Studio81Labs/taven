@@ -141,7 +141,7 @@ function createDefaultSession(
         quality: "DRAFT",
         infillPreset: "STANDARD",
         color: "BLACK",
-        printConfigRevisionId: "00000000-0000-4000-8000-000000000001",
+        printConfigRevisionId: "00000000-0000-4000-8000-000000000003",
       },
       {
         material: "PLA",
@@ -155,7 +155,7 @@ function createDefaultSession(
         quality: "FINE",
         infillPreset: "STANDARD",
         color: "BLACK",
-        printConfigRevisionId: "00000000-0000-4000-8000-000000000001",
+        printConfigRevisionId: "00000000-0000-4000-8000-000000000004",
       },
     ],
     quantityComparisons: [
@@ -880,7 +880,14 @@ const server = http.createServer(async (req, res) => {
         // Handle quality pricing update
         const items = body.items || [];
         session.items = items.map((it, idx) => {
-          const quality = it.quality || "STANDARD";
+          const selectedOption = session.configurationOptions.find(
+            (option) =>
+              option.printConfigRevisionId === it.printConfigRevisionId &&
+              option.material === (it.material || "PLA") &&
+              option.color === (it.color || "BLACK") &&
+              option.infillPreset === (it.infillPreset || "STANDARD"),
+          );
+          const quality = selectedOption?.quality || "STANDARD";
           return {
             ...session.items[0],
             id: it.id || session.items[0]?.id || `item-${idx}`,
@@ -889,6 +896,9 @@ const server = http.createServer(async (req, res) => {
             quality,
             material: it.material || "PLA",
             infillPreset: it.infillPreset || "STANDARD",
+            printConfigRevisionId:
+              selectedOption?.printConfigRevisionId ||
+              session.items[0]?.printConfigRevisionId,
             bodyIds: it.bodyIds || ["body-1"],
           };
         });
