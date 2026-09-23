@@ -311,4 +311,49 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
       page.getByRole("heading", { name: "Testovací platební brána" }),
     ).toBeVisible();
   });
+
+  test("rapid checkout activation starts only one payment command", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+    await page
+      .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible();
+
+    await page.getByLabel("Jméno kontaktní osoby").fill("Jan Zákazník");
+    await page.getByLabel("E-mail").fill("jan.zakaznik@example.cz");
+    await page.getByLabel("Fakturační jméno nebo název").fill("Jan Zákazník");
+    await page.getByLabel("Ulice a číslo").fill("Hlavní 123");
+    await page.getByLabel("Město").fill("Brno");
+    await page.getByLabel("PSČ").fill("60200");
+    await page.getByRole("checkbox", { name: /VOP/i }).check();
+    await page.getByRole("checkbox", { name: /reklamačním řádem/i }).check();
+    await page.getByRole("checkbox", { name: /výjimka/i }).check();
+
+    let paymentCommands = 0;
+    await page.route("**/checkout/payments", async (route) => {
+      paymentCommands += 1;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await route.continue();
+    });
+    const payButton = page.getByRole("button", {
+      name: /Objednat a zaplatit/i,
+    });
+    await expect(payButton).toBeEnabled();
+    await payButton.evaluate((button: HTMLButtonElement) => {
+      button.click();
+      button.click();
+    });
+    await expect(
+      page.getByRole("heading", { name: "Testovací platební brána" }),
+    ).toBeVisible();
+    expect(paymentCommands).toBe(1);
+  });
 });

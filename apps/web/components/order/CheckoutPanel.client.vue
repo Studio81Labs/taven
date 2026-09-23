@@ -358,61 +358,62 @@ async function loadCapabilities(): Promise<void> {
 }
 
 async function submitCheckout(): Promise<void> {
-  if (!form.value?.reportValidity() || !canSubmit.value) return;
-  if (retryMode.value) await loadRetryContext();
-  else await refreshLegalAvailability();
-  const session = credentials.value;
-  const documents = approvedDocuments.value;
-  const evidence = retryEvidence.value;
-  if (!session || (!documents && !evidence)) return;
-  if (retryMode.value && !retryContext.value?.retryAllowed) {
-    errorMessage.value = "Předchozí platbu už nelze bezpečně opakovat.";
+  if (submitting.value || !form.value?.reportValidity() || !canSubmit.value)
     return;
-  }
-  if (
-    !retryMode.value &&
-    draft.photoPublicationConsent &&
-    !documents?.photoConsentRevision
-  ) {
-    errorMessage.value =
-      "Dobrovolný souhlas s fotografiemi zatím nemá schválené znění.";
-    return;
-  }
-
-  const body: CreateCheckoutPayment = {
-    email: draft.email,
-    fullName: draft.fullName,
-    billing: compactBilling(draft.billing),
-    method: draft.method,
-    acceptTerms: retryMode.value || draft.acceptTerms,
-    acceptClaimPolicy: retryMode.value || draft.acceptClaimPolicy,
-    acknowledgeWithdrawalException:
-      retryMode.value || draft.acknowledgeWithdrawalException,
-    termsRevision: evidence?.termsRevision ?? documents!.termsRevision,
-    claimPolicyRevision:
-      evidence?.claimPolicyRevision ?? documents!.claimPolicyRevision,
-    photoPublicationConsent:
-      evidence?.photoPublicationConsent ?? draft.photoPublicationConsent,
-    photoConsentRevision: evidence
-      ? evidence.photoConsentRevision
-      : draft.photoPublicationConsent
-        ? documents!.photoConsentRevision
-        : null,
-  };
-  const requestFingerprint = checkoutRequestFingerprint(body);
-  const activeCommand =
-    command.value?.requestFingerprint === requestFingerprint
-      ? command.value
-      : {
-          idempotencyKey: `checkout-${crypto.randomUUID()}`,
-          requestFingerprint,
-        };
-  command.value = activeCommand;
-  persistCheckout();
   submitting.value = true;
-  errorMessage.value = undefined;
-  await recordCheckoutStartedBeforePayment();
   try {
+    if (retryMode.value) await loadRetryContext();
+    else await refreshLegalAvailability();
+    const session = credentials.value;
+    const documents = approvedDocuments.value;
+    const evidence = retryEvidence.value;
+    if (!session || (!documents && !evidence)) return;
+    if (retryMode.value && !retryContext.value?.retryAllowed) {
+      errorMessage.value = "Předchozí platbu už nelze bezpečně opakovat.";
+      return;
+    }
+    if (
+      !retryMode.value &&
+      draft.photoPublicationConsent &&
+      !documents?.photoConsentRevision
+    ) {
+      errorMessage.value =
+        "Dobrovolný souhlas s fotografiemi zatím nemá schválené znění.";
+      return;
+    }
+
+    const body: CreateCheckoutPayment = {
+      email: draft.email,
+      fullName: draft.fullName,
+      billing: compactBilling(draft.billing),
+      method: draft.method,
+      acceptTerms: retryMode.value || draft.acceptTerms,
+      acceptClaimPolicy: retryMode.value || draft.acceptClaimPolicy,
+      acknowledgeWithdrawalException:
+        retryMode.value || draft.acknowledgeWithdrawalException,
+      termsRevision: evidence?.termsRevision ?? documents!.termsRevision,
+      claimPolicyRevision:
+        evidence?.claimPolicyRevision ?? documents!.claimPolicyRevision,
+      photoPublicationConsent:
+        evidence?.photoPublicationConsent ?? draft.photoPublicationConsent,
+      photoConsentRevision: evidence
+        ? evidence.photoConsentRevision
+        : draft.photoPublicationConsent
+          ? documents!.photoConsentRevision
+          : null,
+    };
+    const requestFingerprint = checkoutRequestFingerprint(body);
+    const activeCommand =
+      command.value?.requestFingerprint === requestFingerprint
+        ? command.value
+        : {
+            idempotencyKey: `checkout-${crypto.randomUUID()}`,
+            requestFingerprint,
+          };
+    command.value = activeCommand;
+    persistCheckout();
+    errorMessage.value = undefined;
+    await recordCheckoutStartedBeforePayment();
     const result = await $api.POST(
       "/automatic-quote-sessions/{sessionId}/checkout/payments",
       {
