@@ -22,6 +22,10 @@ const FIXTURE_TOPOLOGY = {
   manifold: true,
   normals: "consistent",
 } as const;
+// The fixture consumer is intentionally source-independent except for this
+// checked-in, two-object 3MF used by the isolated browser/API integration run.
+const TWO_BODY_3MF_SHA256 =
+  "c907fbe6f12289f747cf6f30be75b6efcaa171bce8fd32a88d768d22ed6619f3";
 
 function fixtureHash(...values: readonly (string | number)[]): string {
   return createHash("sha256").update(values.join(":"), "utf8").digest("hex");
@@ -90,10 +94,15 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
 
   switch (job.kind) {
     case "model_inspection": {
+      const twoBodySource =
+        job.input.source.format === "3mf" &&
+        job.input.source.contentSha256 === TWO_BODY_3MF_SHA256;
       const bodyIds =
         job.input.operation.mode === "canonicalize_selection"
           ? job.input.operation.bodyIds
-          : ["body-0001"];
+          : twoBodySource
+            ? ["body-0001", "body-0002"]
+            : ["body-0001"];
       const geometrySha256 = fixtureHash(
         job.input.source.contentSha256,
         job.input.canonicalizerRevision,
@@ -124,8 +133,10 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
                 }
               : null,
           metrics: {
-            boundingBox: FIXTURE_BOUNDING_BOX,
-            objectCount: 1,
+            boundingBox: twoBodySource
+              ? { ...FIXTURE_BOUNDING_BOX, xMicrometers: "50000" }
+              : FIXTURE_BOUNDING_BOX,
+            objectCount: twoBodySource ? 2 : 1,
             bodyCount: bodyIds.length,
             unitHint: "millimeter",
             scaleAssessment: "trusted",

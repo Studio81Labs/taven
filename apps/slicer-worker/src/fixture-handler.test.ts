@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   SlicingJobSchema,
   geometrySelectionSha256,
@@ -184,6 +188,41 @@ function artifactSha256(result: SlicingResult): string {
 }
 
 describe("runFixtureSlicingJob", () => {
+  it("discovers the checked-in two-object 3MF without changing other sources", () => {
+    const fixturePath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../tools/slicing-fixtures/fixtures/two-body/two-body.3mf",
+    );
+    const sourceHash = createHash("sha256")
+      .update(readFileSync(fixturePath))
+      .digest("hex");
+    expect(sourceHash).toBe(
+      "c907fbe6f12289f747cf6f30be75b6efcaa171bce8fd32a88d768d22ed6619f3",
+    );
+    const twoBodyJob = fixtureJob("model_inspection", {
+      ...sourceInspectionInput,
+      source: {
+        ...sourceInspectionInput.source,
+        format: "3mf",
+        contentSha256: sourceHash,
+      },
+    });
+    expect(runFixtureSlicingJob(twoBodyJob)).toMatchObject({
+      outcome: {
+        status: "succeeded",
+        metrics: {
+          bodyCount: 2,
+          objectCount: 2,
+          boundingBox: { xMicrometers: "50000" },
+        },
+        bodies: [{ bodyId: "body-0001" }, { bodyId: "body-0002" }],
+      },
+    });
+    expect(runFixtureSlicingJob(sourceInspectionJob)).toMatchObject({
+      outcome: { metrics: { bodyCount: 1, objectCount: 1 } },
+    });
+  });
+
   it.each([
     ["model_inspection", inspectionJob],
     ["reference_slice", referenceJob],

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { zipSync } from "fflate";
+import { resetE2eAnonymousAdmissionLimitsForBrowser } from "../../../backend/test/support/publish-e2e-legal-fixtures";
 
 const apiUrl =
   process.env.INTEGRATION_API_URL ?? "https://api-staging.taven.cz";
@@ -21,6 +22,14 @@ const paintedFixturePath = path.resolve(
 
 test.describe("Real API assisted request", () => {
   test.skip(!enabled, "Requires explicit opt-in to create an assisted request");
+
+  test.beforeEach(async () => {
+    if (enabled && process.env.INTEGRATION_MUTABLE_FIXTURES === "true") {
+      await resetE2eAnonymousAdmissionLimitsForBrowser(
+        process.env.DATABASE_URL!,
+      );
+    }
+  });
 
   test("retains one request and photo retention across a failed upload retry", async ({
     page,
