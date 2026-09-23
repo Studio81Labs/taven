@@ -168,6 +168,20 @@ export function isTerminalAttachmentStatus(status: number): boolean {
   return status === 401 || status === 409 || status === 410;
 }
 
+export function requiresDestinationReselection(
+  status: number,
+  error: unknown,
+): boolean {
+  if (status !== 409 || !error || typeof error !== "object") return false;
+  const message = "message" in error ? error.message : undefined;
+  return (
+    typeof message === "string" &&
+    (message.startsWith("Commercial policy changed") ||
+      message.startsWith("Delivery validation is stale") ||
+      message.startsWith("Delivery changed"))
+  );
+}
+
 function requestMessage(
   status: number,
   stage: "attach" | "confirm" | "intent" | "session",
@@ -680,18 +694,8 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       )
         return false;
       if (!result.response.ok || !result.data) {
-        const failureMessage =
-          result.error &&
-          typeof result.error === "object" &&
-          "message" in result.error &&
-          typeof result.error.message === "string"
-            ? result.error.message
-            : "";
         if (
-          result.response.status === 409 &&
-          (failureMessage.startsWith("Commercial policy changed") ||
-            failureMessage.startsWith("Delivery validation is stale") ||
-            failureMessage.startsWith("Delivery changed"))
+          requiresDestinationReselection(result.response.status, result.error)
         ) {
           destinationReselectionRequired = true;
           commandError.value =

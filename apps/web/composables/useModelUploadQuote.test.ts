@@ -11,6 +11,7 @@ import {
   isTerminalUploadConfirmationStatus,
   requestsImmediateEstimate,
   requiresPreparationAdvance,
+  requiresDestinationReselection,
   resolveUploadSession,
 } from "./useModelUploadQuote";
 
@@ -73,6 +74,27 @@ describe("automatic quote preparation advancement", () => {
     "HANDOFF_REQUIRED",
   ] as const)("does not automatically advance %s", (phase) => {
     expect(requiresPreparationAdvance(phase)).toBe(false);
+  });
+});
+
+describe("commercial policy recovery", () => {
+  it("holds automatic preparation for an explicit destination reselection", () => {
+    expect(
+      requiresDestinationReselection(409, {
+        message: "Commercial policy changed; select delivery again",
+      }),
+    ).toBe(true);
+    expect(
+      requiresDestinationReselection(409, {
+        message: "Delivery validation is stale; select delivery again",
+      }),
+    ).toBe(true);
+    expect(
+      requiresDestinationReselection(409, {
+        message: "Automatic quote configuration changed",
+      }),
+    ).toBe(false);
+    expect(requiresDestinationReselection(503, null)).toBe(false);
   });
 });
 

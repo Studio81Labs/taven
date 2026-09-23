@@ -2523,6 +2523,25 @@ export class AutomaticQuotesService {
       null,
     );
     if (!transient) return;
+    const bindingId = deterministicUuid(
+      `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}:${legalTermsRevisionId}`,
+    );
+    const preparationInput = {
+      priceList,
+      items: transient.items,
+      expressRequested: draft.expressRequested,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+      deliveryDestination: destination,
+      shipmentPlanIdForOrdinal: (ordinal: number) =>
+        deterministicUuid(`automatic-shipment-plan:${bindingId}:${ordinal}`),
+    };
+    const provisionalPlan = await prepareAutomaticQuote({
+      ...preparationInput,
+      materialAndColorAvailable: true,
+      withinBuildLimits: true,
+    });
+    if (provisionalPlan.prepared.kind !== "binding_quote") return;
     if (!bindingValidation) {
       throw new ConflictException(
         "Delivery validation is stale; select delivery again",
@@ -2543,25 +2562,6 @@ export class AutomaticQuotesService {
         "Delivery validation is stale; select delivery again",
       );
     }
-    const bindingId = deterministicUuid(
-      `automatic-binding:${orderId}:${destination.id}:${draft.configurationRevision}:${priceList.revision}:${legalTermsRevisionId}`,
-    );
-    const preparationInput = {
-      priceList,
-      items: transient.items,
-      expressRequested: draft.expressRequested,
-      riskAcknowledgementsComplete: true,
-      hasBlockingPreflightFinding: false,
-      deliveryDestination: destination,
-      shipmentPlanIdForOrdinal: (ordinal: number) =>
-        deterministicUuid(`automatic-shipment-plan:${bindingId}:${ordinal}`),
-    };
-    const provisionalPlan = await prepareAutomaticQuote({
-      ...preparationInput,
-      materialAndColorAvailable: true,
-      withinBuildLimits: true,
-    });
-    if (provisionalPlan.prepared.kind !== "binding_quote") return;
     if (
       await this.enqueueMissingCandidateReferenceSlices(
         transaction,

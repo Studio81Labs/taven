@@ -114,10 +114,12 @@ describe("AutomaticQuotesService", () => {
     ).toBe(1);
   });
 
-  it("filters configured delivery options when pricing is unavailable", async () => {
-    const priceList = { findUnique: vi.fn().mockResolvedValue(null) };
+  it("fails closed when the commercial selector is missing", async () => {
+    const commercialPolicySelection = {
+      findUnique: vi.fn().mockResolvedValue(null),
+    };
     const service = new AutomaticQuotesService(
-      { priceList } as unknown as PrismaService,
+      { commercialPolicySelection } as unknown as PrismaService,
       null as never,
       null as never,
       null as never,
@@ -126,20 +128,24 @@ describe("AutomaticQuotesService", () => {
     const deliveryOptions = service as unknown as {
       deliveryOptions: (
         input: undefined,
-        client: { priceList: typeof priceList },
+        client: { commercialPolicySelection: typeof commercialPolicySelection },
         configuredOptions: readonly unknown[],
       ) => Promise<unknown[]>;
     };
 
     await expect(
-      deliveryOptions.deliveryOptions(undefined, { priceList }, [
-        {
-          endpointType: "pickup_point",
-          providerEndpointId: "configured-pickup",
-          supportedCategoryIds: ["pickup"],
-        },
-      ]),
-    ).resolves.toEqual([]);
+      deliveryOptions.deliveryOptions(
+        undefined,
+        { commercialPolicySelection },
+        [
+          {
+            endpointType: "pickup_point",
+            providerEndpointId: "configured-pickup",
+            supportedCategoryIds: ["pickup"],
+          },
+        ],
+      ),
+    ).rejects.toMatchObject({ status: 503 });
   });
 
   it("hands off empty configured delivery choices but keeps provider discovery available", () => {

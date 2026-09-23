@@ -21,6 +21,10 @@ import {
 } from "vitest";
 import { AppModule } from "../src/app.module";
 import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
+import {
+  DELIVERY_CAPABILITY,
+  type DeliveryCapabilityPort,
+} from "../src/modules/automatic-quotes/delivery-capability.port";
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
@@ -2089,6 +2093,70 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       (await configure(0, "body-b", 1, "configure-after-incompatible")).response
         .status,
     ).toBe(200);
+
+    const deliveryCapabilities =
+      app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY);
+    const validateSelection =
+      deliveryCapabilities.validateSelection.bind(deliveryCapabilities);
+    let providerEntered!: () => void;
+    let releaseProvider!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      providerEntered = resolve;
+    });
+    const providerGate = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const providerSpy = vi
+      .spyOn(deliveryCapabilities, "validateSelection")
+      .mockImplementation(async (input) => {
+        providerEntered();
+        await providerGate;
+        return validateSelection(input);
+      });
+    const staleKey = key("destination-policy-race");
+    const destinationBeforeRace =
+      await prisma.automaticQuoteDraft.findUniqueOrThrow({
+        where: { orderId },
+        select: { selectedDeliveryDestinationId: true },
+      });
+    try {
+      const staleDestination = api(
+        `automatic-quote-sessions/${sessionId}/delivery-destination`,
+        {
+          method: "PUT",
+          headers: capabilityHeaders(sessionToken, staleKey),
+          body: JSON.stringify({
+            providerEndpointId: "test-pickup",
+            endpointType: "pickup_point",
+          }),
+        },
+      );
+      await entered;
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: { selectionVersion: { increment: 1 } },
+      });
+      releaseProvider();
+      expect((await staleDestination).response.status).toBe(409);
+      expect(
+        (
+          await prisma.automaticQuoteDraft.findUniqueOrThrow({
+            where: { orderId },
+          })
+        ).selectedDeliveryDestinationId,
+      ).toBe(destinationBeforeRace.selectedDeliveryDestinationId);
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: {
+            namespace: "automatic-quote.select-destination",
+            idempotencyKey: staleKey,
+          },
+        }),
+      ).toBe(0);
+    } finally {
+      releaseProvider();
+      providerSpy.mockRestore();
+    }
 
     const destination = await api(
       `automatic-quote-sessions/${sessionId}/delivery-destination`,
