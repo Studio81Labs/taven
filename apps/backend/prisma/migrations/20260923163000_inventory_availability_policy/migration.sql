@@ -451,6 +451,21 @@ CREATE TRIGGER "inventory_reservation_receipt_guard"
 BEFORE INSERT ON "inventory_reservations"
 FOR EACH ROW EXECUTE FUNCTION taven_pin_inventory_receipt();
 
+CREATE FUNCTION taven_guard_inventory_reservation_receipt_update()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW."receipt_id" IS DISTINCT FROM OLD."receipt_id" THEN
+    RAISE EXCEPTION 'inventory reservation receipt is immutable'
+      USING ERRCODE = '23514', CONSTRAINT = 'inventory_reservation_receipt_immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "inventory_reservation_receipt_immutable"
+BEFORE UPDATE ON "inventory_reservations"
+FOR EACH ROW EXECUTE FUNCTION taven_guard_inventory_reservation_receipt_update();
+
 CREATE FUNCTION taven_guard_inventory_unmount()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

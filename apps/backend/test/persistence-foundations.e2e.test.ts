@@ -3346,6 +3346,19 @@ describe("persistence foundations", () => {
           [production.inventoryReservationId],
         );
         expect(reserved.rows).toEqual([{ receipt_id: initialId }]);
+        await client.query(
+          'UPDATE "inventory_reservations" SET "status" = $1 WHERE "id" = $2',
+          ["HELD", production.inventoryReservationId],
+        );
+        await expect(
+          client.query(
+            'UPDATE "inventory_reservations" SET "receipt_id" = $1 WHERE "id" = $2',
+            [correctionId, production.inventoryReservationId],
+          ),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "inventory_reservation_receipt_immutable",
+        });
       },
     );
   });
