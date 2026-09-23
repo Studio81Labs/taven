@@ -192,4 +192,113 @@ test.describe("Real API Integration Journey", () => {
       }
     }
   });
+
+  test("selects bank transfer and follows pending to captured sandbox payment", async ({
+    page,
+    request,
+  }) => {
+    test.skip(
+      !completePayment,
+      "Requires the isolated sandbox checkout profile",
+    );
+    test.setTimeout(360_000);
+
+    await page.goto("/");
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.getByText("Přetáhni soubor sem").click();
+    await (await fileChooserPromise).setFiles(FIXTURE_PATH);
+    await expect(
+      page.getByRole("button", {
+        name: "Nahrát a pokračovat ke konfiguraci",
+      }),
+    ).toBeEnabled({ timeout: 120_000 });
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+    await expect(page).toHaveURL(/\/objednavka/, { timeout: 120_000 });
+    await page.getByRole("button", { name: "Uložit a přepočítat" }).click();
+    await expect(
+      page.getByRole("button", { name: "Ověřit dopravu a závaznou cenu" }),
+    ).toBeEnabled({ timeout: 120_000 });
+    await page
+      .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible({ timeout: 120_000 });
+    const bankTransfer = page.getByRole("radio", {
+      name: "Bankovní tlačítko / převod",
+    });
+    await expect(bankTransfer).toBeVisible();
+    await bankTransfer.check();
+    await page.getByLabel("Jméno kontaktní osoby").fill("E2E Bank Test");
+    await page.getByLabel("E-mail").fill("browser-144-bank@example.test");
+    await page.getByLabel("Fakturační jméno nebo název").fill("E2E Bank Test");
+    await page.getByLabel("Ulice a číslo").fill("Testovací 123");
+    await page.getByLabel("Město").fill("Brno");
+    await page.getByLabel("PSČ").fill("60200");
+    await page.getByRole("checkbox", { name: /VOP/i }).check();
+    await page.getByRole("checkbox", { name: /reklamačním řádem/i }).check();
+    await page.getByRole("checkbox", { name: /výjimka/i }).check();
+    const checkoutSession = await page.evaluate(() => {
+      const raw = sessionStorage.getItem("taven:automatic-quote-session:v1");
+      return raw
+        ? (JSON.parse(raw) as { sessionId: string; sessionToken: string })
+        : null;
+    });
+    if (!checkoutSession) {
+      throw new Error("Bank checkout session evidence is unavailable");
+    }
+
+    await page.getByRole("button", { name: /Objednat a zaplatit/i }).click();
+    await expect(
+      page.getByRole("heading", { name: "TAVEN. sandbox checkout" }),
+    ).toBeVisible({ timeout: 120_000 });
+    const sandboxUrl = page.url();
+    const paymentId = await page.locator("main code").textContent();
+    if (!paymentId) {
+      throw new Error("Bank sandbox checkout did not identify its payment");
+    }
+    const paymentStatus = async () => {
+      const response = await request.get(
+        `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payment`,
+        {
+          headers: { Authorization: `Bearer ${checkoutSession.sessionToken}` },
+          params: { paymentId },
+        },
+      );
+      expect(response.status()).toBe(200);
+      return response.json();
+    };
+    const initialPayment = await paymentStatus();
+    expect(initialPayment).toMatchObject({
+      paymentId,
+      method: "BANK_TRANSFER",
+      provider: "sandbox",
+    });
+    expect(["CREATED", "PENDING"]).toContain(initialPayment.status);
+
+    await page.getByRole("button", { name: "Keep pending" }).click();
+    await expect(page).toHaveURL(/\/checkout\/payment\/pending/);
+    await expect(
+      page.getByRole("heading", { name: "Čekáme na potvrzení platby." }),
+    ).toBeVisible({ timeout: 120_000 });
+    expect(await paymentStatus()).toMatchObject({
+      paymentId,
+      method: "BANK_TRANSFER",
+      status: "PENDING",
+    });
+
+    await page.goto(sandboxUrl);
+    await page.getByRole("button", { name: "Capture payment" }).click();
+    await expect(page).toHaveURL(/\/checkout\/payment\/success/);
+    await expect(
+      page.getByRole("heading", { name: "Platba byla potvrzena." }),
+    ).toBeVisible({ timeout: 120_000 });
+    expect(await paymentStatus()).toMatchObject({
+      paymentId,
+      method: "BANK_TRANSFER",
+      status: "CAPTURED",
+    });
+  });
 });
