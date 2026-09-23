@@ -8,6 +8,8 @@ on:
       - "apps/backend/**"
       - "apps/slicer-worker/**"
       - "packages/slicer-contracts/**"
+      - "tools/slicing-fixtures/**"
+      - "tools/catalog-profiles/**"
       - "packages/openapi-client/**"
       - "packages/ui-web/**"
       - "package.json"
