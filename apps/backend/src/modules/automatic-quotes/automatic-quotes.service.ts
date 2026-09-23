@@ -4827,7 +4827,9 @@ export class AutomaticQuotesService {
           })
         ).prepared;
     return {
-      quote: provisionalPriceDto(result.price, itemOrdinals),
+      quote: priceFitsApiRange(result.price)
+        ? provisionalPriceDto(result.price, itemOrdinals)
+        : null,
       deliveryOptions,
       express: result.expressEligibility,
       reasons: pricing.allReferenceSliced ? result.reasons : [],
@@ -6139,6 +6141,7 @@ export class AutomaticQuotesService {
               }
             : {}),
         });
+        if (!priceFitsApiRange(prepared.prepared.price)) continue;
         comparisons.push({
           itemOrdinal: activeItem.ordinal,
           quantity,
@@ -7510,4 +7513,18 @@ function safeNumber(value: bigint): number {
     throw new ConflictException("Persisted money exceeds the API range");
   }
   return number;
+}
+
+function priceFitsApiRange(price: {
+  customerTotal: { minorUnits: bigint };
+  tax: { net: { minorUnits: bigint }; vat: { minorUnits: bigint } };
+  components: ReadonlyArray<{ amount: { minorUnits: bigint } }>;
+}): boolean {
+  const maximum = BigInt(Number.MAX_SAFE_INTEGER);
+  return [
+    price.customerTotal.minorUnits,
+    price.tax.net.minorUnits,
+    price.tax.vat.minorUnits,
+    ...price.components.map(({ amount }) => amount.minorUnits),
+  ].every((value) => value >= 0n && value <= maximum);
 }

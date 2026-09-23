@@ -3,6 +3,9 @@ import type { Prisma } from "@prisma/client";
 import { parseAutomaticQuotePricingParameters } from "../automatic-quotes/automatic-quote-pricing";
 
 const MAX_INT64 = 9_223_372_036_854_775_807n;
+const MAX_API_MINOR = BigInt(Number.MAX_SAFE_INTEGER);
+// The public configurator accepts at most 256 items of 1,000 pieces each.
+const MAX_PUBLIC_QUANTITY = 256_000n;
 const AUTOMATIC_FIELDS = [
   "machineRateMinorPerSecond",
   "laborRateMinorPerSecond",
@@ -97,6 +100,16 @@ function checkedInteger(value: bigint, name: string, positive = false): void {
   if (value > MAX_INT64 || (positive && value === 0n)) {
     throw new BadRequestException(`${name} is outside the supported range`);
   }
+}
+
+function checkedMoney(value: bigint, name: string): void {
+  if (value > MAX_API_MINOR) {
+    throw new BadRequestException(`${name} exceeds the quote API range`);
+  }
+}
+
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  return (numerator + denominator - 1n) / denominator;
 }
 
 export function validatePriceListParameters(
@@ -210,6 +223,15 @@ export function validatePriceListParameters(
     "paymentFeeFixedMinor",
   ] as const;
   for (const field of integerFields) checkedInteger(parsed[field], field);
+  for (const field of [
+    "minimumPrintPriceMinor",
+    "smallOrderSurchargeMinor",
+    "freeShippingPrintThresholdMinor",
+    "maximumAutomaticAmountMinor",
+    "paymentFeeFixedMinor",
+  ] as const) {
+    checkedMoney(parsed[field], field);
+  }
   if (parsed.expressMaximumPlateCount > 2n) {
     throw new BadRequestException("expressMaximumPlateCount cannot exceed two");
   }
@@ -241,6 +263,66 @@ export function validatePriceListParameters(
       "packagingCostMinor",
     ] as const) {
       checkedInteger(category[field], field);
+      checkedMoney(category[field], field);
     }
   }
+  const parcelCount =
+    parsed.maximumAutomaticQuantity < MAX_PUBLIC_QUANTITY
+      ? parsed.maximumAutomaticQuantity
+      : MAX_PUBLIC_QUANTITY;
+  const labor = parsed.laborRateMinorPerSecond;
+  const fixedHandling = ceilDiv(
+    parsed.handlingOrderFixedSeconds * labor.numerator,
+    labor.denominator,
+  );
+  const parcelHandling =
+    ceilDiv(parsed.handlingPackSeconds * labor.numerator, labor.denominator) +
+    ceilDiv(
+      parsed.shippingTripSeconds * labor.numerator,
+      labor.denominator * parsed.shippingTripPricingDivisor,
+    );
+  const maximumCategoryCost = parsed.shipmentCategories.reduce(
+    (maximum, category) => {
+      const cost = category.carrierCostMinor + category.packagingCostMinor;
+      return cost > maximum ? cost : maximum;
+    },
+    0n,
+  );
+  const maximumShippingRate = parsed.shipmentCategories.reduce(
+    (maximum, category) =>
+      category.customerShippingRateMinor > maximum
+        ? category.customerShippingRateMinor
+        : maximum,
+    0n,
+  );
+  const fixedProductionCost =
+    fixedHandling + parcelCount * (parcelHandling + maximumCategoryCost);
+  const margin = parsed.marginRate;
+  const fixedPrintPrice = ceilDiv(
+    fixedProductionCost * (margin.denominator + margin.numerator),
+    margin.denominator,
+  );
+  const minimumBasePrice =
+    fixedPrintPrice > parsed.minimumPrintPriceMinor
+      ? fixedPrintPrice
+      : parsed.minimumPrintPriceMinor;
+  const maximumConfiguredNet =
+    ceilDiv(
+      minimumBasePrice * parsed.expressMultiplier.numerator,
+      parsed.expressMultiplier.denominator,
+    ) +
+    parsed.smallOrderSurchargeMinor +
+    parcelCount * maximumShippingRate;
+  const maximumConfiguredGross = ceilDiv(
+    maximumConfiguredNet * BigInt(10_000 + parsed.taxPolicy.vatRateBasisPoints),
+    10_000n,
+  );
+  checkedMoney(maximumConfiguredGross, "configured quote total");
+  const maximumPaymentFee =
+    ceilDiv(
+      parsed.maximumAutomaticAmountMinor *
+        BigInt(parsed.paymentFeeRateBasisPoints),
+      10_000n,
+    ) + parsed.paymentFeeFixedMinor;
+  checkedMoney(maximumPaymentFee, "maximum payment fee");
 }

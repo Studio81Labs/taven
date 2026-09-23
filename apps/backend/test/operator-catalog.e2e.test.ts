@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
+import { Prisma } from "@prisma/client";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -309,6 +310,76 @@ describe("operator catalog commands", () => {
         )
       ).status,
     ).toBe(400);
+    for (const [index, automaticQuote] of [
+      { minimumPrintPriceMinor: "9007199254740992" },
+      { minimumPrintPriceMinor: "5000000000000000" },
+      { paymentFeeFixedMinor: "9007199254740991" },
+      {
+        shipmentCategories: (
+          parameters.automaticQuote.shipmentCategories as Record<
+            string,
+            unknown
+          >[]
+        ).map((category, index) =>
+          index === 0
+            ? { ...category, customerShippingRateMinor: "9007199254741" }
+            : category,
+        ),
+      },
+    ].entries()) {
+      const rejected = await command(
+        "/admin/catalog/price-lists",
+        {
+          ...body,
+          revision: `unsafe-money-${randomUUID()}`,
+          parameters: {
+            ...parameters,
+            automaticQuote: { ...parameters.automaticQuote, ...automaticQuote },
+          },
+        },
+        `catalog-price-${randomUUID()}`,
+      );
+      expect(rejected.status, `unsafe monetary case ${index}`).toBe(400);
+    }
+    const selectedBeforeUnsafeActivation =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+      });
+    const persistedUnsafeList = await prisma.priceList.create({
+      data: {
+        revision: `persisted-unsafe-money-${randomUUID()}`,
+        termsRevision: baseline.termsRevision,
+        currency: "CZK",
+        parameters: {
+          ...parameters,
+          automaticQuote: {
+            ...parameters.automaticQuote,
+            minimumPrintPriceMinor: "9007199254740992",
+          },
+        } as Prisma.InputJsonObject,
+      },
+    });
+    expect(
+      (
+        await command(
+          `/admin/catalog/price-lists/${persistedUnsafeList.id}/activate`,
+          {
+            expectedSelectionVersion:
+              selectedBeforeUnsafeActivation.selectionVersion,
+            reason: "Reject unsafe persisted monetary configuration",
+          },
+          `catalog-unsafe-activation-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    await expect(
+      prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+      }),
+    ).resolves.toMatchObject({
+      priceListId: selectedBeforeUnsafeActivation.priceListId,
+      selectionVersion: selectedBeforeUnsafeActivation.selectionVersion,
+    });
     expect(
       (
         await command(

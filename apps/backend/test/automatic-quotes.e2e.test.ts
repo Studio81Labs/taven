@@ -1640,6 +1640,42 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         },
       });
     }
+    const legacyUnsafeParameters = JSON.parse(
+      JSON.stringify(selectionBeforeProjection.priceList.parameters),
+    ) as { automaticQuote: Record<string, unknown> };
+    legacyUnsafeParameters.automaticQuote.minimumPrintPriceMinor =
+      "9007199254740992";
+    const legacyUnsafeList = await prisma.priceList.create({
+      data: {
+        revision: `legacy-unsafe-money-${randomUUID()}`,
+        termsRevision: selectionBeforeProjection.priceList.termsRevision,
+        currency: "CZK",
+        parameters: legacyUnsafeParameters as Prisma.InputJsonObject,
+      },
+    });
+    try {
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: legacyUnsafeList.id,
+          selectionVersion: { increment: 1 },
+        },
+      });
+      const oversizedRead = await api(`automatic-quote-sessions/${sessionId}`, {
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
+      expect(oversizedRead.response.status).toBe(200);
+      expect(oversizedRead.body.roughEstimate).toBeNull();
+      expect(oversizedRead.body.quantityComparisons).toEqual([]);
+    } finally {
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: selectionBeforeProjection.priceListId,
+          selectionVersion: { increment: 1 },
+        },
+      });
+    }
     expect(immediateRough.body.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
