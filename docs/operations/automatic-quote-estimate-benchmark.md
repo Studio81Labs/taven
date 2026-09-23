@@ -65,6 +65,86 @@ acceptance result and must not be read as passing that gate. The p95 of this
 small sample was 145.18 ms and is retained as an operational observation, not
 as a customer-facing performance promise.
 
+## Warm local browser reference run
+
+Run date: 2026-09-23, approximately 12:06 UTC. The production Nuxt and Nest
+builds both used `7ea5f26c110d02d909f6119da5ee50ad7f0aad9e` on a Mac
+Studio Mac13,1 (arm64), Node.js v24.15.0. The headed Playwright Chromium
+Desktop browser was version 153.0.8010.12 at 1280 × 800, without configured
+CPU or network throttling. Its reported user agent was Chrome 153 on Windows
+and `navigator.platform` was `MacIntel` (Playwright desktop emulation); the
+host itself was arm64 macOS. The browser reported hardware concurrency 10.
+
+The API and web app ran on loopback ports 3011 and 3000, respectively, against
+an isolated PostgreSQL 18 database created for this run and populated with the
+repository's migrations and development seed. Redis and object storage were
+the ordinary local development services. The binding-quote development gate
+was enabled; the normal catalog reads and anonymous estimate limiter remained
+active. The run used no mocked estimate, alternate pricing path, cached
+monetary result or quota bypass.
+
+The fixture was the same 20 mm PLA cube and SHA-256 listed above, with PLA,
+STANDARD quality/infill and quantity one. All four successful responses used
+price-list revision `automatic-v0-czk`, print-configuration revision
+`92222222-2222-4222-8222-222222222222` and reference-profile ID
+`61111111-1111-4111-8111-111111111111`. One successful warm-up selection was
+excluded. The next four selections in the same browser page measured:
+
+| Sample | Parse (ms) | Post-parse scheduling (ms) | Request/response (ms) | Response-to-render (ms) | Parse-complete → visible (ms) |
+| ------ | ---------: | -------------------------: | --------------------: | ----------------------: | ----------------------------: |
+| 1      |        0.2 |                        1.0 |                  65.2 |                     0.9 |                          67.1 |
+| 2      |        0.1 |                        1.2 |                  56.1 |                     7.8 |                          65.1 |
+| 3      |        0.2 |                        1.2 |                 100.8 |                     0.6 |                         102.6 |
+| 4      |        0.1 |                        1.1 |                  76.3 |                     4.6 |                          82.0 |
+
+The warm median was **74.55 ms** and the maximum was **102.6 ms**, so the
+defined local ≤200 ms reference gate passed. These are browser Performance
+marks ending at the first animation-frame opportunity after the matching
+numeric estimate and assumptions entered the visible DOM, not a measurement
+of physical screen paint or a customer-wide latency promise. The existing
+same-assumption slice comparison above remains −15.06% for the unfloored
+production component, within the ±20% target.
+
+After a diagnostic-only harness change that reports unsuccessful estimate HTTP
+responses promptly, the same local production builds were rerun on 2026-09-23.
+The four warm parse-complete → visible samples were 60.6, 43.3, 49.7 and
+48.7 ms (median 49.2 ms, maximum 60.6 ms), again passing the local reference
+gate. The first run's complete breakdown above remains the acceptance record.
+
+## Separate staging diagnostic
+
+Run date: 2026-09-23, approximately 12:51 UTC. Coolify's deployment log
+identifies the staging web build as
+`7ea5f26c110d02d909f6119da5ee50ad7f0aad9e`, healthy after its rolling
+update at 12:19 UTC. The same Mac Studio, Node.js v24.15.0 and headed Chromium
+153.0.8010.12 Desktop profile at 1280 × 800 were used without configured
+throttling. The browser accessed `https://staging.taven.cz` and its real
+`https://api-staging.taven.cz` API; staging backend build identity was not
+independently verified. The fixture and STANDARD assumptions were unchanged.
+All successful responses used price-list revision `automatic-v0-czk`,
+print-configuration revision `92222222-2222-4222-8222-222222222222` and
+staging reference-profile ID `66449e7d-4490-4017-b349-5e8dc6819e6d`.
+
+One successful warm-up selection was excluded. Four consecutive successful
+selections measured:
+
+| Sample | Parse (ms) | Post-parse scheduling (ms) | Request/response (ms) | Response-to-render (ms) | Parse-complete → visible (ms) |
+| ------ | ---------: | -------------------------: | --------------------: | ----------------------: | ----------------------------: |
+| 1      |        0.2 |                        1.2 |                 214.6 |                     0.6 |                         216.4 |
+| 2      |        0.3 |                        1.2 |                 220.7 |                     0.5 |                         222.4 |
+| 3      |        0.3 |                        1.4 |                 232.9 |                     0.5 |                         234.8 |
+| 4      |        0.2 |                        1.2 |                 228.7 |                     0.5 |                         230.4 |
+
+The remote median was **226.4 ms** and maximum **234.8 ms**. Most elapsed
+time was request/response over the remote path; the remote run has no ≤200 ms
+acceptance budget and does not change the passing local reference result.
+Earlier staging attempts before this successful run were incomplete: one
+timed out without a correlated complete mark set, and another rendered an
+estimate error during warm-up. Neither produced a timing sample or is counted
+as a successful selection. A separate one-off staging diagnostic subsequently
+returned HTTP 200 with all timing marks; the cause of those earlier transient
+failures was not established by this benchmark.
+
 ## Browser-visible measurement
 
 The reference acceptance gate is a warm median ≤200 ms from browser-recorded

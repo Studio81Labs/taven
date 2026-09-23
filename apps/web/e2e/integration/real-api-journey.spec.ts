@@ -53,15 +53,17 @@ test.describe("Real API Integration Journey", () => {
       name: "Kalkulace čeká na schválení",
     });
     await expect(proceed.or(approvalGate)).toBeVisible();
-    if (requireCheckout) {
+    if (!requireCheckout && (await approvalGate.isVisible())) {
+      await expect(approvalGate).toBeDisabled();
+    } else {
       await expect(proceed).toBeEnabled();
+    }
+    if (requireCheckout) {
       await proceed.click();
       await expect(page).toHaveURL(/\/objednavka/, { timeout: 120_000 });
       await expect(
         page.getByRole("heading", { name: "Nastavte výrobu.", level: 2 }),
       ).toBeVisible();
-    } else if (await approvalGate.isVisible()) {
-      await expect(approvalGate).toBeDisabled();
     }
   });
 });
