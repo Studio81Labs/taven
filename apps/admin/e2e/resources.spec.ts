@@ -193,3 +193,80 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   ]);
   await expect(page.locator(".form-success")).toHaveCount(0);
 });
+
+test("a confirmed receipt closes its form when the following read fails", async ({
+  page,
+}) => {
+  const nodeId = "00000000-0000-0000-0000-000000000002";
+  const machineId = "00000000-0000-0000-0000-000000000003";
+  let failReads = false;
+  let receiptPosts = 0;
+  await page.route("**/admin/auth/session", (route) =>
+    route.fulfill({
+      json: {
+        csrfToken: "csrf-test",
+        operator: {
+          operatorId: "00000000-0000-0000-0000-000000000001",
+          role: "ADMIN",
+          nodeIds: [nodeId],
+          permissions: ["operations:read", "catalog:write"],
+          authenticationMethod: "DEVELOPMENT_PASSWORD",
+        },
+      },
+    }),
+  );
+  await page.route("**/admin/catalog/machine-capabilities*", (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
+  await page.route("**/admin/nodes/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (
+      route.request().method() === "POST" &&
+      path.endsWith("/inventory-receipts")
+    ) {
+      receiptPosts += 1;
+      failReads = true;
+      await route.fulfill({ json: { id: "new-receipt" } });
+    } else if (failReads) {
+      await route.fulfill({ status: 503, json: { message: "read outage" } });
+    } else if (path.endsWith("/machines")) {
+      await route.fulfill({
+        json: {
+          items: [
+            {
+              id: machineId,
+              nodeId,
+              machineCapabilityId: "cap",
+              code: "M1",
+              displayName: "Stroj 1",
+              installedNozzleMicrometers: 400,
+              status: "ACTIVE",
+            },
+          ],
+        },
+      });
+    } else {
+      await route.fulfill({ json: { items: [] } });
+    }
+  });
+  await page.goto("/zdroje");
+  await page.getByRole("button", { name: "Přijmout novou šarži" }).click();
+  await page.getByRole("combobox", { name: "Stroj" }).selectOption(machineId);
+  await page.getByRole("textbox", { name: "SKU" }).fill("PLA-new");
+  await page.getByRole("textbox", { name: "Dodavatel" }).fill("Vendor");
+  await page
+    .getByRole("textbox", { name: "Přijaté množství mg" })
+    .fill("1000000");
+  await page
+    .getByRole("textbox", { name: /Jednotková cena čitatel/ })
+    .fill("2");
+  await page.getByRole("button", { name: "Zapsat", exact: true }).click();
+  await expect(page.locator(".form-success")).toContainText("Nová šarže");
+  await expect(page.getByRole("alert")).toContainText(
+    "Zápis byl potvrzen, ale obnovení přehledu selhalo",
+  );
+  await expect(
+    page.getByRole("button", { name: "Zapsat", exact: true }),
+  ).toHaveCount(0);
+  expect(receiptPosts).toBe(1);
+});

@@ -34,6 +34,8 @@ const channel = ref<Channel>("");
 const report = ref<S["MetricsReportDto"] | null>(null);
 const orders = ref<S["MetricsOrderDetailDto"][]>([]);
 const orderCursor = ref<string | null>(null);
+const appliedQuery = ref<ReturnType<typeof filters> | null>(null);
+let reportReadGeneration = 0;
 const warnings = ref<S["OperatorWarningsReportDto"] | null>(null);
 const spend = ref<S["AcquisitionSpendEvidenceDto"][]>([]);
 const spendCursor = ref<string | null>(null);
@@ -110,6 +112,7 @@ function filters(): {
 
 async function refresh(): Promise<void> {
   if (!nodeId.value) return;
+  const generation = ++reportReadGeneration;
   loading.value = true;
   error.value = "";
   try {
@@ -125,36 +128,44 @@ async function refresh(): Promise<void> {
           params: { query: { limit: 100 } },
         }),
       ]);
-    report.value = requireData(metricsResponse);
+    const nextReport = requireData(metricsResponse);
     const page = requireData(orderResponse);
+    const nextWarnings = requireData(warningsResponse);
+    const spendPage = requireData(spendResponse);
+    if (generation !== reportReadGeneration) return;
+    report.value = nextReport;
     orders.value = page.items;
     orderCursor.value = page.nextCursor ?? null;
-    warnings.value = requireData(warningsResponse);
-    const spendPage = requireData(spendResponse);
+    appliedQuery.value = query;
+    warnings.value = nextWarnings;
     spend.value = spendPage.items;
     spendCursor.value = spendPage.nextCursor ?? null;
     if (orderId.value) await loadCosts();
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === reportReadGeneration) error.value = errorMessage(cause);
   } finally {
-    loading.value = false;
+    if (generation === reportReadGeneration) loading.value = false;
   }
 }
 
 async function moreOrders(): Promise<void> {
-  if (!orderCursor.value) return;
+  if (!orderCursor.value || !appliedQuery.value || loading.value) return;
+  const generation = reportReadGeneration;
+  const cursor = orderCursor.value;
+  const query = appliedQuery.value;
   try {
     const page = requireData(
       await apiClient.GET("/admin/metrics/orders", {
         params: {
-          query: { ...filters(), cursor: orderCursor.value, limit: 50 },
+          query: { ...query, cursor, limit: 50 },
         },
       }),
     );
+    if (generation !== reportReadGeneration) return;
     orders.value = [...orders.value, ...page.items];
     orderCursor.value = page.nextCursor ?? null;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === reportReadGeneration) error.value = errorMessage(cause);
   }
 }
 
@@ -330,6 +341,7 @@ onMounted(() => void refresh());
       <label>Měsíční shakedown <input v-model="month" type="month" /></label
       ><button
         type="button"
+        :disabled="loading"
         @click="
           oneMonth();
           refresh();
@@ -788,7 +800,12 @@ onMounted(() => void refresh());
           }}
         </li>
       </ul>
-      <button v-if="orderCursor" type="button" @click="moreOrders">
+      <button
+        v-if="orderCursor"
+        type="button"
+        :disabled="loading"
+        @click="moreOrders"
+      >
         Další objednávky
       </button>
     </section>

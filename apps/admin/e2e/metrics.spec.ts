@@ -118,11 +118,20 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
       monthlyTurnover: [],
     },
   };
-  await page.route(/\/admin\/metrics(?:\/orders)?\?/, (route) =>
-    route.fulfill({
-      json: route.request().url().includes("/orders?") ? { items: [] } : report,
-    }),
-  );
+  const orderQueries: URLSearchParams[] = [];
+  await page.route(/\/admin\/metrics(?:\/orders)?\?/, (route) => {
+    if (route.request().url().includes("/orders?")) {
+      const query = new URL(route.request().url()).searchParams;
+      orderQueries.push(query);
+      return route.fulfill({
+        json: {
+          items: [],
+          nextCursor: query.has("cursor") ? undefined : "next-opaque",
+        },
+      });
+    }
+    return route.fulfill({ json: report });
+  });
   await page.route("**/admin/warnings*", (route) =>
     route.fulfill({
       json: {
@@ -157,4 +166,25 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   await expect(
     page.getByText("emailové pokusy unavailable", { exact: false }),
   ).toBeVisible();
+  await page.getByRole("textbox", { name: "Začátek" }).fill("2026-09-02");
+  await page.getByRole("combobox", { name: "Kanál" }).selectOption("paid");
+  await page.getByRole("button", { name: "Další objednávky" }).click();
+  expect(orderQueries).toHaveLength(2);
+  expect(orderQueries[1]?.get("from")).toBe(orderQueries[0]?.get("from"));
+  expect(orderQueries[1]?.get("channel")).toBeNull();
+  let releaseRefresh: (() => void) | undefined;
+  await page.route(/\/admin\/metrics\?/, async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    await route.fulfill({ json: report });
+  });
+  await page.getByRole("button", { name: "Načíst report" }).click();
+  await expect(
+    page.getByRole("button", { name: "Použít měsíc" }),
+  ).toBeDisabled();
+  releaseRefresh?.();
+  await expect(
+    page.getByRole("button", { name: "Použít měsíc" }),
+  ).toBeEnabled();
 });

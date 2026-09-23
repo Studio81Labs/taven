@@ -108,6 +108,10 @@ let activationIntent: CommandIntent<
 > | null = null;
 let activationSignature = "";
 let priceReadGeneration = 0;
+let referenceReadGeneration = 0;
+let profileReadGeneration = 0;
+let configReadGeneration = 0;
+let capabilityReadGeneration = 0;
 
 async function refresh(): Promise<void> {
   loading.value = true;
@@ -268,50 +272,62 @@ async function inspectPrice(id: string): Promise<void> {
 }
 
 async function inspectReference(id: string): Promise<void> {
+  const generation = ++referenceReadGeneration;
   try {
-    selectedReference.value = requireData(
+    const detail = requireData(
       await apiClient.GET("/admin/catalog/reference-profiles/{id}", {
         params: { path: { id } },
       }),
     );
+    if (generation === referenceReadGeneration)
+      selectedReference.value = detail;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === referenceReadGeneration)
+      error.value = errorMessage(cause);
   }
 }
 
 async function inspectProfile(id: string): Promise<void> {
+  const generation = ++profileReadGeneration;
   try {
-    selectedProfile.value = requireData(
+    const detail = requireData(
       await apiClient.GET("/admin/catalog/machine-profiles/{id}", {
         params: { path: { id } },
       }),
     );
+    if (generation === profileReadGeneration) selectedProfile.value = detail;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === profileReadGeneration) error.value = errorMessage(cause);
   }
 }
 
 async function inspectConfig(id: string): Promise<void> {
+  const generation = ++configReadGeneration;
   try {
-    selectedConfig.value = requireData(
+    const detail = requireData(
       await apiClient.GET("/admin/catalog/print-config-revisions/{id}", {
         params: { path: { id } },
       }),
     );
+    if (generation === configReadGeneration) selectedConfig.value = detail;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === configReadGeneration) error.value = errorMessage(cause);
   }
 }
 
 async function inspectCapability(id: string): Promise<void> {
+  const generation = ++capabilityReadGeneration;
   try {
-    selectedCapability.value = requireData(
+    const detail = requireData(
       await apiClient.GET("/admin/catalog/machine-capabilities/{id}", {
         params: { path: { id } },
       }),
     );
+    if (generation === capabilityReadGeneration)
+      selectedCapability.value = detail;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === capabilityReadGeneration)
+      error.value = errorMessage(cause);
   }
 }
 

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const profileId = "00000000-0000-0000-0000-000000000011";
+const secondProfileId = "00000000-0000-0000-0000-000000000012";
 const priceId = "00000000-0000-0000-0000-000000000021";
 const nextPriceId = "00000000-0000-0000-0000-000000000022";
 const notice = {
@@ -48,6 +49,7 @@ type CatalogState = {
   activationFails?: boolean;
   postedVersions: number[];
   createdPriceRevisions?: string[];
+  includeSecondReference?: boolean;
   postHeaders: { csrf?: string; key?: string }[];
 };
 
@@ -128,6 +130,20 @@ async function mockCatalog(page: Page, state: CatalogState): Promise<void> {
               digest: "a",
               createdAt: "2026-09-23T12:00:00Z",
             },
+            ...(state.includeSecondReference
+              ? [
+                  {
+                    id: secondProfileId,
+                    material: "PETG",
+                    quality: "FINE",
+                    slicerEngine: "Orca",
+                    slicerVersion: "2",
+                    state: "DRAFT",
+                    digest: "b",
+                    createdAt: "2026-09-23T12:00:00Z",
+                  },
+                ]
+              : []),
           ],
         },
       });
@@ -276,6 +292,65 @@ test("creating a price revision leaves the selected policy untouched", async ({
   ).toBeVisible();
   expect(state.createdPriceRevisions).toEqual(["v3"]);
   expect(state.postedVersions).toEqual([]);
+});
+
+test("a late catalog detail response cannot replace the latest selected revision", async ({
+  page,
+}) => {
+  const state: CatalogState = {
+    version: 1,
+    selectedPriceId: priceId,
+    feed: [],
+    postedVersions: [],
+    postHeaders: [],
+    includeSecondReference: true,
+  };
+  await mockSession(page);
+  await mockCatalog(page, state);
+  let releaseFirst: (() => void) | undefined;
+  let firstFinished: (() => void) | undefined;
+  const firstDone = new Promise<void>((resolve) => {
+    firstFinished = resolve;
+  });
+  await page.route(
+    /\/admin\/catalog\/reference-profiles\/[0-9a-f-]+$/,
+    async (route) => {
+      const id = new URL(route.request().url()).pathname.split("/").at(-1)!;
+      if (id === profileId)
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      await route.fulfill({
+        json: {
+          id,
+          material: id === profileId ? "PLA" : "PETG",
+          quality: id === profileId ? "STANDARD" : "FINE",
+          slicerEngine: "Orca",
+          slicerVersion: "1",
+          state: "DRAFT",
+          digest: "digest",
+          settings: { selected: id },
+          createdAt: "2026-09-23T12:00:00Z",
+        },
+      });
+      if (id === profileId) firstFinished?.();
+    },
+  );
+  await page.goto("/katalog");
+  const references = page
+    .getByRole("heading", { name: "Referenční profily" })
+    .locator("..");
+  await references.getByRole("button", { name: "Detail" }).first().click();
+  await expect.poll(() => Boolean(releaseFirst)).toBe(true);
+  await references.getByRole("button", { name: "Detail" }).nth(1).click();
+  await expect(references.locator(".operator-detail")).toContainText(
+    secondProfileId,
+  );
+  releaseFirst?.();
+  await firstDone;
+  await expect(references.locator(".operator-detail")).toContainText(
+    secondProfileId,
+  );
 });
 
 test("two tabs require a fresh deliberate publication after a stale selection", async ({

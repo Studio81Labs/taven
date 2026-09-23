@@ -238,12 +238,19 @@ async function run<Body>(
   busy.value = true;
   error.value = "";
   success.value = "";
+  let writeConfirmed = false;
   try {
     await journal.submit(action, body, write);
+    writeConfirmed = true;
+    form.value = "";
     success.value = message;
     await refresh();
+    if (error.value)
+      error.value = `Zápis byl potvrzen, ale obnovení přehledu selhalo. ${error.value}`;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    error.value = writeConfirmed
+      ? `Zápis byl potvrzen, ale obnovení přehledu selhalo. ${errorMessage(cause)}`
+      : errorMessage(cause);
   } finally {
     busy.value = false;
   }
