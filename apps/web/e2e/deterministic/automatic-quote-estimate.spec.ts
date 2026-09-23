@@ -113,4 +113,120 @@ test.describe("Automatic estimate concurrency", () => {
     await expect(page.getByText(/333.*Kč/)).toBeVisible({ timeout: 5_000 });
     await expect.poll(() => requestCount).toBe(2);
   });
+
+  test("keeps selected-quality server pricing ahead of a late STANDARD baseline", async ({
+    page,
+  }) => {
+    let releaseBaseline!: () => void;
+    let markStarted!: () => void;
+    let markSettled!: () => void;
+    const baselineGate = new Promise<void>((resolve) => {
+      releaseBaseline = resolve;
+    });
+    const baselineStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const baselineSettled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
+    let baselineBody: { quality?: string } | undefined;
+    await page.route("**/automatic-quote-estimates", async (route) => {
+      baselineBody = route.request().postDataJSON();
+      markStarted();
+      await baselineGate;
+      try {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(estimateResponse(99900)),
+        });
+      } catch {
+        // Navigation may abort the provisional request after the quote starts.
+      } finally {
+        markSettled();
+      }
+    });
+
+    try {
+      await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
+      await baselineStarted;
+      expect(baselineBody?.quality).toBe("STANDARD");
+      await page
+        .getByRole("button", {
+          name: "Nahrát a pokračovat ke konfiguraci",
+        })
+        .click();
+      await expect(page).toHaveURL(/\/objednavka/);
+
+      const price = page.locator(".price-summary .total-price");
+      const qualitySelect = page.getByRole("combobox", { name: "Kvalita" });
+      for (const [
+        quality,
+        revisionId,
+        totalMinor,
+        bindingMinor,
+        visiblePrice,
+      ] of [
+        [
+          "STANDARD",
+          "00000000-0000-4000-8000-000000000001",
+          35000,
+          43900,
+          "439,00",
+        ],
+        [
+          "DRAFT",
+          "00000000-0000-4000-8000-000000000003",
+          21780,
+          30680,
+          "306,80",
+        ],
+        [
+          "FINE",
+          "00000000-0000-4000-8000-000000000004",
+          50820,
+          59720,
+          "597,20",
+        ],
+      ] as const) {
+        await qualitySelect.selectOption(quality);
+        const responsePromise = page.waitForResponse(
+          (response) =>
+            response.url().includes("/configuration") &&
+            response.request().method() === "PUT",
+        );
+        const preparePromise = page.waitForResponse(
+          (response) =>
+            response.url().includes("/prepare") &&
+            response.request().method() === "POST",
+        );
+        await page.getByRole("button", { name: "Uložit a přepočítat" }).click();
+        const response = await responsePromise;
+        expect(response.status()).toBe(200);
+        expect(response.request().postDataJSON().items[0]).toMatchObject({
+          printConfigRevisionId: revisionId,
+        });
+        const quote = await response.json();
+        expect(quote.items[0]).toMatchObject({
+          quality,
+          printConfigRevisionId: revisionId,
+        });
+        expect(quote.roughEstimate.totalMinor).toBe(totalMinor);
+        const prepared = await preparePromise;
+        expect(prepared.status()).toBe(200);
+        expect((await prepared.json()).bindingQuote.totalMinor).toBe(
+          bindingMinor,
+        );
+        await expect(price).toContainText(visiblePrice);
+        await expect(qualitySelect).toHaveValue(quality);
+      }
+
+      releaseBaseline();
+      await baselineSettled;
+      await expect(price).toContainText("597,20");
+      await expect(page.getByText("999,00 Kč")).not.toBeVisible();
+    } finally {
+      releaseBaseline();
+    }
+  });
 });
