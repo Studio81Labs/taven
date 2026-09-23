@@ -102,6 +102,14 @@ async function assertArchivedCheckoutFailsBeforeAcceptance(
   expect(prior.status()).toBe(200);
   const current = (await prior.json()).documents;
   const databaseUrl = process.env.DATABASE_URL!;
+  const terms = page.getByRole("checkbox", { name: /VOP/i });
+  const claims = page.getByRole("checkbox", { name: /reklamačním řádem/i });
+  const withdrawal = page.getByRole("checkbox", { name: /výjimka/i });
+  const submit = page.getByRole("button", { name: /Objednat a zaplatit/i });
+  await expect(terms).toBeChecked();
+  await expect(claims).toBeChecked();
+  await expect(withdrawal).toBeChecked();
+  await expect(submit).toBeEnabled();
   const restoreDocuments =
     await archiveE2eCheckoutDocumentsForBrowser(databaseUrl);
   try {
@@ -164,9 +172,40 @@ async function assertArchivedCheckoutFailsBeforeAcceptance(
       decisionCount: 0,
       idempotencyCount: 0,
     });
+
+    await submit.click();
+    await expect(
+      page.getByRole("heading", { name: "Objednávku zatím nelze zaplatit." }),
+    ).toBeVisible();
+    await expect(terms).toHaveCount(0);
+    await expect(claims).toHaveCount(0);
+    await expect(withdrawal).toHaveCount(0);
+    expect(
+      await readE2eCheckoutEffectsForBrowser(
+        databaseUrl,
+        checkoutSession.sessionId,
+      ),
+    ).toEqual({
+      acceptedOrderPriceBindingId: null,
+      paymentCount: 0,
+      acceptanceCount: 0,
+      decisionCount: 0,
+      idempotencyCount: 0,
+    });
   } finally {
     await restoreDocuments();
   }
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Dokončení objednávky" }),
+  ).toBeVisible({ timeout: 120_000 });
+  await expect(terms).not.toBeChecked();
+  await expect(claims).not.toBeChecked();
+  await expect(withdrawal).not.toBeChecked();
+  await terms.check();
+  await claims.check();
+  await withdrawal.check();
+  await expect(submit).toBeEnabled();
 }
 
 test.describe("Real API Integration Journey", () => {
