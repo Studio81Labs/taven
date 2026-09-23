@@ -58,7 +58,6 @@ jobs:
             NUXT_API_BASE_URL=http://127.0.0.1:4175 \
             NUXT_PUBLIC_API_BASE_URL=http://127.0.0.1:4175 \
             NUXT_PUBLIC_SITE_URL=http://127.0.0.1:4176 \
-            NUXT_PUBLIC_AUTOMATIC_QUOTE_ENABLED=false \
             node apps/web/.output/server/index.mjs > "$RUNNER_TEMP/taven-closed-web.log" 2>&1 &
           web_pid=$!
           trap 'kill "$mock_pid" "$web_pid" 2>/dev/null || true' EXIT

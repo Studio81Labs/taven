@@ -30,7 +30,8 @@ test.describe("Normal default-closed build", () => {
       }
     });
 
-    await page.goto("/");
+    const homeResponse = await page.goto("/");
+    expect(await homeResponse?.text()).toContain("automaticQuoteEnabled:false");
     await expect(
       page.getByText("Kalkulace čeká", { exact: true }),
     ).toBeVisible();
