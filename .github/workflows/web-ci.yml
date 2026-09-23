@@ -49,6 +49,31 @@ jobs:
       - run: pnpm web:build
       - name: Install Playwright browsers
         run: pnpm -C apps/web exec playwright install chromium --with-deps
+      - name: Verify independently launched normal default-closed build
+        run: |
+          set -euo pipefail
+          node apps/web/e2e/fixtures/mock-backend-server.mjs > "$RUNNER_TEMP/taven-closed-mock.log" 2>&1 &
+          mock_pid=$!
+          NITRO_PORT=4176 NITRO_HOST=127.0.0.1 \
+            NUXT_API_BASE_URL=http://127.0.0.1:4175 \
+            NUXT_PUBLIC_API_BASE_URL=http://127.0.0.1:4175 \
+            NUXT_PUBLIC_SITE_URL=http://127.0.0.1:4176 \
+            node apps/web/.output/server/index.mjs > "$RUNNER_TEMP/taven-closed-web.log" 2>&1 &
+          web_pid=$!
+          trap 'kill "$mock_pid" "$web_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4175/health > /dev/null &&
+               curl --fail --silent http://127.0.0.1:4176/ > /dev/null; then break; fi
+            if [ "$attempt" -eq 30 ]; then
+              tail -40 "$RUNNER_TEMP/taven-closed-mock.log" "$RUNNER_TEMP/taven-closed-web.log"
+              exit 1
+            fi
+            sleep 1
+          done
+          NORMAL_BUILD_CLOSED_TEST=true INTEGRATION_TEST=true \
+            INTEGRATION_API_URL=http://127.0.0.1:4175 \
+            INTEGRATION_WEB_URL=http://127.0.0.1:4176 \
+            pnpm -C apps/web exec playwright test e2e/integration/default-closed-normal-build.spec.ts --project=integration
       - name: Run browser integration tests
         run: pnpm web:test:e2e
 
