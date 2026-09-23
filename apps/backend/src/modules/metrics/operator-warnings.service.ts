@@ -185,6 +185,7 @@ export class OperatorWarningsService {
                 expectedDeleteAfter: { lte: now },
                 availableAt: { lte: now },
               },
+              { status: "PROCESSING", leaseUntil: { lt: now } },
             ],
           },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -197,7 +198,12 @@ export class OperatorWarningsService {
             row.id,
             row.updatedAt,
             row.status,
-            { dueAt: row.expectedDeleteAfter.toISOString() },
+            {
+              dueAt:
+                row.status === "PROCESSING" && row.leaseUntil
+                  ? row.leaseUntil.toISOString()
+                  : row.expectedDeleteAfter.toISOString(),
+            },
           );
 
         const inventory = await tx.$queryRaw<InventoryStateRow[]>`
@@ -236,6 +242,8 @@ export class OperatorWarningsService {
           JOIN machines machine ON machine.id = inventory.machine_id
           WHERE inventory.node_id = ${nodeId}::uuid
             AND machine.status = 'ACTIVE'
+            AND inventory.status = 'AVAILABLE'
+            AND inventory.remaining_milligrams > inventory.reserved_milligrams
             AND NOT EXISTS (
               SELECT 1 FROM machine_profiles profile
               JOIN reference_profiles reference ON reference.id = profile.reference_profile_id
@@ -279,6 +287,7 @@ export class OperatorWarningsService {
            AND (reservation.status <> 'RESERVED' OR reservation.expires_at > ${now})
           WHERE candidate.node_id = ${nodeId}::uuid
             AND candidate.expires_at > ${now}
+            AND interval.ends_at > ${now}
           ORDER BY candidate.calculated_at DESC, candidate.id DESC
           LIMIT ${take}
         `;

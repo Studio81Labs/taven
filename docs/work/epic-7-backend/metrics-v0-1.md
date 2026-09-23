@@ -80,6 +80,9 @@ leaf used in CM or CAC. These reads never change costs.
 `GET /admin/warnings` gives an ADMIN a bounded snapshot of factual refund,
 capture-compensation, email-outbox, retention, inventory, profile, live
 reservation-conflict, reference-activation, and receipt-rate observations.
+Retention work with an expired processing lease is due using the lease deadline;
+profile availability is evaluated only for usable inventory. Candidate conflicts
+exclude intervals that have ended and `RESERVED` rows whose expiry has passed.
 `truncated` indicates more collected warnings than the requested limit;
 `coverage.sourceScanLimited` signals that a source hit its bounded scan limit
 and additional matching facts may be omitted. The feed has no

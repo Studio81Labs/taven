@@ -568,6 +568,94 @@ describe("operator read contracts", () => {
     await expect(warningCodes()).resolves.toEqual([]);
   }, 30_000);
 
+  it("reports a retention job whose processing lease has expired", async () => {
+    const leaseUntil = new Date(Date.now() - 1_000);
+    const job = await prisma.retentionDeletionJob.create({
+      data: {
+        assetKind: "MODEL_FILE",
+        assetId: fixture.modelFileId,
+        expectedDeleteAfter: new Date(Date.now() - 60_000),
+        status: "PROCESSING",
+        availableAt: new Date(Date.now() - 60_000),
+        leaseUntil,
+        leaseToken: randomBytes(32).toString("hex"),
+      },
+    });
+    const response = await fetch(
+      new URL("/admin/warnings?limit=100", baseUrl),
+      {
+        headers: { cookie: adminCookie },
+      },
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          code: "RETENTION_DUE",
+          sourceId: job.id,
+          status: "PROCESSING",
+          dueAt: leaseUntil.toISOString(),
+        }),
+      ]),
+    });
+  });
+
+  it("warns about missing profiles only for usable inventory", async () => {
+    const originalMachine = await prisma.machine.findUniqueOrThrow({
+      where: { id: fixture.machineId },
+    });
+    const machine = await prisma.machine.create({
+      data: {
+        nodeId,
+        machineCapabilityId: originalMachine.machineCapabilityId,
+        code: `warning-${randomBytes(8).toString("hex")}`,
+        displayName: "Warning profile fixture",
+        installedNozzleMicrometers: 600,
+      },
+    });
+    const lot = await prisma.inventory.create({
+      data: {
+        nodeId,
+        machineId: machine.id,
+        sku: `warning-profile-${randomUUID()}`,
+        material: "PLA",
+        color: "Black",
+        vendor: "Test vendor",
+        priceMinorUnitsNumerator: 1n,
+        priceMinorUnitsDenominator: 1n,
+        currency: "CZK",
+        remainingMilligrams: 100n,
+      },
+    });
+    const warningsForLot = async () => {
+      const response = await fetch(
+        new URL("/admin/warnings?limit=100", baseUrl),
+        { headers: { cookie: adminCookie } },
+      );
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        items: Array<{ code: string; sourceId: string }>;
+      };
+      return body.items.filter((item) => item.sourceId === lot.id);
+    };
+    await expect(warningsForLot()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "PROFILE_UNAVAILABLE" }),
+      ]),
+    );
+    await prisma.inventory.update({
+      where: { id: lot.id },
+      data: { status: "DEPLETED", remainingMilligrams: 0n },
+    });
+    const depleted = await warningsForLot();
+    expect(depleted.some((item) => item.code === "PROFILE_UNAVAILABLE")).toBe(
+      false,
+    );
+    expect(depleted.some((item) => item.code === "INVENTORY_UNAVAILABLE")).toBe(
+      true,
+    );
+  });
+
   it("enforces the trusted node scope and capacity query boundary", async () => {
     const unavailableNode = await read(`/admin/nodes/${randomUUID()}/machines`);
     expect(unavailableNode.status).toBe(404);
