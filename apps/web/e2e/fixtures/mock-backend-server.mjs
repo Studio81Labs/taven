@@ -14,6 +14,7 @@ process.on("unhandledRejection", (err) => {
 let testState = {
   legalStatus: "approved", // "approved" | "draft" | "error503"
   legalRevisionVersion: 1,
+  legalRevisionHashMismatch: false,
   legalEvaluatedAt: null, // custom ISO string or null for current UTC
   capacityStatus: "available", // "available" | "out_of_capacity"
   expressEligible: true,
@@ -51,6 +52,7 @@ function resetState() {
   testState = {
     legalStatus: "approved",
     legalRevisionVersion: 1,
+    legalRevisionHashMismatch: false,
     legalEvaluatedAt: null,
     capacityStatus: "available",
     expressEligible: true,
@@ -393,9 +395,12 @@ const server = http.createServer(async (req, res) => {
         retention: "e",
         photoConsent: "f",
       }[key].repeat(64);
-      const revisionHash = revisionCode.endsWith("-v2")
-        ? "9".repeat(64)
-        : contentHash;
+      const revisionHash =
+        key === "terms" && testState.legalRevisionHashMismatch
+          ? "0".repeat(64)
+          : revisionCode.endsWith("-v2")
+            ? "9".repeat(64)
+            : contentHash;
       if (
         testState.legalStatus !== "approved" ||
         (revisionCode !== expectedRevision && !isHistoricalRevision)

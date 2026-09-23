@@ -1,4 +1,11 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test, expect } from "@playwright/test";
+
+const FIXTURE_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../../tools/slicing-fixtures/fixtures/single-pla/cube.stl",
+);
 
 test.describe("Legal Time & Availability Enforcement", () => {
   test.beforeEach(async ({ request }) => {
@@ -55,6 +62,45 @@ test.describe("Legal Time & Availability Enforcement", () => {
     await expect(
       page.getByText("NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI"),
     ).toBeVisible();
+  });
+
+  test("a mismatched active revision hash closes legal reading and checkout", async ({
+    page,
+    request,
+  }) => {
+    await page.goto("/vop");
+    await expect(
+      page.getByRole("heading", { name: "Test terms", level: 1 }),
+    ).toBeVisible();
+
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { legalRevisionHashMismatch: true },
+    });
+    await page.reload();
+    await expect(
+      page.getByText("NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI"),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Test terms", level: 1 }),
+    ).not.toBeVisible();
+
+    await page.goto("/");
+    await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+    await page
+      .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Objednávku zatím nelze zaplatit." }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Objednat a zaplatit/i }),
+    ).not.toBeVisible();
   });
 
   test("a slow successful availability read still enables the approved journey", async ({
