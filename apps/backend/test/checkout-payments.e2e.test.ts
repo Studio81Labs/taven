@@ -2253,7 +2253,8 @@ describe("checkout payment capture protocol", () => {
               termsRevision: "terms-v1",
               claimPolicyRevision: "claim-policy-v1",
               acknowledgeWithdrawalException: true,
-              photoPublicationConsent: false,
+              photoPublicationConsent: true,
+              photoConsentRevision: "photos-v1",
             }),
           },
         );
@@ -3213,24 +3214,30 @@ describe("checkout payment capture protocol", () => {
         intentCreationFailureResultId: expect.any(String),
       });
       const approvals = app.get(LegalApprovalsService);
-      const termsDocument = await prisma.legalDocument.findUniqueOrThrow({
-        where: { key: "terms" },
-        include: {
-          publications: {
-            where: { endsAt: null, cancelledAt: null },
-            take: 1,
-          },
-        },
-      });
-      const activeTermsPublication = termsDocument.publications[0];
-      if (!activeTermsPublication) {
-        throw new Error("Checkout E2E terms publication is unavailable");
-      }
+      const checkoutLegalDocuments = await Promise.all(
+        (["terms", "claims", "photoConsent"] as const).map(async (key) => {
+          const document = await prisma.legalDocument.findUniqueOrThrow({
+            where: { key },
+            include: {
+              publications: {
+                where: { endsAt: null, cancelledAt: null },
+                take: 1,
+              },
+            },
+          });
+          const publication = document.publications[0];
+          if (!publication) {
+            throw new Error(`Checkout E2E ${key} publication is unavailable`);
+          }
+          return { key, document, publication };
+        }),
+      );
       const acceptedBeforeArchive = await prisma.order.findUniqueOrThrow({
         where: { id: outageFoundation.orderId },
         select: {
           acceptedOrderPriceBindingId: true,
           withdrawalExceptionAcknowledgedAt: true,
+          photoPublicationConsentGrantedAt: true,
           legalAcceptances: {
             select: {
               id: true,
@@ -3245,29 +3252,35 @@ describe("checkout payment capture protocol", () => {
       expect(acceptedBeforeArchive.acceptedOrderPriceBindingId).toBe(
         outageFoundation.orderPriceBindingId,
       );
-      expect(acceptedBeforeArchive.legalAcceptances).toHaveLength(2);
+      expect(
+        acceptedBeforeArchive.photoPublicationConsentGrantedAt,
+      ).not.toBeNull();
+      expect(acceptedBeforeArchive.legalAcceptances).toHaveLength(3);
       try {
-        await app.get(LegalDocumentsService).archivePublication(
-          {
-            operatorId: "f0000000-0000-4000-8000-000000000001",
-            role: "ADMIN",
-            permissions: [OPERATOR_PERMISSIONS.LEGAL_WRITE],
-            nodeIds: [],
-            authenticationMethod: "DEVELOPMENT_PASSWORD",
-            sessionId: randomUUID(),
-          },
-          "terms",
-          activeTermsPublication.id,
-          {
-            expectedGeneration: termsDocument.generation,
-            reason: "Checkout frozen retry E2E fixture",
-            reasonCode: "E2E_FROZEN_RETRY",
-          },
-          `checkout-archive-${randomUUID()}`,
-        );
-        expect((await approvals.availability()).documents.terms.effective).toBe(
-          false,
-        );
+        for (const { key, document, publication } of checkoutLegalDocuments) {
+          await app.get(LegalDocumentsService).archivePublication(
+            {
+              operatorId: "f0000000-0000-4000-8000-000000000001",
+              role: "ADMIN",
+              permissions: [OPERATOR_PERMISSIONS.LEGAL_WRITE],
+              nodeIds: [],
+              authenticationMethod: "DEVELOPMENT_PASSWORD",
+              sessionId: randomUUID(),
+            },
+            key,
+            publication.id,
+            {
+              expectedGeneration: document.generation,
+              reason: "Checkout frozen retry E2E fixture",
+              reasonCode: "E2E_FROZEN_RETRY",
+            },
+            `checkout-archive-${randomUUID()}`,
+          );
+        }
+        const availability = await approvals.availability();
+        for (const { key } of checkoutLegalDocuments) {
+          expect(availability.documents[key].effective).toBe(false);
+        }
         const retryContextResponse = await fetch(
           new URL(
             `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/retry-context`,
@@ -3281,6 +3294,13 @@ describe("checkout payment capture protocol", () => {
           acceptedEvidence: {
             termsRevision: "terms-v1",
             claimPolicyRevision: "claim-policy-v1",
+            photoPublicationConsent: true,
+            photoConsentRevision: "photos-v1",
+            terms: { contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+            claims: { contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+            photoConsent: {
+              contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+            },
           },
         });
         const carrierOutage = vi
@@ -3390,6 +3410,7 @@ describe("checkout payment capture protocol", () => {
             select: {
               acceptedOrderPriceBindingId: true,
               withdrawalExceptionAcknowledgedAt: true,
+              photoPublicationConsentGrantedAt: true,
               legalAcceptances: {
                 select: {
                   id: true,
@@ -3404,21 +3425,23 @@ describe("checkout payment capture protocol", () => {
         ).resolves.toEqual(acceptedBeforeArchive);
       } finally {
         // This suite shares its disposable E2E catalog with later cases.
-        // Restore only the publication fixture after exercising real archival.
+        // Restore only the publication fixtures after exercising real archival.
         await prisma.$transaction(async (transaction) => {
           await transaction.$executeRawUnsafe(
             "SET LOCAL session_replication_role = 'replica'",
           );
-          await transaction.$executeRaw`
-            UPDATE legal_document_publications
-            SET ends_at = NULL
-            WHERE id = ${activeTermsPublication.id}::uuid
-          `;
-          await transaction.$executeRaw`
-            UPDATE legal_documents
-            SET generation = ${termsDocument.generation}
-            WHERE id = ${termsDocument.id}::uuid
-          `;
+          for (const { document, publication } of checkoutLegalDocuments) {
+            await transaction.$executeRaw`
+              UPDATE legal_document_publications
+              SET ends_at = NULL
+              WHERE id = ${publication.id}::uuid
+            `;
+            await transaction.$executeRaw`
+              UPDATE legal_documents
+              SET generation = ${document.generation}
+              WHERE id = ${document.id}::uuid
+            `;
+          }
         });
       }
       const failedPayments = await prisma.payment.findMany({
