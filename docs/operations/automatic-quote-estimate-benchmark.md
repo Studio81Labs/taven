@@ -65,6 +65,55 @@ acceptance result and must not be read as passing that gate. The p95 of this
 small sample was 145.18 ms and is retained as an operational observation, not
 as a customer-facing performance promise.
 
+## Warm local browser reference run
+
+Run date: 2026-09-23, approximately 12:06 UTC. The production Nuxt and Nest
+builds both used `7ea5f26c110d02d909f6119da5ee50ad7f0aad9e` on a Mac
+Studio Mac13,1 (arm64), Node.js v24.15.0. The headed Playwright Chromium
+Desktop browser was version 153.0.8010.12 at 1280 × 800, without configured
+CPU or network throttling. Its reported user agent was Chrome 153 on Windows
+and `navigator.platform` was `MacIntel` (Playwright desktop emulation); the
+host itself was arm64 macOS. The browser reported hardware concurrency 10.
+
+The API and web app ran on loopback ports 3011 and 3000, respectively, against
+an isolated PostgreSQL 18 database created for this run and populated with the
+repository's migrations and development seed. Redis and object storage were
+the ordinary local development services. The binding-quote development gate
+was enabled; the normal catalog reads and anonymous estimate limiter remained
+active. The run used no mocked estimate, alternate pricing path, cached
+monetary result or quota bypass.
+
+The fixture was the same 20 mm PLA cube and SHA-256 listed above, with PLA,
+STANDARD quality/infill and quantity one. All four successful responses used
+price-list revision `automatic-v0-czk`, print-configuration revision
+`92222222-2222-4222-8222-222222222222` and reference-profile ID
+`61111111-1111-4111-8111-111111111111`. One successful warm-up selection was
+excluded. The next four selections in the same browser page measured:
+
+| Sample | Parse (ms) | Post-parse scheduling (ms) | Request/response (ms) | Response-to-render (ms) | Parse-complete → visible (ms) |
+| ------ | ---------: | -------------------------: | --------------------: | ----------------------: | ----------------------------: |
+| 1      |        0.2 |                        1.0 |                  65.2 |                     0.9 |                          67.1 |
+| 2      |        0.1 |                        1.2 |                  56.1 |                     7.8 |                          65.1 |
+| 3      |        0.2 |                        1.2 |                 100.8 |                     0.6 |                         102.6 |
+| 4      |        0.1 |                        1.1 |                  76.3 |                     4.6 |                          82.0 |
+
+The warm median was **74.55 ms** and the maximum was **102.6 ms**, so the
+defined local ≤200 ms reference gate passed. These are browser Performance
+marks ending at the first animation-frame opportunity after the matching
+numeric estimate and assumptions entered the visible DOM, not a measurement
+of physical screen paint or a customer-wide latency promise. The existing
+same-assumption slice comparison above remains −15.06% for the unfloored
+production component, within the ±20% target.
+
+The separate headed staging diagnostic against `https://staging.taven.cz` on
+2026-09-23 was **incomplete**. The page displayed the cube's 300 CZK estimate,
+but the deployed web bundle did not emit the required timing marks during the
+warm-up selection, so the harness timed out after 120 seconds and produced no
+valid remote timing sample. The staging deployment's exact commit was not
+verified. Redeploying a web build containing the benchmark instrumentation and
+rerunning the same command is required before reporting a remote breakdown;
+the local pass does not substitute for that report.
+
 ## Browser-visible measurement
 
 The reference acceptance gate is a warm median ≤200 ms from browser-recorded
