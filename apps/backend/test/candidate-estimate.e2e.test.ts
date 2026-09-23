@@ -760,6 +760,29 @@ describe("candidate estimate terminal receipts", () => {
         ends_at: new Date(secondStart.getTime() + 60_000),
       },
     ]);
+    const guardClient = await pool.connect();
+    try {
+      await guardClient.query("BEGIN");
+      // Isolate the CHECK from the pre-existing UPDATE immutability trigger.
+      // ROLLBACK restores the trigger before this test releases its connection.
+      await guardClient.query(
+        "ALTER TABLE candidate_resource_estimates DISABLE TRIGGER candidate_resource_estimates_immutable",
+      );
+      await expect(
+        guardClient.query(
+          `UPDATE candidate_resource_estimates
+           SET machine_availability_selection_version = NULL
+           WHERE resource_snapshot ->> 'dispatchJobId' = $1`,
+          [fixture.job.jobId],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint: "candidate_availability_identity_check",
+      });
+    } finally {
+      await guardClient.query("ROLLBACK");
+      guardClient.release();
+    }
   });
 
   it("coordinates live candidate windows for the same order phase and machine", async () => {

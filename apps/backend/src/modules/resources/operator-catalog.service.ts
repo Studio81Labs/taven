@@ -1856,7 +1856,7 @@ function currency(value: unknown): string {
 function explicitInstant(value: unknown, name: string): Date {
   const parts =
     typeof value === "string"
-      ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(
+      ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(
           value,
         )
       : null;
@@ -1902,7 +1902,11 @@ function explicitInstant(value: unknown, name: string): Date {
   ) {
     throw new BadRequestException(`${name} is invalid`);
   }
-  const instant = new Date(value);
+  // JavaScript Date and PostgreSQL inputs have millisecond precision. Accept
+  // RFC 3339 fractions and truncate only the sub-millisecond digits.
+  const instant = new Date(
+    value.replace(/(\.\d{3})\d+(?=Z|[+-]\d{2}:\d{2}$)/, "$1"),
+  );
   if (Number.isNaN(instant.getTime())) {
     throw new BadRequestException(`${name} is invalid`);
   }

@@ -647,7 +647,7 @@ describe("operator catalog commands", () => {
       priceMinorUnitsDenominator: "100",
       currency: "CZK",
       remainingMilligrams: "500",
-      purchasedAt: new Date(Date.now() - 86_400_000).toISOString(),
+      purchasedAt: `${new Date(Date.now() - 86_400_000).toISOString().slice(0, -1)}456Z`,
     };
     const receiptKey = `catalog-receipt-${randomUUID()}`;
     expect(
@@ -683,6 +683,14 @@ describe("operator catalog commands", () => {
     expect(detail.receipts).toMatchObject([
       { kind: "INITIAL", receivedMilligrams: "500" },
     ]);
+    expect(
+      await prisma.inventoryReceipt.findUniqueOrThrow({
+        where: { id: detail.receipts[0]!.id },
+        select: { purchasedAt: true },
+      }),
+    ).toMatchObject({
+      purchasedAt: new Date(receiptBody.purchasedAt),
+    });
     const firstReceiptId = detail.receipts[0]?.id;
     if (!firstReceiptId) throw new Error("initial receipt was not returned");
     const correctionPath = `${detailPath}/receipt-corrections`;
@@ -835,7 +843,12 @@ describe("operator catalog commands", () => {
     const availabilityBody = {
       expectedVersion: 1,
       reason: "Staffed print shift",
-      windows: [{ startsAt: start.toISOString(), endsAt: stop.toISOString() }],
+      windows: [
+        {
+          startsAt: `${start.toISOString().slice(0, -1)}456Z`,
+          endsAt: `${stop.toISOString().slice(0, -1)}456Z`,
+        },
+      ],
     };
     const availabilityKey = `catalog-availability-${randomUUID()}`;
     expect(

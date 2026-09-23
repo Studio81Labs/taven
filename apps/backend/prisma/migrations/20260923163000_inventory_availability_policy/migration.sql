@@ -149,7 +149,9 @@ ALTER TABLE "machine_availability_windows"
 ALTER TABLE "candidate_resource_estimates"
   ADD CONSTRAINT "candidate_availability_identity_check"
     CHECK (("machine_availability_revision_id" IS NULL AND "machine_availability_selection_version" IS NULL)
-      OR ("machine_availability_revision_id" IS NOT NULL AND "machine_availability_selection_version" > 0));
+      OR ("machine_availability_revision_id" IS NOT NULL
+        AND "machine_availability_selection_version" IS NOT NULL
+        AND "machine_availability_selection_version" > 0));
 
 -- Preserve existing live work without claiming that unused time is available.
 -- The sentinel revision is not eligible for new candidate estimates. Operators
