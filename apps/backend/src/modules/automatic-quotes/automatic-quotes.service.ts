@@ -1758,7 +1758,6 @@ export class AutomaticQuotesService {
         }
         if (draft.items.length === 0) return;
         let enqueued = false;
-        let referenceResolved = false;
         for (const item of draft.items) {
           const geometry = await transaction.modelGeometry.findUnique({
             where: { id: item.targetModelGeometryId },
@@ -1775,12 +1774,6 @@ export class AutomaticQuotesService {
             order.id,
             true,
           );
-          if (
-            item.referencePartsPerPlate === null &&
-            occupancy.kind === "resolved"
-          ) {
-            referenceResolved = true;
-          }
           if (occupancy.kind === "failed") {
             enqueued = true;
             continue;
@@ -1813,7 +1806,7 @@ export class AutomaticQuotesService {
             enqueued = true;
           }
         }
-        if (enqueued || referenceResolved) return;
+        if (enqueued) return;
         if (evidenceState === "none") {
           await this.stageOrFinalizeBinding(
             transaction,
@@ -2552,25 +2545,23 @@ export class AutomaticQuotesService {
       withinBuildLimits: true,
     });
     if (provisionalPlan.prepared.kind !== "binding_quote") return;
-    if (!bindingValidation) {
-      throw new ConflictException(
-        "Delivery validation is stale; select delivery again",
+    if (bindingValidation) {
+      const currentValidation = await this.bindingValidationInput(
+        transaction,
+        orderId,
+        draft,
+        destination,
+        selectedPolicy,
       );
-    }
-    const currentValidation = await this.bindingValidationInput(
-      transaction,
-      orderId,
-      draft,
-      destination,
-      selectedPolicy,
-    );
-    if (
-      !currentValidation ||
-      currentValidation.inputFingerprint !== bindingValidation.inputFingerprint
-    ) {
-      throw new ConflictException(
-        "Delivery validation is stale; select delivery again",
-      );
+      if (
+        !currentValidation ||
+        currentValidation.inputFingerprint !==
+          bindingValidation.inputFingerprint
+      ) {
+        throw new ConflictException(
+          "Delivery validation is stale; select delivery again",
+        );
+      }
     }
     if (
       await this.enqueueMissingCandidateReferenceSlices(
@@ -2583,6 +2574,7 @@ export class AutomaticQuotesService {
     ) {
       return;
     }
+    if (!bindingValidation) return;
     const candidateResourcesAvailable = await this.candidateResourcesAvailable(
       transaction,
       draft.items,
@@ -4911,10 +4903,13 @@ export class AutomaticQuotesService {
     },
     policy: SelectedCommercialPolicy,
   ) {
+    const sortedDraftItems = [...draft.items].sort(
+      (left, right) => left.ordinal - right.ordinal,
+    );
     const pricing = await this.pricingItemsFromDraft(
       client,
       orderId,
-      [...draft.items].sort((left, right) => left.ordinal - right.ordinal),
+      sortedDraftItems,
       null,
     );
     if (!pricing) return null;
@@ -4933,6 +4928,33 @@ export class AutomaticQuotesService {
         ),
     });
     if (prepared.prepared.kind !== "binding_quote") return null;
+    const demands = candidateParcelDemands(
+      pricing.items,
+      prepared.prepared.shipmentPlan,
+    );
+    if (!demands) return null;
+    const draftByPricingItemId = new Map(
+      pricing.items.map((item, index) => [item.id, sortedDraftItems[index]]),
+    );
+    for (const demand of demands) {
+      const item = draftByPricingItemId.get(demand.itemId);
+      const pricingItem = pricing.items.find(({ id }) => id === demand.itemId);
+      if (!item || !pricingItem) return null;
+      const geometry = await client.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      if (!geometry) return null;
+      const occupancies = referenceOccupancies(
+        demand.quantity,
+        Math.min(pricingItem.referencePartsPerPlate, demand.quantity),
+      );
+      if (
+        (await this.missingReferenceSlices(client, item, geometry, occupancies))
+          .length > 0
+      ) {
+        return null;
+      }
+    }
     const parcels = prepared.prepared.shipmentPlan.parcels.map((parcel) => ({
       weightMilligrams: parcel.weightMilligrams,
       xMicrometers: parcel.packingBox.xMicrometers,

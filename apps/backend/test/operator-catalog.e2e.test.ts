@@ -394,6 +394,37 @@ describe("operator catalog commands", () => {
           )
         ).status,
       ).toBe(403);
+      const withoutCsrf = await fetch(new URL(path, baseUrl), {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json",
+          "idempotency-key": `commercial-no-csrf-${randomUUID()}`,
+          origin: "http://localhost:3002",
+        },
+        body: JSON.stringify({
+          expectedSelectionVersion: result.selectionVersion,
+          reason: "Missing CSRF proof",
+        }),
+      });
+      expect(withoutCsrf.status).toBe(403);
+      const eurList = await prisma.priceList.findUniqueOrThrow({
+        where: {
+          currency_revision: { currency: "EUR", revision: "legacy-v0-eur" },
+        },
+      });
+      expect(
+        (
+          await command(
+            `/admin/catalog/price-lists/${eurList.id}/activate`,
+            {
+              expectedSelectionVersion: result.selectionVersion,
+              reason: "Wrong currency",
+            },
+            `commercial-wrong-currency-${randomUUID()}`,
+          )
+        ).status,
+      ).toBe(400);
       const read = await fetch(
         new URL("/admin/catalog/commercial-policy-selections/CZK", baseUrl),
         { headers: { cookie: adminCookie } },
@@ -427,6 +458,42 @@ describe("operator catalog commands", () => {
       await expect(rollback.json()).resolves.toMatchObject({
         priceListId: original.priceListId,
         selectionVersion: same.selectionVersion + 1,
+      });
+      const afterRollbackVersion = same.selectionVersion + 1;
+      expect(
+        (await command(path, input, `commercial-aba-stale-${randomUUID()}`))
+          .status,
+      ).toBe(409);
+      const auditCountBeforeRace = await prisma.auditEvent.count({
+        where: { eventType: "catalog.commercial-policy.activated" },
+      });
+      const competing = await Promise.all(
+        ["first", "second"].map((suffix) =>
+          command(
+            `/admin/catalog/price-lists/${original.priceListId}/activate`,
+            {
+              expectedSelectionVersion: afterRollbackVersion,
+              reason: `Concurrent publication ${suffix}`,
+            },
+            `commercial-concurrent-${randomUUID()}`,
+          ),
+        ),
+      );
+      expect(competing.map((response) => response.status).sort()).toEqual([
+        200, 409,
+      ]);
+      expect(
+        await prisma.auditEvent.count({
+          where: { eventType: "catalog.commercial-policy.activated" },
+        }),
+      ).toBe(auditCountBeforeRace + 1);
+      await expect(
+        prisma.commercialPolicySelection.findUniqueOrThrow({
+          where: { currency: "CZK" },
+        }),
+      ).resolves.toMatchObject({
+        priceListId: original.priceListId,
+        selectionVersion: afterRollbackVersion + 1,
       });
     } finally {
       await holder.query("ROLLBACK");

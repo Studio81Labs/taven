@@ -3062,16 +3062,81 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(recoveredCandidateFrontier.response.status).toBe(200);
     expect(recoveredCandidateFrontier.body.phase).toBe("ELIGIBILITY_PENDING");
     expect(recoveredCandidateFrontier.body.handoff).toBeNull();
-    const standardRecoveryReady = await api(
-      `automatic-quote-sessions/${recoverySessionId}/prepare`,
-      {
-        method: "POST",
-        headers: capabilityHeaders(
-          recoverySessionToken,
-          key("capacity-recovery-standard-ready"),
-        ),
+    const pinnedPolicy =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+        include: { priceList: true },
+      });
+    const alternateList = await prisma.priceList.create({
+      data: {
+        revision: `automatic-publication-${randomUUID()}`,
+        termsRevision: pinnedPolicy.priceList.termsRevision,
+        currency: "CZK",
+        parameters: pinnedPolicy.priceList.parameters as Prisma.InputJsonObject,
       },
-    );
+    });
+    await prisma.commercialPolicySelection.update({
+      where: { currency: "CZK" },
+      data: {
+        priceListId: alternateList.id,
+        selectionVersion: { increment: 1 },
+      },
+    });
+    const outagePort = app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY);
+    const providerOutage = vi
+      .spyOn(outagePort, "validateSelection")
+      .mockRejectedValue(new Error("provider outage during pinned binding"));
+    let standardRecoveryReady: Awaited<ReturnType<typeof api>>;
+    try {
+      standardRecoveryReady = await api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-standard-ready"),
+          ),
+        },
+      );
+      const pinnedReplay = await api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-standard-ready"),
+          ),
+        },
+      );
+      expect(pinnedReplay.response.status).toBe(200);
+      expect(providerOutage).not.toHaveBeenCalled();
+      await expect(
+        prisma.orderActivePriceBinding.findUniqueOrThrow({
+          where: { orderId: recoveryOrderId },
+          include: {
+            orderPriceBinding: { include: { priceSnapshot: true } },
+          },
+        }),
+      ).resolves.toMatchObject({
+        orderPriceBindingId: standardRecoveryBinding.orderPriceBindingId,
+        orderPriceBinding: {
+          priceSnapshot: {
+            priceListId:
+              standardRecoveryBinding.orderPriceBinding.priceSnapshot
+                .priceListId,
+          },
+        },
+      });
+    } finally {
+      providerOutage.mockRestore();
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: pinnedPolicy.priceListId,
+          selectionVersion: { increment: 1 },
+        },
+      });
+    }
     expect(standardRecoveryReady.response.status).toBe(200);
     expect(standardRecoveryReady.body.phase).toBe("CHECKOUT_READY");
     expect(standardRecoveryReady.body.checkoutReady).toBe(true);
