@@ -119,10 +119,16 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
     },
   };
   const orderQueries: URLSearchParams[] = [];
-  await page.route(/\/admin\/metrics(?:\/orders)?\?/, (route) => {
+  let releaseOrderPage: (() => void) | undefined;
+  let holdOrderPage = false;
+  await page.route(/\/admin\/metrics(?:\/orders)?\?/, async (route) => {
     if (route.request().url().includes("/orders?")) {
       const query = new URL(route.request().url()).searchParams;
       orderQueries.push(query);
+      if (query.has("cursor") && holdOrderPage)
+        await new Promise<void>((resolve) => {
+          releaseOrderPage = resolve;
+        });
       return route.fulfill({
         json: {
           items: [],
@@ -149,9 +155,81 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
       },
     }),
   );
-  await page.route("**/admin/acquisition-spend*", (route) =>
-    route.fulfill({ json: { items: [], scope: "PLATFORM" } }),
-  );
+  let releaseSpendPage: (() => void) | undefined;
+  let spendPageRequests = 0;
+  await page.route("**/admin/acquisition-spend*", async (route) => {
+    const paged = new URL(route.request().url()).searchParams.has("cursor");
+    if (paged) {
+      spendPageRequests += 1;
+      await new Promise<void>((resolve) => {
+        releaseSpendPage = resolve;
+      });
+    }
+    return route.fulfill({
+      json: {
+        items: paged
+          ? []
+          : [
+              {
+                id: "00000000-0000-0000-0000-000000000021",
+                amountMinor: "8500",
+                channel: "DIRECT",
+                currency: "CZK",
+                periodStart: "2025-01-01T00:00:00Z",
+                periodEnd: "2025-02-01T00:00:00Z",
+                sourceEntityType: "CAMPAIGN",
+                sourceKey: "original-spend",
+                isCurrent: true,
+                recordedAt: "2025-02-02T00:00:00Z",
+                reason: null,
+                supersedesId: null,
+                successorId: null,
+              },
+            ],
+        nextCursor: paged ? undefined : "next-spend",
+        scope: "PLATFORM",
+      },
+    });
+  });
+  const costOrderId = "00000000-0000-0000-0000-000000000031";
+  let releaseCostPage: (() => void) | undefined;
+  let costPageRequests = 0;
+  await page.route("**/admin/orders/*/actual-costs*", async (route) => {
+    const paged = new URL(route.request().url()).searchParams.has("cursor");
+    if (paged) {
+      costPageRequests += 1;
+      await new Promise<void>((resolve) => {
+        releaseCostPage = resolve;
+      });
+    }
+    return route.fulfill({
+      json: {
+        orderId: costOrderId,
+        items: paged
+          ? []
+          : [
+              {
+                id: "00000000-0000-0000-0000-000000000032",
+                orderId: costOrderId,
+                amountMinor: "2500",
+                category: "CARRIER",
+                currency: "CZK",
+                occurredAt: "2025-03-02T11:00:00Z",
+                source: "MEASURED",
+                sourceEntityType: "SHIPMENT",
+                sourceEntityId: "00000000-0000-0000-0000-000000000033",
+                sourceKey: "original-cost",
+                isCurrent: true,
+                recordedAt: "2025-03-03T00:00:00Z",
+                reason: null,
+                supersedesId: null,
+                successorId: null,
+              },
+            ],
+        nextCursor: paged ? undefined : "next-cost",
+      },
+    });
+  });
   await page.goto("/metriky");
   await expect(
     page.getByText("v0-1 preflight:", { exact: false }),
@@ -168,10 +246,16 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   ).toBeVisible();
   await page.getByRole("textbox", { name: "Začátek" }).fill("2026-09-02");
   await page.getByRole("combobox", { name: "Kanál" }).selectOption("paid");
+  holdOrderPage = true;
   await page.getByRole("button", { name: "Další objednávky" }).click();
+  await expect.poll(() => Boolean(releaseOrderPage)).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "Další objednávky" }),
+  ).toBeDisabled();
   expect(orderQueries).toHaveLength(2);
   expect(orderQueries[1]?.get("from")).toBe(orderQueries[0]?.get("from"));
   expect(orderQueries[1]?.get("channel")).toBeNull();
+  releaseOrderPage?.();
   let releaseRefresh: (() => void) | undefined;
   await page.route(/\/admin\/metrics\?/, async (route) => {
     await new Promise<void>((resolve) => {
@@ -187,4 +271,83 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   await expect(
     page.getByRole("button", { name: "Použít měsíc" }),
   ).toBeEnabled();
+  await page
+    .getByRole("textbox", { name: "ID objednávky" })
+    .first()
+    .fill(costOrderId);
+  await page.getByRole("button", { name: "Načíst", exact: true }).click();
+  const costs = page
+    .getByRole("heading", { name: "Skutečné náklady objednávky" })
+    .locator("..");
+  await costs.getByRole("button", { name: "Opravit" }).click();
+  const evidence = page.locator(".operator-card").filter({
+    has: page.getByRole("heading", { name: /Skutečný náklad · oprava/ }),
+  });
+  await expect(
+    evidence.getByRole("textbox", { name: "Částka v haléřích" }),
+  ).toHaveValue("2500");
+  await expect(
+    evidence.getByRole("combobox", { name: "Kategorie" }),
+  ).toHaveValue("CARRIER");
+  await expect(evidence.getByRole("combobox", { name: "Zdroj" })).toHaveValue(
+    "MEASURED",
+  );
+  await expect(
+    evidence.getByRole("textbox", { name: /Vznik nákladu/ }),
+  ).toHaveValue("2025-03-02T11:00:00Z");
+  await expect(
+    evidence.getByRole("textbox", { name: "Typ zdrojové entity" }),
+  ).toHaveValue("SHIPMENT");
+  await expect(
+    evidence.getByRole("textbox", { name: "ID zdrojové entity" }),
+  ).toHaveValue("00000000-0000-0000-0000-000000000033");
+  await expect(
+    evidence.getByRole("textbox", { name: "Jedinečný klíč zdroje" }),
+  ).toBeEmpty();
+  await evidence.getByRole("button", { name: "Zavřít" }).click();
+  const spend = page
+    .getByRole("heading", { name: /Akviziční výdaj · platforma/ })
+    .locator("..");
+  await spend.getByRole("button", { name: "Opravit" }).click();
+  const spendEvidence = page.locator(".operator-card").filter({
+    has: page.getByRole("heading", { name: /Akviziční výdaj · oprava/ }),
+  });
+  await expect(
+    spendEvidence.getByRole("textbox", { name: "Částka v haléřích" }),
+  ).toHaveValue("8500");
+  await expect(
+    spendEvidence.getByRole("combobox", { name: "Kanál" }),
+  ).toHaveValue("DIRECT");
+  await expect(
+    spendEvidence.getByRole("textbox", { name: /Začátek období/ }),
+  ).toHaveValue("2025-01-01T00:00:00Z");
+  await expect(
+    spendEvidence.getByRole("textbox", { name: /Konec období/ }),
+  ).toHaveValue("2025-02-01T00:00:00Z");
+  await expect(
+    spendEvidence.getByRole("textbox", { name: "Typ zdrojové entity" }),
+  ).toHaveValue("CAMPAIGN");
+  await expect(
+    spendEvidence.getByRole("textbox", { name: "Jedinečný klíč zdroje" }),
+  ).toBeEmpty();
+  await costs.getByRole("button", { name: "Další náklady" }).click();
+  await expect.poll(() => Boolean(releaseCostPage)).toBe(true);
+  await expect(
+    costs.getByRole("button", { name: "Další náklady" }),
+  ).toBeDisabled();
+  expect(costPageRequests).toBe(1);
+  releaseCostPage?.();
+  await expect(
+    costs.getByRole("button", { name: "Další náklady" }),
+  ).toHaveCount(0);
+  await spend.getByRole("button", { name: "Další výdaje" }).click();
+  await expect.poll(() => Boolean(releaseSpendPage)).toBe(true);
+  await expect(
+    spend.getByRole("button", { name: "Další výdaje" }),
+  ).toBeDisabled();
+  expect(spendPageRequests).toBe(1);
+  releaseSpendPage?.();
+  await expect(spend.getByRole("button", { name: "Další výdaje" })).toHaveCount(
+    0,
+  );
 });

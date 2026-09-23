@@ -34,13 +34,16 @@ const channel = ref<Channel>("");
 const report = ref<S["MetricsReportDto"] | null>(null);
 const orders = ref<S["MetricsOrderDetailDto"][]>([]);
 const orderCursor = ref<string | null>(null);
+const orderPageLoading = ref(false);
 const appliedQuery = ref<ReturnType<typeof filters> | null>(null);
 let reportReadGeneration = 0;
 const warnings = ref<S["OperatorWarningsReportDto"] | null>(null);
 const spend = ref<S["AcquisitionSpendEvidenceDto"][]>([]);
 const spendCursor = ref<string | null>(null);
+const spendPageLoading = ref(false);
 const actualCosts = ref<S["ActualCostEvidenceDto"][]>([]);
 const actualCursor = ref<string | null>(null);
+const costPageLoading = ref(false);
 const orderId = ref("");
 const costOrderId = ref("");
 let costReadGeneration = 0;
@@ -69,7 +72,10 @@ watch(
     actualCosts.value = [];
     actualCursor.value = null;
     costOrderId.value = "";
-    if (entry.value === "cost") supersedesId.value = "";
+    if (entry.value === "cost") {
+      entry.value = "";
+      supersedesId.value = "";
+    }
   },
   { flush: "sync" },
 );
@@ -149,10 +155,17 @@ async function refresh(): Promise<void> {
 }
 
 async function moreOrders(): Promise<void> {
-  if (!orderCursor.value || !appliedQuery.value || loading.value) return;
+  if (
+    !orderCursor.value ||
+    !appliedQuery.value ||
+    loading.value ||
+    orderPageLoading.value
+  )
+    return;
   const generation = reportReadGeneration;
   const cursor = orderCursor.value;
   const query = appliedQuery.value;
+  orderPageLoading.value = true;
   try {
     const page = requireData(
       await apiClient.GET("/admin/metrics/orders", {
@@ -166,6 +179,8 @@ async function moreOrders(): Promise<void> {
     orderCursor.value = page.nextCursor ?? null;
   } catch (cause) {
     if (generation === reportReadGeneration) error.value = errorMessage(cause);
+  } finally {
+    orderPageLoading.value = false;
   }
 }
 
@@ -195,39 +210,51 @@ async function moreCosts(): Promise<void> {
   if (
     !actualCursor.value ||
     !orderId.value ||
-    costOrderId.value !== orderId.value
+    costOrderId.value !== orderId.value ||
+    costPageLoading.value
   )
     return;
   const id = orderId.value;
+  const cursor = actualCursor.value;
+  const generation = costReadGeneration;
+  costPageLoading.value = true;
   try {
     const page = requireData(
       await apiClient.GET("/admin/orders/{orderId}/actual-costs", {
         params: {
           path: { orderId: id },
-          query: { limit: 100, cursor: actualCursor.value },
+          query: { limit: 100, cursor },
         },
       }),
     );
-    if (id !== orderId.value) return;
+    if (generation !== costReadGeneration || id !== orderId.value) return;
     actualCosts.value = [...actualCosts.value, ...page.items];
     actualCursor.value = page.nextCursor ?? null;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === costReadGeneration) error.value = errorMessage(cause);
+  } finally {
+    costPageLoading.value = false;
   }
 }
 
 async function moreSpend(): Promise<void> {
-  if (!spendCursor.value) return;
+  if (!spendCursor.value || spendPageLoading.value || loading.value) return;
+  const cursor = spendCursor.value;
+  const generation = reportReadGeneration;
+  spendPageLoading.value = true;
   try {
     const page = requireData(
       await apiClient.GET("/admin/acquisition-spend", {
-        params: { query: { limit: 100, cursor: spendCursor.value } },
+        params: { query: { limit: 100, cursor } },
       }),
     );
+    if (generation !== reportReadGeneration) return;
     spend.value = [...spend.value, ...page.items];
     spendCursor.value = page.nextCursor ?? null;
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === reportReadGeneration) error.value = errorMessage(cause);
+  } finally {
+    spendPageLoading.value = false;
   }
 }
 
@@ -302,6 +329,38 @@ async function recordEvidence(): Promise<void> {
 }
 
 function editEvidence(kind: "cost" | "spend", id = ""): void {
+  amountMinor.value = "";
+  sourceKey.value = "";
+  sourceEntityType.value = "MANUAL";
+  sourceEntityId.value = "";
+  category.value = "MATERIAL";
+  source.value = "MANUAL";
+  evidenceChannel.value = "PAID";
+  occurredAt.value = new Date().toISOString();
+  periodStart.value = new Date().toISOString();
+  periodEnd.value = new Date(Date.now() + 86_400_000).toISOString();
+  if (id && kind === "cost") {
+    const selected = actualCosts.value.find(
+      (item) => item.id === id && item.isCurrent,
+    );
+    if (!selected) return;
+    amountMinor.value = selected.amountMinor;
+    category.value = selected.category as typeof category.value;
+    source.value = selected.source as typeof source.value;
+    occurredAt.value = selected.occurredAt;
+    sourceEntityType.value = selected.sourceEntityType;
+    sourceEntityId.value = selected.sourceEntityId ?? "";
+  } else if (id) {
+    const selected = spend.value.find(
+      (item) => item.id === id && item.isCurrent,
+    );
+    if (!selected) return;
+    amountMinor.value = selected.amountMinor;
+    evidenceChannel.value = selected.channel as typeof evidenceChannel.value;
+    periodStart.value = selected.periodStart;
+    periodEnd.value = selected.periodEnd;
+    sourceEntityType.value = selected.sourceEntityType;
+  }
   entry.value = kind;
   supersedesId.value = id;
   reason.value = "";
@@ -803,7 +862,7 @@ onMounted(() => void refresh());
       <button
         v-if="orderCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || orderPageLoading"
         @click="moreOrders"
       >
         Další objednávky
@@ -830,7 +889,12 @@ onMounted(() => void refresh());
           </button>
         </li>
       </ul>
-      <button v-if="actualCursor" type="button" @click="moreCosts">
+      <button
+        v-if="actualCursor"
+        type="button"
+        :disabled="costPageLoading"
+        @click="moreCosts"
+      >
         Další náklady
       </button>
       <button v-if="canWrite" type="button" @click="editEvidence('cost')">
@@ -855,7 +919,12 @@ onMounted(() => void refresh());
           </button>
         </li>
       </ul>
-      <button v-if="spendCursor" type="button" @click="moreSpend">
+      <button
+        v-if="spendCursor"
+        type="button"
+        :disabled="loading || spendPageLoading"
+        @click="moreSpend"
+      >
         Další výdaje
       </button>
       <button v-if="canWrite" type="button" @click="editEvidence('spend')">
