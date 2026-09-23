@@ -201,7 +201,7 @@ export class OperatorCatalogService {
     key?: string,
   ): Promise<CatalogResult> {
     const nodeId = this.globalNode(operator);
-    const input = priceListInput(body);
+    const input = await priceListInput(body);
     return this.command(
       operator,
       "catalog:price-list:create",
@@ -264,7 +264,7 @@ export class OperatorCatalogService {
         if (target.currency !== selection.currency) {
           throw new BadRequestException("Price list currency does not match");
         }
-        validatePriceListParameters(
+        await validatePriceListParameters(
           target.parameters as Prisma.InputJsonObject,
         );
         const updated = await tx.commercialPolicySelection.update({
@@ -1103,13 +1103,15 @@ function printConfigRevisionInput(
   };
 }
 
-function priceListInput(body: CreatePriceListDto): CreatePriceListInput {
+async function priceListInput(
+  body: CreatePriceListDto,
+): Promise<CreatePriceListInput> {
   body = commandBody(body);
   if (body.currency !== "CZK") {
     throw new BadRequestException("currency must be CZK in v0");
   }
   const parameters = settings(body.parameters);
-  validatePriceListParameters(parameters);
+  await validatePriceListParameters(parameters);
   return {
     revision: text(body.revision, "revision", 100),
     termsRevision: text(body.termsRevision, "termsRevision", 100),

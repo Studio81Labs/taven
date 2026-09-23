@@ -112,9 +112,9 @@ function ceilDiv(numerator: bigint, denominator: bigint): bigint {
   return (numerator + denominator - 1n) / denominator;
 }
 
-export function validatePriceListParameters(
+export async function validatePriceListParameters(
   value: Prisma.InputJsonObject,
-): void {
+): Promise<void> {
   const root = record(value, "parameters");
   exactKeys(root, ["sellerTaxPolicy", "automaticQuote"], "parameters");
   exactKeys(
@@ -235,9 +235,9 @@ export function validatePriceListParameters(
   if (parsed.expressMaximumPlateCount > 2n) {
     throw new BadRequestException("expressMaximumPlateCount cannot exceed two");
   }
-  if (parsed.paymentFeeRateBasisPoints > 10_000) {
+  if (parsed.paymentFeeRateBasisPoints >= 10_000) {
     throw new BadRequestException(
-      "paymentFeeRateBasisPoints cannot exceed 10000",
+      "paymentFeeRateBasisPoints must be below 10000",
     );
   }
   const categoryIds = new Set<string>();
@@ -313,11 +313,36 @@ export function validatePriceListParameters(
     ) +
     parsed.smallOrderSurchargeMinor +
     parcelCount * maximumShippingRate;
-  const maximumConfiguredGross = ceilDiv(
-    maximumConfiguredNet * BigInt(10_000 + parsed.taxPolicy.vatRateBasisPoints),
-    10_000n,
-  );
-  checkedMoney(maximumConfiguredGross, "configured quote total");
+  try {
+    const { Money, grossUpPaymentSchedule } = await import("@taven/core");
+    const configuredGrossUp = grossUpPaymentSchedule(
+      Money.of(maximumConfiguredNet, "CZK"),
+      [
+        {
+          id: "automatic-full-payment",
+          sequence: 0,
+          role: "FULL",
+          shareBasisPoints: 10_000,
+          feeRateBasisPoints: parsed.paymentFeeRateBasisPoints,
+          feeFixed: Money.of(parsed.paymentFeeFixedMinor, "CZK"),
+        },
+      ],
+      parsed.taxPolicy,
+    );
+    checkedMoney(
+      configuredGrossUp.contractTotal.minorUnits,
+      "configured quote total",
+    );
+    checkedMoney(
+      configuredGrossUp.paymentFee.minorUnits,
+      "configured payment fee",
+    );
+  } catch (error) {
+    if (error instanceof BadRequestException) throw error;
+    throw new BadRequestException(
+      error instanceof Error ? error.message : "Payment policy is invalid",
+    );
+  }
   const maximumPaymentFee =
     ceilDiv(
       parsed.maximumAutomaticAmountMinor *

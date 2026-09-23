@@ -341,37 +341,74 @@ describe("operator catalog commands", () => {
       );
       expect(rejected.status, `unsafe monetary case ${index}`).toBe(400);
     }
+    for (const feeRate of [9_000, 10_000]) {
+      const rejected = await command(
+        "/admin/catalog/price-lists",
+        {
+          ...body,
+          revision: `unsustainable-fee-${randomUUID()}`,
+          parameters: {
+            ...parameters,
+            sellerTaxPolicy: {
+              regime: "VAT_PAYER",
+              vatRateBasisPoints: 2_100,
+            },
+            automaticQuote: {
+              ...parameters.automaticQuote,
+              paymentFeeRateBasisPoints: feeRate,
+            },
+          },
+        },
+        `catalog-price-${randomUUID()}`,
+      );
+      expect(rejected.status, `unsafe fee rate ${feeRate}`).toBe(400);
+    }
     const selectedBeforeUnsafeActivation =
       await prisma.commercialPolicySelection.findUniqueOrThrow({
         where: { currency: "CZK" },
       });
-    const persistedUnsafeList = await prisma.priceList.create({
-      data: {
-        revision: `persisted-unsafe-money-${randomUUID()}`,
-        termsRevision: baseline.termsRevision,
-        currency: "CZK",
-        parameters: {
-          ...parameters,
-          automaticQuote: {
-            ...parameters.automaticQuote,
-            minimumPrintPriceMinor: "9007199254740992",
-          },
-        } as Prisma.InputJsonObject,
+    for (const unsafeParameters of [
+      {
+        ...parameters,
+        automaticQuote: {
+          ...parameters.automaticQuote,
+          minimumPrintPriceMinor: "9007199254740992",
+        },
       },
-    });
-    expect(
-      (
-        await command(
-          `/admin/catalog/price-lists/${persistedUnsafeList.id}/activate`,
-          {
-            expectedSelectionVersion:
-              selectedBeforeUnsafeActivation.selectionVersion,
-            reason: "Reject unsafe persisted monetary configuration",
-          },
-          `catalog-unsafe-activation-${randomUUID()}`,
-        )
-      ).status,
-    ).toBe(400);
+      {
+        ...parameters,
+        sellerTaxPolicy: {
+          regime: "VAT_PAYER",
+          vatRateBasisPoints: 2_100,
+        },
+        automaticQuote: {
+          ...parameters.automaticQuote,
+          paymentFeeRateBasisPoints: 9_000,
+        },
+      },
+    ]) {
+      const persistedUnsafeList = await prisma.priceList.create({
+        data: {
+          revision: `persisted-unsafe-policy-${randomUUID()}`,
+          termsRevision: baseline.termsRevision,
+          currency: "CZK",
+          parameters: unsafeParameters as Prisma.InputJsonObject,
+        },
+      });
+      expect(
+        (
+          await command(
+            `/admin/catalog/price-lists/${persistedUnsafeList.id}/activate`,
+            {
+              expectedSelectionVersion:
+                selectedBeforeUnsafeActivation.selectionVersion,
+              reason: "Reject unsafe persisted commercial configuration",
+            },
+            `catalog-unsafe-activation-${randomUUID()}`,
+          )
+        ).status,
+      ).toBe(400);
+    }
     await expect(
       prisma.commercialPolicySelection.findUniqueOrThrow({
         where: { currency: "CZK" },
