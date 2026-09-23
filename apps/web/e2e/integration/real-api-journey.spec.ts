@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Page } from "@playwright/test";
-import { archiveE2eTermsForBrowser } from "../../../backend/test/support/publish-e2e-legal-fixtures";
+import { archiveE2eCheckoutDocumentsForBrowser } from "../../../backend/test/support/publish-e2e-legal-fixtures";
 
 const INTEGRATION_API_URL =
   process.env.INTEGRATION_API_URL || "https://api-staging.taven.cz";
@@ -17,6 +17,7 @@ const FIXTURE_PATH = path.resolve(
 async function startSandboxPayment(
   page: Page,
   method: "CARD" | "BANK_TRANSFER",
+  consentToPhotos = false,
 ) {
   await page.goto("/");
   const fileChooserPromise = page.waitForEvent("filechooser");
@@ -51,6 +52,9 @@ async function startSandboxPayment(
   await page.getByRole("checkbox", { name: /VOP/i }).check();
   await page.getByRole("checkbox", { name: /reklamačním řádem/i }).check();
   await page.getByRole("checkbox", { name: /výjimka/i }).check();
+  if (consentToPhotos) {
+    await page.getByRole("checkbox", { name: /Dobrovolně souhlasím/i }).check();
+  }
   const checkoutSession = await page.evaluate(() => {
     const raw = sessionStorage.getItem("taven:automatic-quote-session:v1");
     return raw
@@ -320,6 +324,7 @@ test.describe("Real API Integration Journey", () => {
     const { checkoutSession, paymentId } = await startSandboxPayment(
       page,
       "CARD",
+      true,
     );
     await page.getByRole("button", { name: "Decline payment" }).click();
     await expect(page).toHaveURL(/\/checkout\/payment\/cancelled/);
@@ -346,24 +351,49 @@ test.describe("Real API Integration Journey", () => {
       status: "FAILED",
       provider: "sandbox",
     });
-    const restoreTerms =
+    const retryContextUrl = `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/retry-context`;
+    const readRetryContext = async () => {
+      const retryContext = await request.get(retryContextUrl, {
+        headers: { Authorization: `Bearer ${checkoutSession.sessionToken}` },
+      });
+      expect(retryContext.status()).toBe(200);
+      return retryContext.json();
+    };
+    const frozenRetry = await readRetryContext();
+    expect(frozenRetry).toMatchObject({
+      retryAllowed: true,
+      acceptedEvidence: {
+        termsRevision: "terms-v1",
+        claimPolicyRevision: "claim-policy-v1",
+        photoPublicationConsent: true,
+        photoConsentRevision: "photos-v1",
+        terms: { contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+        claims: { contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+        photoConsent: { contentHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      },
+    });
+    const restoreDocuments =
       process.env.INTEGRATION_MUTABLE_FIXTURES === "true"
-        ? await archiveE2eTermsForBrowser(process.env.DATABASE_URL!)
+        ? await archiveE2eCheckoutDocumentsForBrowser(process.env.DATABASE_URL!)
         : null;
     try {
-      if (restoreTerms) {
+      if (restoreDocuments) {
         const legal = await request.get(
           `${INTEGRATION_API_URL}/legal-documents/availability`,
         );
         expect(legal.status()).toBe(200);
-        expect((await legal.json()).documents.terms.effective).toBe(false);
+        const documents = (await legal.json()).documents;
+        for (const key of ["terms", "claims", "photoConsent"] as const) {
+          expect(documents[key].effective).toBe(false);
+        }
+        expect(await readRetryContext()).toEqual(frozenRetry);
       }
       await page.getByRole("link", { name: "Zpět ke kalkulaci" }).click();
       await expect(page).toHaveURL(/\/objednavka\?retry=1/);
       await expect(
         page.getByRole("heading", { name: "Dokončení objednávky" }),
       ).toBeVisible({ timeout: 120_000 });
-      if (restoreTerms) {
+      if (restoreDocuments) {
         await page.reload();
         await expect(
           page.getByRole("heading", { name: "Platba nebyla dokončena." }),
@@ -372,7 +402,7 @@ test.describe("Real API Integration Journey", () => {
       await page
         .getByRole("button", { name: "Zvolit nový platební pokus" })
         .click();
-      if (restoreTerms) {
+      if (restoreDocuments) {
         const historicalTerms = page.getByRole("link", {
           name: "Zobrazit VOP",
         });
@@ -383,14 +413,39 @@ test.describe("Real API Integration Journey", () => {
         await expect(page.getByRole("checkbox", { name: /VOP/i })).toHaveCount(
           0,
         );
-        const historicalPage = await request.get(
-          new URL(
-            (await historicalTerms.getAttribute("href"))!,
-            page.url(),
-          ).toString(),
-        );
-        expect(historicalPage.status()).toBe(200);
-        expect(await historicalPage.text()).toContain("Historické znění");
+        const frozenEvidence = frozenRetry.acceptedEvidence as {
+          terms: { revision: string; contentHash: string };
+          claims: { revision: string; contentHash: string };
+          photoConsent: { revision: string; contentHash: string };
+        };
+        for (const { link, path, evidence } of [
+          {
+            link: historicalTerms,
+            path: "/vop",
+            evidence: frozenEvidence.terms,
+          },
+          {
+            link: page.getByRole("link", { name: "reklamační řád" }),
+            path: "/reklamace",
+            evidence: frozenEvidence.claims,
+          },
+          {
+            link: page.getByRole("link", { name: /pravidel fotografování/i }),
+            path: "/fotografie-a-duvernost",
+            evidence: frozenEvidence.photoConsent,
+          },
+        ]) {
+          const href = await link.getAttribute("href");
+          const url = new URL(href!, page.url());
+          expect(url.pathname).toBe(path);
+          expect(url.searchParams.get("revision")).toBe(evidence.revision);
+          expect(url.searchParams.get("contentHash")).toBe(
+            evidence.contentHash,
+          );
+          const historicalPage = await request.get(url.toString());
+          expect(historicalPage.status()).toBe(200);
+          expect(await historicalPage.text()).toContain("Historické znění");
+        }
       }
       await expect(
         page.getByRole("button", { name: /Objednat a zaplatit/i }),
@@ -423,7 +478,7 @@ test.describe("Real API Integration Journey", () => {
         status: "CAPTURED",
       });
     } finally {
-      await restoreTerms?.();
+      await restoreDocuments?.();
     }
   });
 

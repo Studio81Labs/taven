@@ -87,7 +87,7 @@ export async function publishE2eLegalFixturesForDatabase(
 }
 
 /** Temporary archive for the isolated browser database; never use against staging. */
-export async function archiveE2eTermsForBrowser(
+export async function archiveE2eCheckoutDocumentsForBrowser(
   databaseUrl: string,
 ): Promise<() => Promise<void>> {
   const url = new URL(databaseUrl);
@@ -97,36 +97,50 @@ export async function archiveE2eTermsForBrowser(
     );
   }
   const pool = new Pool({ connectionString: databaseUrl });
-  let publicationId: string | undefined;
-  let documentId: string | undefined;
-  let generation: number | undefined;
+  const archived: {
+    documentId: string;
+    generation: number;
+    publicationId: string;
+  }[] = [];
   try {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const document = await client.query<{ id: string; generation: number }>(
-        "SELECT id, generation FROM legal_documents WHERE key = 'terms' FOR UPDATE",
+      const documents = await client.query<{
+        id: string;
+        key: string;
+        generation: number;
+      }>(
+        `SELECT id, key, generation FROM legal_documents
+         WHERE key IN ('terms', 'claims', 'photoConsent')
+         ORDER BY id FOR UPDATE`,
       );
-      if (document.rows.length !== 1) throw new Error("Terms fixture missing");
-      documentId = document.rows[0]!.id;
-      generation = document.rows[0]!.generation;
-      const publication = await client.query<{ id: string }>(
-        `SELECT id FROM legal_document_publications
-         WHERE document_id = $1 AND cancelled_at IS NULL AND ends_at IS NULL
-         ORDER BY starts_at DESC LIMIT 1 FOR UPDATE`,
-        [documentId],
-      );
-      if (publication.rows.length !== 1)
-        throw new Error("Active terms publication fixture missing");
-      publicationId = publication.rows[0]!.id;
-      await client.query(
-        "UPDATE legal_document_publications SET ends_at = clock_timestamp() WHERE id = $1",
-        [publicationId],
-      );
-      await client.query(
-        "UPDATE legal_documents SET generation = generation + 1 WHERE id = $1",
-        [documentId],
-      );
+      if (documents.rows.length !== 3)
+        throw new Error("Checkout legal fixtures missing");
+      for (const document of documents.rows) {
+        const publication = await client.query<{ id: string }>(
+          `SELECT id FROM legal_document_publications
+           WHERE document_id = $1 AND cancelled_at IS NULL AND ends_at IS NULL
+           ORDER BY starts_at DESC LIMIT 1 FOR UPDATE`,
+          [document.id],
+        );
+        if (publication.rows.length !== 1)
+          throw new Error(`Active ${document.key} publication fixture missing`);
+        const publicationId = publication.rows[0]!.id;
+        await client.query(
+          "UPDATE legal_document_publications SET ends_at = clock_timestamp() WHERE id = $1",
+          [publicationId],
+        );
+        await client.query(
+          "UPDATE legal_documents SET generation = generation + 1 WHERE id = $1",
+          [document.id],
+        );
+        archived.push({
+          documentId: document.id,
+          generation: document.generation,
+          publicationId,
+        });
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -144,14 +158,16 @@ export async function archiveE2eTermsForBrowser(
     try {
       await client.query("BEGIN");
       await client.query("SET LOCAL session_replication_role = 'replica'");
-      await client.query(
-        "UPDATE legal_document_publications SET ends_at = NULL WHERE id = $1",
-        [publicationId],
-      );
-      await client.query(
-        "UPDATE legal_documents SET generation = $2 WHERE id = $1",
-        [documentId, generation],
-      );
+      for (const entry of archived) {
+        await client.query(
+          "UPDATE legal_document_publications SET ends_at = NULL WHERE id = $1",
+          [entry.publicationId],
+        );
+        await client.query(
+          "UPDATE legal_documents SET generation = $2 WHERE id = $1",
+          [entry.documentId, entry.generation],
+        );
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
