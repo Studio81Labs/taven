@@ -16,6 +16,7 @@ let testState = {
   legalRevisionVersion: 1,
   legalRevisionHashMismatch: false,
   legalEvaluatedAt: null, // custom ISO string or null for current UTC
+  modelBodyIds: null, // optional deterministic inspection result
   capacityStatus: "available", // "available" | "out_of_capacity"
   expressEligible: true,
   paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED"
@@ -54,6 +55,7 @@ function resetState() {
     legalRevisionVersion: 1,
     legalRevisionHashMismatch: false,
     legalEvaluatedAt: null,
+    modelBodyIds: null,
     capacityStatus: "available",
     expressEligible: true,
     paymentOutcome: "CAPTURED",
@@ -124,7 +126,7 @@ function createDefaultSession(
       {
         modelFileId: "00000000-0000-4000-8000-000000000002",
         format: "STL",
-        discoveredBodyIds: ["body-1"],
+        discoveredBodyIds: testState.modelBodyIds ?? ["body-1"],
         inspectionStatus: "SUCCEEDED",
       },
     ],
@@ -908,7 +910,7 @@ const server = http.createServer(async (req, res) => {
           const quality = selectedOption?.quality || "STANDARD";
           return {
             ...session.items[0],
-            id: it.id || session.items[0]?.id || `item-${idx}`,
+            id: it.id || session.items[idx]?.id || crypto.randomUUID(),
             ordinal: idx,
             quantity: it.quantity || 1,
             quality,
