@@ -1,7 +1,16 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test, expect, type Page } from "@playwright/test";
-import { archiveE2eCheckoutDocumentsForBrowser } from "../../../backend/test/support/publish-e2e-legal-fixtures";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
+import {
+  archiveE2eCheckoutDocumentsForBrowser,
+  readE2eCheckoutEffectsForBrowser,
+} from "../../../backend/test/support/publish-e2e-legal-fixtures";
 
 const INTEGRATION_API_URL =
   process.env.INTEGRATION_API_URL || "https://api-staging.taven.cz";
@@ -74,6 +83,84 @@ async function startSandboxPayment(
     throw new Error("Sandbox checkout did not identify its payment");
   }
   return { checkoutSession, paymentId, sandboxUrl };
+}
+
+async function assertArchivedCheckoutFailsBeforeAcceptance(
+  page: Page,
+  request: APIRequestContext,
+  checkoutSession: { sessionId: string; sessionToken: string },
+): Promise<void> {
+  const prior = await request.get(
+    `${INTEGRATION_API_URL}/legal-documents/availability`,
+  );
+  expect(prior.status()).toBe(200);
+  const current = (await prior.json()).documents;
+  const databaseUrl = process.env.DATABASE_URL!;
+  const restoreDocuments =
+    await archiveE2eCheckoutDocumentsForBrowser(databaseUrl);
+  try {
+    const unavailable = await request.get(
+      `${INTEGRATION_API_URL}/legal-documents/availability`,
+    );
+    expect(unavailable.status()).toBe(200);
+    const unavailableDocuments = (await unavailable.json()).documents;
+    for (const key of ["terms", "claims", "photoConsent"] as const) {
+      expect(unavailableDocuments[key].effective).toBe(false);
+    }
+    const legalTab = await page.context().newPage();
+    try {
+      await legalTab.goto("/vop");
+      await expect(
+        legalTab.getByText("NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI"),
+      ).toBeVisible();
+    } finally {
+      await legalTab.close();
+    }
+
+    const rejected = await request.post(
+      `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payments`,
+      {
+        headers: {
+          Authorization: `Bearer ${checkoutSession.sessionToken}`,
+          "Idempotency-Key": `legal-archived-${randomUUID()}`,
+        },
+        data: {
+          email: "browser-144@example.test",
+          fullName: "E2E Browser Test",
+          billing: {
+            name: "E2E Browser Test",
+            addressLine1: "Testovací 123",
+            city: "Brno",
+            postalCode: "60200",
+            countryCode: "CZ",
+          },
+          method: "CARD",
+          acceptTerms: true,
+          acceptClaimPolicy: true,
+          acknowledgeWithdrawalException: true,
+          termsRevision: current.terms.revision,
+          claimPolicyRevision: current.claims.revision,
+          photoPublicationConsent: false,
+          photoConsentRevision: null,
+        },
+      },
+    );
+    expect(rejected.status()).toBe(503);
+    expect(
+      await readE2eCheckoutEffectsForBrowser(
+        databaseUrl,
+        checkoutSession.sessionId,
+      ),
+    ).toEqual({
+      acceptedOrderPriceBindingId: null,
+      paymentCount: 0,
+      acceptanceCount: 0,
+      decisionCount: 0,
+      idempotencyCount: 0,
+    });
+  } finally {
+    await restoreDocuments();
+  }
 }
 
 test.describe("Real API Integration Journey", () => {
@@ -169,6 +256,13 @@ test.describe("Real API Integration Journey", () => {
         });
         if (!checkoutSession) {
           throw new Error("Checkout session evidence is unavailable");
+        }
+        if (process.env.INTEGRATION_MUTABLE_FIXTURES === "true") {
+          await assertArchivedCheckoutFailsBeforeAcceptance(
+            page,
+            request,
+            checkoutSession,
+          );
         }
         await page
           .getByRole("button", { name: /Objednat a zaplatit/i })

@@ -86,16 +86,68 @@ export async function publishE2eLegalFixturesForDatabase(
   }
 }
 
-/** Temporary archive for the isolated browser database; never use against staging. */
-export async function archiveE2eCheckoutDocumentsForBrowser(
+/** Reads only the isolated browser database so rejected checkout effects stay observable. */
+export async function readE2eCheckoutEffectsForBrowser(
   databaseUrl: string,
-): Promise<() => Promise<void>> {
+  sessionId: string,
+): Promise<{
+  acceptedOrderPriceBindingId: string | null;
+  paymentCount: number;
+  acceptanceCount: number;
+  decisionCount: number;
+  idempotencyCount: number;
+}> {
+  assertIsolatedBrowserDatabase(databaseUrl);
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const result = await pool.query<{
+      accepted_order_price_binding_id: string | null;
+      payment_count: number;
+      acceptance_count: number;
+      decision_count: number;
+      idempotency_count: number;
+    }>(
+      `SELECT target.accepted_order_price_binding_id,
+              (SELECT count(*)::int FROM payments WHERE order_id = target.id) AS payment_count,
+              (SELECT count(*)::int FROM legal_acceptances WHERE order_id = target.id) AS acceptance_count,
+              (SELECT count(*)::int FROM legal_acceptance_decisions WHERE order_id = target.id) AS decision_count,
+              (SELECT count(*)::int FROM idempotency_records
+               WHERE namespace = 'checkout-payment:' || origin.quote_session_id::text) AS idempotency_count
+       FROM automatic_order_origins origin
+       JOIN orders target ON target.id = origin.order_id
+       WHERE origin.quote_session_id = $1`,
+      [sessionId],
+    );
+    if (result.rows.length !== 1) {
+      throw new Error("Isolated browser checkout order is unavailable");
+    }
+    const row = result.rows[0]!;
+    return {
+      acceptedOrderPriceBindingId: row.accepted_order_price_binding_id,
+      paymentCount: row.payment_count,
+      acceptanceCount: row.acceptance_count,
+      decisionCount: row.decision_count,
+      idempotencyCount: row.idempotency_count,
+    };
+  } finally {
+    await pool.end();
+  }
+}
+
+function assertIsolatedBrowserDatabase(databaseUrl: string): void {
   const url = new URL(databaseUrl);
   if (url.hostname !== "127.0.0.1" || url.pathname !== "/taven_web_browser") {
     throw new Error(
       "Legal browser fixture requires the isolated local database",
     );
   }
+}
+
+/** Temporary archive for the isolated browser database; never use against staging. */
+export async function archiveE2eCheckoutDocumentsForBrowser(
+  databaseUrl: string,
+): Promise<() => Promise<void>> {
+  assertIsolatedBrowserDatabase(databaseUrl);
   const pool = new Pool({ connectionString: databaseUrl });
   const archived: {
     documentId: string;
