@@ -1854,15 +1854,53 @@ function currency(value: unknown): string {
 }
 
 function explicitInstant(value: unknown, name: string): Date {
-  if (
-    typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(
-      value,
-    )
-  ) {
+  const parts =
+    typeof value === "string"
+      ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(
+          value,
+        )
+      : null;
+  if (typeof value !== "string" || !parts) {
     throw new BadRequestException(
       `${name} requires an ISO date-time with offset`,
     );
+  }
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const hour = Number(parts[4]);
+  const minute = Number(parts[5]);
+  const second = Number(parts[6]);
+  const offsetHour = parts[7] === undefined ? 0 : Number(parts[7]);
+  const offsetMinute = parts[8] === undefined ? 0 : Number(parts[8]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  if (
+    year < 1 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1]! ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
+    throw new BadRequestException(`${name} is invalid`);
   }
   const instant = new Date(value);
   if (Number.isNaN(instant.getTime())) {

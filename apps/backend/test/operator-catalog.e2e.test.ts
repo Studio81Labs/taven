@@ -650,6 +650,15 @@ describe("operator catalog commands", () => {
       purchasedAt: new Date(Date.now() - 86_400_000).toISOString(),
     };
     const receiptKey = `catalog-receipt-${randomUUID()}`;
+    expect(
+      (
+        await command(
+          receiptPath,
+          { ...receiptBody, purchasedAt: "2026-02-30T12:00:00Z" },
+          `catalog-invalid-purchase-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
     const received = await responseBody(
       command(receiptPath, receiptBody, receiptKey),
     );
@@ -829,6 +838,23 @@ describe("operator catalog commands", () => {
       windows: [{ startsAt: start.toISOString(), endsAt: stop.toISOString() }],
     };
     const availabilityKey = `catalog-availability-${randomUUID()}`;
+    expect(
+      (
+        await command(
+          availabilityPath,
+          {
+            ...availabilityBody,
+            windows: [
+              {
+                startsAt: `${new Date().toISOString().slice(0, 10)}T24:00:00Z`,
+                endsAt: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+              },
+            ],
+          },
+          `catalog-invalid-window-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
     const published = await responseBody(
       command(availabilityPath, availabilityBody, availabilityKey),
     );

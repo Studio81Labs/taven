@@ -504,6 +504,14 @@ export class RecordInitialInventoryReceiptDto extends CatalogReasonDto {
 }
 
 export class CorrectInventoryReceiptDto extends CatalogReasonDto {
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 500,
+    pattern: NON_BLANK_TEXT,
+  })
+  declare reason: string;
+
   @ApiProperty(UUID)
   supersedesReceiptId!: string;
 
@@ -551,8 +559,16 @@ export class MachineAvailabilityWindowDto {
 
 export class ReplaceMachineAvailabilityDto extends CatalogReasonDto {
   @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 500,
+    pattern: NON_BLANK_TEXT,
+  })
+  declare reason: string;
+
+  @ApiProperty({
     type: "integer",
-    minimum: 0,
+    minimum: 1,
     maximum: 2_147_483_646,
     nullable: true,
   })
