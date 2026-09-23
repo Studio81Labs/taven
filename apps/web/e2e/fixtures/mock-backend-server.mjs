@@ -17,6 +17,7 @@ let testState = {
   capacityStatus: "available", // "available" | "out_of_capacity"
   expressEligible: true,
   paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED"
+  riskScenario: null, // null | "warning"
   recordedObservations: [],
   lastAssistedQuote: null,
   lastCheckoutPayload: null,
@@ -50,6 +51,7 @@ function resetState() {
     capacityStatus: "available",
     expressEligible: true,
     paymentOutcome: "CAPTURED",
+    riskScenario: null,
     recordedObservations: [],
     lastAssistedQuote: null,
     lastCheckoutPayload: null,
@@ -93,7 +95,7 @@ function createDefaultSession(
   sessionId = crypto.randomUUID(),
   sessionToken = generateCapabilityToken(),
 ) {
-  return {
+  const session = {
     sessionId,
     sessionToken,
     orderId: "00000000-0000-4000-8000-000000000001",
@@ -209,6 +211,20 @@ function createDefaultSession(
     },
     bindingQuote: null,
   };
+  if (testState.riskScenario === "warning") {
+    session.phase = "ACTION_REQUIRED";
+    session.items[0].findings = [
+      {
+        id: crypto.randomUUID(),
+        code: "TEST_PREFLIGHT_WARNING",
+        severity: "WARNING",
+        message: "Testovací riziko tisku vyžaduje potvrzení.",
+        acknowledgementKey: "test-risk-warning",
+        decision: null,
+      },
+    ];
+  }
+  return session;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1014,6 +1030,44 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (subpath === "/risk-decisions" && method === "POST") {
+        const body = await parseJson(req);
+        const finding = session.items[body.itemOrdinal]?.findings.find(
+          (candidate) => candidate.id === body.findingId,
+        );
+        if (
+          !finding ||
+          finding.acknowledgementKey !== body.acknowledgementKey ||
+          !["ACKNOWLEDGED", "DECLINED"].includes(body.decision)
+        ) {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "Risk decision does not match the finding",
+          });
+          return;
+        }
+        finding.decision = body.decision;
+        session.configurationRevision += 1;
+        if (body.decision === "DECLINED") {
+          session.phase = "HANDOFF_REQUIRED";
+          session.checkoutReady = false;
+          session.bindingQuote = null;
+          session.handoff = {
+            kind: "INDIVIDUAL_QUOTE_REQUEST",
+            reasons: ["RISK_DECLINED"],
+            safeContext: {
+              automaticQuoteSessionId: session.sessionId,
+              modelFileIds: session.modelFiles.map((file) => file.modelFileId),
+              itemSelections: session.items.map((item) => ({
+                ordinal: item.ordinal,
+                modelFileId: item.modelFileId,
+                bodyIds: item.bodyIds,
+                material: item.material,
+                quantity: item.quantity,
+                fitSensitive: item.fitSensitive,
+              })),
+            },
+          };
+        }
         sendJson(res, 200, session);
         return;
       }

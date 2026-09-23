@@ -1,4 +1,11 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test, expect } from "@playwright/test";
+
+const cubePath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../../tools/slicing-fixtures/fixtures/single-pla/cube.stl",
+);
 
 test.describe("Assisted Quote Journey", () => {
   test.beforeEach(async ({ request }) => {
@@ -74,6 +81,98 @@ test.describe("Assisted Quote Journey", () => {
     expect(
       testState.lastAssistedQuote.description.length,
     ).toBeGreaterThanOrEqual(10);
+  });
+
+  test("declined print risk carries one request into the assisted form", async ({
+    page,
+    request,
+  }) => {
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { riskScenario: "warning" },
+    });
+    let createCalls = 0;
+    page.on("request", (outgoing) => {
+      if (
+        outgoing.method() === "POST" &&
+        outgoing.url() === "http://127.0.0.1:4175/quote-requests"
+      ) {
+        createCalls += 1;
+      }
+    });
+
+    await page.goto("/");
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.getByText("Přetáhni soubor sem").click();
+    await (await chooserPromise).setFiles(cubePath);
+    const proceed = page.getByRole("button", {
+      name: "Nahrát a pokračovat ke konfiguraci",
+    });
+    await expect(proceed).toBeEnabled();
+    await proceed.click();
+    await expect(page).toHaveURL(/\/objednavka/);
+    await expect(
+      page.getByRole("heading", { name: "Potvrďte zjištěná rizika." }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Testovací riziko tisku vyžaduje potvrzení."),
+    ).toBeVisible();
+
+    const declinedResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/risk-decisions"),
+    );
+    await page
+      .getByRole("button", {
+        name: "Nepřijmout a požádat o individuální nabídku",
+      })
+      .click();
+    expect((await declinedResponse).status()).toBe(200);
+    await expect(
+      page.getByText("PŘÍMÁ KALKULACE ZASTAVENA", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(/Riziko jste nepřijali/)).toBeVisible();
+
+    const issuedResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/handoff-capabilities"),
+    );
+    await page
+      .getByRole("button", { name: "Pokračovat individuální poptávkou" })
+      .click();
+    expect((await issuedResponse).status()).toBe(201);
+    await expect(page).toHaveURL(/\/poptavka\?source=automatic-quote/);
+    await expect(
+      page.getByRole("textbox", { name: /Co potřebujete vyrobit/ }),
+    ).toHaveValue(/nechci přijmout riziko/);
+    const storedHandoff = await page.evaluate(() => {
+      const raw = sessionStorage.getItem("taven:assisted-quote-handoff:v1");
+      return raw
+        ? (JSON.parse(raw) as { handoffToken: string; reasons: string[] })
+        : null;
+    });
+    expect(storedHandoff?.reasons).toContain("RISK_DECLINED");
+
+    await page.getByLabel("Jméno *").fill("E2E Risk Test");
+    await page.getByLabel("E-mail *").fill("risk-browser@example.test");
+    await page.locator('input[type="checkbox"]').first().check();
+    await page
+      .getByRole("button", { name: "Odeslat k lidskému posouzení" })
+      .click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Děkujeme. Podklady předáme k lidskému posouzení.",
+      }),
+    ).toBeVisible();
+    expect(createCalls).toBe(1);
+    const state = await request.get("http://127.0.0.1:4175/__test/state");
+    expect(await state.json()).toMatchObject({
+      lastAssistedQuote: {
+        attribution: { source: "automatic-quote" },
+        automaticQuoteHandoffToken: storedHandoff?.handoffToken,
+      },
+    });
   });
 
   test("handoff capability endpoint requires session bearer and idempotency key", async ({
