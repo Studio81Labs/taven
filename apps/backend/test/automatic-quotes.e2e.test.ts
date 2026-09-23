@@ -2941,6 +2941,52 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       releaseBindingProvider();
       bindingProviderSpy.mockRestore();
     }
+    const gapKey = key("capacity-recovery-policy-gap");
+    const gapClient = await pool.connect();
+    let gapValidated!: () => void;
+    const validationFinished = new Promise<void>((resolve) => {
+      gapValidated = resolve;
+    });
+    const gapProviderSpy = vi
+      .spyOn(bindingRacePort, "validateSelection")
+      .mockImplementation(async (input) => {
+        const result = await originalBindingValidation(input);
+        gapValidated();
+        return result;
+      });
+    try {
+      await gapClient.query("BEGIN");
+      await gapClient.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`automatic-quote.prepare:${gapKey}`],
+      );
+      const pendingAfterValidation = api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(recoverySessionToken, gapKey),
+        },
+      );
+      await validationFinished;
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: { selectionVersion: { increment: 1 } },
+      });
+      await gapClient.query("COMMIT");
+      expect((await pendingAfterValidation).response.status).toBe(409);
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: {
+            namespace: "automatic-quote.prepare",
+            idempotencyKey: gapKey,
+          },
+        }),
+      ).toBe(0);
+    } finally {
+      await gapClient.query("ROLLBACK").catch(() => undefined);
+      gapClient.release();
+      gapProviderSpy.mockRestore();
+    }
     const recoveryRestaged = await api(
       `automatic-quote-sessions/${recoverySessionId}/prepare`,
       {
