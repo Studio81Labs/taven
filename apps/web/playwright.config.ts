@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const integrationTest = process.env.INTEGRATION_TEST === "true";
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
@@ -12,7 +14,9 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL: "http://127.0.0.1:4174",
+    baseURL: integrationTest
+      ? (process.env.INTEGRATION_WEB_URL ?? "https://staging.taven.cz")
+      : "http://127.0.0.1:4174",
     trace: "on-first-retry",
   },
   projects: [
@@ -40,26 +44,28 @@ export default defineConfig({
       testMatch: ["**/integration/**/*.spec.ts"],
     },
   ],
-  webServer: [
-    {
-      command: "node e2e/fixtures/mock-backend-server.mjs",
-      port: 4175,
-      timeout: 120_000,
-      reuseExistingServer: !process.env.CI,
-    },
-    {
-      command: "node scripts/serve-fixture-web.mjs",
-      port: 4174,
-      timeout: 120_000,
-      reuseExistingServer: !process.env.CI,
-      env: {
-        PORT: "4174",
-        HOST: "127.0.0.1",
-        NUXT_API_BASE_URL: "http://127.0.0.1:4175",
-        NUXT_PUBLIC_API_BASE_URL: "http://127.0.0.1:4175",
-        NUXT_PUBLIC_SITE_URL: "http://127.0.0.1:4174",
-        NUXT_PUBLIC_AUTOMATIC_QUOTE_ENABLED: "true",
-      },
-    },
-  ],
+  webServer: integrationTest
+    ? undefined
+    : [
+        {
+          command: "node e2e/fixtures/mock-backend-server.mjs",
+          port: 4175,
+          timeout: 120_000,
+          reuseExistingServer: !process.env.CI,
+        },
+        {
+          command: "node scripts/serve-fixture-web.mjs",
+          port: 4174,
+          timeout: 120_000,
+          reuseExistingServer: !process.env.CI,
+          env: {
+            PORT: "4174",
+            HOST: "127.0.0.1",
+            NUXT_API_BASE_URL: "http://127.0.0.1:4175",
+            NUXT_PUBLIC_API_BASE_URL: "http://127.0.0.1:4175",
+            NUXT_PUBLIC_SITE_URL: "http://127.0.0.1:4174",
+            NUXT_PUBLIC_AUTOMATIC_QUOTE_ENABLED: "true",
+          },
+        },
+      ],
 });
