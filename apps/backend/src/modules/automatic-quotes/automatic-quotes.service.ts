@@ -2300,6 +2300,7 @@ export class AutomaticQuotesService {
     orderId: string,
     items: readonly AutomaticQuoteCandidateDraftItem[],
     client: Transaction | PrismaService = this.prisma,
+    projectionPriceList?: SelectedCommercialPolicy["priceList"],
   ): Promise<boolean> {
     for (const item of items) {
       const geometry = await client.modelGeometry.findUnique({
@@ -2352,11 +2353,9 @@ export class AutomaticQuotesService {
       where: { orderId },
       include: { selectedDeliveryDestination: true },
     });
-    const priceList = await this.priceListForOrderProjection(
-      client,
-      orderId,
-      draft,
-    );
+    const priceList =
+      projectionPriceList ??
+      (await this.priceListForOrderProjection(client, orderId, draft));
     if (!draft?.selectedDeliveryDestination) return false;
     const pricing = await this.pricingItemsFromDraft(
       client,
@@ -4738,6 +4737,7 @@ export class AutomaticQuotesService {
     candidateAdmissionSatisfied = false,
     client: Transaction | PrismaService = this.prisma,
     configuredDeliveryOptions?: readonly DeliveryCapabilityOption[],
+    projectionPriceList?: SelectedCommercialPolicy["priceList"],
   ): Promise<{
     quote: AutomaticQuoteSessionDto["roughEstimate"];
     deliveryOptions: AutomaticQuoteSessionDto["deliveryOptions"];
@@ -4751,11 +4751,9 @@ export class AutomaticQuotesService {
         items: { orderBy: { ordinal: "asc" } },
       },
     });
-    const priceList = await this.priceListForOrderProjection(
-      client,
-      orderId,
-      draft,
-    );
+    const priceList =
+      projectionPriceList ??
+      (await this.priceListForOrderProjection(client, orderId, draft));
     if (!draft || draft.items.length === 0) return null;
     const pricing = await this.pricingItemsFromDraft(
       client,
@@ -5428,6 +5426,11 @@ export class AutomaticQuotesService {
         "Automatic quote has incomplete checkout evidence",
       );
     }
+    const projectionPriceList = await this.priceListForOrderProjection(
+      client,
+      order.id,
+      draft,
+    );
     const expired =
       session.status === QuoteSessionStatus.EXPIRED ||
       session.expiresAt.getTime() <= Date.now();
@@ -5544,7 +5547,12 @@ export class AutomaticQuotesService {
     );
     const handoffReasons: string[] = [];
     if (
-      await this.preprocessingRequiresHandoff(order.id, draft.items, client)
+      await this.preprocessingRequiresHandoff(
+        order.id,
+        draft.items,
+        client,
+        projectionPriceList,
+      )
     ) {
       handoffReasons.push("PREPROCESSING_FAILED");
     }
@@ -5630,10 +5638,22 @@ export class AutomaticQuotesService {
     const hasLiveReservation = Boolean(currentPlan && currentReservation);
     const rough =
       itemDtos.length > 0
-        ? await this.roughQuote(order.id, hasLiveReservation, client)
+        ? await this.roughQuote(
+            order.id,
+            hasLiveReservation,
+            client,
+            undefined,
+            projectionPriceList,
+          )
         : null;
     const deliveryOptions =
-      rough?.deliveryOptions ?? (await this.deliveryOptions(undefined, client));
+      rough?.deliveryOptions ??
+      (await this.deliveryOptions(
+        undefined,
+        client,
+        undefined,
+        projectionPriceList,
+      ));
     const selectedDeliveryDestination = draft.selectedDeliveryDestination
       ? {
           providerEndpointId:
@@ -5708,7 +5728,7 @@ export class AutomaticQuotesService {
       rough?.reasons.includes("SHIPMENT_INELIGIBLE") ?? false;
     const quantityComparisons =
       itemDtos.length > 0
-        ? await this.quantityComparisons(order.id, client)
+        ? await this.quantityComparisons(order.id, projectionPriceList, client)
         : [];
     const phase = expired
       ? "EXPIRED"
@@ -5931,9 +5951,12 @@ export class AutomaticQuotesService {
       | undefined,
     client: Transaction | PrismaService = this.prisma,
     configuredOptions?: readonly DeliveryCapabilityOption[],
+    projectionPriceList?: SelectedCommercialPolicy["priceList"],
   ) {
     const priceList =
-      input?.priceList ?? (await currentCommercialPolicy(client)).priceList;
+      input?.priceList ??
+      projectionPriceList ??
+      (await currentCommercialPolicy(client)).priceList;
     const options =
       configuredOptions ?? this.deliveryCapabilities.configuredOptions();
     if (!priceList) return [];
@@ -5989,6 +6012,7 @@ export class AutomaticQuotesService {
 
   private async quantityComparisons(
     orderId: string,
+    priceList: SelectedCommercialPolicy["priceList"],
     client: Transaction | PrismaService = this.prisma,
   ): Promise<AutomaticQuoteSessionDto["quantityComparisons"]> {
     const draft = await client.automaticQuoteDraft.findUnique({
@@ -5999,11 +6023,6 @@ export class AutomaticQuotesService {
         items: { orderBy: { ordinal: "asc" } },
       },
     });
-    const priceList = await this.priceListForOrderProjection(
-      client,
-      orderId,
-      draft,
-    );
     if (!draft || draft.items.length === 0) return [];
     const parameters = parseAutomaticQuotePricingParameters(
       priceList.parameters,

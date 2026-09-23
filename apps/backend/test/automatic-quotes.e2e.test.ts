@@ -1562,6 +1562,83 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         ),
       ),
     );
+    const selectionBeforeProjection =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+        include: { priceList: true },
+      });
+    const changedParameters = JSON.parse(
+      JSON.stringify(selectionBeforeProjection.priceList.parameters),
+    ) as { automaticQuote: Record<string, unknown> };
+    changedParameters.automaticQuote.minimumPrintPriceMinor = "500000";
+    const changedPriceList = await prisma.priceList.create({
+      data: {
+        revision: `projection-race-${randomUUID()}`,
+        termsRevision: selectionBeforeProjection.priceList.termsRevision,
+        currency: "CZK",
+        parameters: changedParameters as Prisma.InputJsonObject,
+      },
+    });
+    const projectionService = automaticQuotes as unknown as {
+      roughQuote: (...args: unknown[]) => Promise<unknown>;
+      priceListForOrderProjection: (...args: unknown[]) => Promise<unknown>;
+    };
+    const originalRoughQuote =
+      projectionService.roughQuote.bind(automaticQuotes);
+    let roughFinished!: () => void;
+    let releaseProjection!: () => void;
+    const roughComplete = new Promise<void>((resolve) => {
+      roughFinished = resolve;
+    });
+    const projectionGate = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    const roughProjectionSpy = vi
+      .spyOn(projectionService, "roughQuote")
+      .mockImplementation(async (...args) => {
+        const result = await originalRoughQuote(...args);
+        roughFinished();
+        await projectionGate;
+        return result;
+      });
+    const selectedProjectionSpy = vi.spyOn(
+      projectionService,
+      "priceListForOrderProjection",
+    );
+    try {
+      const pendingProjection = api(`automatic-quote-sessions/${sessionId}`, {
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
+      await roughComplete;
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: changedPriceList.id,
+          selectionVersion: { increment: 1 },
+        },
+      });
+      releaseProjection();
+      const projection = await pendingProjection;
+      expect(projection.response.status).toBe(200);
+      expect(selectedProjectionSpy).toHaveBeenCalledTimes(1);
+      expect(projection.body.roughEstimate).toEqual(
+        immediateRough.body.roughEstimate,
+      );
+      expect(projection.body.quantityComparisons).toEqual(
+        immediateRough.body.quantityComparisons,
+      );
+    } finally {
+      releaseProjection();
+      selectedProjectionSpy.mockRestore();
+      roughProjectionSpy.mockRestore();
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: selectionBeforeProjection.priceListId,
+          selectionVersion: { increment: 1 },
+        },
+      });
+    }
     expect(immediateRough.body.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
