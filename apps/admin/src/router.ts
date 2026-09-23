@@ -59,7 +59,12 @@ router.beforeEach(async (to) => {
     return to.path === "/nedostupne" ? true : "/nedostupne";
   }
   if (session.phase === "anonymous") {
-    return to.path === "/prihlaseni" ? true : "/prihlaseni";
+    return to.path === "/prihlaseni"
+      ? true
+      : {
+          path: "/prihlaseni",
+          query: to.query.auth === "failed" ? { auth: "failed" } : {},
+        };
   }
   if (to.path === "/prihlaseni" || to.path === "/nedostupne") return "/";
   if (!hasOperationalNode()) {

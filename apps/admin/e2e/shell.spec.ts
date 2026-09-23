@@ -79,6 +79,17 @@ test("fails closed, signs in, and sends CSRF on logout", async ({ page }) => {
   );
 });
 
+test("preserves the GitHub failure alert after a root callback", async ({
+  page,
+}) => {
+  await mockAuth(page, null);
+  await page.goto("/?auth=failed");
+  await expect(page).toHaveURL(/\/prihlaseni\?auth=failed$/);
+  await expect(page.getByRole("alert")).toContainText(
+    "Přihlášení přes GitHub se nezdařilo.",
+  );
+});
+
 test("failed server logout stays visible and can be retried", async ({
   page,
 }) => {
