@@ -2887,6 +2887,60 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(recoveryFallback.body.express).toMatchObject({ requested: false });
     expect(recoveryFallback.body.checkoutReady).toBe(false);
     expect(recoveryFallback.body.bindingQuote).toBeNull();
+    const bindingRacePort =
+      app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY);
+    const originalBindingValidation =
+      bindingRacePort.validateSelection.bind(bindingRacePort);
+    let bindingProviderEntered!: () => void;
+    let releaseBindingProvider!: () => void;
+    const bindingProviderStarted = new Promise<void>((resolve) => {
+      bindingProviderEntered = resolve;
+    });
+    const bindingProviderGate = new Promise<void>((resolve) => {
+      releaseBindingProvider = resolve;
+    });
+    const bindingProviderSpy = vi
+      .spyOn(bindingRacePort, "validateSelection")
+      .mockImplementation(async (input) => {
+        bindingProviderEntered();
+        await bindingProviderGate;
+        return originalBindingValidation(input);
+      });
+    const staleBindingKey = key("capacity-recovery-stale-provider");
+    try {
+      const pendingBinding = api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(recoverySessionToken, staleBindingKey),
+        },
+      );
+      await bindingProviderStarted;
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: { selectionVersion: { increment: 1 } },
+      });
+      releaseBindingProvider();
+      expect((await pendingBinding).response.status).toBe(409);
+      expect(
+        (
+          await prisma.orderActivePriceBinding.findUniqueOrThrow({
+            where: { orderId: recoveryOrderId },
+          })
+        ).orderPriceBindingId,
+      ).toBe(staleExpressBinding.orderPriceBindingId);
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: {
+            namespace: "automatic-quote.prepare",
+            idempotencyKey: staleBindingKey,
+          },
+        }),
+      ).toBe(0);
+    } finally {
+      releaseBindingProvider();
+      bindingProviderSpy.mockRestore();
+    }
     const recoveryRestaged = await api(
       `automatic-quote-sessions/${recoverySessionId}/prepare`,
       {

@@ -2352,7 +2352,11 @@ export class AutomaticQuotesService {
       where: { orderId },
       include: { selectedDeliveryDestination: true },
     });
-    const priceList = await this.priceListForOrderProjection(client, orderId);
+    const priceList = await this.priceListForOrderProjection(
+      client,
+      orderId,
+      draft,
+    );
     if (!draft?.selectedDeliveryDestination) return false;
     const pricing = await this.pricingItemsFromDraft(
       client,
@@ -4705,15 +4709,12 @@ export class AutomaticQuotesService {
   private async priceListForOrderProjection(
     client: Transaction | PrismaService,
     orderId: string,
+    draft: {
+      selectedDeliveryDestinationId: string | null;
+      expressRequested: boolean;
+      configurationRevision: number;
+    } | null,
   ) {
-    const draft = await client.automaticQuoteDraft.findUnique({
-      where: { orderId },
-      select: {
-        selectedDeliveryDestinationId: true,
-        expressRequested: true,
-        configurationRevision: true,
-      },
-    });
     const active = await client.orderActivePriceBinding.findUnique({
       where: { orderId },
       include: {
@@ -4750,7 +4751,11 @@ export class AutomaticQuotesService {
         items: { orderBy: { ordinal: "asc" } },
       },
     });
-    const priceList = await this.priceListForOrderProjection(client, orderId);
+    const priceList = await this.priceListForOrderProjection(
+      client,
+      orderId,
+      draft,
+    );
     if (!draft || draft.items.length === 0) return null;
     const pricing = await this.pricingItemsFromDraft(
       client,
@@ -5991,7 +5996,11 @@ export class AutomaticQuotesService {
         items: { orderBy: { ordinal: "asc" } },
       },
     });
-    const priceList = await this.priceListForOrderProjection(client, orderId);
+    const priceList = await this.priceListForOrderProjection(
+      client,
+      orderId,
+      draft,
+    );
     if (!draft || draft.items.length === 0) return [];
     const parameters = parseAutomaticQuotePricingParameters(
       priceList.parameters,
