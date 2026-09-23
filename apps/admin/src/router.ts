@@ -49,7 +49,13 @@ export const router = createRouter({
       component: () => import("./views/ShellSectionView.vue"),
       meta: { label: item.label, permission: item.permission },
     })),
-    { path: "/:pathMatch(.*)*", redirect: "/" },
+    {
+      path: "/:pathMatch(.*)*",
+      redirect: (to) => ({
+        path: "/",
+        query: to.query.auth === "failed" ? { auth: "failed" } : {},
+      }),
+    },
   ],
 });
 
@@ -59,7 +65,12 @@ router.beforeEach(async (to) => {
     return to.path === "/nedostupne" ? true : "/nedostupne";
   }
   if (session.phase === "anonymous") {
-    return to.path === "/prihlaseni" ? true : "/prihlaseni";
+    return to.path === "/prihlaseni"
+      ? true
+      : {
+          path: "/prihlaseni",
+          query: to.query.auth === "failed" ? { auth: "failed" } : {},
+        };
   }
   if (to.path === "/prihlaseni" || to.path === "/nedostupne") return "/";
   if (!hasOperationalNode()) {
