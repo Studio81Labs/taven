@@ -5,7 +5,9 @@ import { test, expect } from "@playwright/test";
 const INTEGRATION_API_URL =
   process.env.INTEGRATION_API_URL || "https://api-staging.taven.cz";
 const integrationTest = process.env.INTEGRATION_TEST === "true";
-const requireCheckout = process.env.INTEGRATION_REQUIRE_CHECKOUT === "true";
+const completePayment = process.env.INTEGRATION_COMPLETE_PAYMENT === "true";
+const requireCheckout =
+  process.env.INTEGRATION_REQUIRE_CHECKOUT === "true" || completePayment;
 const FIXTURE_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../tools/slicing-fixtures/fixtures/single-pla/cube.stl",
@@ -64,6 +66,85 @@ test.describe("Real API Integration Journey", () => {
       await expect(
         page.getByRole("heading", { name: "Nastavte výrobu.", level: 2 }),
       ).toBeVisible();
+
+      if (completePayment) {
+        await page.getByRole("button", { name: "Uložit a přepočítat" }).click();
+        await expect(
+          page.getByRole("button", {
+            name: "Ověřit dopravu a závaznou cenu",
+          }),
+        ).toBeEnabled({ timeout: 120_000 });
+        await page
+          .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+          .click();
+        await expect(
+          page.getByRole("heading", { name: "Dokončení objednávky" }),
+        ).toBeVisible({ timeout: 120_000 });
+        await page.getByLabel("Jméno kontaktní osoby").fill("E2E Browser Test");
+        await page.getByLabel("E-mail").fill("browser-144@example.test");
+        await page
+          .getByLabel("Fakturační jméno nebo název")
+          .fill("E2E Browser Test");
+        await page.getByLabel("Ulice a číslo").fill("Testovací 123");
+        await page.getByLabel("Město").fill("Brno");
+        await page.getByLabel("PSČ").fill("60200");
+        await page.getByRole("checkbox", { name: /VOP/i }).check();
+        await page
+          .getByRole("checkbox", { name: /reklamačním řádem/i })
+          .check();
+        await page.getByRole("checkbox", { name: /výjimka/i }).check();
+        await page
+          .getByRole("button", { name: /Objednat a zaplatit/i })
+          .click();
+        await expect(
+          page.getByRole("heading", { name: "TAVEN. sandbox checkout" }),
+        ).toBeVisible({ timeout: 120_000 });
+        await page.getByRole("button", { name: "Capture payment" }).click();
+        await expect(page).toHaveURL(/\/checkout\/payment\/success/);
+        await expect(
+          page.getByRole("heading", { name: "Platba byla potvrzena." }),
+        ).toBeVisible({ timeout: 120_000 });
+        await expect(page.getByText("PLATBA PŘIJATA")).toBeVisible();
+        const returnUrl = new URL(page.url());
+        const sessionId = returnUrl.searchParams.get("sessionId");
+        const paymentId = returnUrl.searchParams.get("paymentId");
+        const stored = await page.evaluate(() => {
+          const raw = sessionStorage.getItem(
+            "taven:automatic-quote-session:v1",
+          );
+          return raw
+            ? (JSON.parse(raw) as {
+                capturedPaymentId?: string;
+                publicReference: string;
+                sessionId: string;
+                sessionToken: string;
+              })
+            : null;
+        });
+        if (!sessionId || !paymentId || !stored) {
+          throw new Error(
+            "Captured checkout return is missing its session evidence",
+          );
+        }
+        expect(stored.sessionId).toBe(sessionId);
+        expect(stored.capturedPaymentId).toBe(paymentId);
+        await expect(
+          page.getByText(`Reference ${stored.publicReference}`),
+        ).toBeVisible();
+        const confirmed = await request.get(
+          `${INTEGRATION_API_URL}/automatic-quote-sessions/${sessionId}/checkout/payment`,
+          {
+            headers: { Authorization: `Bearer ${stored.sessionToken}` },
+            params: { paymentId },
+          },
+        );
+        expect(confirmed.status()).toBe(200);
+        expect(await confirmed.json()).toMatchObject({
+          paymentId,
+          status: "CAPTURED",
+          provider: "sandbox",
+        });
+      }
     }
   });
 });
