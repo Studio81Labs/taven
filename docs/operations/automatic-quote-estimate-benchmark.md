@@ -105,14 +105,45 @@ of physical screen paint or a customer-wide latency promise. The existing
 same-assumption slice comparison above remains −15.06% for the unfloored
 production component, within the ±20% target.
 
-The separate headed staging diagnostic against `https://staging.taven.cz` on
-2026-09-23 was **incomplete**. The page displayed the cube's 300 CZK estimate,
-but the deployed web bundle did not emit the required timing marks during the
-warm-up selection, so the harness timed out after 120 seconds and produced no
-valid remote timing sample. The staging deployment's exact commit was not
-verified. Redeploying a web build containing the benchmark instrumentation and
-rerunning the same command is required before reporting a remote breakdown;
-the local pass does not substitute for that report.
+After a diagnostic-only harness change that reports unsuccessful estimate HTTP
+responses promptly, the same local production builds were rerun on 2026-09-23.
+The four warm parse-complete → visible samples were 60.6, 43.3, 49.7 and
+48.7 ms (median 49.2 ms, maximum 60.6 ms), again passing the local reference
+gate. The first run's complete breakdown above remains the acceptance record.
+
+## Separate staging diagnostic
+
+Run date: 2026-09-23, approximately 12:51 UTC. Coolify's deployment log
+identifies the staging web build as
+`7ea5f26c110d02d909f6119da5ee50ad7f0aad9e`, healthy after its rolling
+update at 12:19 UTC. The same Mac Studio, Node.js v24.15.0 and headed Chromium
+153.0.8010.12 Desktop profile at 1280 × 800 were used without configured
+throttling. The browser accessed `https://staging.taven.cz` and its real
+`https://api-staging.taven.cz` API; staging backend build identity was not
+independently verified. The fixture and STANDARD assumptions were unchanged.
+All successful responses used price-list revision `automatic-v0-czk`,
+print-configuration revision `92222222-2222-4222-8222-222222222222` and
+staging reference-profile ID `66449e7d-4490-4017-b349-5e8dc6819e6d`.
+
+One successful warm-up selection was excluded. Four consecutive successful
+selections measured:
+
+| Sample | Parse (ms) | Post-parse scheduling (ms) | Request/response (ms) | Response-to-render (ms) | Parse-complete → visible (ms) |
+| ------ | ---------: | -------------------------: | --------------------: | ----------------------: | ----------------------------: |
+| 1      |        0.2 |                        1.2 |                 214.6 |                     0.6 |                         216.4 |
+| 2      |        0.3 |                        1.2 |                 220.7 |                     0.5 |                         222.4 |
+| 3      |        0.3 |                        1.4 |                 232.9 |                     0.5 |                         234.8 |
+| 4      |        0.2 |                        1.2 |                 228.7 |                     0.5 |                         230.4 |
+
+The remote median was **226.4 ms** and maximum **234.8 ms**. Most elapsed
+time was request/response over the remote path; the remote run has no ≤200 ms
+acceptance budget and does not change the passing local reference result.
+Earlier staging attempts before this successful run were incomplete: one
+timed out without a correlated complete mark set, and another rendered an
+estimate error during warm-up. Neither produced a timing sample or is counted
+as a successful selection. A separate one-off staging diagnostic subsequently
+returned HTTP 200 with all timing marks; the cause of those earlier transient
+failures was not established by this benchmark.
 
 ## Browser-visible measurement
 
