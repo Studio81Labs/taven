@@ -689,6 +689,79 @@ describe("candidate estimate terminal receipts", () => {
     });
   });
 
+  it("fits a whole plate after a pause and pins the selected availability revision", async () => {
+    const fixture = await createFixture("availability-pause");
+    const firstStart = new Date(Date.now() + 45 * 60_000);
+    const firstEnd = new Date(firstStart.getTime() + 30_000);
+    const secondStart = new Date(firstStart.getTime() + 15 * 60_000);
+    const secondEnd = new Date(secondStart.getTime() + 5 * 60_000);
+    const revisionId = randomUUID();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT id FROM machines WHERE id = $1 FOR UPDATE", [
+        fixture.job.input.machineId,
+      ]);
+      await client.query(
+        "INSERT INTO machine_availability_revisions (id, node_id, machine_id, reason) VALUES ($1, $2, $3, $4)",
+        [revisionId, fixture.nodeId, fixture.job.input.machineId, "test pause"],
+      );
+      for (const [ordinal, startsAt, endsAt] of [
+        [0, firstStart, firstEnd],
+        [1, secondStart, secondEnd],
+      ] as const) {
+        await client.query(
+          "INSERT INTO machine_availability_windows (id, revision_id, node_id, machine_id, ordinal, starts_at, ends_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [
+            randomUUID(),
+            revisionId,
+            fixture.nodeId,
+            fixture.job.input.machineId,
+            ordinal,
+            startsAt,
+            endsAt,
+          ],
+        );
+      }
+      await client.query(
+        "UPDATE machine_availability_selections SET revision_id = $1, selection_version = selection_version + 1 WHERE machine_id = $2 AND node_id = $3",
+        [revisionId, fixture.job.input.machineId, fixture.nodeId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const ingested = await candidates.ingest({ result: fixture.success });
+    expect(ingested.status).toBe("succeeded");
+    const persisted = await pool.query<{
+      machine_availability_revision_id: string;
+      machine_availability_selection_version: number;
+      starts_at: Date;
+      ends_at: Date;
+    }>(
+      `SELECT candidate.machine_availability_revision_id,
+              candidate.machine_availability_selection_version,
+              interval.starts_at, interval.ends_at
+       FROM candidate_resource_estimates candidate
+       JOIN candidate_capacity_intervals interval
+         ON interval.candidate_resource_estimate_id = candidate.id
+       WHERE candidate.resource_snapshot ->> 'dispatchJobId' = $1`,
+      [fixture.job.jobId],
+    );
+    expect(persisted.rows).toMatchObject([
+      {
+        machine_availability_revision_id: revisionId,
+        machine_availability_selection_version: 2,
+        starts_at: secondStart,
+        ends_at: new Date(secondStart.getTime() + 60_000),
+      },
+    ]);
+  });
+
   it("coordinates live candidate windows for the same order phase and machine", async () => {
     const fixture = await createFixture("coordinated-candidate-windows", {
       dispatchableGeometry: true,

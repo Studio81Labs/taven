@@ -198,28 +198,39 @@ function earliestCapacityWindows(
   plateSeconds: readonly bigint[],
   startsAt: Date,
   occupied: readonly OccupiedCapacityRow[],
+  available: readonly CandidateCapacityWindow[],
 ): CandidateCapacityWindow[] {
   let cursor = startsAt.getTime();
   return plateSeconds.map((seconds) => {
     const duration = Number(seconds * 1_000n);
-    if (!Number.isSafeInteger(duration)) {
+    if (!Number.isSafeInteger(duration) || duration <= 0) {
       throw new ResourceValidationError(
         "candidate plate duration exceeds the scheduling range",
       );
     }
-    for (const reservation of occupied) {
-      const reservedStart = reservation.starts_at.getTime();
-      const reservedEnd = reservation.ends_at.getTime();
-      if (reservedEnd <= cursor) continue;
-      if (reservedStart >= cursor + duration) break;
-      cursor = Math.max(cursor, reservedEnd);
+    for (const window of available) {
+      cursor = Math.max(cursor, window.startsAt.getTime());
+      if (cursor + duration > window.endsAt.getTime()) continue;
+      for (const reservation of occupied) {
+        const reservedStart = reservation.starts_at.getTime();
+        const reservedEnd = reservation.ends_at.getTime();
+        if (reservedEnd <= cursor) continue;
+        if (reservedStart >= cursor + duration) break;
+        cursor = Math.max(cursor, reservedEnd);
+      }
+      if (cursor + duration <= window.endsAt.getTime()) {
+        const result = {
+          startsAt: new Date(cursor),
+          endsAt: new Date(cursor + duration),
+        };
+        cursor += duration;
+        return result;
+      }
     }
-    const window = {
-      startsAt: new Date(cursor),
-      endsAt: new Date(cursor + duration),
-    };
-    cursor += duration;
-    return window;
+    throw new ResourceConflictError(
+      "no selected machine availability window fits the complete plate",
+      "machine_availability_plate_fit",
+    );
   });
 }
 
@@ -699,6 +710,33 @@ export class CandidateEstimateService {
           machineCalibrationId:
             dispatch.job.input.machineCalibration.revisionId,
         });
+        const availability =
+          await transaction.machineAvailabilitySelection.findUnique({
+            where: {
+              machineId_nodeId: {
+                machineId: dispatch.job.input.machineId,
+                nodeId: dispatch.nodeId,
+              },
+            },
+            include: {
+              revision: {
+                include: { windows: { orderBy: { ordinal: "asc" } } },
+              },
+            },
+          });
+        if (
+          !availability ||
+          availability.revision.reason === "LEGACY_LIVE_RESERVATION_BOOTSTRAP"
+        ) {
+          throw new ResourceConflictError(
+            "machine availability has not been configured for new work",
+            "machine_availability_unconfigured",
+          );
+        }
+        const available = availability.revision.windows.map((window) => ({
+          startsAt: window.startsAt,
+          endsAt: window.endsAt,
+        }));
         const expiresAt =
           input.expiresAt ??
           new Date(observed.observed_at.getTime() + CANDIDATE_TTL_MILLISECONDS);
@@ -737,7 +775,7 @@ export class CandidateEstimateService {
         `;
         const capacityWindows =
           input.capacityWindows ??
-          earliestCapacityWindows(plateSeconds, expiresAt, occupied);
+          earliestCapacityWindows(plateSeconds, expiresAt, occupied, available);
         validateCapacityWindows(
           capacityWindows,
           plateSeconds,
@@ -745,6 +783,21 @@ export class CandidateEstimateService {
         );
         if (input.capacityWindows) {
           validateCapacityAvailability(capacityWindows, occupied);
+        }
+        if (
+          capacityWindows.some(
+            (candidate) =>
+              !available.some(
+                (window) =>
+                  window.startsAt <= candidate.startsAt &&
+                  window.endsAt >= candidate.endsAt,
+              ),
+          )
+        ) {
+          throw new ResourceConflictError(
+            "candidate plate falls outside selected machine availability",
+            "machine_availability_plate_fit",
+          );
         }
         const requiredMaterialMilligrams = result.outcome.plates.reduce(
           (total, plate) => total + BigInt(plate.estimatedMaterialMilligrams),
@@ -840,6 +893,8 @@ export class CandidateEstimateService {
             observed.remaining_milligrams.toString(),
           inventoryReservedMilligrams: observed.reserved_milligrams.toString(),
           machineId: dispatch.job.input.machineId,
+          machineAvailabilityRevisionId: availability.revisionId,
+          machineAvailabilitySelectionVersion: availability.selectionVersion,
           machineProfileRevisionId:
             dispatch.job.input.machineProfile.revisionId,
           machineCalibrationRevisionId:
@@ -865,6 +920,8 @@ export class CandidateEstimateService {
             machineCalibrationId:
               dispatch.job.input.machineCalibration.revisionId,
             machineId: dispatch.job.input.machineId,
+            machineAvailabilityRevisionId: availability.revisionId,
+            machineAvailabilitySelectionVersion: availability.selectionVersion,
             inventoryId: dispatch.inventoryId,
             shipmentPlanId: dispatch.job.input.shipmentPlanId,
             arrangementRevisionId:

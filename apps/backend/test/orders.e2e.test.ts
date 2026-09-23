@@ -371,6 +371,9 @@ async function createFreshReplacementCandidate(
       machineProfileId: source.machineProfileId,
       machineCalibrationId: source.machineCalibrationId,
       machineId: source.machineId,
+      machineAvailabilityRevisionId: source.machineAvailabilityRevisionId,
+      machineAvailabilitySelectionVersion:
+        source.machineAvailabilitySelectionVersion,
       inventoryId: source.inventoryId,
       shipmentPlanId: source.shipmentPlanId,
       arrangementRevisionId: source.arrangementRevisionId,
@@ -835,6 +838,45 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     for (const [name, value] of Object.entries(previousCheckoutEnvironment)) {
       restoreEnvironment(name, value);
     }
+  });
+
+  it("requires mounted inventory and active selected machine availability before printing", async () => {
+    const fixture = await preparePaidOrder("printing-mount-prerequisite");
+    const { orderId, inventoryId, machineId } = fixture.foundation;
+    const jobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, jobId, "printing-mount-accept");
+    await makeGcodeReady(jobId);
+    await prisma.inventory.update({
+      where: { id: inventoryId },
+      data: { mountStatus: "UNMOUNTED" },
+    });
+    await expect(
+      orders.startPrinting(orderId, jobId, "printing-mount-unready"),
+    ).rejects.toThrow("Required material must be mounted before printing");
+    await prisma.inventory.update({
+      where: { id: inventoryId },
+      data: { mountStatus: "MOUNTED" },
+    });
+    await prisma.machine.update({
+      where: { id: machineId },
+      data: { status: "MAINTENANCE" },
+    });
+    await expect(
+      orders.startPrinting(orderId, jobId, "printing-machine-unready"),
+    ).rejects.toThrow("Machine is unavailable for printing");
+    await prisma.machine.update({
+      where: { id: machineId },
+      data: { status: "ACTIVE" },
+    });
+    await expect(
+      orders.startPrinting(orderId, jobId, "printing-mount-ready"),
+    ).resolves.toMatchObject({ status: "JOB_PRINTING" });
+    await expect(
+      prisma.inventory.update({
+        where: { id: inventoryId },
+        data: { mountStatus: "UNMOUNTED" },
+      }),
+    ).rejects.toThrow(/printing inventory cannot be unmounted/);
   });
 
   it("rejects absent refund request bodies before command execution", async () => {

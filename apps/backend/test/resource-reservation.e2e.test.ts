@@ -71,6 +71,149 @@ describe("phase resource reservation execution", () => {
     await pool.end();
   });
 
+  it("serializes availability publication ahead of a stale reservation hold", async () => {
+    const setup = await pool.connect();
+    let nodeId: string;
+    let machineId: string;
+    let planId: string;
+    try {
+      await setup.query("BEGIN");
+      const fixtures = new PersistenceFactory(
+        setup,
+        `${testScope}:publication-wins`,
+      );
+      const foundation = await fixtures.createFoundation("publication-wins");
+      const now = Date.now();
+      const production = await fixtures.planProduction(
+        foundation,
+        "publication-wins-production",
+        {
+          startsAt: new Date(now + 3_600_000),
+          endsAt: new Date(now + 7_200_000),
+        },
+      );
+      await setup.query(
+        "UPDATE inventories SET remaining_milligrams = 1000 WHERE id = $1",
+        [foundation.inventoryId],
+      );
+      await fixtures.createResourcePlan(foundation, [production]);
+      await setup.query("COMMIT");
+      nodeId = foundation.nodeId;
+      machineId = foundation.machineId;
+      planId = foundation.phaseResourcePlanId;
+    } catch (error) {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setup.release();
+    }
+
+    const publisher = await pool.connect();
+    try {
+      await publisher.query("BEGIN");
+      await publisher.query(
+        "SELECT id FROM machines WHERE id = $1 FOR UPDATE",
+        [machineId],
+      );
+      const revisionId = randomUUID();
+      await publisher.query(
+        "INSERT INTO machine_availability_revisions (id, node_id, machine_id, reason) VALUES ($1, $2, $3, $4)",
+        [revisionId, nodeId, machineId, "test publication wins"],
+      );
+      await publisher.query(
+        "UPDATE machine_availability_selections SET revision_id = $1, selection_version = selection_version + 1 WHERE machine_id = $2 AND node_id = $3",
+        [revisionId, machineId, nodeId],
+      );
+      const attemptedHold = reserveAndCommit(
+        nodeId,
+        planId,
+        `publication-wins-${randomUUID()}`,
+      );
+      await publisher.query("COMMIT");
+      await expect(attemptedHold).rejects.toMatchObject({
+        constraint: "phase_reservation_machine_availability",
+      });
+      const sets = await pool.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM phase_reservation_sets WHERE phase_resource_plan_id = $1",
+        [planId],
+      );
+      expect(sets.rows[0]?.count).toBe("0");
+    } catch (error) {
+      await publisher.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      publisher.release();
+    }
+  });
+
+  it("rejects a direct availability revision that excludes committed live capacity", async () => {
+    const setup = await pool.connect();
+    let nodeId: string;
+    let machineId: string;
+    let planId: string;
+    try {
+      await setup.query("BEGIN");
+      const fixtures = new PersistenceFactory(
+        setup,
+        `${testScope}:reservation-wins`,
+      );
+      const foundation = await fixtures.createFoundation("reservation-wins");
+      const now = Date.now();
+      const production = await fixtures.planProduction(
+        foundation,
+        "reservation-wins-production",
+        {
+          startsAt: new Date(now + 3_600_000),
+          endsAt: new Date(now + 7_200_000),
+        },
+      );
+      await setup.query(
+        "UPDATE inventories SET remaining_milligrams = 1000 WHERE id = $1",
+        [foundation.inventoryId],
+      );
+      await fixtures.createResourcePlan(foundation, [production]);
+      await setup.query("COMMIT");
+      nodeId = foundation.nodeId;
+      machineId = foundation.machineId;
+      planId = foundation.phaseResourcePlanId;
+    } catch (error) {
+      await setup.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setup.release();
+    }
+    await reserveAndCommit(nodeId, planId, `reservation-wins-${randomUUID()}`);
+    const publisher = await pool.connect();
+    try {
+      await publisher.query("BEGIN");
+      await publisher.query(
+        "SELECT id FROM machines WHERE id = $1 FOR UPDATE",
+        [machineId],
+      );
+      const revisionId = randomUUID();
+      await publisher.query(
+        "INSERT INTO machine_availability_revisions (id, node_id, machine_id, reason) VALUES ($1, $2, $3, $4)",
+        [revisionId, nodeId, machineId, "test reservation wins"],
+      );
+      await expect(
+        publisher.query(
+          "UPDATE machine_availability_selections SET revision_id = $1, selection_version = selection_version + 1 WHERE machine_id = $2 AND node_id = $3",
+          [revisionId, machineId, nodeId],
+        ),
+      ).rejects.toMatchObject({
+        constraint: "machine_availability_live_reservation_guard",
+      });
+      await publisher.query("ROLLBACK");
+    } finally {
+      publisher.release();
+    }
+    const selected = await pool.query<{ selection_version: number }>(
+      "SELECT selection_version FROM machine_availability_selections WHERE machine_id = $1 AND node_id = $2",
+      [machineId, nodeId],
+    );
+    expect(selected.rows[0]?.selection_version).toBe(1);
+  });
+
   it("persists a complete live eligibility plan through the backend service", async () => {
     const setupClient = await pool.connect();
     await setupClient.query("BEGIN");

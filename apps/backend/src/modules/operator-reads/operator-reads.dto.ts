@@ -139,6 +139,18 @@ export class OperatorJobEstimateDto {
   machineId!: string;
 
   @ApiProperty(UUID)
+  inventoryId!: string;
+
+  @ApiProperty({ type: String, enum: ["UNKNOWN", "UNMOUNTED", "MOUNTED"] })
+  inventoryMountStatus!: string;
+
+  @ApiProperty({
+    type: Boolean,
+    description: "Material must be mounted before printing.",
+  })
+  mountReadyForPrinting!: boolean;
+
+  @ApiProperty(UUID)
   printConfigRevisionId!: string;
 
   @ApiProperty(UUID)
@@ -716,6 +728,34 @@ export class MachineReadDto {
   installedNozzleMicrometers!: number;
 }
 
+export class MachineAvailabilityWindowReadDto {
+  @ApiProperty({ type: Number, minimum: 0 })
+  ordinal!: number;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  startsAt!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  endsAt!: string;
+}
+
+export class MachineAvailabilityReadDto {
+  @ApiProperty(UUID)
+  machineId!: string;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  revisionId!: string | null;
+
+  @ApiPropertyOptional({ type: Number, nullable: true })
+  selectionVersion!: number | null;
+
+  @ApiProperty({ type: [MachineAvailabilityWindowReadDto] })
+  windows!: MachineAvailabilityWindowReadDto[];
+
+  @ApiProperty({ type: () => [CapacityReservationReadDto] })
+  occupiedIntervals!: CapacityReservationReadDto[];
+}
+
 export class InventoryReadDto {
   @ApiProperty(UUID)
   id!: string;
@@ -743,6 +783,27 @@ export class InventoryReadDto {
 
   @ApiProperty({ type: String })
   status!: string;
+
+  @ApiProperty({ type: String, enum: ["UNKNOWN", "UNMOUNTED", "MOUNTED"] })
+  mountStatus!: string;
+
+  @ApiProperty({ type: String, enum: ["UNKNOWN", "RECORDED"] })
+  receiptCoverage!: "UNKNOWN" | "RECORDED";
+}
+
+export class InventoryReceiptReadDto {
+  @ApiProperty(UUID) id!: string;
+  @ApiProperty({ type: String, enum: ["INITIAL", "CORRECTION"] }) kind!: string;
+  @ApiPropertyOptional({ ...UUID, nullable: true }) supersedesReceiptId!:
+    string | null;
+  @ApiProperty(DECIMAL) receivedMilligrams!: string;
+  @ApiProperty({ type: String }) vendor!: string;
+  @ApiProperty({ type: String }) currency!: string;
+  @ApiProperty(DECIMAL) priceMinorUnitsNumerator!: string;
+  @ApiProperty(DECIMAL) priceMinorUnitsDenominator!: string;
+  @ApiProperty({ type: String, format: "date-time" }) purchasedAt!: string;
+  @ApiPropertyOptional({ type: String, nullable: true }) reason!: string | null;
+  @ApiProperty({ type: String, format: "date-time" }) createdAt!: string;
 }
 
 const CATALOG_JSON = { type: Object, additionalProperties: true } as const;
@@ -803,6 +864,9 @@ export class InventoryDetailDto extends InventoryReadDto {
 
   @ApiProperty({ type: String })
   currency!: string;
+
+  @ApiProperty({ type: [InventoryReceiptReadDto] })
+  receipts!: InventoryReceiptReadDto[];
 }
 
 export class MachineCalibrationReadDto {

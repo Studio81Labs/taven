@@ -378,6 +378,46 @@ export class PersistenceFactory {
       ],
     );
     await this.sql.query(
+      'UPDATE "inventories" SET "mount_status" = $2 WHERE "id" = $1',
+      [inventoryId, "MOUNTED"],
+    );
+    await this.sql.query(
+      'INSERT INTO "inventory_receipts" ("id", "node_id", "machine_id", "inventory_id", "kind", "received_milligrams", "vendor", "currency", "price_minor_units_numerator", "price_minor_units_denominator", "purchased_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+      [
+        this.id(`${name}:initial-receipt`),
+        nodeId,
+        machineId,
+        inventoryId,
+        "INITIAL",
+        1_000_000,
+        "Test vendor",
+        "EUR",
+        1,
+        1,
+        createdAt,
+      ],
+    );
+    const availabilityRevisionId = this.id(`${name}:availability-revision`);
+    await this.sql.query(
+      'INSERT INTO "machine_availability_revisions" ("id", "node_id", "machine_id", "reason") VALUES ($1, $2, $3, $4)',
+      [availabilityRevisionId, nodeId, machineId, "test fixture availability"],
+    );
+    await this.sql.query(
+      'INSERT INTO "machine_availability_windows" ("id", "revision_id", "node_id", "machine_id", "ordinal", "starts_at", "ends_at") VALUES ($1, $2, $3, $4, 0, $5, $6)',
+      [
+        this.id(`${name}:availability-window`),
+        availabilityRevisionId,
+        nodeId,
+        machineId,
+        testTimes.createdAt,
+        testTimes.expiresAt,
+      ],
+    );
+    await this.sql.query(
+      'INSERT INTO "machine_availability_selections" ("machine_id", "node_id", "revision_id", "selection_version") VALUES ($1, $2, $3, 1)',
+      [machineId, nodeId, availabilityRevisionId],
+    );
+    await this.sql.query(
       'INSERT INTO "model_files" ("id", "format", "original_filename", "storage_object_key", "content_hash", "size_bytes", "uploaded_at", "source_delete_after", "retention_hold") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
       [
         modelFileId,
@@ -1835,8 +1875,18 @@ export class PersistenceFactory {
       ],
     );
 
+    const availability = await this.sql.query<{
+      revision_id: string;
+      selection_version: number;
+    }>(
+      'SELECT "revision_id", "selection_version" FROM "machine_availability_selections" WHERE "machine_id" = $1 AND "node_id" = $2',
+      [foundation.machineId, foundation.nodeId],
+    );
+    const selectedAvailability = availability.rows[0];
+    if (!selectedAvailability)
+      throw new Error("test machine availability is unconfigured");
     await this.sql.query(
-      'INSERT INTO "candidate_resource_estimates" ("id", "node_id", "estimate_key", "model_geometry_id", "slice_result_id", "tail_slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "machine_id", "inventory_id", "shipment_plan_id", "arrangement_revision_id", "quantity", "parts_per_plate", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, $20)',
+      'INSERT INTO "candidate_resource_estimates" ("id", "node_id", "estimate_key", "model_geometry_id", "slice_result_id", "tail_slice_result_id", "print_config_revision_id", "machine_profile_id", "machine_calibration_id", "machine_id", "machine_availability_revision_id", "machine_availability_selection_version", "inventory_id", "shipment_plan_id", "arrangement_revision_id", "quantity", "parts_per_plate", "required_material_milligrams", "required_machine_seconds", "resource_snapshot", "calculated_at", "expires_at") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21, $22)',
       [
         candidateId,
         foundation.nodeId,
@@ -1850,6 +1900,8 @@ export class PersistenceFactory {
         foundation.machineProfileId,
         foundation.machineCalibrationId,
         foundation.machineId,
+        selectedAvailability.revision_id,
+        selectedAvailability.selection_version,
         foundation.inventoryId,
         shipmentPlanId,
         arrangementRevisionId,

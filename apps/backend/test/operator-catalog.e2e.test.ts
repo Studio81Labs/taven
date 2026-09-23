@@ -634,6 +634,265 @@ describe("operator catalog commands", () => {
     }
   });
 
+  it("receives and corrects a lot, mounts it, and publishes bounded machine availability", async () => {
+    const receiptPath = `/admin/nodes/${fixture.nodeId}/inventory-receipts`;
+    const receiptBody = {
+      machineId: fixture.machineId,
+      sku: `received-${randomUUID()}`,
+      material: "PLA",
+      vendor: "Original vendor",
+      color: "blue",
+      lotCode: "receipt-test",
+      priceMinorUnitsNumerator: "7",
+      priceMinorUnitsDenominator: "100",
+      currency: "CZK",
+      remainingMilligrams: "500",
+      purchasedAt: new Date(Date.now() - 86_400_000).toISOString(),
+    };
+    const receiptKey = `catalog-receipt-${randomUUID()}`;
+    const received = await responseBody(
+      command(receiptPath, receiptBody, receiptKey),
+    );
+    expect(received.status).toBe("AVAILABLE");
+    expect(
+      await responseBody(command(receiptPath, receiptBody, receiptKey)),
+    ).toEqual(received);
+    const detailPath = `/admin/nodes/${fixture.nodeId}/inventories/${received.id}`;
+    const detailResponse = await fetch(new URL(detailPath, baseUrl), {
+      headers: { cookie: viewerCookie },
+    });
+    expect(detailResponse.status).toBe(200);
+    const detail = (await detailResponse.json()) as {
+      mountStatus: string;
+      receiptCoverage: string;
+      receipts: Array<{ id: string; kind: string; receivedMilligrams: string }>;
+    };
+    expect(detail).toMatchObject({
+      mountStatus: "UNMOUNTED",
+      receiptCoverage: "RECORDED",
+    });
+    expect(detail.receipts).toMatchObject([
+      { kind: "INITIAL", receivedMilligrams: "500" },
+    ]);
+    const firstReceiptId = detail.receipts[0]?.id;
+    if (!firstReceiptId) throw new Error("initial receipt was not returned");
+    const correctionPath = `${detailPath}/receipt-corrections`;
+    const correctionBody = {
+      supersedesReceiptId: firstReceiptId,
+      receivedMilligrams: "500",
+      vendor: "Correct vendor",
+      priceMinorUnitsNumerator: "8",
+      priceMinorUnitsDenominator: "100",
+      currency: "CZK",
+      purchasedAt: receiptBody.purchasedAt,
+      reason: "Correct purchase document",
+    };
+    expect(
+      (
+        await command(
+          correctionPath,
+          correctionBody,
+          `catalog-correct-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await command(
+          correctionPath,
+          correctionBody,
+          `catalog-correct-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(409);
+    const corrected = await prisma.inventory.findUniqueOrThrow({
+      where: { id: received.id },
+    });
+    expect(corrected).toMatchObject({
+      vendor: "Correct vendor",
+      priceMinorUnitsNumerator: 8n,
+      remainingMilligrams: 500n,
+    });
+    const legacy = await responseBody(
+      command(
+        `/admin/nodes/${fixture.nodeId}/inventories`,
+        {
+          ...receiptBody,
+          sku: `legacy-${randomUUID()}`,
+          remainingMilligrams: "300",
+          purchasedAt: undefined,
+        },
+        `catalog-legacy-${randomUUID()}`,
+      ),
+    );
+    const legacyDetail = await fetch(
+      new URL(
+        `/admin/nodes/${fixture.nodeId}/inventories/${legacy.id}`,
+        baseUrl,
+      ),
+      {
+        headers: { cookie: viewerCookie },
+      },
+    );
+    expect(await legacyDetail.json()).toMatchObject({
+      receiptCoverage: "UNKNOWN",
+      mountStatus: "UNKNOWN",
+    });
+    const initialPath = `/admin/nodes/${fixture.nodeId}/inventories/${legacy.id}/initial-receipt`;
+    const initialBody = {
+      receivedMilligrams: "400",
+      vendor: "Attested vendor",
+      priceMinorUnitsNumerator: "5",
+      priceMinorUnitsDenominator: "100",
+      currency: "CZK",
+      purchasedAt: receiptBody.purchasedAt,
+      reason: "Original invoice located",
+    };
+    const initialKey = `catalog-initial-${randomUUID()}`;
+    expect(
+      (
+        await command(
+          initialPath,
+          { ...initialBody, receivedMilligrams: "299" },
+          `catalog-initial-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(409);
+    const attested = await responseBody(
+      command(initialPath, initialBody, initialKey),
+    );
+    expect(
+      await responseBody(command(initialPath, initialBody, initialKey)),
+    ).toEqual(attested);
+    expect(
+      (
+        await command(
+          initialPath,
+          initialBody,
+          `catalog-initial-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(409);
+    await expect(
+      prisma.inventory.findUnique({ where: { id: legacy.id } }),
+    ).resolves.toMatchObject({
+      vendor: "Attested vendor",
+      priceMinorUnitsNumerator: 5n,
+      remainingMilligrams: 300n,
+    });
+    const mountPath = `${detailPath}/mount`;
+    expect(
+      (
+        await command(
+          mountPath,
+          { mountStatus: "MOUNTED", reason: "Loaded on machine" },
+          `catalog-mount-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await command(
+          mountPath,
+          { mountStatus: "UNMOUNTED", reason: "Removed from machine" },
+          `catalog-mount-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await command(
+          `/admin/nodes/${randomUUID()}/inventories/${received.id}/mount`,
+          { mountStatus: "MOUNTED", reason: "Wrong node" },
+          `catalog-mount-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await commandAs(
+          viewerCookie,
+          viewerCsrfToken,
+          mountPath,
+          { mountStatus: "MOUNTED", reason: "Wrong role" },
+          `catalog-mount-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(403);
+
+    const availabilityPath = `/admin/nodes/${fixture.nodeId}/machines/${fixture.machineId}/availability`;
+    const start = new Date(Date.now() + 3_600_000);
+    const stop = new Date(start.getTime() + 3_600_000);
+    const availabilityBody = {
+      expectedVersion: 1,
+      reason: "Staffed print shift",
+      windows: [{ startsAt: start.toISOString(), endsAt: stop.toISOString() }],
+    };
+    const availabilityKey = `catalog-availability-${randomUUID()}`;
+    const published = await responseBody(
+      command(availabilityPath, availabilityBody, availabilityKey),
+    );
+    expect(
+      await responseBody(
+        command(availabilityPath, availabilityBody, availabilityKey),
+      ),
+    ).toEqual(published);
+    expect(
+      (
+        await command(
+          availabilityPath,
+          availabilityBody,
+          `catalog-availability-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(409);
+    const read = await fetch(
+      new URL(
+        `${availabilityPath}?from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(stop.toISOString())}`,
+        baseUrl,
+      ),
+      {
+        headers: { cookie: viewerCookie },
+      },
+    );
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({
+      machineId: fixture.machineId,
+      revisionId: published.id,
+      selectionVersion: 2,
+      windows: [
+        {
+          ordinal: 0,
+          startsAt: start.toISOString(),
+          endsAt: stop.toISOString(),
+        },
+      ],
+      occupiedIntervals: [],
+    });
+    expect(
+      (
+        await fetch(
+          new URL(
+            `${availabilityPath}?from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(stop.toISOString())}&extra=1`,
+            baseUrl,
+          ),
+          { headers: { cookie: viewerCookie } },
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(
+          new URL(
+            `/admin/nodes/${randomUUID()}/machines/${fixture.machineId}/availability?from=${encodeURIComponent(start.toISOString())}&to=${encodeURIComponent(stop.toISOString())}`,
+            baseUrl,
+          ),
+          { headers: { cookie: viewerCookie } },
+        )
+      ).status,
+    ).toBe(404);
+  });
+
   it("writes revision and node catalog resources with idempotency and audit evidence", async () => {
     const referenceKey = `catalog-reference-${randomUUID()}`;
     const referenceBody = {
@@ -1597,6 +1856,75 @@ describe("operator catalog commands", () => {
       },
     );
     expect(forbidden.status).toBe(403);
+  });
+
+  it("rejects availability publication that would strand a live reservation", async () => {
+    const client = await pool.connect();
+    let nodeId: string;
+    let machineId: string;
+    let planId: string;
+    try {
+      await client.query("BEGIN");
+      const fixtures = new PersistenceFactory(
+        client,
+        `availability-live-${randomUUID()}`,
+      );
+      const foundation = await fixtures.createFoundation("availability-live");
+      const now = Date.now();
+      const production = await fixtures.planProduction(
+        foundation,
+        "availability-live-production",
+        {
+          startsAt: new Date(now + 3_600_000),
+          endsAt: new Date(now + 7_200_000),
+        },
+      );
+      await client.query(
+        "UPDATE inventories SET remaining_milligrams = 1000 WHERE id = $1",
+        [foundation.inventoryId],
+      );
+      await fixtures.createResourcePlan(foundation, [production]);
+      await client.query("COMMIT");
+      nodeId = foundation.nodeId;
+      machineId = foundation.machineId;
+      planId = foundation.phaseResourcePlanId;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+    await pool.query(
+      "SELECT * FROM taven_create_phase_reservation($1, $2, $3)",
+      [nodeId, planId, `availability-live-${randomUUID()}`],
+    );
+    const live = await pool.query<{ id: string }>(
+      `SELECT id FROM capacity_reservations WHERE machine_id = $1
+         AND status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')`,
+      [machineId],
+    );
+    const path = `/admin/nodes/${nodeId}/machines/${machineId}/availability`;
+    const scopedAdmin = await sessionCookie("ADMIN", nodeId);
+    const response = await commandAs(
+      scopedAdmin.cookie,
+      scopedAdmin.csrfToken,
+      path,
+      {
+        expectedVersion: 1,
+        reason: "Pause all future work",
+        windows: [],
+      },
+      `availability-shrink-${randomUUID()}`,
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      conflictReservationIds: live.rows.map(({ id }) => id),
+    });
+    await expect(
+      prisma.machineAvailabilitySelection.findUnique({
+        where: { machineId_nodeId: { machineId, nodeId } },
+      }),
+    ).resolves.toMatchObject({ selectionVersion: 1 });
   });
 
   async function command(

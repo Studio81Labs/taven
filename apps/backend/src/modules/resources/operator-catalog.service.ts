@@ -8,6 +8,8 @@ import {
 import {
   IdempotencyStatus,
   InventoryStatus,
+  InventoryMountStatus,
+  InventoryReceiptKind,
   MachineStatus,
   Material,
   Prisma,
@@ -54,6 +56,11 @@ import type {
   ActivateCommercialPolicyDto,
   CommercialPolicyActivationResultDto,
   CreateInventoryDto,
+  ReceiveInventoryDto,
+  RecordInitialInventoryReceiptDto,
+  CorrectInventoryReceiptDto,
+  InventoryMountDto,
+  ReplaceMachineAvailabilityDto,
   CreateMachineCapabilityDto,
   CreateMachineCalibrationDto,
   CreateMachineProfileDto,
@@ -502,6 +509,487 @@ export class OperatorCatalogService {
           payload: { operation: "create", machineId: input.machineId },
         });
         return result;
+      },
+    );
+  }
+
+  async receiveInventory(
+    operator: OperatorContext,
+    nodeId: string,
+    body: ReceiveInventoryDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    nodeId = this.node(operator, nodeId);
+    const input = inventoryInput(nodeId, body);
+    if (input.remainingMilligrams <= 0n) {
+      throw new BadRequestException("received lot mass must be positive");
+    }
+    const purchasedAt = explicitInstant(body.purchasedAt, "purchasedAt");
+    return this.command(
+      operator,
+      `cat:n:${nodeId}:i:receive`,
+      key,
+      {
+        inventory: inventoryCommandInput(input),
+        purchasedAt: purchasedAt.toISOString(),
+      },
+      async (tx, idempotencyKey) => {
+        const inventory = await this.catalog.createInventory(input, tx);
+        await tx.inventory.update({
+          where: { id: inventory.id },
+          data: { mountStatus: InventoryMountStatus.UNMOUNTED },
+        });
+        const receipt = await tx.inventoryReceipt.create({
+          data: {
+            nodeId,
+            machineId: inventory.machineId,
+            inventoryId: inventory.id,
+            kind: InventoryReceiptKind.INITIAL,
+            receivedMilligrams: inventory.remainingMilligrams,
+            vendor: inventory.vendor,
+            currency: inventory.currency,
+            priceMinorUnitsNumerator: inventory.priceMinorUnitsNumerator,
+            priceMinorUnitsDenominator: inventory.priceMinorUnitsDenominator,
+            purchasedAt,
+          },
+        });
+        await this.record(tx, operator, nodeId, idempotencyKey, inventory.id, {
+          eventType: "catalog.inventory.received",
+          payload: {
+            operation: "receive",
+            machineId: inventory.machineId,
+            receiptId: receipt.id,
+          },
+        });
+        return { id: inventory.id, status: inventory.status };
+      },
+    );
+  }
+
+  async recordInitialInventoryReceipt(
+    operator: OperatorContext,
+    nodeId: string,
+    inventoryId: string,
+    body: RecordInitialInventoryReceiptDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    nodeId = this.node(operator, nodeId);
+    inventoryId = uuid(inventoryId, "inventoryId");
+    body = commandBody(body);
+    const receivedMilligrams = integer(
+      body.receivedMilligrams,
+      "receivedMilligrams",
+    );
+    const priceMinorUnitsNumerator = integer(
+      body.priceMinorUnitsNumerator,
+      "priceMinorUnitsNumerator",
+    );
+    const priceMinorUnitsDenominator = integer(
+      body.priceMinorUnitsDenominator,
+      "priceMinorUnitsDenominator",
+    );
+    if (
+      receivedMilligrams <= 0n ||
+      priceMinorUnitsNumerator < 0n ||
+      priceMinorUnitsDenominator <= 0n
+    ) {
+      throw new BadRequestException(
+        "receipt mass and purchase rate are invalid",
+      );
+    }
+    const vendor = text(body.vendor, "vendor", 200);
+    const receiptCurrency = currency(body.currency);
+    const purchasedAt = explicitInstant(body.purchasedAt, "purchasedAt");
+    const reason = reasonText(body);
+    return this.command(
+      operator,
+      `cat:n:${nodeId}:i:${inventoryId}:receipt-initial`,
+      key,
+      {
+        nodeId,
+        inventoryId,
+        receivedMilligrams: receivedMilligrams.toString(),
+        priceMinorUnitsNumerator: priceMinorUnitsNumerator.toString(),
+        priceMinorUnitsDenominator: priceMinorUnitsDenominator.toString(),
+        vendor,
+        currency: receiptCurrency,
+        purchasedAt: purchasedAt.toISOString(),
+        reason,
+      },
+      async (tx, idempotencyKey) => {
+        const rows = await tx.$queryRaw<
+          Array<{ machine_id: string; remaining_milligrams: bigint }>
+        >`
+          SELECT machine_id, remaining_milligrams FROM inventories
+          WHERE id = ${inventoryId}::uuid AND node_id = ${nodeId}::uuid FOR UPDATE
+        `;
+        const inventory = rows[0];
+        if (!inventory) throw new NotFoundException("Inventory was not found");
+        if (receivedMilligrams < inventory.remaining_milligrams) {
+          throw new ConflictException(
+            "Attested receipt mass is below current lot balance",
+          );
+        }
+        const existing = await tx.inventoryReceipt.findFirst({
+          where: { inventoryId, nodeId },
+          select: { id: true },
+        });
+        if (existing)
+          throw new ConflictException(
+            "Inventory already has purchase evidence",
+          );
+        const receipt = await tx.inventoryReceipt.create({
+          data: {
+            nodeId,
+            machineId: inventory.machine_id,
+            inventoryId,
+            kind: InventoryReceiptKind.INITIAL,
+            receivedMilligrams,
+            vendor,
+            currency: receiptCurrency,
+            priceMinorUnitsNumerator,
+            priceMinorUnitsDenominator,
+            purchasedAt,
+          },
+        });
+        await tx.inventory.update({
+          where: { id: inventoryId },
+          data: {
+            vendor,
+            currency: receiptCurrency,
+            priceMinorUnitsNumerator,
+            priceMinorUnitsDenominator,
+          },
+        });
+        await this.record(tx, operator, nodeId, idempotencyKey, inventoryId, {
+          eventType: "catalog.inventory.receipt-recorded",
+          reason,
+          reasonCode: "INVENTORY_RECEIPT_ATTESTATION",
+          payload: { operation: "receipt-initial", receiptId: receipt.id },
+        });
+        return { id: inventoryId, status: "RECORDED" };
+      },
+    );
+  }
+
+  async correctInventoryReceipt(
+    operator: OperatorContext,
+    nodeId: string,
+    inventoryId: string,
+    body: CorrectInventoryReceiptDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    nodeId = this.node(operator, nodeId);
+    inventoryId = uuid(inventoryId, "inventoryId");
+    body = commandBody(body);
+    const supersedesReceiptId = uuid(
+      body.supersedesReceiptId,
+      "supersedesReceiptId",
+    );
+    const receivedMilligrams = integer(
+      body.receivedMilligrams,
+      "receivedMilligrams",
+    );
+    const priceMinorUnitsNumerator = integer(
+      body.priceMinorUnitsNumerator,
+      "priceMinorUnitsNumerator",
+    );
+    const priceMinorUnitsDenominator = integer(
+      body.priceMinorUnitsDenominator,
+      "priceMinorUnitsDenominator",
+    );
+    if (
+      receivedMilligrams <= 0n ||
+      priceMinorUnitsNumerator < 0n ||
+      priceMinorUnitsDenominator <= 0n
+    ) {
+      throw new BadRequestException(
+        "receipt mass and purchase rate are invalid",
+      );
+    }
+    const vendor = text(body.vendor, "vendor", 200);
+    const receiptCurrency = currency(body.currency);
+    const purchasedAt = explicitInstant(body.purchasedAt, "purchasedAt");
+    const reason = reasonText(body);
+    if (reason.length > 500)
+      throw new BadRequestException("reason is too long");
+    return this.command(
+      operator,
+      `cat:n:${nodeId}:i:${inventoryId}:receipt-correct`,
+      key,
+      {
+        nodeId,
+        inventoryId,
+        supersedesReceiptId,
+        receivedMilligrams: receivedMilligrams.toString(),
+        priceMinorUnitsNumerator: priceMinorUnitsNumerator.toString(),
+        priceMinorUnitsDenominator: priceMinorUnitsDenominator.toString(),
+        vendor,
+        currency: receiptCurrency,
+        purchasedAt: purchasedAt.toISOString(),
+        reason,
+      },
+      async (tx, idempotencyKey) => {
+        const rows = await tx.$queryRaw<
+          Array<{ machine_id: string; remaining_milligrams: bigint }>
+        >`
+          SELECT machine_id, remaining_milligrams FROM inventories
+          WHERE id = ${inventoryId}::uuid AND node_id = ${nodeId}::uuid
+          FOR UPDATE
+        `;
+        if (rows.length !== 1)
+          throw new NotFoundException("Inventory was not found");
+        if (receivedMilligrams < rows[0]!.remaining_milligrams) {
+          throw new ConflictException(
+            "Corrected receipt mass is below current lot balance",
+          );
+        }
+        const activeReceipt = await tx.inventoryReceipt.findFirst({
+          where: { inventoryId, nodeId, corrections: { none: {} } },
+          select: { id: true },
+        });
+        if (activeReceipt?.id !== supersedesReceiptId) {
+          throw new ConflictException("Inventory receipt has changed");
+        }
+        const receipt = await tx.inventoryReceipt.create({
+          data: {
+            nodeId,
+            machineId: rows[0]!.machine_id,
+            inventoryId,
+            kind: InventoryReceiptKind.CORRECTION,
+            supersedesReceiptId,
+            receivedMilligrams,
+            vendor,
+            currency: receiptCurrency,
+            priceMinorUnitsNumerator,
+            priceMinorUnitsDenominator,
+            purchasedAt,
+            reason,
+          },
+        });
+        await tx.inventory.update({
+          where: { id: inventoryId },
+          data: {
+            vendor,
+            currency: receiptCurrency,
+            priceMinorUnitsNumerator,
+            priceMinorUnitsDenominator,
+          },
+        });
+        await this.record(tx, operator, nodeId, idempotencyKey, inventoryId, {
+          eventType: "catalog.inventory.receipt-corrected",
+          reason,
+          reasonCode: "INVENTORY_RECEIPT_CORRECTION",
+          payload: {
+            operation: "receipt-correction",
+            receiptId: receipt.id,
+            supersedesReceiptId,
+          },
+        });
+        return { id: inventoryId, status: "RECEIPT_CORRECTED" };
+      },
+    );
+  }
+
+  async setInventoryMount(
+    operator: OperatorContext,
+    nodeId: string,
+    inventoryId: string,
+    body: InventoryMountDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    nodeId = this.node(operator, nodeId);
+    inventoryId = uuid(inventoryId, "inventoryId");
+    body = commandBody(body);
+    if (body.mountStatus !== "MOUNTED" && body.mountStatus !== "UNMOUNTED") {
+      throw new BadRequestException("mountStatus is invalid");
+    }
+    const mountStatus = body.mountStatus;
+    const reason = reasonText(body);
+    return this.command(
+      operator,
+      `cat:n:${nodeId}:i:${inventoryId}:mount`,
+      key,
+      { nodeId, inventoryId, mountStatus, reason },
+      async (tx, idempotencyKey) => {
+        const rows = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM inventories
+          WHERE id = ${inventoryId}::uuid AND node_id = ${nodeId}::uuid FOR UPDATE
+        `;
+        if (rows.length !== 1)
+          throw new NotFoundException("Inventory was not found");
+        const inventory = await tx.inventory.update({
+          where: { id: inventoryId },
+          data: { mountStatus },
+        });
+        await this.record(tx, operator, nodeId, idempotencyKey, inventoryId, {
+          eventType: "catalog.inventory.mount-changed",
+          reason,
+          reasonCode: "INVENTORY_MOUNT_CHANGE",
+          payload: { operation: "mount", mountStatus },
+        });
+        return { id: inventoryId, status: inventory.mountStatus };
+      },
+    );
+  }
+
+  async replaceMachineAvailability(
+    operator: OperatorContext,
+    nodeId: string,
+    machineId: string,
+    body: ReplaceMachineAvailabilityDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    nodeId = this.node(operator, nodeId);
+    machineId = uuid(machineId, "machineId");
+    body = commandBody(body);
+    const reason = reasonText(body);
+    if (reason.length > 500)
+      throw new BadRequestException("reason is too long");
+    const expectedVersion = body.expectedVersion;
+    if (
+      expectedVersion !== null &&
+      (!Number.isSafeInteger(expectedVersion) ||
+        expectedVersion < 1 ||
+        expectedVersion >= MAX_INT32)
+    ) {
+      throw new BadRequestException("expectedVersion is invalid");
+    }
+    if (!Array.isArray(body.windows) || body.windows.length > 1000) {
+      throw new BadRequestException(
+        "windows must contain at most 1000 intervals",
+      );
+    }
+    const windows = body.windows
+      .map((window, index) => ({
+        startsAt: explicitInstant(
+          window?.startsAt,
+          `windows[${index}].startsAt`,
+        ),
+        endsAt: explicitInstant(window?.endsAt, `windows[${index}].endsAt`),
+      }))
+      .sort(
+        (left, right) => left.startsAt.getTime() - right.startsAt.getTime(),
+      );
+    for (const [index, window] of windows.entries()) {
+      if (
+        window.endsAt <= window.startsAt ||
+        (index > 0 && window.startsAt < windows[index - 1]!.endsAt)
+      ) {
+        throw new BadRequestException(
+          "availability windows must be positive and nonoverlapping",
+        );
+      }
+    }
+    return this.command(
+      operator,
+      `cat:n:${nodeId}:m:${machineId}:availability`,
+      key,
+      {
+        nodeId,
+        machineId,
+        expectedVersion,
+        reason,
+        windows: windows.map(({ startsAt, endsAt }) => ({
+          startsAt: startsAt.toISOString(),
+          endsAt: endsAt.toISOString(),
+        })),
+      },
+      async (tx, idempotencyKey) => {
+        const machineRows = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM machines WHERE id = ${machineId}::uuid
+            AND node_id = ${nodeId}::uuid FOR UPDATE
+        `;
+        if (machineRows.length !== 1)
+          throw new NotFoundException("Machine was not found");
+        const selected = await tx.machineAvailabilitySelection.findUnique({
+          where: { machineId_nodeId: { machineId, nodeId } },
+        });
+        if ((selected?.selectionVersion ?? null) !== expectedVersion) {
+          throw new ConflictException("Machine availability selection changed");
+        }
+        const now = await databaseNow(tx);
+        const horizon = 366 * 86_400_000;
+        if (
+          (windows.length > 0 &&
+            windows[windows.length - 1]!.endsAt.getTime() -
+              windows[0]!.startsAt.getTime() >
+              horizon) ||
+          windows.some(
+            ({ startsAt, endsAt }) =>
+              startsAt.getTime() < now.getTime() - horizon ||
+              endsAt.getTime() > now.getTime() + horizon ||
+              endsAt.getTime() - startsAt.getTime() > horizon,
+          )
+        ) {
+          throw new BadRequestException(
+            "availability windows exceed the 366-day bound",
+          );
+        }
+        const revision = await tx.machineAvailabilityRevision.create({
+          data: { nodeId, machineId, reason },
+        });
+        await tx.machineAvailabilityWindow.createMany({
+          data: windows.map((window, ordinal) => ({
+            revisionId: revision.id,
+            nodeId,
+            machineId,
+            ordinal,
+            ...window,
+          })),
+        });
+        const excluded = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT reservation.id
+          FROM capacity_reservations reservation
+          WHERE reservation.machine_id = ${machineId}::uuid
+            AND reservation.node_id = ${nodeId}::uuid
+            AND reservation.status IN ('RESERVED', 'HELD', 'SCHEDULED', 'PRINTING')
+            AND NOT EXISTS (
+              SELECT 1 FROM machine_availability_windows available
+              WHERE available.revision_id = ${revision.id}::uuid
+                AND available.starts_at <= reservation.starts_at
+                AND available.ends_at >= reservation.ends_at
+            )
+          ORDER BY reservation.id LIMIT 101
+        `;
+        if (excluded.length > 0) {
+          throw new ConflictException({
+            message: "Availability excludes live reservations",
+            conflictReservationIds: excluded.slice(0, 100).map(({ id }) => id),
+            moreConflicts: excluded.length > 100,
+          });
+        }
+        if (selected) {
+          await tx.machineAvailabilitySelection.update({
+            where: { machineId_nodeId: { machineId, nodeId } },
+            data: {
+              revisionId: revision.id,
+              selectionVersion: { increment: 1 },
+              updatedAt: now,
+            },
+          });
+        } else {
+          await tx.machineAvailabilitySelection.create({
+            data: {
+              machineId,
+              nodeId,
+              revisionId: revision.id,
+              selectionVersion: 1,
+            },
+          });
+        }
+        await this.record(tx, operator, nodeId, idempotencyKey, machineId, {
+          eventType: "catalog.machine.availability-changed",
+          reason,
+          reasonCode: "MACHINE_AVAILABILITY_CHANGE",
+          payload: {
+            operation: "availability",
+            revisionId: revision.id,
+            previousRevisionId: selected?.revisionId ?? null,
+            selectionVersion: (selected?.selectionVersion ?? 0) + 1,
+          },
+        });
+        return { id: revision.id, status: "ACTIVE" };
       },
     );
   }
@@ -1344,6 +1832,24 @@ function currency(value: unknown): string {
     throw new BadRequestException("currency is invalid");
   }
   return normalized;
+}
+
+function explicitInstant(value: unknown, name: string): Date {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+      value,
+    )
+  ) {
+    throw new BadRequestException(
+      `${name} requires an ISO date-time with offset`,
+    );
+  }
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return instant;
 }
 
 function optionalText(

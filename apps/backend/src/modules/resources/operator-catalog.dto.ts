@@ -468,6 +468,100 @@ export class CreateInventoryDto {
   remainingMilligrams!: string;
 }
 
+export class ReceiveInventoryDto extends CreateInventoryDto {
+  @ApiProperty({ type: String, format: "date-time" })
+  purchasedAt!: string;
+}
+
+export class RecordInitialInventoryReceiptDto extends CatalogReasonDto {
+  @ApiProperty(POSITIVE_INTEGER)
+  receivedMilligrams!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    pattern: NON_BLANK_TEXT,
+  })
+  vendor!: string;
+
+  @ApiProperty(NON_NEGATIVE_INTEGER)
+  priceMinorUnitsNumerator!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  priceMinorUnitsDenominator!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 3,
+    maxLength: 3,
+    pattern: "^[A-Z]{3}$",
+  })
+  currency!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  purchasedAt!: string;
+}
+
+export class CorrectInventoryReceiptDto extends CatalogReasonDto {
+  @ApiProperty(UUID)
+  supersedesReceiptId!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  receivedMilligrams!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    pattern: NON_BLANK_TEXT,
+  })
+  vendor!: string;
+
+  @ApiProperty(NON_NEGATIVE_INTEGER)
+  priceMinorUnitsNumerator!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  priceMinorUnitsDenominator!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 3,
+    maxLength: 3,
+    pattern: "^[A-Z]{3}$",
+  })
+  currency!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  purchasedAt!: string;
+}
+
+export class InventoryMountDto extends CatalogReasonDto {
+  @ApiProperty({ type: String, enum: ["MOUNTED", "UNMOUNTED"] })
+  mountStatus!: "MOUNTED" | "UNMOUNTED";
+}
+
+export class MachineAvailabilityWindowDto {
+  @ApiProperty({ type: String, format: "date-time" })
+  startsAt!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  endsAt!: string;
+}
+
+export class ReplaceMachineAvailabilityDto extends CatalogReasonDto {
+  @ApiProperty({
+    type: "integer",
+    minimum: 0,
+    maximum: 2_147_483_646,
+    nullable: true,
+  })
+  expectedVersion!: number | null;
+
+  @ApiProperty({ type: [MachineAvailabilityWindowDto], maxItems: 1000 })
+  windows!: MachineAvailabilityWindowDto[];
+}
+
 export class MachineStatusDto extends CatalogReasonDto {
   @ApiProperty({ type: String, enum: MACHINE_STATUSES })
   status!: string;
