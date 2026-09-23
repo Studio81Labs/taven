@@ -2987,22 +2987,28 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       gapClient.release();
       gapProviderSpy.mockRestore();
     }
-    const priceListHolder = await pool.connect();
+    const bindingService = automaticQuotes as unknown as {
+      persistBinding: (...args: unknown[]) => Promise<void>;
+    };
+    const actualPersistBinding =
+      bindingService.persistBinding.bind(automaticQuotes);
+    let bindingEntered!: () => void;
+    let releaseBinding!: () => void;
+    const bindingStarted = new Promise<void>((resolve) => {
+      bindingEntered = resolve;
+    });
+    const bindingGate = new Promise<void>((resolve) => {
+      releaseBinding = resolve;
+    });
+    const persistBindingSpy = vi
+      .spyOn(bindingService, "persistBinding")
+      .mockImplementation(async (...args) => {
+        bindingEntered();
+        await bindingGate;
+        return actualPersistBinding(...args);
+      });
     let recoveryRestaged!: Awaited<ReturnType<typeof api>>;
     try {
-      await priceListHolder.query("BEGIN");
-      const selected = await prisma.commercialPolicySelection.findUniqueOrThrow(
-        { where: { currency: "CZK" } },
-      );
-      await priceListHolder.query(
-        "SELECT id FROM price_lists WHERE id = $1 FOR UPDATE",
-        [selected.priceListId],
-      );
-      const holderPid = (
-        await priceListHolder.query<{ pid: number }>(
-          "SELECT pg_backend_pid() AS pid",
-        )
-      ).rows[0]!.pid;
       const pendingRestage = api(
         `automatic-quote-sessions/${recoverySessionId}/prepare`,
         {
@@ -3013,23 +3019,13 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           ),
         },
       );
-      let bindingWaitingForPriceList = false;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        const blocked = await priceListHolder.query<{ waiting: boolean }>(
-          `SELECT EXISTS (
-             SELECT 1 FROM pg_stat_activity activity
-             WHERE activity.state = 'active'
-               AND $1 = ANY(pg_blocking_pids(activity.pid))
-           ) AS waiting`,
-          [holderPid],
-        );
-        if (blocked.rows[0]?.waiting) {
-          bindingWaitingForPriceList = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      expect(bindingWaitingForPriceList).toBe(true);
+      await bindingStarted;
+      await expect(
+        pool.query(
+          `SELECT currency FROM commercial_policy_selections
+           WHERE currency = 'CZK' FOR UPDATE NOWAIT`,
+        ),
+      ).rejects.toMatchObject({ code: "55P03" });
       let activationSettled = false;
       const pendingActivation = prisma.commercialPolicySelection
         .update({
@@ -3042,12 +3038,12 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         });
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(activationSettled).toBe(false);
-      await priceListHolder.query("COMMIT");
+      releaseBinding();
       recoveryRestaged = await pendingRestage;
       await pendingActivation;
     } finally {
-      await priceListHolder.query("ROLLBACK").catch(() => undefined);
-      priceListHolder.release();
+      releaseBinding();
+      persistBindingSpy.mockRestore();
     }
     expect(recoveryRestaged.response.status).toBe(200);
     expect(recoveryRestaged.body.checkoutReady).toBe(false);
