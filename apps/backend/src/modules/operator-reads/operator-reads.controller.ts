@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Controller,
   Get,
+  HttpCode,
   Param,
   Post,
   Query,
@@ -139,6 +140,7 @@ export class OperatorReadsController {
   }
 
   @Post("admin/jobs/:jobId/artifacts/:kind/download")
+  @HttpCode(200)
   @ApiOperation({ summary: "Issue a scoped, audited job artifact download" })
   @ApiParam({ name: "jobId", type: String, format: "uuid" })
   @ApiParam({
