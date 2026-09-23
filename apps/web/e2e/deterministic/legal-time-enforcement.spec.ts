@@ -27,6 +27,40 @@ test.describe("Legal Time & Availability Enforcement", () => {
     ).not.toBeVisible();
   });
 
+  test("a slow successful availability read still enables the approved journey", async ({
+    page,
+  }) => {
+    await page.route("**/legal-documents/availability", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    });
+
+    await page.goto("/");
+    await expect(
+      page
+        .getByRole("navigation", { name: "Hlavní navigace" })
+        .getByRole("link", { name: "Nahrát model" }),
+    ).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("a slow successful immutable revision read still renders approved text", async ({
+    page,
+  }) => {
+    let revisionRequests = 0;
+    await page.route("**/legal-documents/terms/revisions/**", async (route) => {
+      revisionRequests += 1;
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    });
+
+    await page.goto("/");
+    await page.getByRole("link", { name: "Obchodní podmínky" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Test terms", level: 1 }),
+    ).toBeVisible({ timeout: 10_000 });
+    expect(revisionRequests).toBeGreaterThan(0);
+  });
+
   test("backend legal gate 503 failure fails closed and displays draft placeholder", async ({
     page,
     request,

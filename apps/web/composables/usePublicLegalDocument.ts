@@ -7,7 +7,10 @@ import {
 } from "vue";
 import { legalDocuments } from "../content/public-site";
 import type { LegalDocumentKey } from "../content/launch-manifest";
-import type { LegalAvailability } from "../utils/legal-availability";
+import {
+  LEGAL_READ_TIMEOUT_MS,
+  type LegalAvailability,
+} from "../utils/legal-availability";
 import { useLegalAvailability } from "./useLegalAvailability";
 
 type PublicRevision = components["schemas"]["PublicLegalRevisionDto"];
@@ -156,7 +159,7 @@ export function usePublicLegalDocument(
           },
         }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("timeout")), 1_000),
+          setTimeout(() => reject(new Error("timeout")), LEGAL_READ_TIMEOUT_MS),
         ),
       ]);
       if (!isCurrent()) return;
