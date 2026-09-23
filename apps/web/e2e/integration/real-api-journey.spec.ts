@@ -365,6 +365,14 @@ test.describe("Real API Integration Journey", () => {
       ).toBeVisible({ timeout: 120_000 });
       if (restoreTerms) {
         await page.reload();
+        await expect(
+          page.getByRole("heading", { name: "Platba nebyla dokončena." }),
+        ).toBeVisible({ timeout: 120_000 });
+      }
+      await page
+        .getByRole("button", { name: "Zvolit nový platební pokus" })
+        .click();
+      if (restoreTerms) {
         const historicalTerms = page.getByRole("link", {
           name: "Zobrazit VOP",
         });
@@ -384,9 +392,6 @@ test.describe("Real API Integration Journey", () => {
         expect(historicalPage.status()).toBe(200);
         expect(await historicalPage.text()).toContain("Historické znění");
       }
-      await page
-        .getByRole("button", { name: "Zvolit nový platební pokus" })
-        .click();
       await expect(
         page.getByRole("button", { name: /Objednat a zaplatit/i }),
       ).toBeEnabled({ timeout: 120_000 });
