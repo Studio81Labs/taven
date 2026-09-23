@@ -387,10 +387,12 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       if (buffer.byteLength <= MAX_LOCAL_PREVIEW_BYTES) {
         try {
           markEstimateTiming("parser-start", revision);
-          geometry.value = await parseModelGeometry(valid.format, buffer);
+          const parsedGeometry = await parseModelGeometry(valid.format, buffer);
+          if (revision !== selectionRevision) return;
+          geometry.value = parsedGeometry;
           if (requestsImmediateEstimate(options)) {
             markEstimateTiming("parser-complete", revision);
-            scheduleEstimate(geometry.value, revision);
+            scheduleEstimate(parsedGeometry, revision);
           }
         } catch (error) {
           if (
