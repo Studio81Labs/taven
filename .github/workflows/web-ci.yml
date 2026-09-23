@@ -109,7 +109,9 @@ jobs:
       INTEGRATION_TEST: "true"
       INTEGRATION_REQUIRE_CHECKOUT: "true"
       INTEGRATION_COMPLETE_PAYMENT: "true"
+      INTEGRATION_COMPLETE_ASSISTED: "true"
       INTEGRATION_API_URL: http://localhost:3001
+      INTEGRATION_STORAGE_URL: http://localhost:9000
       INTEGRATION_WEB_URL: http://localhost:3000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -170,4 +172,4 @@ jobs:
             fi
             sleep 1
           done
-          pnpm -C apps/web exec playwright test e2e/integration/real-api-journey.spec.ts --project=integration
+          pnpm -C apps/web exec playwright test e2e/integration/real-api-journey.spec.ts e2e/integration/assisted-real-api.spec.ts --project=integration
