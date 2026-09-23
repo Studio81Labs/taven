@@ -145,9 +145,11 @@ async function measureSample(
   await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
   const [browserTiming, response] = await Promise.all([
     timing,
-    estimateResponse,
+    estimateResponse.then((result) => {
+      expect(result.ok(), `estimate HTTP ${result.status()}`).toBe(true);
+      return result;
+    }),
   ]);
-  expect(response.ok()).toBe(true);
   const payload = (await response.json()) as {
     priceListRevision?: unknown;
     assumptions?: {
