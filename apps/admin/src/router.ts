@@ -49,7 +49,13 @@ export const router = createRouter({
       component: () => import("./views/ShellSectionView.vue"),
       meta: { label: item.label, permission: item.permission },
     })),
-    { path: "/:pathMatch(.*)*", redirect: "/" },
+    {
+      path: "/:pathMatch(.*)*",
+      redirect: (to) => ({
+        path: "/",
+        query: to.query.auth === "failed" ? { auth: "failed" } : {},
+      }),
+    },
   ],
 });
 
