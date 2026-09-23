@@ -258,7 +258,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   let pollController: AbortController | undefined;
   let commandController: AbortController | undefined;
   let disposed = false;
-  let destinationReselectionRequired = false;
+  const destinationReselectionRequired = ref(false);
   let uploadIntent: UploadIntent | undefined;
   let confirmedUpload: ConfirmedUpload | undefined;
   let createdSession: CreatedQuoteSession | undefined;
@@ -343,7 +343,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   }
 
   function resetState(clearStoredSession = true): void {
-    destinationReselectionRequired = false;
+    destinationReselectionRequired.value = false;
     selectionRevision += 1;
     uploadController?.abort();
     uploadController = undefined;
@@ -650,7 +650,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       if (!applyQuote(result.data)) {
         if (
           requiresPreparationAdvance(result.data.phase) &&
-          !destinationReselectionRequired
+          !destinationReselectionRequired.value
         ) {
           if (!(await prepareQuote())) scheduleQuoteRefresh(3_000);
         } else {
@@ -697,9 +697,10 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
         if (
           requiresDestinationReselection(result.response.status, result.error)
         ) {
-          destinationReselectionRequired = true;
+          destinationReselectionRequired.value = true;
           commandError.value =
             "Cena nebo doprava se změnila. Zkontrolujte kalkulaci a vyberte výdejní místo znovu.";
+          scheduleQuoteRefresh(0);
         } else {
           commandError.value = quoteCommandMessage(result.response.status);
         }
@@ -714,7 +715,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       }
       quoteCommandKeys.complete(scope, input);
       if (scope === "delivery-destination") {
-        destinationReselectionRequired = false;
+        destinationReselectionRequired.value = false;
       }
       if (!applyQuote(result.data)) scheduleQuoteRefresh(1_500);
       return true;
@@ -1105,6 +1106,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     estimateMessage,
     commandPending,
     decideRisk,
+    destinationReselectionRequired,
     errorMessage,
     filename,
     geometry,

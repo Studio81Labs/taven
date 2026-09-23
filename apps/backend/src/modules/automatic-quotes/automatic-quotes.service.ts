@@ -4840,7 +4840,7 @@ export class AutomaticQuotesService {
     sessionCapability: string,
   ): Promise<FreshBindingValidation | null> {
     const session = await this.loadSession(sessionId);
-    assertSessionCapability(session, sessionCapability);
+    assertOpenOrConvertedSession(session, sessionCapability);
     const order = session.automaticOrderOrigin?.order;
     const draft = order?.automaticQuoteDraft;
     const destination = draft?.selectedDeliveryDestination;

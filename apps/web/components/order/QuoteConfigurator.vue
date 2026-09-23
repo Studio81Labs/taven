@@ -31,6 +31,7 @@ type DeliveryDestination =
 
 const props = defineProps<{
   commandError?: string;
+  destinationReselectionRequired: boolean;
   pending: boolean;
   quote: QuoteSession;
   onReplaceConfiguration: (
@@ -796,8 +797,9 @@ function quantityPrice(choice: {
 
     <div
       v-if="
-        quote.phase === 'REFERENCE_SLICES_PENDING' ||
-        quote.phase === 'ELIGIBILITY_PENDING'
+        !destinationReselectionRequired &&
+        (quote.phase === 'REFERENCE_SLICES_PENDING' ||
+          quote.phase === 'ELIGIBILITY_PENDING')
       "
       class="notice working-notice"
       aria-live="polite"
@@ -894,6 +896,7 @@ function quantityPrice(choice: {
 
     <section
       v-if="
+        (destinationReselectionRequired && !quote.checkoutEvidenceAccepted) ||
         quote.phase === 'DESTINATION_REQUIRED' ||
         (quote.phase === 'CHECKOUT_READY' && !quote.checkoutEvidenceAccepted)
       "
@@ -902,9 +905,11 @@ function quantityPrice(choice: {
       <p class="eyebrow">03 / DOPRAVA</p>
       <h3>
         {{
-          quote.phase === "CHECKOUT_READY"
-            ? "Změnit místo doručení"
-            : "Vyberte ověřené místo doručení."
+          destinationReselectionRequired
+            ? "Znovu ověřte místo doručení"
+            : quote.phase === "CHECKOUT_READY"
+              ? "Změnit místo doručení"
+              : "Vyberte ověřené místo doručení."
         }}
       </h3>
       <p v-if="quote.phase === 'CHECKOUT_READY'">
@@ -947,14 +952,18 @@ function quantityPrice(choice: {
           !selectedDeliveryOption ||
           pending ||
           saving ||
-          (quote.phase === 'CHECKOUT_READY' && !selectedDestinationChanged)
+          (quote.phase === 'CHECKOUT_READY' &&
+            !destinationReselectionRequired &&
+            !selectedDestinationChanged)
         "
         @click="submitDestination"
       >
         {{
-          quote.phase === "CHECKOUT_READY"
-            ? "Přepočítat s jiným místem"
-            : "Ověřit dopravu a závaznou cenu"
+          destinationReselectionRequired
+            ? "Znovu ověřit místo"
+            : quote.phase === "CHECKOUT_READY"
+              ? "Přepočítat s jiným místem"
+              : "Ověřit dopravu a závaznou cenu"
         }}
       </button>
     </section>

@@ -2987,6 +2987,33 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       gapClient.release();
       gapProviderSpy.mockRestore();
     }
+    const recoveryExpiresAt = (
+      await prisma.quoteSession.findUniqueOrThrow({
+        where: { id: recoverySessionId },
+        select: { expiresAt: true },
+      })
+    ).expiresAt;
+    const expiredClock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(recoveryExpiresAt.getTime() + 1);
+    const expiredProviderSpy = vi.spyOn(bindingRacePort, "validateSelection");
+    try {
+      const expiredPrepare = await api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-expired-before-provider"),
+          ),
+        },
+      );
+      expect(expiredPrepare.response.status).toBe(410);
+      expect(expiredProviderSpy).not.toHaveBeenCalled();
+    } finally {
+      expiredProviderSpy.mockRestore();
+      expiredClock.mockRestore();
+    }
     const bindingService = automaticQuotes as unknown as {
       persistBinding: (...args: unknown[]) => Promise<void>;
     };

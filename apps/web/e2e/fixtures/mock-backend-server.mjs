@@ -17,6 +17,7 @@ let testState = {
   capacityStatus: "available", // "available" | "out_of_capacity"
   expressEligible: true,
   paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED"
+  prepareCommercialConflictOnce: false,
   recordedObservations: [],
   lastAssistedQuote: null,
   lastCheckoutPayload: null,
@@ -50,6 +51,7 @@ function resetState() {
     capacityStatus: "available",
     expressEligible: true,
     paymentOutcome: "CAPTURED",
+    prepareCommercialConflictOnce: false,
     recordedObservations: [],
     lastAssistedQuote: null,
     lastCheckoutPayload: null,
@@ -948,6 +950,17 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (subpath === "/prepare" && method === "POST") {
+        if (testState.prepareCommercialConflictOnce) {
+          testState.prepareCommercialConflictOnce = false;
+          session.phase = "ELIGIBILITY_PENDING";
+          session.checkoutReady = false;
+          session.bindingQuote = null;
+          sendJson(res, 409, {
+            statusCode: 409,
+            message: "Commercial policy changed; select delivery again",
+          });
+          return;
+        }
         session.phase = "CHECKOUT_READY";
         session.checkoutReady = true;
 

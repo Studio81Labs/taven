@@ -13,6 +13,38 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     await request.post("http://127.0.0.1:4175/__test/reset");
   });
 
+  test("keeps destination reselection available after a commercial conflict", async ({
+    page,
+    request,
+  }) => {
+    await page.goto("/");
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.getByText("Přetáhni soubor sem").click();
+    await (await fileChooserPromise).setFiles(FIXTURE_PATH);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+    await expect(page).toHaveURL(/\/objednavka/);
+    const verifyDelivery = page.getByRole("button", {
+      name: "Ověřit dopravu a závaznou cenu",
+    });
+    await expect(verifyDelivery).toBeVisible();
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { prepareCommercialConflictOnce: true },
+    });
+    await verifyDelivery.click();
+    await expect(page.getByText(/Cena nebo doprava se změnila/)).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "Způsob a místo" }),
+    ).toBeVisible();
+    const reselect = page.getByRole("button", { name: "Znovu ověřit místo" });
+    await expect(reselect).toBeEnabled();
+    await reselect.click();
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible();
+  });
+
   test("full direct customer journey: model upload -> estimate -> configurator -> checkout -> payment -> confirmation", async ({
     page,
   }) => {
