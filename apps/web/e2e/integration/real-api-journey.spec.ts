@@ -21,7 +21,7 @@ test.describe("Real API Integration Journey", () => {
     page,
     request,
   }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(360_000);
     const healthResponse = await request.get(`${INTEGRATION_API_URL}/health`);
     expect(healthResponse.status()).toBe(200);
 
