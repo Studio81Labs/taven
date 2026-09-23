@@ -22,6 +22,9 @@ import {
 } from "../src/modules/payments/sandbox-payment-provider.adapter";
 import { PaymentsService } from "../src/modules/payments/payments.service";
 import { LegalApprovalsService } from "../src/modules/legal-approvals/legal-approvals.service";
+import { LegalDocumentsModule } from "../src/modules/legal-documents/legal-documents.module";
+import { LegalDocumentsService } from "../src/modules/legal-documents/legal-documents.service";
+import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
@@ -2160,7 +2163,7 @@ describe("checkout payment capture protocol", () => {
     let app: INestApplication | undefined;
     try {
       const moduleRef = await Test.createTestingModule({
-        imports: [PaymentsModule],
+        imports: [PaymentsModule, LegalDocumentsModule],
       })
         .overrideProvider(DELIVERY_CAPABILITY)
         .useValue({
@@ -3210,122 +3213,214 @@ describe("checkout payment capture protocol", () => {
         intentCreationFailureResultId: expect.any(String),
       });
       const approvals = app.get(LegalApprovalsService);
-      const publishedLegal = await approvals.availability();
-      const changedTerms = vi
-        .spyOn(approvals, "availability")
-        .mockResolvedValue({
-          ...publishedLegal,
-          documents: {
-            ...publishedLegal.documents,
-            terms: {
-              ...publishedLegal.documents.terms,
-              revisionId: randomUUID(),
+      const termsDocument = await prisma.legalDocument.findUniqueOrThrow({
+        where: { key: "terms" },
+        include: {
+          publications: {
+            where: { endsAt: null, cancelledAt: null },
+            take: 1,
+          },
+        },
+      });
+      const activeTermsPublication = termsDocument.publications[0];
+      if (!activeTermsPublication) {
+        throw new Error("Checkout E2E terms publication is unavailable");
+      }
+      const acceptedBeforeArchive = await prisma.order.findUniqueOrThrow({
+        where: { id: outageFoundation.orderId },
+        select: {
+          acceptedOrderPriceBindingId: true,
+          withdrawalExceptionAcknowledgedAt: true,
+          legalAcceptances: {
+            select: {
+              id: true,
+              revisionId: true,
+              acceptedAt: true,
+              decisionId: true,
             },
+            orderBy: { id: "asc" },
+          },
+        },
+      });
+      expect(acceptedBeforeArchive.acceptedOrderPriceBindingId).toBe(
+        outageFoundation.orderPriceBindingId,
+      );
+      expect(acceptedBeforeArchive.legalAcceptances).toHaveLength(2);
+      try {
+        await app.get(LegalDocumentsService).archivePublication(
+          {
+            operatorId: "f0000000-0000-4000-8000-000000000001",
+            role: "ADMIN",
+            permissions: [OPERATOR_PERMISSIONS.LEGAL_WRITE],
+            nodeIds: [],
+            authenticationMethod: "DEVELOPMENT_PASSWORD",
+            sessionId: randomUUID(),
+          },
+          "terms",
+          activeTermsPublication.id,
+          {
+            expectedGeneration: termsDocument.generation,
+            reason: "Checkout frozen retry E2E fixture",
+            reasonCode: "E2E_FROZEN_RETRY",
+          },
+          `checkout-archive-${randomUUID()}`,
+        );
+        expect((await approvals.availability()).documents.terms.effective).toBe(
+          false,
+        );
+        const retryContextResponse = await fetch(
+          new URL(
+            `/automatic-quote-sessions/${outageFoundation.quoteSessionId}/checkout/retry-context`,
+            baseUrl,
+          ),
+          { headers: { authorization: `Bearer ${outageToken}` } },
+        );
+        expect(retryContextResponse.status).toBe(200);
+        await expect(retryContextResponse.json()).resolves.toMatchObject({
+          retryAllowed: true,
+          acceptedEvidence: {
+            termsRevision: "terms-v1",
+            claimPolicyRevision: "claim-policy-v1",
           },
         });
-      const carrierOutage = vi
-        .spyOn(
-          app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY),
-          "validateSelection",
-        )
-        .mockRejectedValue(new Error("carrier unavailable after checkout"));
-      const quoteService = app.get(AutomaticQuotesService) as unknown as {
-        prevalidateFreshBinding: (
-          sessionId: string,
-          capability: string,
-        ) => Promise<unknown>;
-        bindingValidationInput: (...args: unknown[]) => Promise<unknown>;
-      };
-      const newBinding = vi
-        .spyOn(quoteService, "bindingValidationInput")
-        .mockResolvedValue({ parcels: [], inputFingerprint: "test" });
-      try {
-        await expect(
-          quoteService.prevalidateFreshBinding(
-            outageFoundation.quoteSessionId,
-            outageToken,
-          ),
-        ).resolves.toBeNull();
-        expect(newBinding).not.toHaveBeenCalled();
-        expect(carrierOutage).not.toHaveBeenCalled();
-      } finally {
-        newBinding.mockRestore();
-        carrierOutage.mockRestore();
-        changedTerms.mockRestore();
-      }
-      const callsAfterDefinitiveFailure = providerCreateCalls;
-      const definitiveFailureReplay = await createOutagePayment();
-      expect(definitiveFailureReplay.status).toBe(200);
-      await expect(definitiveFailureReplay.json()).resolves.toMatchObject(
-        firstFailedResponse,
-      );
-      expect(providerCreateCalls).toBe(callsAfterDefinitiveFailure);
+        const carrierOutage = vi
+          .spyOn(
+            app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY),
+            "validateSelection",
+          )
+          .mockRejectedValue(new Error("carrier unavailable after checkout"));
+        const quoteService = app.get(AutomaticQuotesService) as unknown as {
+          prevalidateFreshBinding: (
+            sessionId: string,
+            capability: string,
+          ) => Promise<unknown>;
+          bindingValidationInput: (...args: unknown[]) => Promise<unknown>;
+        };
+        const newBinding = vi
+          .spyOn(quoteService, "bindingValidationInput")
+          .mockResolvedValue({ parcels: [], inputFingerprint: "test" });
+        try {
+          await expect(
+            quoteService.prevalidateFreshBinding(
+              outageFoundation.quoteSessionId,
+              outageToken,
+            ),
+          ).resolves.toBeNull();
+          expect(newBinding).not.toHaveBeenCalled();
+          expect(carrierOutage).not.toHaveBeenCalled();
+        } finally {
+          newBinding.mockRestore();
+          carrierOutage.mockRestore();
+        }
+        const callsAfterDefinitiveFailure = providerCreateCalls;
+        const definitiveFailureReplay = await createOutagePayment();
+        expect(definitiveFailureReplay.status).toBe(200);
+        await expect(definitiveFailureReplay.json()).resolves.toMatchObject(
+          firstFailedResponse,
+        );
+        expect(providerCreateCalls).toBe(callsAfterDefinitiveFailure);
 
-      await expect(
-        Promise.all([
-          prisma.payment.count({
-            where: { orderId: outageFoundation.orderId },
+        await expect(
+          Promise.all([
+            prisma.payment.count({
+              where: { orderId: outageFoundation.orderId },
+            }),
+            prisma.order.findUniqueOrThrow({
+              where: { id: outageFoundation.orderId },
+              select: {
+                acceptedTermsRevision: true,
+                acceptedClaimPolicyRevision: true,
+                acceptedClaimWindowDays: true,
+              },
+            }),
+          ]),
+        ).resolves.toEqual([
+          1,
+          {
+            acceptedTermsRevision: "terms-v1",
+            acceptedClaimPolicyRevision: "claim-policy-v1",
+            acceptedClaimWindowDays: 30,
+          },
+        ]);
+
+        const firstOutageRecord =
+          await prisma.idempotencyRecord.findFirstOrThrow({
+            where: {
+              namespace: `checkout-payment:${outageFoundation.quoteSessionId}`,
+              idempotencyKey: outageIdempotencyKey,
+            },
+            orderBy: { generation: "desc" },
+          });
+        await prisma.idempotencyRecord.update({
+          where: { id: firstOutageRecord.id },
+          data: {
+            expiresAt: new Date(firstOutageRecord.createdAt.getTime() + 1),
+          },
+        });
+
+        const retriedOutageResponse = await createOutagePayment();
+        expect(retriedOutageResponse.status).toBe(200);
+        const retriedOutageBody = (await retriedOutageResponse.json()) as {
+          paymentId: string;
+          status: string;
+        };
+        expect(retriedOutageBody.status).toBe("FAILED");
+        expect(retriedOutageBody.paymentId).not.toBe(firstFailedPayment.id);
+        await expect(
+          prisma.idempotencyRecord.findMany({
+            where: {
+              namespace: `checkout-payment:${outageFoundation.quoteSessionId}`,
+              idempotencyKey: outageIdempotencyKey,
+            },
+            orderBy: { generation: "asc" },
+            select: { generation: true, status: true },
           }),
+        ).resolves.toEqual([
+          { generation: 1, status: "COMPLETED" },
+          { generation: 2, status: "COMPLETED" },
+        ]);
+        await expect(
+          prisma.payment.count({
+            where: { orderId: outageFoundation.orderId, status: "FAILED" },
+          }),
+        ).resolves.toBe(2);
+        await expect(
           prisma.order.findUniqueOrThrow({
             where: { id: outageFoundation.orderId },
             select: {
-              acceptedTermsRevision: true,
-              acceptedClaimPolicyRevision: true,
-              acceptedClaimWindowDays: true,
+              acceptedOrderPriceBindingId: true,
+              withdrawalExceptionAcknowledgedAt: true,
+              legalAcceptances: {
+                select: {
+                  id: true,
+                  revisionId: true,
+                  acceptedAt: true,
+                  decisionId: true,
+                },
+                orderBy: { id: "asc" },
+              },
             },
           }),
-        ]),
-      ).resolves.toEqual([
-        1,
-        {
-          acceptedTermsRevision: "terms-v1",
-          acceptedClaimPolicyRevision: "claim-policy-v1",
-          acceptedClaimWindowDays: 30,
-        },
-      ]);
-
-      const firstOutageRecord = await prisma.idempotencyRecord.findFirstOrThrow(
-        {
-          where: {
-            namespace: `checkout-payment:${outageFoundation.quoteSessionId}`,
-            idempotencyKey: outageIdempotencyKey,
-          },
-          orderBy: { generation: "desc" },
-        },
-      );
-      await prisma.idempotencyRecord.update({
-        where: { id: firstOutageRecord.id },
-        data: {
-          expiresAt: new Date(firstOutageRecord.createdAt.getTime() + 1),
-        },
-      });
-
-      const retriedOutageResponse = await createOutagePayment();
-      expect(retriedOutageResponse.status).toBe(200);
-      const retriedOutageBody = (await retriedOutageResponse.json()) as {
-        paymentId: string;
-        status: string;
-      };
-      expect(retriedOutageBody.status).toBe("FAILED");
-      expect(retriedOutageBody.paymentId).not.toBe(firstFailedPayment.id);
-      await expect(
-        prisma.idempotencyRecord.findMany({
-          where: {
-            namespace: `checkout-payment:${outageFoundation.quoteSessionId}`,
-            idempotencyKey: outageIdempotencyKey,
-          },
-          orderBy: { generation: "asc" },
-          select: { generation: true, status: true },
-        }),
-      ).resolves.toEqual([
-        { generation: 1, status: "COMPLETED" },
-        { generation: 2, status: "COMPLETED" },
-      ]);
-      await expect(
-        prisma.payment.count({
-          where: { orderId: outageFoundation.orderId, status: "FAILED" },
-        }),
-      ).resolves.toBe(2);
+        ).resolves.toEqual(acceptedBeforeArchive);
+      } finally {
+        // This suite shares its disposable E2E catalog with later cases.
+        // Restore only the publication fixture after exercising real archival.
+        await prisma.$transaction(async (transaction) => {
+          await transaction.$executeRawUnsafe(
+            "SET LOCAL session_replication_role = 'replica'",
+          );
+          await transaction.$executeRaw`
+            UPDATE legal_document_publications
+            SET ends_at = NULL
+            WHERE id = ${activeTermsPublication.id}::uuid
+          `;
+          await transaction.$executeRaw`
+            UPDATE legal_documents
+            SET generation = ${termsDocument.generation}
+            WHERE id = ${termsDocument.id}::uuid
+          `;
+        });
+      }
       const failedPayments = await prisma.payment.findMany({
         where: { orderId: outageFoundation.orderId, status: "FAILED" },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
