@@ -6325,6 +6325,292 @@
         ],
         "type": "object"
       },
+      "OperatorJobAcceptedRiskDto": {
+        "properties": {
+          "acknowledgedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "acknowledgementKey": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "findingId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "findingId",
+          "code",
+          "severity",
+          "message",
+          "acknowledgementKey",
+          "acknowledgedAt"
+        ],
+        "type": "object"
+      },
+      "OperatorJobArtifactAvailabilityDto": {
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "enum": [
+              "NOT_GENERATED",
+              "NOT_READY",
+              "TERMINAL_JOB",
+              "EXPIRED",
+              "DELETED",
+              "MISSING_BYTES",
+              "INTEGRITY_MISMATCH"
+            ],
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "available",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "OperatorJobArtifactDownloadDto": {
+        "properties": {
+          "contentLength": {
+            "description": "Object size in bytes",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "downloadUrl": {
+            "format": "uri",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "downloadUrl",
+          "expiresAt",
+          "contentType",
+          "contentLength",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "OperatorJobArtifactsDto": {
+        "properties": {
+          "preview": {
+            "$ref": "#/components/schemas/OperatorJobArtifactAvailabilityDto"
+          },
+          "production": {
+            "$ref": "#/components/schemas/OperatorJobArtifactAvailabilityDto"
+          },
+          "sourceModel": {
+            "$ref": "#/components/schemas/OperatorJobArtifactAvailabilityDto"
+          }
+        },
+        "required": [
+          "sourceModel",
+          "preview",
+          "production"
+        ],
+        "type": "object"
+      },
+      "OperatorJobDeadlineDto": {
+        "properties": {
+          "date": {
+            "format": "date",
+            "nullable": true,
+            "type": "string"
+          },
+          "provenance": {
+            "enum": [
+              "ACCEPTED_INDIVIDUAL_QUOTE",
+              "NO_PROMISED_DATE"
+            ],
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "provenance"
+        ],
+        "type": "object"
+      },
+      "OperatorJobDetailDto": {
+        "properties": {
+          "artifacts": {
+            "$ref": "#/components/schemas/OperatorJobArtifactsDto"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/OperatorJobDeadlineDto"
+          },
+          "estimate": {
+            "$ref": "#/components/schemas/OperatorJobEstimateDto"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderReference": {
+            "type": "string"
+          },
+          "replacementJobId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "replacesJobId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "resultReplacementRequestId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "shipmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "shipmentPlanId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "shipmentPlanOrdinal": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorJobSlotDto"
+            },
+            "type": "array"
+          },
+          "sourceReplacementRequestId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "nodeId",
+          "orderId",
+          "orderReference",
+          "orderPhaseId",
+          "shipmentPlanId",
+          "shipmentId",
+          "shipmentPlanOrdinal",
+          "status",
+          "replacesJobId",
+          "replacementJobId",
+          "sourceReplacementRequestId",
+          "resultReplacementRequestId",
+          "slots",
+          "estimate",
+          "deadline",
+          "artifacts"
+        ],
+        "type": "object"
+      },
+      "OperatorJobEstimateDto": {
+        "properties": {
+          "calculatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "candidateResourceEstimateId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineCalibrationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "provenance": {
+            "enum": [
+              "CANDIDATE_RESOURCE_ESTIMATE"
+            ],
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "requiredMachineSeconds": {
+            "description": "Estimated machine seconds",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "requiredMaterialMilligrams": {
+            "description": "Estimated material in milligrams",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidateResourceEstimateId",
+          "machineId",
+          "printConfigRevisionId",
+          "machineProfileId",
+          "machineCalibrationId",
+          "quantity",
+          "requiredMachineSeconds",
+          "requiredMaterialMilligrams",
+          "calculatedAt",
+          "provenance"
+        ],
+        "type": "object"
+      },
       "OperatorJobListItemDto": {
         "properties": {
           "createdAt": {
@@ -6381,6 +6667,83 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "OperatorJobSlotDto": {
+        "properties": {
+          "acceptedRisks": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorJobAcceptedRiskDto"
+            },
+            "type": "array"
+          },
+          "boundsXMicrometers": {
+            "description": "X bound in micrometers",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "boundsYMicrometers": {
+            "description": "Y bound in micrometers",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "boundsZMicrometers": {
+            "description": "Z bound in micrometers",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "color": {
+            "nullable": true,
+            "type": "string"
+          },
+          "fulfilmentSlotId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "geometrySha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "modelGeometryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderItemId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantityOrdinal": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "sourceModelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "volumeCubicMicrometers": {
+            "description": "Canonical volume in cubic micrometers",
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fulfilmentSlotId",
+          "orderItemId",
+          "quantityOrdinal",
+          "sourceModelFileId",
+          "modelGeometryId",
+          "material",
+          "color",
+          "boundsXMicrometers",
+          "boundsYMicrometers",
+          "boundsZMicrometers",
+          "volumeCubicMicrometers",
+          "geometrySha256",
+          "acceptedRisks"
         ],
         "type": "object"
       },
@@ -10045,6 +10408,115 @@
           }
         ],
         "summary": "List node-scoped production jobs",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/jobs/{jobId}": {
+      "get": {
+        "operationId": "OperatorReadsController_job",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorJobDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read one node-scoped production job",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/jobs/{jobId}/artifacts/{kind}/download": {
+      "post": {
+        "operationId": "OperatorReadsController_jobArtifactDownload",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "SOURCE_MODEL",
+                "PREVIEW",
+                "PRODUCTION"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorJobArtifactDownloadDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Issue a scoped, audited job artifact download",
         "tags": [
           "operator reads"
         ]

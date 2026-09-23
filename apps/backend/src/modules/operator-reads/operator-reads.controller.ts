@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Post,
   Query,
   UseGuards,
 } from "@nestjs/common";
@@ -29,6 +30,8 @@ import {
   MachinePageDto,
   MachineProfilePageDto,
   OperatorJobPageDto,
+  OperatorJobDetailDto,
+  OperatorJobArtifactDownloadDto,
   OperatorOrderDetailDto,
   OperatorOrderPageDto,
   PriceListPageDto,
@@ -36,6 +39,7 @@ import {
   PrintConfigRevisionPageDto,
   ReferenceProfilePageDto,
 } from "./operator-reads.dto";
+import { OperatorJobArtifactsService } from "./operator-job-artifacts.service";
 import { OperatorReadsService } from "./operator-reads.service";
 
 const PAGE_FIELDS = new Set(["cursor", "limit"]);
@@ -60,7 +64,10 @@ type PageQuery = Readonly<{
 @RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_READ)
 @Controller()
 export class OperatorReadsController {
-  constructor(private readonly reads: OperatorReadsService) {}
+  constructor(
+    private readonly reads: OperatorReadsService,
+    private readonly jobArtifacts: OperatorJobArtifactsService,
+  ) {}
 
   @Get("admin/orders")
   @ApiOperation({ summary: "List node-scoped orders" })
@@ -118,6 +125,34 @@ export class OperatorReadsController {
     @Query() query: Record<string, string | string[] | undefined>,
   ): Promise<OperatorJobPageDto> {
     return this.reads.jobsPage(operator, pageQuery(query, JOB_FIELDS));
+  }
+
+  @Get("admin/jobs/:jobId")
+  @ApiOperation({ summary: "Read one node-scoped production job" })
+  @ApiParam({ name: "jobId", type: String, format: "uuid" })
+  @ApiOkResponse({ type: OperatorJobDetailDto })
+  job(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("jobId") jobId: string,
+  ): Promise<OperatorJobDetailDto> {
+    return this.jobArtifacts.detail(operator, jobId);
+  }
+
+  @Post("admin/jobs/:jobId/artifacts/:kind/download")
+  @ApiOperation({ summary: "Issue a scoped, audited job artifact download" })
+  @ApiParam({ name: "jobId", type: String, format: "uuid" })
+  @ApiParam({
+    name: "kind",
+    type: String,
+    enum: ["SOURCE_MODEL", "PREVIEW", "PRODUCTION"],
+  })
+  @ApiOkResponse({ type: OperatorJobArtifactDownloadDto })
+  jobArtifactDownload(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("jobId") jobId: string,
+    @Param("kind") kind: string,
+  ): Promise<OperatorJobArtifactDownloadDto> {
+    return this.jobArtifacts.download(operator, jobId, kind);
   }
 
   @Get("admin/catalog/reference-profiles")

@@ -381,6 +381,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one node-scoped production job */
+        get: operations["OperatorReadsController_job"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/jobs/{jobId}/artifacts/{kind}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue a scoped, audited job artifact download */
+        post: operations["OperatorReadsController_jobArtifactDownload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/legal-documents": {
         parameters: {
             query?: never;
@@ -3651,6 +3685,92 @@ export interface components {
             payments: components["schemas"]["OperatorPaymentDto"][];
             settlements: components["schemas"]["OperatorSettlementDto"][];
         };
+        OperatorJobAcceptedRiskDto: {
+            /** Format: date-time */
+            acknowledgedAt: string;
+            acknowledgementKey: string;
+            code: string;
+            /** Format: uuid */
+            findingId: string;
+            message: string;
+            severity: string;
+        };
+        OperatorJobArtifactAvailabilityDto: {
+            available: boolean;
+            /** @enum {string|null} */
+            reason: "NOT_GENERATED" | "NOT_READY" | "TERMINAL_JOB" | "EXPIRED" | "DELETED" | "MISSING_BYTES" | "INTEGRITY_MISMATCH" | null;
+        };
+        OperatorJobArtifactDownloadDto: {
+            /** @description Object size in bytes */
+            contentLength: string;
+            contentType: string;
+            /** Format: uri */
+            downloadUrl: string;
+            /** Format: date-time */
+            expiresAt: string;
+            sha256: string;
+        };
+        OperatorJobArtifactsDto: {
+            preview: components["schemas"]["OperatorJobArtifactAvailabilityDto"];
+            production: components["schemas"]["OperatorJobArtifactAvailabilityDto"];
+            sourceModel: components["schemas"]["OperatorJobArtifactAvailabilityDto"];
+        };
+        OperatorJobDeadlineDto: {
+            /** Format: date */
+            date: string | null;
+            /** @enum {string|null} */
+            provenance: "ACCEPTED_INDIVIDUAL_QUOTE" | "NO_PROMISED_DATE" | null;
+        };
+        OperatorJobDetailDto: {
+            artifacts: components["schemas"]["OperatorJobArtifactsDto"];
+            deadline: components["schemas"]["OperatorJobDeadlineDto"];
+            estimate: components["schemas"]["OperatorJobEstimateDto"];
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            nodeId: string;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            orderReference: string;
+            /** Format: uuid */
+            replacementJobId: string | null;
+            /** Format: uuid */
+            replacesJobId: string | null;
+            /** Format: uuid */
+            resultReplacementRequestId: string | null;
+            /** Format: uuid */
+            shipmentId: string | null;
+            /** Format: uuid */
+            shipmentPlanId: string;
+            shipmentPlanOrdinal: number;
+            slots: components["schemas"]["OperatorJobSlotDto"][];
+            /** Format: uuid */
+            sourceReplacementRequestId: string | null;
+            status: string;
+        };
+        OperatorJobEstimateDto: {
+            /** Format: date-time */
+            calculatedAt: string;
+            /** Format: uuid */
+            candidateResourceEstimateId: string;
+            /** Format: uuid */
+            machineCalibrationId: string;
+            /** Format: uuid */
+            machineId: string;
+            /** Format: uuid */
+            machineProfileId: string;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            /** @enum {string} */
+            provenance: "CANDIDATE_RESOURCE_ESTIMATE";
+            quantity: number;
+            /** @description Estimated machine seconds */
+            requiredMachineSeconds: string;
+            /** @description Estimated material in milligrams */
+            requiredMaterialMilligrams: string;
+        };
         OperatorJobListItemDto: {
             /** Format: date-time */
             createdAt: string;
@@ -3669,6 +3789,29 @@ export interface components {
         OperatorJobPageDto: {
             items: components["schemas"]["OperatorJobListItemDto"][];
             nextCursor?: string;
+        };
+        OperatorJobSlotDto: {
+            acceptedRisks: components["schemas"]["OperatorJobAcceptedRiskDto"][];
+            /** @description X bound in micrometers */
+            boundsXMicrometers: string;
+            /** @description Y bound in micrometers */
+            boundsYMicrometers: string;
+            /** @description Z bound in micrometers */
+            boundsZMicrometers: string;
+            color: string | null;
+            /** Format: uuid */
+            fulfilmentSlotId: string;
+            geometrySha256: string;
+            material: string;
+            /** Format: uuid */
+            modelGeometryId: string;
+            /** Format: uuid */
+            orderItemId: string;
+            quantityOrdinal: number;
+            /** Format: uuid */
+            sourceModelFileId: string;
+            /** @description Canonical volume in cubic micrometers */
+            volumeCubicMicrometers: string;
         };
         OperatorOrderDetailDto: {
             acceptedPrice?: components["schemas"]["OperatorAcceptedPriceDto"] | null;
@@ -4984,6 +5127,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperatorJobPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_job: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorJobDetailDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_jobArtifactDownload: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                kind: "SOURCE_MODEL" | "PREVIEW" | "PRODUCTION";
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorJobArtifactDownloadDto"];
                 };
             };
         };
