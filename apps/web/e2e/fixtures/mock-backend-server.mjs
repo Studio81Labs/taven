@@ -19,6 +19,7 @@ let testState = {
   expressEligible: true,
   paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED"
   prepareCommercialConflictOnce: false,
+  expressFailureOnce: false,
   riskScenario: null, // null | "warning"
   recordedObservations: [],
   lastAssistedQuote: null,
@@ -55,6 +56,7 @@ function resetState() {
     expressEligible: true,
     paymentOutcome: "CAPTURED",
     prepareCommercialConflictOnce: false,
+    expressFailureOnce: false,
     riskScenario: null,
     recordedObservations: [],
     lastAssistedQuote: null,
@@ -908,6 +910,13 @@ const server = http.createServer(async (req, res) => {
         let priceMinor = 35000;
         if (firstQuality === "DRAFT") priceMinor = 21780;
         else if (firstQuality === "FINE") priceMinor = 50820;
+        const quantity = session.items[0]?.quantity || 1;
+        priceMinor =
+          firstQuality === "STANDARD" && quantity === 5
+            ? 140000
+            : firstQuality === "STANDARD" && quantity === 20
+              ? 480000
+              : priceMinor * quantity;
 
         session.roughEstimate = {
           kind: "ROUGH_ESTIMATE",
@@ -992,6 +1001,32 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (subpath === "/prepare" && method === "POST") {
+        if (testState.expressFailureOnce && session.express.requested) {
+          testState.expressFailureOnce = false;
+          session.phase = "HANDOFF_REQUIRED";
+          session.checkoutReady = false;
+          session.bindingQuote = null;
+          session.express.eligible = false;
+          session.express.reasons = ["EXPRESS_INELIGIBLE"];
+          session.handoff = {
+            kind: "INDIVIDUAL_QUOTE_REQUEST",
+            reasons: ["EXPRESS_INELIGIBLE"],
+            safeContext: {
+              automaticQuoteSessionId: session.sessionId,
+              modelFileIds: session.modelFiles.map((file) => file.modelFileId),
+              itemSelections: session.items.map((item) => ({
+                ordinal: item.ordinal,
+                modelFileId: item.modelFileId,
+                bodyIds: item.bodyIds,
+                material: item.material,
+                quantity: item.quantity,
+                fitSensitive: item.fitSensitive,
+              })),
+            },
+          };
+          sendJson(res, 200, session);
+          return;
+        }
         if (testState.prepareCommercialConflictOnce) {
           testState.prepareCommercialConflictOnce = false;
           session.phase = "ELIGIBILITY_PENDING";
@@ -1005,6 +1040,7 @@ const server = http.createServer(async (req, res) => {
         }
         session.phase = "CHECKOUT_READY";
         session.checkoutReady = true;
+        session.handoff = null;
 
         const baseMinor = session.roughEstimate?.totalMinor || 35000;
         const deliveryMinor = 8900;
