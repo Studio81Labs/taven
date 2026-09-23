@@ -1005,14 +1005,15 @@ const server = http.createServer(async (req, res) => {
             candidate.endpointType === endpointType,
         );
         if (
-          session.selectedDeliveryDestination &&
-          (session.selectedDeliveryDestination.providerEndpointId !==
+          !session.selectedDeliveryDestination ||
+          session.selectedDeliveryDestination.providerEndpointId !==
             providerEndpointId ||
-            session.selectedDeliveryDestination.endpointType !== endpointType)
+          session.selectedDeliveryDestination.endpointType !== endpointType
         ) {
+          session.configurationRevision += 1;
           session.bindingQuote = null;
           session.checkoutReady = false;
-          session.phase = "DESTINATION_REQUIRED";
+          session.phase = "ELIGIBILITY_PENDING";
         }
         session.selectedDeliveryDestination = {
           providerEndpointId,

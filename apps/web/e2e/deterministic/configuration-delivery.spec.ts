@@ -135,9 +135,8 @@ test.describe("Rendered configuration and delivery", () => {
     await page
       .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
       .click();
-    expect(
-      (await (await initialPrepareResponse).json()).bindingQuote.totalMinor,
-    ).toBe(43900);
+    const initialPrepared = await (await initialPrepareResponse).json();
+    expect(initialPrepared.bindingQuote.totalMinor).toBe(43900);
     await expect(page.locator(".price-summary .total-price")).toContainText(
       "439,00",
     );
@@ -166,7 +165,8 @@ test.describe("Rendered configuration and delivery", () => {
       endpointType: "pickup_point",
     });
     expect(await destination.json()).toMatchObject({
-      phase: "DESTINATION_REQUIRED",
+      phase: "ELIGIBILITY_PENDING",
+      configurationRevision: initialPrepared.configurationRevision + 1,
       checkoutReady: false,
       bindingQuote: null,
       selectedDeliveryDestination: {
