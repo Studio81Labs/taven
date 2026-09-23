@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool, type PoolClient } from "pg";
 import {
   DELIVERY_CAPABILITY,
+  type DeliveryCapabilityPort,
   type ResolvedDeliveryCapability,
 } from "../src/modules/automatic-quotes/delivery-capability.port";
 import {
@@ -20,6 +21,8 @@ import {
   sandboxEventSignature,
 } from "../src/modules/payments/sandbox-payment-provider.adapter";
 import { PaymentsService } from "../src/modules/payments/payments.service";
+import { LegalApprovalsService } from "../src/modules/legal-approvals/legal-approvals.service";
+import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
@@ -3206,6 +3209,50 @@ describe("checkout payment capture protocol", () => {
         status: "FAILED",
         intentCreationFailureResultId: expect.any(String),
       });
+      const approvals = app.get(LegalApprovalsService);
+      const publishedLegal = await approvals.availability();
+      const changedTerms = vi
+        .spyOn(approvals, "availability")
+        .mockResolvedValue({
+          ...publishedLegal,
+          documents: {
+            ...publishedLegal.documents,
+            terms: {
+              ...publishedLegal.documents.terms,
+              revisionId: randomUUID(),
+            },
+          },
+        });
+      const carrierOutage = vi
+        .spyOn(
+          app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY),
+          "validateSelection",
+        )
+        .mockRejectedValue(new Error("carrier unavailable after checkout"));
+      const quoteService = app.get(AutomaticQuotesService) as unknown as {
+        prevalidateFreshBinding: (
+          sessionId: string,
+          capability: string,
+        ) => Promise<unknown>;
+        bindingValidationInput: (...args: unknown[]) => Promise<unknown>;
+      };
+      const newBinding = vi
+        .spyOn(quoteService, "bindingValidationInput")
+        .mockResolvedValue({ parcels: [], inputFingerprint: "test" });
+      try {
+        await expect(
+          quoteService.prevalidateFreshBinding(
+            outageFoundation.quoteSessionId,
+            outageToken,
+          ),
+        ).resolves.toBeNull();
+        expect(newBinding).not.toHaveBeenCalled();
+        expect(carrierOutage).not.toHaveBeenCalled();
+      } finally {
+        newBinding.mockRestore();
+        carrierOutage.mockRestore();
+        changedTerms.mockRestore();
+      }
       const callsAfterDefinitiveFailure = providerCreateCalls;
       const definitiveFailureReplay = await createOutagePayment();
       expect(definitiveFailureReplay.status).toBe(200);

@@ -1,7 +1,15 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  ApiExtraModels,
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from "@nestjs/swagger";
 import { FulfilmentProjectionDto } from "../orders/orders.dto";
 import { ReferenceProfileActivationNoticeDto } from "../resources/reference-profile-activation-notice.dto";
-import { PriceListParametersDto } from "../resources/operator-catalog.dto";
+import {
+  PriceListParametersDto,
+  SellerTaxPolicyDto,
+} from "../resources/operator-catalog.dto";
 
 const UUID = { type: String, format: "uuid" } as const;
 const DECIMAL = { type: String, pattern: "^-?[0-9]+$" } as const;
@@ -754,9 +762,27 @@ export class PrintConfigRevisionDetailDto extends PrintConfigRevisionReadDto {
   settings!: Record<string, unknown>;
 }
 
+export class LegacyPriceListParametersDto {
+  @ApiProperty({ type: () => SellerTaxPolicyDto })
+  sellerTaxPolicy!: SellerTaxPolicyDto;
+
+  @ApiProperty({ type: "integer", minimum: 0 })
+  balance_payment_days!: number;
+
+  @ApiProperty({ type: [String] })
+  balance_timeout_earned_component_kinds!: string[];
+}
+
+@ApiExtraModels(PriceListParametersDto, LegacyPriceListParametersDto)
 export class PriceListDetailDto extends PriceListReadDto {
-  @ApiProperty({ type: () => PriceListParametersDto })
-  parameters!: PriceListParametersDto;
+  @ApiProperty({
+    type: Object,
+    oneOf: [
+      { $ref: getSchemaPath(PriceListParametersDto) },
+      { $ref: getSchemaPath(LegacyPriceListParametersDto) },
+    ],
+  })
+  parameters!: PriceListParametersDto | LegacyPriceListParametersDto;
 }
 
 export class InventoryDetailDto extends InventoryReadDto {

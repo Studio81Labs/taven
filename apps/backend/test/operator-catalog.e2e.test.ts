@@ -264,6 +264,31 @@ describe("operator catalog commands", () => {
       id: created.id,
       parameters,
     });
+    for (const revision of ["legacy-v0-czk", "legacy-v0-eur"]) {
+      const legacy = await prisma.priceList.findFirstOrThrow({
+        where: { revision },
+      });
+      const legacyDetail = await fetch(
+        new URL(`/admin/catalog/price-lists/${legacy.id}`, baseUrl),
+        { headers: { cookie: adminCookie } },
+      );
+      expect(legacyDetail.status).toBe(200);
+      await expect(legacyDetail.json()).resolves.toMatchObject({
+        id: legacy.id,
+        parameters: {
+          sellerTaxPolicy: {
+            regime: "NON_VAT_PAYER",
+            vatRateBasisPoints: 0,
+          },
+          balance_payment_days: 7,
+          balance_timeout_earned_component_kinds: [
+            "ITEM_PRODUCTION",
+            "ITEM_QUANTITY",
+            "ITEM_POSTPROCESSING",
+          ],
+        },
+      });
+    }
     const unsafe = {
       ...body,
       revision: `operator-${randomUUID()}`,

@@ -4847,6 +4847,9 @@ export class AutomaticQuotesService {
     if (!order || !draft || !destination || draft.items.length === 0) {
       return null;
     }
+    // Checkout acceptance freezes the binding and legal evidence. A failed
+    // payment retry must not ask the carrier to revalidate that contract.
+    if (frozenCheckoutEvidenceState(order) !== "none") return null;
     const active = order.activePriceBinding?.orderPriceBinding;
     if (active) {
       const legal = await this.requiredLegalApprovals().availability();

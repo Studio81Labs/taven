@@ -4901,6 +4901,29 @@
         },
         "type": "object"
       },
+      "LegacyPriceListParametersDto": {
+        "properties": {
+          "balance_payment_days": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "balance_timeout_earned_component_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sellerTaxPolicy": {
+            "$ref": "#/components/schemas/SellerTaxPolicyDto"
+          }
+        },
+        "required": [
+          "sellerTaxPolicy",
+          "balance_payment_days",
+          "balance_timeout_earned_component_kinds"
+        ],
+        "type": "object"
+      },
       "LegalDocumentAvailabilityDocumentsDto": {
         "properties": {
           "claims": {
@@ -8233,7 +8256,14 @@
             "type": "string"
           },
           "parameters": {
-            "$ref": "#/components/schemas/PriceListParametersDto"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PriceListParametersDto"
+              },
+              {
+                "$ref": "#/components/schemas/LegacyPriceListParametersDto"
+              }
+            ]
           },
           "revision": {
             "type": "string"

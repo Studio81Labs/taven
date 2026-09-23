@@ -3435,6 +3435,11 @@ export interface components {
             /** Format: uuid */
             photoAssetId?: string;
         };
+        LegacyPriceListParametersDto: {
+            balance_payment_days: number;
+            balance_timeout_earned_component_kinds: string[];
+            sellerTaxPolicy: components["schemas"]["SellerTaxPolicyDto"];
+        };
         LegalDocumentAvailabilityDocumentsDto: {
             claims: components["schemas"]["LegalDocumentAvailabilityRecordDto"];
             photoConsent: components["schemas"]["LegalDocumentAvailabilityRecordDto"];
@@ -4351,7 +4356,7 @@ export interface components {
             currency: string;
             /** Format: uuid */
             id: string;
-            parameters: components["schemas"]["PriceListParametersDto"];
+            parameters: components["schemas"]["PriceListParametersDto"] | components["schemas"]["LegacyPriceListParametersDto"];
             revision: string;
             termsRevision: string;
         };
