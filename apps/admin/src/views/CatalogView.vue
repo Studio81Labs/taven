@@ -52,6 +52,12 @@ const selectedReference = ref<S["ReferenceProfileDetailDto"] | null>(null);
 const selectedProfile = ref<S["MachineProfileDetailDto"] | null>(null);
 const selectedConfig = ref<S["PrintConfigRevisionDetailDto"] | null>(null);
 const selectedCapability = ref<Capability | null>(null);
+const referenceDetailPending = ref(false);
+const profileDetailPending = ref(false);
+const configDetailPending = ref(false);
+const requestedReferenceId = ref("");
+const requestedProfileId = ref("");
+const requestedConfigId = ref("");
 const localNotices = ref<Notice[]>([]);
 const noticeItems = ref<Notice[]>([]);
 const noticeNext = ref<string | null>(null);
@@ -279,6 +285,8 @@ async function inspectPrice(id: string): Promise<void> {
 
 async function inspectReference(id: string): Promise<void> {
   const generation = ++referenceReadGeneration;
+  requestedReferenceId.value = id;
+  referenceDetailPending.value = true;
   try {
     const detail = requireData(
       await apiClient.GET("/admin/catalog/reference-profiles/{id}", {
@@ -290,11 +298,16 @@ async function inspectReference(id: string): Promise<void> {
   } catch (cause) {
     if (generation === referenceReadGeneration)
       error.value = errorMessage(cause);
+  } finally {
+    if (generation === referenceReadGeneration)
+      referenceDetailPending.value = false;
   }
 }
 
 async function inspectProfile(id: string): Promise<void> {
   const generation = ++profileReadGeneration;
+  requestedProfileId.value = id;
+  profileDetailPending.value = true;
   try {
     const detail = requireData(
       await apiClient.GET("/admin/catalog/machine-profiles/{id}", {
@@ -304,11 +317,16 @@ async function inspectProfile(id: string): Promise<void> {
     if (generation === profileReadGeneration) selectedProfile.value = detail;
   } catch (cause) {
     if (generation === profileReadGeneration) error.value = errorMessage(cause);
+  } finally {
+    if (generation === profileReadGeneration)
+      profileDetailPending.value = false;
   }
 }
 
 async function inspectConfig(id: string): Promise<void> {
   const generation = ++configReadGeneration;
+  requestedConfigId.value = id;
+  configDetailPending.value = true;
   try {
     const detail = requireData(
       await apiClient.GET("/admin/catalog/print-config-revisions/{id}", {
@@ -318,6 +336,8 @@ async function inspectConfig(id: string): Promise<void> {
     if (generation === configReadGeneration) selectedConfig.value = detail;
   } catch (cause) {
     if (generation === configReadGeneration) error.value = errorMessage(cause);
+  } finally {
+    if (generation === configReadGeneration) configDetailPending.value = false;
   }
 }
 
@@ -343,6 +363,21 @@ function edit(type: typeof editor.value): void {
     (priceDetailPending.value ||
       !selectedPrice.value ||
       selectedPrice.value.id !== requestedPriceId.value)
+  )
+    return;
+  if (
+    (type === "reference" &&
+      (referenceDetailPending.value ||
+        (requestedReferenceId.value &&
+          selectedReference.value?.id !== requestedReferenceId.value))) ||
+    (type === "profile" &&
+      (profileDetailPending.value ||
+        (requestedProfileId.value &&
+          selectedProfile.value?.id !== requestedProfileId.value))) ||
+    (type === "config" &&
+      (configDetailPending.value ||
+        (requestedConfigId.value &&
+          selectedConfig.value?.id !== requestedConfigId.value)))
   )
     return;
   editor.value = type;
@@ -505,6 +540,7 @@ async function activatePrice(id: string): Promise<void> {
     busy.value ||
     loading.value ||
     !selection.value ||
+    selection.value.priceListId === id ||
     !actionReason.value.trim()
   )
     return;
@@ -547,6 +583,8 @@ async function activatePrice(id: string): Promise<void> {
     success.value =
       "Ceník je vybrán pro nově potvrzené cenové vazby. Existující vazby a nabídky zůstávají připnuté k původní ceně, limitům i lhůtám.";
     await refresh();
+    if (error.value)
+      error.value = `Publikace byla potvrzena, ale obnovení katalogu selhalo. ${error.value}`;
   } catch (cause) {
     error.value = errorMessage(cause);
     if (cause instanceof OperatorRequestError && cause.status === 409) {
@@ -724,7 +762,13 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || loading || !selection || !actionReason.trim()"
+            :disabled="
+              busy ||
+              loading ||
+              !selection ||
+              selection.priceListId === price.id ||
+              !actionReason.trim()
+            "
             @click="activatePrice(price.id)"
           >
             Potvrdit pro nové vazby
@@ -845,7 +889,16 @@ onUnmounted(() => noticePager.dispose());
       >
         Další referenční profily
       </button>
-      <button v-if="canWrite" type="button" @click="edit('reference')">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="
+          referenceDetailPending ||
+          (!!requestedReferenceId &&
+            selectedReference?.id !== requestedReferenceId)
+        "
+        @click="edit('reference')"
+      >
         Nová revize profilu
       </button>
     </section>
@@ -897,7 +950,15 @@ onUnmounted(() => noticePager.dispose());
       >
         Další profily strojů
       </button>
-      <button v-if="canWrite" type="button" @click="edit('profile')">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="
+          profileDetailPending ||
+          (!!requestedProfileId && selectedProfile?.id !== requestedProfileId)
+        "
+        @click="edit('profile')"
+      >
         Nová revize profilu stroje
       </button>
     </section>
@@ -929,7 +990,15 @@ onUnmounted(() => noticePager.dispose());
       >
         Další konfigurace
       </button>
-      <button v-if="canWrite" type="button" @click="edit('config')">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="
+          configDetailPending ||
+          (!!requestedConfigId && selectedConfig?.id !== requestedConfigId)
+        "
+        @click="edit('config')"
+      >
         Nová revize konfigurace
       </button>
     </section>

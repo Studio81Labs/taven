@@ -50,6 +50,7 @@ type CatalogState = {
   postedVersions: number[];
   createdPriceRevisions?: string[];
   includeSecondReference?: boolean;
+  refreshFailsAfterActivation?: boolean;
   postHeaders: { csrf?: string; key?: string }[];
 };
 
@@ -165,7 +166,11 @@ async function mockCatalog(page: Page, state: CatalogState): Promise<void> {
         path,
       )
     ) {
-      await route.fulfill({ json: { items: [] } });
+      await route.fulfill(
+        state.refreshFailsAfterActivation && state.postedVersions.length
+          ? { status: 503, json: { message: "read outage" } }
+          : { json: { items: [] } },
+      );
     } else if (
       method === "POST" &&
       path.endsWith(`/reference-profiles/${profileId}/activate`)
@@ -340,17 +345,27 @@ test("a late catalog detail response cannot replace the latest selected revision
   const references = page
     .getByRole("heading", { name: "Referenční profily" })
     .locator("..");
+  const clone = references.getByRole("button", {
+    name: "Nová revize profilu",
+    exact: true,
+  });
   await references.getByRole("button", { name: "Detail" }).first().click();
   await expect.poll(() => Boolean(releaseFirst)).toBe(true);
+  await expect(clone).toBeDisabled();
   await references.getByRole("button", { name: "Detail" }).nth(1).click();
   await expect(references.locator(".operator-detail")).toContainText(
     secondProfileId,
   );
+  await expect(clone).toBeEnabled();
   releaseFirst?.();
   await firstDone;
   await expect(references.locator(".operator-detail")).toContainText(
     secondProfileId,
   );
+  await clone.click();
+  await expect(
+    page.getByRole("textbox", { name: "Nastavení JSON" }),
+  ).toHaveValue(new RegExp(secondProfileId));
 });
 
 test("catalog writes wait for a manual refresh to finish", async ({ page }) => {
@@ -387,11 +402,11 @@ test("catalog writes wait for a manual refresh to finish", async ({ page }) => {
     .click();
   await expect.poll(() => Boolean(releaseRead)).toBe(true);
   await expect(
-    page.getByRole("button", { name: "Potvrdit pro nové vazby" }).first(),
+    page.getByRole("button", { name: "Potvrdit pro nové vazby" }).nth(1),
   ).toBeDisabled();
   releaseRead?.();
   await expect(
-    page.getByRole("button", { name: "Potvrdit pro nové vazby" }).first(),
+    page.getByRole("button", { name: "Potvrdit pro nové vazby" }).nth(1),
   ).toBeEnabled();
   expect(state.postedVersions).toEqual([]);
 });
@@ -455,6 +470,36 @@ test("the price editor waits for the requested detail before cloning", async ({
   await expect(
     page.getByRole("textbox", { name: "Úplné cenové parametry JSON" }),
   ).toHaveValue(/300000/);
+});
+
+test("a confirmed price activation cannot be repeated after a read outage", async ({
+  page,
+}) => {
+  const state: CatalogState = {
+    version: 1,
+    selectedPriceId: priceId,
+    feed: [],
+    postedVersions: [],
+    postHeaders: [],
+    refreshFailsAfterActivation: true,
+  };
+  await mockSession(page);
+  await mockCatalog(page, state);
+  page.on("dialog", (dialog) => void dialog.accept());
+  await page.goto("/katalog");
+  await page
+    .getByRole("textbox", { name: "Důvod publikace" })
+    .fill("nová revize");
+  const activate = page
+    .getByRole("button", { name: "Potvrdit pro nové vazby" })
+    .nth(1);
+  await activate.click();
+  await expect(page.locator(".form-success")).toContainText("Ceník je vybrán");
+  await expect(page.getByRole("alert")).toContainText(
+    "Publikace byla potvrzena, ale obnovení katalogu selhalo",
+  );
+  await expect(activate).toBeDisabled();
+  expect(state.postedVersions).toEqual([1]);
 });
 
 test("two tabs require a fresh deliberate publication after a stale selection", async ({
