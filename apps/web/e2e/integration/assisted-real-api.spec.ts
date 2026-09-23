@@ -165,7 +165,7 @@ test.describe("Real API assisted request", () => {
     });
     await expect(proceed).toBeEnabled({ timeout: 120_000 });
     await proceed.click();
-    await expect(page).toHaveURL(/\/objednavka/);
+    await expect(page).toHaveURL(/\/objednavka/, { timeout: 120_000 });
     await page
       .getByRole("checkbox", { name: /Díl musí přesně lícovat/ })
       .check();
