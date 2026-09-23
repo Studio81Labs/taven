@@ -188,7 +188,11 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   ).toBeVisible();
   await page.getByRole("button", { name: "Detail a rychlé změny" }).click();
   await page.getByLabel("Důvod změny").fill("Nasazeno pro tisk");
+  await page.getByRole("button", { name: "Dostupnost" }).first().click();
+  const draftStart = page.getByRole("textbox", { name: "Začátek" });
+  await draftStart.fill("2026-09-23T09:00:00+02:00");
   await page.getByRole("button", { name: "Nasadit" }).click();
+  await expect(draftStart).toHaveValue("2026-09-23T09:00:00+02:00");
   await expect(page.locator(".form-success")).toContainText(
     "Množství ani rezervace se nezměnily",
   );

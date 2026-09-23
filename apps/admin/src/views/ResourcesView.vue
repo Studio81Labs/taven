@@ -38,6 +38,17 @@ const formMachineId = ref("");
 const from = ref(new Date().toISOString());
 const to = ref(new Date(Date.now() + 30 * 86_400_000).toISOString());
 const windows = ref<{ startsAt: string; endsAt: string }[]>([]);
+const availabilityDirty = computed(() => {
+  const saved = availability.value?.windows ?? [];
+  return (
+    windows.value.length !== saved.length ||
+    windows.value.some(
+      (window, index) =>
+        window.startsAt !== saved[index]?.startsAt ||
+        window.endsAt !== saved[index]?.endsAt,
+    )
+  );
+});
 const error = ref("");
 const success = ref("");
 const busy = ref(false);
@@ -103,7 +114,8 @@ async function refresh(): Promise<void> {
     capabilities.value = capabilityData.items;
     capabilityCursor.value = capabilityData.nextCursor ?? null;
     if (inventory.value) await inspectInventory(inventory.value.id);
-    if (availabilityMachineId.value) await inspectAvailability();
+    if (availabilityMachineId.value && !availabilityDirty.value)
+      await inspectAvailability(true);
     if (!error.value) inventoryRefreshRequired.value = false;
   } catch (cause) {
     error.value = errorMessage(cause);
@@ -220,7 +232,7 @@ function openLegacyReceipt(): void {
   form.value = "legacy-receipt";
 }
 
-async function inspectAvailability(): Promise<void> {
+async function inspectAvailability(preserveDraft = false): Promise<void> {
   if (!availabilityMachineId.value) return;
   const machineId = availabilityMachineId.value;
   const generation = ++availabilityReadGeneration;
@@ -242,7 +254,8 @@ async function inspectAvailability(): Promise<void> {
     );
     if (
       generation !== availabilityReadGeneration ||
-      machineId !== availabilityMachineId.value
+      machineId !== availabilityMachineId.value ||
+      (preserveDraft && availabilityDirty.value)
     )
       return;
     availability.value = detail;
@@ -746,7 +759,7 @@ onMounted(() => void refresh());
       <div class="operator-inline">
         <label>Od <input v-model="from" /></label
         ><label>Do <input v-model="to" /></label
-        ><button type="button" @click="inspectAvailability">Načíst</button>
+        ><button type="button" @click="inspectAvailability()">Načíst</button>
       </div>
       <p v-if="availability">
         Verze výběru {{ availability.selectionVersion ?? "dosud nezaložena" }} ·
