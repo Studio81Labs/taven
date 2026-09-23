@@ -181,7 +181,7 @@ async function more(
     capability: capabilityCursor,
   };
   const cursor = cursors[kind].value;
-  if (!cursor || loading.value) return;
+  if (!cursor || loading.value || busy.value) return;
   loading.value = true;
   try {
     if (kind === "price") {
@@ -373,7 +373,7 @@ function edit(type: typeof editor.value): void {
 }
 
 async function createRevision(): Promise<void> {
-  if (!canWrite.value || busy.value) return;
+  if (!canWrite.value || busy.value || loading.value) return;
   busy.value = true;
   error.value = "";
   success.value = "";
@@ -490,6 +490,7 @@ async function activatePrice(id: string): Promise<void> {
   if (
     !canWrite.value ||
     busy.value ||
+    loading.value ||
     !selection.value ||
     !actionReason.value.trim()
   )
@@ -551,7 +552,13 @@ async function profileAction(
   id: string,
   action: "activate" | "retire",
 ): Promise<void> {
-  if (!canWrite.value || busy.value || !actionReason.value.trim()) return;
+  if (
+    !canWrite.value ||
+    busy.value ||
+    loading.value ||
+    !actionReason.value.trim()
+  )
+    return;
   busy.value = true;
   error.value = "";
   success.value = "";
@@ -704,7 +711,7 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || !selection || !actionReason.trim()"
+            :disabled="busy || loading || !selection || !actionReason.trim()"
             @click="activatePrice(price.id)"
           >
             Potvrdit pro nové vazby
@@ -714,7 +721,7 @@ onUnmounted(() => noticePager.dispose());
       <button
         v-if="priceCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || busy"
         @click="more('price')"
       >
         Další ceníky
@@ -788,7 +795,7 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || !actionReason.trim()"
+            :disabled="busy || loading || !actionReason.trim()"
             @click="profileAction('reference', item.id, 'activate')"
           >
             Aktivovat
@@ -796,7 +803,7 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || !actionReason.trim()"
+            :disabled="busy || loading || !actionReason.trim()"
             @click="profileAction('reference', item.id, 'retire')"
           >
             Vyřadit
@@ -811,7 +818,7 @@ onUnmounted(() => noticePager.dispose());
       <button
         v-if="referenceCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || busy"
         @click="more('reference')"
       >
         Další referenční profily
@@ -837,7 +844,7 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || !actionReason.trim()"
+            :disabled="busy || loading || !actionReason.trim()"
             @click="profileAction('profile', item.id, 'activate')"
           >
             Aktivovat
@@ -845,7 +852,7 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || !actionReason.trim()"
+            :disabled="busy || loading || !actionReason.trim()"
             @click="profileAction('profile', item.id, 'retire')"
           >
             Vyřadit
@@ -863,7 +870,7 @@ onUnmounted(() => noticePager.dispose());
       <button
         v-if="profileCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || busy"
         @click="more('profile')"
       >
         Další profily strojů
@@ -895,7 +902,7 @@ onUnmounted(() => noticePager.dispose());
       <button
         v-if="configCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || busy"
         @click="more('config')"
       >
         Další konfigurace
@@ -926,7 +933,7 @@ onUnmounted(() => noticePager.dispose());
       <button
         v-if="capabilityCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || busy"
         @click="more('capability')"
       >
         Další schopnosti
@@ -1079,7 +1086,8 @@ onUnmounted(() => noticePager.dispose());
           /></label>
         </template>
         <div class="operator-actions">
-          <button type="submit" :disabled="busy">Vytvořit revizi</button
+          <button type="submit" :disabled="busy || loading">
+            Vytvořit revizi</button
           ><button type="button" @click="editor = ''">Zavřít</button>
         </div>
       </form>

@@ -270,3 +270,135 @@ test("a confirmed receipt closes its form when the following read fails", async 
   ).toHaveCount(0);
   expect(receiptPosts).toBe(1);
 });
+
+test("receipt correction copies the selected evidence and waits for refresh", async ({
+  page,
+}) => {
+  const nodeId = "00000000-0000-0000-0000-000000000002";
+  const inventoryId = "00000000-0000-0000-0000-000000000004";
+  const firstId = "00000000-0000-0000-0000-000000000011";
+  const secondId = "00000000-0000-0000-0000-000000000012";
+  await page.route("**/admin/auth/session", (route) =>
+    route.fulfill({
+      json: {
+        csrfToken: "csrf-test",
+        operator: {
+          operatorId: "00000000-0000-0000-0000-000000000001",
+          role: "ADMIN",
+          nodeIds: [nodeId],
+          permissions: ["operations:read", "catalog:write"],
+          authenticationMethod: "DEVELOPMENT_PASSWORD",
+        },
+      },
+    }),
+  );
+  await page.route("**/admin/catalog/machine-capabilities*", (route) =>
+    route.fulfill({ json: { items: [] } }),
+  );
+  await page.route("**/admin/nodes/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith(`/inventories/${inventoryId}`))
+      return route.fulfill({
+        json: {
+          id: inventoryId,
+          nodeId,
+          machineId: "machine",
+          sku: "PLA-red",
+          vendor: "Current vendor",
+          currency: "CZK",
+          priceMinorUnitsNumerator: "9",
+          priceMinorUnitsDenominator: "1000",
+          receipts: [
+            {
+              id: firstId,
+              kind: "INITIAL",
+              vendor: "First vendor",
+              currency: "CZK",
+              purchasedAt: "2025-04-03T10:00:00Z",
+              receivedMilligrams: "400000",
+              priceMinorUnitsNumerator: "2",
+              priceMinorUnitsDenominator: "1000",
+              createdAt: "2025-04-03T10:00:00Z",
+            },
+            {
+              id: secondId,
+              kind: "CORRECTION",
+              supersedesReceiptId: firstId,
+              vendor: "Second vendor",
+              currency: "CZK",
+              purchasedAt: "2025-04-04T10:00:00Z",
+              receivedMilligrams: "500000",
+              priceMinorUnitsNumerator: "3",
+              priceMinorUnitsDenominator: "1000",
+              createdAt: "2025-04-04T10:00:00Z",
+            },
+          ],
+        },
+      });
+    if (path.endsWith("/inventories"))
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              id: inventoryId,
+              nodeId,
+              machineId: "machine",
+              sku: "PLA-red",
+              material: "PLA",
+              status: "AVAILABLE",
+              mountStatus: "MOUNTED",
+              receiptCoverage: "RECORDED",
+              remainingMilligrams: "500000",
+              reservedMilligrams: "0",
+              availableMilligrams: "500000",
+            },
+          ],
+        },
+      });
+    return route.fulfill({ json: { items: [] } });
+  });
+  await page.goto("/zdroje");
+  await page.getByRole("button", { name: "Detail a rychlé změny" }).click();
+  await page.getByRole("button", { name: "Opravit doklad" }).click();
+  await expect(page.getByRole("textbox", { name: "Dodavatel" })).toHaveValue(
+    "Second vendor",
+  );
+  await expect(page.getByRole("textbox", { name: /Nakoupeno/ })).toHaveValue(
+    "2025-04-04T10:00:00Z",
+  );
+  await expect(
+    page.getByRole("textbox", { name: "Přijaté množství mg" }),
+  ).toHaveValue("500000");
+  await page
+    .getByRole("combobox", { name: "Nahrazený doklad" })
+    .selectOption(firstId);
+  await expect(page.getByRole("textbox", { name: "Dodavatel" })).toHaveValue(
+    "First vendor",
+  );
+  await expect(page.getByRole("textbox", { name: /Nakoupeno/ })).toHaveValue(
+    "2025-04-03T10:00:00Z",
+  );
+  await expect(
+    page.getByRole("textbox", { name: "Přijaté množství mg" }),
+  ).toHaveValue("400000");
+  await page.getByRole("textbox", { name: "Důvod změny" }).fill("oprava");
+  let releaseRead: (() => void) | undefined;
+  await page.route(`**/admin/nodes/${nodeId}/machines*`, async (route) => {
+    await new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    await route.fulfill({ json: { items: [] } });
+  });
+  await page.getByRole("button", { name: "Obnovit zdroje" }).click();
+  await expect.poll(() => Boolean(releaseRead)).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "Zapsat", exact: true }),
+  ).toBeDisabled();
+  releaseRead?.();
+  await expect(page.getByRole("textbox", { name: "Dodavatel" })).toHaveValue(
+    "First vendor",
+  );
+  await expect(
+    page.getByRole("button", { name: "Zapsat", exact: true }),
+  ).toBeEnabled();
+});

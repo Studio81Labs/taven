@@ -353,6 +353,49 @@ test("a late catalog detail response cannot replace the latest selected revision
   );
 });
 
+test("catalog writes wait for a manual refresh to finish", async ({ page }) => {
+  const state: CatalogState = {
+    version: 1,
+    selectedPriceId: priceId,
+    feed: [],
+    postedVersions: [],
+    postHeaders: [],
+  };
+  await mockSession(page);
+  await mockCatalog(page, state);
+  await page.goto("/katalog");
+  await expect(
+    page.getByText("Aktuálně vybraná verze: 1", { exact: false }),
+  ).toBeVisible();
+  let releaseRead: (() => void) | undefined;
+  await page.route(
+    "**/admin/catalog/commercial-policy-selections/CZK",
+    async (route) => {
+      await new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      await route.fulfill({
+        json: { currency: "CZK", priceListId: priceId, selectionVersion: 1 },
+      });
+    },
+  );
+  await page
+    .getByRole("textbox", { name: "Důvod publikace" })
+    .fill("nový ceník");
+  await page
+    .getByRole("button", { name: "Obnovit katalog a upozornění" })
+    .click();
+  await expect.poll(() => Boolean(releaseRead)).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "Potvrdit pro nové vazby" }).first(),
+  ).toBeDisabled();
+  releaseRead?.();
+  await expect(
+    page.getByRole("button", { name: "Potvrdit pro nové vazby" }).first(),
+  ).toBeEnabled();
+  expect(state.postedVersions).toEqual([]);
+});
+
 test("two tabs require a fresh deliberate publication after a stale selection", async ({
   context,
 }) => {

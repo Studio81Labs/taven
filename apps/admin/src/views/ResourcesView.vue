@@ -114,7 +114,7 @@ async function more(
     capability: capabilityCursor,
   };
   const cursor = cursors[kind].value;
-  if (!cursor || loading.value) return;
+  if (!cursor || loading.value || busy.value) return;
   loading.value = true;
   try {
     if (kind === "machine") {
@@ -177,7 +177,7 @@ async function inspectInventory(id: string): Promise<void> {
     );
     if (generation !== inventoryReadGeneration) return;
     inventory.value = detail;
-    if (form.value !== "receipt") {
+    if (form.value !== "receipt" && form.value !== "correction") {
       vendor.value = detail.vendor;
       priceNumerator.value = detail.priceMinorUnitsNumerator;
       priceDenominator.value = detail.priceMinorUnitsDenominator;
@@ -191,6 +191,24 @@ async function inspectInventory(id: string): Promise<void> {
 function selectInventory(id: string): void {
   form.value = "";
   void inspectInventory(id);
+}
+
+function selectCorrectionReceipt(id: string): void {
+  const receipt = inventory.value?.receipts.find((item) => item.id === id);
+  if (!receipt) return;
+  supersedesReceiptId.value = receipt.id;
+  vendor.value = receipt.vendor;
+  purchasedAt.value = receipt.purchasedAt;
+  receivedMilligrams.value = receipt.receivedMilligrams;
+  priceNumerator.value = receipt.priceMinorUnitsNumerator;
+  priceDenominator.value = receipt.priceMinorUnitsDenominator;
+}
+
+function openCorrection(): void {
+  const receipt = inventory.value?.receipts.at(-1);
+  if (!receipt) return;
+  form.value = "correction";
+  selectCorrectionReceipt(receipt.id);
 }
 
 async function inspectAvailability(): Promise<void> {
@@ -234,7 +252,7 @@ async function run<Body>(
   write: (body: Readonly<Body>, key: string) => Promise<unknown>,
   message: string,
 ): Promise<void> {
-  if (busy.value || !canWrite.value) return;
+  if (busy.value || loading.value || !canWrite.value) return;
   busy.value = true;
   error.value = "";
   success.value = "";
@@ -554,7 +572,13 @@ async function adjustInventory(): Promise<void> {
 }
 
 async function publishAvailability(): Promise<void> {
-  if (!availability.value || !reason.value.trim() || busy.value) return;
+  if (
+    !availability.value ||
+    !reason.value.trim() ||
+    busy.value ||
+    loading.value
+  )
+    return;
   const machineId = availabilityMachineId.value;
   if (availability.value.machineId !== machineId) return;
   busy.value = true;
@@ -652,19 +676,19 @@ onMounted(() => void refresh());
           <template v-if="canWrite">
             <button
               type="button"
-              :disabled="busy || !reason.trim()"
+              :disabled="busy || loading || !reason.trim()"
               @click="machineStatus(machine.id, 'ACTIVE')"
             >
               Aktivní</button
             ><button
               type="button"
-              :disabled="busy || !reason.trim()"
+              :disabled="busy || loading || !reason.trim()"
               @click="machineStatus(machine.id, 'MAINTENANCE')"
             >
               Údržba</button
             ><button
               type="button"
-              :disabled="busy || !reason.trim()"
+              :disabled="busy || loading || !reason.trim()"
               @click="machineStatus(machine.id, 'DISABLED')"
             >
               Vypnout
@@ -675,7 +699,7 @@ onMounted(() => void refresh());
       <button
         v-if="machineCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || busy"
         @click="more('machine')"
       >
         Další stroje
@@ -738,7 +762,7 @@ onMounted(() => void refresh());
             @click="windows.push({ startsAt: from, endsAt: to })"
           >
             Přidat okno</button
-          ><button type="submit" :disabled="busy || !reason.trim()">
+          ><button type="submit" :disabled="busy || loading || !reason.trim()">
             Publikovat dostupnost
           </button>
         </div>
@@ -754,13 +778,13 @@ onMounted(() => void refresh());
           <template v-if="canWrite">
             <button
               type="button"
-              :disabled="busy || !reason.trim()"
+              :disabled="busy || loading || !reason.trim()"
               @click="calibrationAction(item.id, 'activate')"
             >
               Aktivovat</button
             ><button
               type="button"
-              :disabled="busy || !reason.trim()"
+              :disabled="busy || loading || !reason.trim()"
               @click="calibrationAction(item.id, 'retire')"
             >
               Vyřadit
@@ -771,7 +795,7 @@ onMounted(() => void refresh());
       <button
         v-if="calibrationCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || busy"
         @click="more('calibration')"
       >
         Další kalibrace
@@ -803,7 +827,7 @@ onMounted(() => void refresh());
       <button
         v-if="inventoryCursor"
         type="button"
-        :disabled="loading"
+        :disabled="loading || busy"
         @click="more('inventory')"
       >
         Další šarže
@@ -842,31 +866,31 @@ onMounted(() => void refresh());
         <div class="operator-actions">
           <button
             type="button"
-            :disabled="busy || !reason.trim()"
+            :disabled="busy || loading || !reason.trim()"
             @click="mount('MOUNTED')"
           >
             Nasadit</button
           ><button
             type="button"
-            :disabled="busy || !reason.trim()"
+            :disabled="busy || loading || !reason.trim()"
             @click="mount('UNMOUNTED')"
           >
             Sundat</button
           ><button
             type="button"
-            :disabled="busy || !reason.trim()"
+            :disabled="busy || loading || !reason.trim()"
             @click="changeInventoryStatus('AVAILABLE')"
           >
             Dostupné</button
           ><button
             type="button"
-            :disabled="busy || !reason.trim()"
+            :disabled="busy || loading || !reason.trim()"
             @click="changeInventoryStatus('DEPLETED')"
           >
             Vyčerpané</button
           ><button
             type="button"
-            :disabled="busy || !reason.trim()"
+            :disabled="busy || loading || !reason.trim()"
             @click="changeInventoryStatus('RETIRED')"
           >
             Vyřadit
@@ -876,7 +900,7 @@ onMounted(() => void refresh());
           <label
             >Změna množství v mg (znaménko +/−)
             <input v-model="adjustmentMilligrams" required /></label
-          ><button type="submit" :disabled="busy || !reason.trim()">
+          ><button type="submit" :disabled="busy || loading || !reason.trim()">
             Upravit množství
           </button>
         </form>
@@ -890,7 +914,7 @@ onMounted(() => void refresh());
           ><button
             v-if="inventory.receipts.length"
             type="button"
-            @click="form = 'correction'"
+            @click="openCorrection"
           >
             Opravit doklad
           </button>
@@ -944,7 +968,7 @@ onMounted(() => void refresh());
           ><button
             v-if="capabilityCursor"
             type="button"
-            :disabled="loading"
+            :disabled="loading || busy"
             @click="more('capability')"
           >
             Další schopnosti</button
@@ -1031,7 +1055,11 @@ onMounted(() => void refresh());
           /></label>
           <label v-if="form === 'correction'"
             >Nahrazený doklad
-            <select v-model="supersedesReceiptId" required>
+            <select
+              v-model="supersedesReceiptId"
+              required
+              @change="selectCorrectionReceipt(supersedesReceiptId)"
+            >
               <option
                 v-for="item in inventory?.receipts ?? []"
                 :key="item.id"
@@ -1046,6 +1074,7 @@ onMounted(() => void refresh());
           type="submit"
           :disabled="
             busy ||
+            loading ||
             ((form === 'correction' || form === 'legacy-receipt') &&
               !reason.trim())
           "
