@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { zipSync } from "fflate";
 
 const apiUrl =
   process.env.INTEGRATION_API_URL ?? "https://api-staging.taven.cz";
@@ -11,6 +13,10 @@ const enabled =
 const cubePath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../tools/slicing-fixtures/fixtures/single-pla/cube.stl",
+);
+const paintedFixturePath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../../tools/slicing-fixtures/fixtures/painted-multimaterial/source",
 );
 
 test.describe("Real API assisted request", () => {
@@ -252,6 +258,95 @@ test.describe("Real API assisted request", () => {
       publicReference: created.publicReference,
       status: "NEW",
       attribution: { source: "automatic-quote" },
+    });
+  });
+
+  test("routes a painted 3MF to one assisted request without an automatic session", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const painted3mf = zipSync({
+      "3D/3dmodel.model": readFileSync(
+        path.join(paintedFixturePath, "3D/3dmodel.model"),
+      ),
+      "[Content_Types].xml": readFileSync(
+        path.join(paintedFixturePath, "[Content_Types].xml"),
+      ),
+      "_rels/.rels": readFileSync(path.join(paintedFixturePath, "_rels/.rels")),
+    });
+    let createCalls = 0;
+    let automaticSessionCreates = 0;
+    page.on("request", (outgoing) => {
+      if (outgoing.method() !== "POST") return;
+      if (outgoing.url() === `${apiUrl}/quote-requests`) createCalls += 1;
+      if (outgoing.url() === `${apiUrl}/automatic-quote-sessions`)
+        automaticSessionCreates += 1;
+    });
+
+    await page.goto("/");
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.getByText("Přetáhni soubor sem").click();
+    const fileChooser = await chooserPromise;
+    await fileChooser.setFiles({
+      name: "painted-two-material.3mf",
+      mimeType: "model/3mf",
+      buffer: Buffer.from(painted3mf),
+    });
+    await expect(
+      page.getByRole("heading", {
+        name: "Tento soubor potřebuje ruční posouzení.",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(/Barevný nebo vícemateriálový 3MF/),
+    ).toBeVisible();
+    expect(automaticSessionCreates).toBe(0);
+
+    await page
+      .getByRole("link", { name: "Přejít na individuální poptávku" })
+      .click();
+    await expect(page).toHaveURL(/\/poptavka\?source=blocked-3mf/);
+    await expect(
+      page.getByRole("textbox", { name: /Co potřebujete vyrobit/ }),
+    ).toHaveValue(/3MF model s více materiály nebo barvami/);
+    await page.getByLabel("Jméno *").fill("E2E Painted Test");
+    await page.getByLabel("E-mail *").fill("painted-browser@example.test");
+    await page.locator('input[type="checkbox"]').first().check();
+    const createdResponse = page.waitForResponse(
+      (response) =>
+        response.url() === `${apiUrl}/quote-requests` &&
+        response.request().method() === "POST",
+    );
+    await page
+      .getByRole("button", { name: "Odeslat k lidskému posouzení" })
+      .click();
+    const response = await createdResponse;
+    expect(response.status()).toBe(201);
+    const created = (await response.json()) as {
+      publicReference: string;
+      requestId: string;
+      requestToken: string;
+    };
+    await expect(
+      page.getByRole("heading", {
+        name: "Děkujeme. Podklady předáme k lidskému posouzení.",
+      }),
+    ).toBeVisible();
+    expect(createCalls).toBe(1);
+    expect(automaticSessionCreates).toBe(0);
+
+    const detailResponse = await request.get(
+      `${apiUrl}/quote-requests/${created.requestId}`,
+      { headers: { Authorization: `Bearer ${created.requestToken}` } },
+    );
+    expect(detailResponse.status()).toBe(200);
+    expect(await detailResponse.json()).toMatchObject({
+      requestId: created.requestId,
+      publicReference: created.publicReference,
+      status: "NEW",
+      attribution: { source: "blocked-3mf" },
+      attachments: [],
     });
   });
 });
