@@ -210,9 +210,12 @@ describe("operator read contracts", () => {
     const machine = await prisma.machine.findUniqueOrThrow({
       where: { id: fixture.machineId },
     });
+    const profile = await prisma.machineProfile.findUniqueOrThrow({
+      where: { id: fixture.machineProfileId },
+    });
     const details = [
       [
-        `/admin/catalog/reference-profiles/${fixture.referenceProfileId}`,
+        `/admin/catalog/reference-profiles/${profile.referenceProfileId}`,
         "settings",
       ],
       [
