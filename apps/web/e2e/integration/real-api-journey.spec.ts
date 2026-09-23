@@ -384,4 +384,53 @@ test.describe("Real API Integration Journey", () => {
       status: "CAPTURED",
     });
   });
+
+  test("requires an explicit cancellation before voiding a pending payment", async ({
+    page,
+    request,
+  }) => {
+    test.skip(
+      !completePayment,
+      "Requires the isolated sandbox checkout profile",
+    );
+    test.setTimeout(360_000);
+
+    const { checkoutSession, paymentId } = await startSandboxPayment(
+      page,
+      "CARD",
+    );
+    const readPayment = async () => {
+      const response = await request.get(
+        `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payment`,
+        {
+          headers: { Authorization: `Bearer ${checkoutSession.sessionToken}` },
+          params: { paymentId },
+        },
+      );
+      expect(response.status()).toBe(200);
+      return response.json();
+    };
+    await page.goto(
+      `/checkout/payment/cancelled?sessionId=${checkoutSession.sessionId}&paymentId=${paymentId}`,
+    );
+    await expect(
+      page.getByRole("heading", { name: "Čekáme na potvrzení platby." }),
+    ).toBeVisible({ timeout: 120_000 });
+    expect(["CREATED", "PENDING"]).toContain((await readPayment()).status);
+    await page
+      .getByRole("button", { name: "Opravdu zrušit platební pokus" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Platební pokus byl zrušen." }),
+    ).toBeVisible({ timeout: 120_000 });
+    await expect(
+      page.getByRole("button", { name: "Začít novou kalkulaci" }),
+    ).toBeVisible();
+    expect(await readPayment()).toMatchObject({
+      paymentId,
+      method: "CARD",
+      status: "VOIDED",
+      provider: "sandbox",
+    });
+  });
 });
