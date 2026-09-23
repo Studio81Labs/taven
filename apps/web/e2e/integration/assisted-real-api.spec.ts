@@ -273,6 +273,7 @@ test.describe("Real API assisted request", () => {
       "[Content_Types].xml": readFileSync(
         path.join(paintedFixturePath, "[Content_Types].xml"),
       ),
+      "_rels/.rels": readFileSync(path.join(paintedFixturePath, "_rels/.rels")),
     });
     let createCalls = 0;
     let automaticSessionCreates = 0;
