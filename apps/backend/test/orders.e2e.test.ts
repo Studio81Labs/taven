@@ -14,6 +14,7 @@ import type { EligibilityPlanService } from "../src/modules/resources/eligibilit
 import type { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import { OperatorCatalogService } from "../src/modules/resources/operator-catalog.service";
 import type { ResourceCatalogService } from "../src/modules/resources/resource-catalog.service";
+import { OperatorWarningsService } from "../src/modules/metrics/operator-warnings.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import {
   PersistenceFactory,
@@ -4139,7 +4140,32 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       client.release();
     }
 
+    const warnings = new OperatorWarningsService(prisma);
+    const warningOperator = operatorForTest(
+      testOperatorId,
+      fixture.foundation.nodeId,
+    );
+    const beforeRetrySuccess = await warnings.report(warningOperator, 100);
+    expect(beforeRetrySuccess.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "REFUND_UNRESOLVED",
+          sourceId: retryRefundId,
+        }),
+      ]),
+    );
+    expect(
+      beforeRetrySuccess.items.some((item) => item.sourceId === failedRefundId),
+    ).toBe(false);
+
     await succeedRefund(retryRefundId);
+    const afterRetrySuccess = await warnings.report(warningOperator, 100);
+    expect(
+      afterRetrySuccess.items.some(
+        (item) =>
+          item.sourceId === failedRefundId || item.sourceId === retryRefundId,
+      ),
+    ).toBe(false);
 
     await expect(
       prisma.refundTransaction.findMany({

@@ -6,6 +6,7 @@ import {
   automationMetrics,
   completenessFor,
   finalContributionMargin,
+  issuancePreflight,
   isFinalMarginTerminal,
   MetricsReportService,
   operationalReport,
@@ -91,6 +92,43 @@ describe("parseMetricsQuery", () => {
     expect(() => parseCursor(cursor, "filter-hash")).toThrow(
       BadRequestException,
     );
+  });
+});
+
+describe("issuance preflight evidence", () => {
+  it.each(["clean", "warning"] as const)(
+    "decodes a supported %s summary from the immutable snapshot",
+    (classification) => {
+      expect(
+        issuancePreflight({
+          automaticQuote: {
+            configurationRevision: 2,
+            preflightAtIssuance: { schemaVersion: 1, classification },
+          },
+        }),
+      ).toBe(classification);
+    },
+  );
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { automaticQuote: {} },
+    { automaticQuote: { preflightAtIssuance: null } },
+    { automaticQuote: { preflightAtIssuance: [] } },
+    {
+      automaticQuote: {
+        preflightAtIssuance: { schemaVersion: 2, classification: "clean" },
+      },
+    },
+    {
+      automaticQuote: {
+        preflightAtIssuance: { schemaVersion: 1, classification: "other" },
+      },
+    },
+  ])("treats unsupported or legacy evidence as unknown", (input) => {
+    expect(issuancePreflight(input)).toBe("unknown");
   });
 });
 
@@ -387,6 +425,7 @@ describe("v0-1 metric classifications", () => {
           accepted: true,
           grossMinor: 10_000n,
           preflight: "clean",
+          preflightAtIssuance: "clean",
         },
         {
           kind: "automatic",
@@ -394,6 +433,7 @@ describe("v0-1 metric classifications", () => {
           accepted: false,
           grossMinor: 10_000n,
           preflight: "warning",
+          preflightAtIssuance: "warning",
         },
         {
           kind: "automatic",
@@ -401,6 +441,7 @@ describe("v0-1 metric classifications", () => {
           accepted: true,
           grossMinor: 10_000n,
           preflight: "warning",
+          preflightAtIssuance: "warning",
         },
       ],
       "CZK",
@@ -420,6 +461,219 @@ describe("v0-1 metric classifications", () => {
             acceptedBindings: 1,
             conversion: { value: 0.5 },
           },
+        },
+      },
+    });
+  });
+
+  it("keeps v0-1 counts and adds deduplicated issued-gross to confirmed-paid bands", () => {
+    const facts = [
+      {
+        bindingId: "a",
+        kind: "automatic",
+        channel: "paid",
+        accepted: true,
+        grossMinor: 24_999n,
+        preflight: "clean",
+        preflightAtIssuance: "clean",
+      },
+      {
+        bindingId: "b",
+        kind: "automatic",
+        channel: "paid",
+        accepted: false,
+        grossMinor: 25_000n,
+        preflight: "warning",
+        preflightAtIssuance: "warning",
+      },
+      {
+        bindingId: "b",
+        kind: "automatic",
+        channel: "paid",
+        accepted: false,
+        grossMinor: 25_000n,
+        preflight: "warning",
+        preflightAtIssuance: "warning",
+      },
+      {
+        bindingId: "c",
+        kind: "automatic",
+        channel: "paid",
+        accepted: true,
+        grossMinor: 49_999n,
+        preflight: "warning",
+        preflightAtIssuance: "warning",
+      },
+      {
+        bindingId: "d",
+        kind: "automatic",
+        channel: "paid",
+        accepted: false,
+        grossMinor: 50_000n,
+        preflight: "unknown",
+        preflightAtIssuance: "unknown",
+      },
+      {
+        bindingId: "e",
+        kind: "automatic",
+        channel: "paid",
+        accepted: true,
+        grossMinor: 100_000n,
+        preflight: "clean",
+        preflightAtIssuance: "clean",
+      },
+      {
+        bindingId: "f",
+        kind: "individual",
+        channel: "paid",
+        accepted: false,
+        grossMinor: 199_999n,
+        preflight: "unknown",
+        preflightAtIssuance: "unknown",
+      },
+      {
+        bindingId: "g",
+        kind: "individual",
+        channel: "paid",
+        accepted: true,
+        grossMinor: 200_000n,
+        preflight: "unknown",
+        preflightAtIssuance: "unknown",
+      },
+      {
+        bindingId: "h",
+        kind: "individual",
+        channel: "paid",
+        accepted: false,
+        grossMinor: null,
+        preflight: "unknown",
+        preflightAtIssuance: "unknown",
+      },
+      {
+        bindingId: "other",
+        kind: "automatic",
+        channel: "organic",
+        accepted: true,
+        grossMinor: 24_999n,
+        preflight: "clean",
+        preflightAtIssuance: "clean",
+      },
+    ] as const;
+    const report = quoteMetrics(facts, "CZK", "paid");
+
+    expect(report).toMatchObject({
+      offersIssued: 9,
+      acceptedBindings: 4,
+      priceBandConversion: {
+        metricDefinition: "v0-2",
+        total: {
+          issued: 8,
+          confirmedPaid: 4,
+          conversion: { numerator: 4, denominator: 8, value: 0.5 },
+          unavailableGross: 1,
+          bands: {
+            under_25000: {
+              issued: 1,
+              confirmedPaid: 1,
+              conversion: { value: 1 },
+            },
+            "25000_to_49999": {
+              issued: 2,
+              confirmedPaid: 1,
+              conversion: { value: 0.5 },
+            },
+            "50000_to_99999": {
+              issued: 1,
+              confirmedPaid: 0,
+              conversion: { value: 0 },
+            },
+            "100000_to_199999": {
+              issued: 2,
+              confirmedPaid: 1,
+              conversion: { value: 0.5 },
+            },
+            "200000_or_more": {
+              issued: 1,
+              confirmedPaid: 1,
+              conversion: { value: 1 },
+            },
+          },
+        },
+        automatic: {
+          preflight: {
+            clean: {
+              bands: { "200000_or_more": { conversion: { value: null } } },
+            },
+            warning: {
+              issued: 2,
+              confirmedPaid: 1,
+              bands: { "25000_to_49999": { issued: 2, confirmedPaid: 1 } },
+            },
+          },
+        },
+        individual: {
+          preflight: {
+            unknown: { issued: 3, confirmedPaid: 1, unavailableGross: 1 },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps current v0-1 decisions separate from immutable v0-2 issuance coverage", () => {
+    const report = quoteMetrics(
+      [
+        {
+          bindingId: "older",
+          kind: "automatic",
+          channel: "direct",
+          accepted: false,
+          grossMinor: 25_000n,
+          preflight: "clean",
+          preflightAtIssuance: "warning",
+        },
+        {
+          bindingId: "legacy",
+          kind: "automatic",
+          channel: "direct",
+          accepted: true,
+          grossMinor: 50_000n,
+          preflight: "clean",
+        },
+        {
+          bindingId: "individual",
+          kind: "individual",
+          channel: "direct",
+          accepted: false,
+          grossMinor: null,
+          preflight: "unknown",
+          preflightAtIssuance: "unknown",
+        },
+      ],
+      "CZK",
+      "direct",
+    );
+    expect(report).toMatchObject({
+      automatic: { preflight: { clean: 2 } },
+      priceBandConversion: {
+        total: { issued: 3, confirmedPaid: 1, unavailableGross: 1 },
+        automatic: {
+          preflight: {
+            clean: { issued: 0, conversion: { value: null } },
+            warning: {
+              issued: 1,
+              bands: { "25000_to_49999": { issued: 1 } },
+            },
+            unknown: {
+              issued: 1,
+              confirmedPaid: 1,
+              unavailableGross: 0,
+              bands: { "50000_to_99999": { issued: 1 } },
+            },
+          },
+        },
+        individual: {
+          preflight: { unknown: { issued: 1, unavailableGross: 1 } },
         },
       },
     });

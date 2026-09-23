@@ -22,6 +22,10 @@ import {
 import { AppModule } from "../src/app.module";
 import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
 import {
+  bindingFacts,
+  quoteMetrics,
+} from "../src/modules/metrics/metrics-report.service";
+import {
   DELIVERY_CAPABILITY,
   type DeliveryCapabilityPort,
 } from "../src/modules/automatic-quotes/delivery-capability.port";
@@ -3662,6 +3666,18 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       await prisma.orderActivePriceBinding.findUniqueOrThrow({
         where: { orderId },
       });
+    const warningSnapshot = await prisma.orderPriceBinding.findUniqueOrThrow({
+      where: { id: staleRiskBinding.orderPriceBindingId },
+      include: { priceSnapshot: true },
+    });
+    expect(warningSnapshot.priceSnapshot.inputSnapshot).toMatchObject({
+      automaticQuote: {
+        preflightAtIssuance: {
+          schemaVersion: 1,
+          classification: "warning",
+        },
+      },
+    });
     const staleRiskPlanIds = new Set(
       (
         await prisma.shipmentPlan.findMany({
@@ -3804,6 +3820,21 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(firstBinding.orderPriceBindingId).not.toBe(
       staleRiskBinding.orderPriceBindingId,
     );
+    expect(
+      (
+        await prisma.orderPriceBinding.findUniqueOrThrow({
+          where: { id: firstBinding.orderPriceBindingId },
+          include: { priceSnapshot: true },
+        })
+      ).priceSnapshot.inputSnapshot,
+    ).toMatchObject({
+      automaticQuote: {
+        preflightAtIssuance: {
+          schemaVersion: 1,
+          classification: "warning",
+        },
+      },
+    });
     await expect(
       prisma.orderPriceBinding.findUniqueOrThrow({
         where: { id: staleRiskBinding.orderPriceBindingId },
@@ -4143,6 +4174,10 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       },
     });
 
+    const beforeReplay = await prisma.orderPriceBinding.findUniqueOrThrow({
+      where: { id: firstBinding.orderPriceBindingId },
+      include: { priceSnapshot: true },
+    });
     const replay = await api(`automatic-quote-sessions/${sessionId}/prepare`, {
       method: "POST",
       headers: capabilityHeaders(sessionToken, key("finalize-replay")),
@@ -4151,6 +4186,16 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(replay.body.checkoutReady).toBe(true);
     expect(await prisma.orderPriceBinding.count({ where: { orderId } })).toBe(
       2,
+    );
+    const afterReplay = await prisma.orderPriceBinding.findUniqueOrThrow({
+      where: { id: firstBinding.orderPriceBindingId },
+      include: { priceSnapshot: true },
+    });
+    expect(afterReplay.priceSnapshot.snapshotHash).toBe(
+      beforeReplay.priceSnapshot.snapshotHash,
+    );
+    expect(afterReplay.priceSnapshot.inputSnapshot).toEqual(
+      beforeReplay.priceSnapshot.inputSnapshot,
     );
     expect(
       await prisma.phaseReservationSet.count({
@@ -4306,6 +4351,10 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       endpointType: "pickup_point",
       label: "Test Z-BOX",
     });
+    await prisma.preflightFinding.update({
+      where: { id: riskFinding.id },
+      data: { severity: "INFO" },
+    });
     await expect(
       prisma.phaseReservationSet.findUniqueOrThrow({
         where: { id: successorReservation!.id },
@@ -4331,6 +4380,83 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(replacement.orderPriceBindingId).not.toBe(
       firstBinding.orderPriceBindingId,
     );
+    const cleanSnapshot = await prisma.orderPriceBinding.findUniqueOrThrow({
+      where: { id: replacement.orderPriceBindingId },
+      include: { priceSnapshot: true },
+    });
+    expect(cleanSnapshot.priceSnapshot.inputSnapshot).toMatchObject({
+      automaticQuote: {
+        preflightAtIssuance: { schemaVersion: 1, classification: "clean" },
+      },
+    });
+    const bindingEvents = await prisma.businessEvent.findMany({
+      where: { orderId, eventType: "quote.bound" },
+      select: {
+        eventType: true,
+        orderId: true,
+        quoteSessionId: true,
+        payload: true,
+      },
+    });
+    expect(bindingEvents).toHaveLength(3);
+    const beforeDecisionCleanup = await prisma.$transaction((transaction) =>
+      bindingFacts(
+        transaction,
+        bindingEvents,
+        new Map([[sessionId, "direct"]]),
+        "CZK",
+      ),
+    );
+    expect(quoteMetrics(beforeDecisionCleanup, "CZK", "direct")).toMatchObject({
+      automatic: { preflight: { warning: 3 } },
+    });
+    await prisma.automaticQuoteRiskDecisionRecord.deleteMany({
+      where: { orderId },
+    });
+    const issuedFacts = await prisma.$transaction((transaction) =>
+      bindingFacts(
+        transaction,
+        bindingEvents,
+        new Map([[sessionId, "direct"]]),
+        "CZK",
+      ),
+    );
+    expect(issuedFacts).toMatchObject([
+      { kind: "automatic", preflight: "clean" },
+      { kind: "automatic", preflight: "clean" },
+      { kind: "automatic", preflight: "clean" },
+    ]);
+    expect(
+      issuedFacts.filter((fact) => fact.preflightAtIssuance === "warning"),
+    ).toHaveLength(2);
+    expect(
+      issuedFacts.filter((fact) => fact.preflightAtIssuance === "clean"),
+    ).toHaveLength(1);
+    expect(
+      quoteMetrics(issuedFacts, "CZK", "direct").priceBandConversion,
+    ).toEqual(
+      quoteMetrics(beforeDecisionCleanup, "CZK", "direct").priceBandConversion,
+    );
+    expect(quoteMetrics(issuedFacts, "CZK", "direct")).toMatchObject({
+      offersIssued: 3,
+      automatic: { preflight: { clean: 3 } },
+      priceBandConversion: {
+        total: { issued: 3, unavailableGross: 0 },
+        automatic: {
+          preflight: {
+            clean: { issued: 1 },
+            warning: { issued: 2 },
+            unknown: { issued: 0 },
+          },
+        },
+      },
+    });
+    await expect(
+      prisma.priceSnapshot.update({
+        where: { id: warningSnapshot.priceSnapshotId },
+        data: { inputSnapshot: cleanSnapshot.priceSnapshot.inputSnapshot! },
+      }),
+    ).rejects.toThrow();
     await expect(
       prisma.orderPriceBinding.findUniqueOrThrow({
         where: { id: firstBinding.orderPriceBindingId },

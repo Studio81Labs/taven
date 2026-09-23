@@ -20,6 +20,11 @@ import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { AuditService } from "../audit/audit.service";
+import {
+  assertOperationalOrderScope,
+  requireOperatorPermission,
+} from "../admin-access/operator-command";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { HANDLING_RATE_POLICY } from "./handling-rate-policy";
 import type {
@@ -32,6 +37,10 @@ import type {
   StartHandlingSessionDto,
   VoidHandlingSessionDto,
 } from "./measurement.dto";
+import type {
+  AcquisitionSpendEvidencePageDto,
+  ActualCostEvidencePageDto,
+} from "./measurement-read.dto";
 
 type Transaction = Prisma.TransactionClient;
 type AllocationInput = Readonly<{
@@ -55,6 +64,129 @@ export class MeasurementService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
   ) {}
+
+  async actualCostEvidence(
+    operator: OperatorContext,
+    orderId: string,
+    cursor?: string,
+    limit = 25,
+  ): Promise<ActualCostEvidencePageDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
+    orderId = uuid(orderId, "orderId");
+    if (cursor !== undefined) cursor = uuid(cursor, "cursor");
+    evidencePageLimit(limit);
+    const nodeId = operatorNode(operator);
+    return this.prisma.$transaction(
+      async (tx) => {
+        await assertOperationalOrderScope(tx, orderId, nodeId);
+        if (
+          cursor &&
+          !(await tx.orderActualCost.findFirst({
+            where: { id: cursor, orderId },
+            select: { id: true },
+          }))
+        ) {
+          throw new BadRequestException("cursor is invalid");
+        }
+        const rows = await tx.orderActualCost.findMany({
+          where: { orderId },
+          orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+          take: limit + 1,
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          include: { successor: { select: { id: true } } },
+        });
+        const page = rows.slice(0, limit);
+        return {
+          orderId,
+          items: page.map((row) => ({
+            id: row.id,
+            orderId: row.orderId,
+            category: row.category,
+            amountMinor: row.amountMinor.toString(),
+            currency: row.currency,
+            occurredAt: row.occurredAt.toISOString(),
+            source: row.source,
+            sourceKey: row.sourceKey,
+            sourceEntityType: row.sourceEntityType,
+            sourceEntityId: row.sourceEntityId,
+            supersedesId: row.supersedesId,
+            successorId: row.successor?.id ?? null,
+            reason: row.reason,
+            recordedAt: row.recordedAt.toISOString(),
+            isCurrent: row.successor === null,
+          })),
+          ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+  }
+
+  async acquisitionSpendEvidence(
+    operator: OperatorContext,
+    channel?: string,
+    cursor?: string,
+    limit = 25,
+  ): Promise<AcquisitionSpendEvidencePageDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
+    if (
+      channel !== undefined &&
+      !Object.values(AcquisitionChannel).includes(channel as AcquisitionChannel)
+    ) {
+      throw new BadRequestException("channel is invalid");
+    }
+    if (cursor !== undefined) cursor = uuid(cursor, "cursor");
+    evidencePageLimit(limit);
+    const where = channel ? { channel: channel as AcquisitionChannel } : {};
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+        if (
+          cursor &&
+          !(await tx.acquisitionSpend.findFirst({
+            where: { id: cursor, ...where },
+            select: { id: true },
+          }))
+        ) {
+          throw new BadRequestException("cursor is invalid");
+        }
+        const rows = await tx.acquisitionSpend.findMany({
+          where,
+          orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+          take: limit + 1,
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          include: { successor: { select: { id: true } } },
+        });
+        const page = rows.slice(0, limit);
+        return {
+          scope: "PLATFORM",
+          items: page.map((row) => ({
+            id: row.id,
+            channel: row.channel,
+            periodStart: row.periodStart.toISOString(),
+            periodEnd: row.periodEnd.toISOString(),
+            amountMinor: row.amountMinor.toString(),
+            currency: row.currency,
+            sourceKey: row.sourceKey,
+            sourceEntityType: row.sourceEntityType,
+            supersedesId: row.supersedesId,
+            successorId: row.successor?.id ?? null,
+            reason: row.reason,
+            recordedAt: row.recordedAt.toISOString(),
+            isCurrent: row.successor === null,
+          })),
+          ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+  }
 
   start(
     operator: OperatorContext,
@@ -909,6 +1041,10 @@ function currency(value: string): string {
 function uuid(value: string, name: string): string {
   assertUuid(value, name);
   return value.toLowerCase();
+}
+function evidencePageLimit(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100)
+    throw new BadRequestException("limit must be between 1 and 100");
 }
 function assertUuid(value: string, name: string): void {
   if (typeof value !== "string" || !UUID_PATTERN.test(value))

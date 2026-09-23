@@ -1040,11 +1040,13 @@ export function operationalReport(
 }
 
 type BindingFact = Readonly<{
+  bindingId?: string | undefined;
   kind: "automatic" | "individual";
   channel: Channel;
   accepted: boolean;
   grossMinor: bigint | null;
   preflight: "clean" | "warning" | "unknown";
+  preflightAtIssuance?: "clean" | "warning" | "unknown";
 }>;
 
 type AssistedRequest = Readonly<{
@@ -1217,7 +1219,7 @@ function responseAt(request: AssistedRequest): Date | null {
   );
 }
 
-async function bindingFacts(
+export async function bindingFacts(
   transaction: Transaction,
   events: readonly Readonly<{
     eventType: string;
@@ -1281,6 +1283,7 @@ async function bindingFacts(
         jsonString(event.payload, "bindingId") ?? "",
       );
       return {
+        bindingId: binding?.id,
         kind: "automatic",
         channel:
           event.quoteSessionId === null
@@ -1292,10 +1295,14 @@ async function bindingFacts(
             ? binding.priceSnapshot.contractTotalMinor
             : null,
         preflight: automaticPreflight(riskByOrder.get(binding?.orderId ?? "")),
+        preflightAtIssuance: issuancePreflight(
+          binding?.priceSnapshot.inputSnapshot,
+        ),
       };
     }
     const quote = quoteMap.get(jsonString(event.payload, "quoteId") ?? "");
     return {
+      bindingId: quote?.id,
       kind: "individual",
       channel: attributionChannel(quote?.quoteRequest.attribution),
       accepted: Boolean(quote?.individualOrderOrigin?.order.confirmedAt),
@@ -1304,6 +1311,7 @@ async function bindingFacts(
           ? quote.priceBinding.priceSnapshot.contractTotalMinor
           : null,
       preflight: "unknown",
+      preflightAtIssuance: "unknown",
     };
   });
 }
@@ -1315,6 +1323,23 @@ function automaticPreflight(
   return severities.some((severity) => severity === "BLOCKING")
     ? "unknown"
     : "warning";
+}
+
+export function issuancePreflight(
+  inputSnapshot: Prisma.JsonValue | undefined,
+): BindingFact["preflight"] {
+  const automaticQuote = jsonRecord(jsonRecord(inputSnapshot)?.automaticQuote);
+  const summary = jsonRecord(automaticQuote?.preflightAtIssuance);
+  return summary?.schemaVersion === 1 &&
+    (summary.classification === "clean" || summary.classification === "warning")
+    ? summary.classification
+    : "unknown";
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 export function quoteMetrics(
@@ -1341,6 +1366,88 @@ export function quoteMetrics(
         .map((binding) => binding.grossMinor)
         .filter((value): value is bigint => value !== null),
     ),
+    priceBandConversion: priceBandConversion(scoped),
+  };
+}
+
+function priceBandConversion(bindings: readonly BindingFact[]) {
+  const seen = new Set<string>();
+  const unique = bindings.filter((binding) => {
+    if (!binding.bindingId) return true;
+    const identity = `${binding.kind}:${binding.bindingId}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+  const origin = (kind: BindingFact["kind"]) => {
+    const selected = unique.filter((binding) => binding.kind === kind);
+    return {
+      all: priceBandConversionGroup(selected),
+      preflight: {
+        clean: priceBandConversionGroup(
+          selected.filter((binding) => binding.preflightAtIssuance === "clean"),
+        ),
+        warning: priceBandConversionGroup(
+          selected.filter(
+            (binding) => binding.preflightAtIssuance === "warning",
+          ),
+        ),
+        unknown: priceBandConversionGroup(
+          selected.filter(
+            (binding) =>
+              binding.preflightAtIssuance === "unknown" ||
+              binding.preflightAtIssuance === undefined,
+          ),
+        ),
+      },
+    };
+  };
+  return {
+    metricDefinition: "v0-2" as const,
+    definition:
+      "Immutable binding gross at issuance determines the CZK band. Each issued binding is counted once; confirmed-paid means its exact accepted origin has a confirmed order. Automatic preflight uses the binding's versioned immutable price-snapshot summary; legacy or unsupported evidence and individual offers are unknown. This differs from preserved v0-1 current-decision preflight. Expired and reissued offers remain in the denominator, and a deposit does not create another binding.",
+    total: priceBandConversionGroup(unique),
+    automatic: origin("automatic"),
+    individual: origin("individual"),
+  };
+}
+
+function priceBandConversionGroup(bindings: readonly BindingFact[]) {
+  const bands = Object.fromEntries(
+    (Object.keys(priceBands([])) as PriceBand[]).map((band) => {
+      const cohort = bindings.filter(
+        (binding) =>
+          binding.grossMinor !== null &&
+          priceBandFor(binding.grossMinor) === band,
+      );
+      const confirmedPaid = cohort.filter((binding) => binding.accepted).length;
+      return [
+        band,
+        {
+          issued: cohort.length,
+          confirmedPaid,
+          conversion: ratio(confirmedPaid, cohort.length),
+        },
+      ];
+    }),
+  ) as Record<
+    PriceBand,
+    Readonly<{
+      issued: number;
+      confirmedPaid: number;
+      conversion: MetricRatio;
+    }>
+  >;
+  return {
+    issued: bindings.length,
+    confirmedPaid: bindings.filter((binding) => binding.accepted).length,
+    conversion: ratio(
+      bindings.filter((binding) => binding.accepted).length,
+      bindings.length,
+    ),
+    unavailableGross: bindings.filter((binding) => binding.grossMinor === null)
+      .length,
+    bands,
   };
 }
 
@@ -1786,13 +1893,17 @@ function priceBands(values: readonly bigint[]): Record<PriceBand, number> {
     "200000_or_more": 0,
   };
   for (const value of values) {
-    if (value < 25_000n) bands.under_25000 += 1;
-    else if (value < 50_000n) bands["25000_to_49999"] += 1;
-    else if (value < 100_000n) bands["50000_to_99999"] += 1;
-    else if (value < 200_000n) bands["100000_to_199999"] += 1;
-    else bands["200000_or_more"] += 1;
+    bands[priceBandFor(value)] += 1;
   }
   return bands;
+}
+
+function priceBandFor(value: bigint): PriceBand {
+  if (value < 25_000n) return "under_25000";
+  if (value < 50_000n) return "25000_to_49999";
+  if (value < 100_000n) return "50000_to_99999";
+  if (value < 200_000n) return "100000_to_199999";
+  return "200000_or_more";
 }
 
 function monthlyTurnover(
