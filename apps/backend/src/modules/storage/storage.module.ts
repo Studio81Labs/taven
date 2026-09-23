@@ -30,6 +30,11 @@ import { UploadService } from "./upload.service";
     UploadService,
     RetentionService,
   ],
-  exports: [OBJECT_STORAGE, UploadService, RetentionService],
+  exports: [
+    OBJECT_STORAGE,
+    OBJECT_STORAGE_CONFIG,
+    UploadService,
+    RetentionService,
+  ],
 })
 export class StorageModule {}

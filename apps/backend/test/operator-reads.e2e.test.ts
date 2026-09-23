@@ -3,10 +3,14 @@ import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../src/app.module";
 import { configureHttpBodyParsers } from "../src/http-body.config";
 import { PrismaService } from "../src/prisma/prisma.service";
+import {
+  OBJECT_STORAGE,
+  type StoredObjectMetadata,
+} from "../src/modules/storage/object-storage.port";
 import {
   PersistenceFactory,
   testTimes,
@@ -38,13 +42,44 @@ describe("operator read contracts", () => {
   let fixture: PersistenceFoundation;
   let fixtureJob: ProductionReservationFixture;
   let viewerCookie: string;
+  let viewerCsrfToken: string;
+  let foreignCookie: string;
   let adminCookie: string;
   let adminCsrfToken: string;
+  const storedObjects = new Map<string, StoredObjectMetadata>();
+  const headObject = vi.fn(
+    async (key: string) => storedObjects.get(key) ?? null,
+  );
+  const putImmutableObject = vi.fn(
+    async (input: {
+      objectKey: string;
+      bytes: Uint8Array;
+      contentHash: string;
+      contentType: string;
+    }) => {
+      storedObjects.set(input.objectKey, {
+        contentType: input.contentType,
+        contentLength: input.bytes.byteLength,
+        contentHash: input.contentHash,
+      });
+    },
+  );
+  const createDownloadUrl = vi.fn(
+    async ({ expiresAt }: { objectKey: string; expiresAt: Date }) => ({
+      url: "https://storage.example.test/signed?token=opaque",
+      method: "GET" as const,
+      requiredHeaders: {},
+      expiresAt,
+    }),
+  );
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(OBJECT_STORAGE)
+      .useValue({ headObject, putImmutableObject, createDownloadUrl })
+      .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>({
       bodyParser: false,
     });
@@ -121,8 +156,25 @@ describe("operator read contracts", () => {
       client.release();
     }
     nodeId = fixture.nodeId;
+    const source = await prisma.modelFile.findUniqueOrThrow({
+      where: { id: fixture.modelFileId },
+    });
+    storedObjects.set(source.storageObjectKey, {
+      contentType: "model/stl",
+      contentLength: Number(source.sizeBytes),
+      contentHash: source.contentHash,
+    });
     const viewerSession = await sessionCookie("VIEWER", nodeId);
     viewerCookie = viewerSession.cookie;
+    viewerCsrfToken = viewerSession.csrfToken;
+    const foreignNode = await prisma.node.create({
+      data: {
+        code: `foreign-${randomBytes(8).toString("hex")}`,
+        name: "Foreign test node",
+        timeZone: "Europe/Prague",
+      },
+    });
+    foreignCookie = (await sessionCookie("VIEWER", foreignNode.id)).cookie;
     const adminSession = await sessionCookie("ADMIN", nodeId);
     adminCookie = adminSession.cookie;
     adminCsrfToken = adminSession.csrfToken;
@@ -171,6 +223,107 @@ describe("operator read contracts", () => {
       const response = await read(path);
       expect(response.status, path).toBe(400);
     }
+  });
+
+  it("returns an exact job detail and an explicit missing preview", async () => {
+    const response = await read(`/admin/jobs/${fixtureJob.jobId}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toMatchObject({
+      id: fixtureJob.jobId,
+      nodeId,
+      orderId: fixture.orderId,
+      shipmentPlanId: fixture.shipmentPlanId,
+      shipmentId: null,
+      status: "CREATED",
+      slots: [
+        {
+          fulfilmentSlotId: fixture.fulfilmentSlotId,
+          orderItemId: fixture.orderItemId,
+          sourceModelFileId: fixture.modelFileId,
+          modelGeometryId: fixture.modelGeometryId,
+          boundsXMicrometers: expect.any(String),
+          volumeCubicMicrometers: expect.any(String),
+          geometrySha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+          acceptedRisks: expect.any(Array),
+        },
+      ],
+      estimate: {
+        candidateResourceEstimateId: fixtureJob.candidateResourceEstimateId,
+        machineId: fixture.machineId,
+        partsPerPlate: expect.any(Number),
+        plateCount: expect.any(Number),
+        provenance: "CANDIDATE_RESOURCE_ESTIMATE",
+      },
+      deadline: { date: null, provenance: "NO_PROMISED_DATE" },
+      artifacts: {
+        sourceModel: { available: true, reason: null },
+        preview: { available: false, reason: "NOT_GENERATED" },
+        production: { available: false, reason: "NOT_READY" },
+      },
+    });
+  });
+
+  it("enforces session, node, kind, CSRF and download audit boundaries", async () => {
+    const path = `/admin/jobs/${fixtureJob.jobId}`;
+    expect((await fetch(new URL(path, baseUrl))).status).toBe(401);
+    expect(
+      (
+        await fetch(new URL(path, baseUrl), {
+          headers: { cookie: foreignCookie },
+        })
+      ).status,
+    ).toBe(404);
+    expect((await read(`/admin/jobs/${randomUUID()}`)).status).toBe(404);
+    expect((await read("/admin/jobs/invalid")).status).toBe(400);
+    expect((await download("BOGUS")).status).toBe(400);
+    expect((await download("SOURCE_MODEL", false)).status).toBe(403);
+    expect((await download("PREVIEW")).status).toBe(409);
+    expect((await download("PRODUCTION")).status).toBe(409);
+
+    const response = await download("SOURCE_MODEL");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toMatchObject({
+      downloadUrl: "https://storage.example.test/signed?token=opaque",
+      expiresAt: expect.any(String),
+      contentType: "model/stl",
+      contentLength: "1",
+      sha256: "a".repeat(64),
+    });
+    expect(createDownloadUrl).toHaveBeenCalledTimes(1);
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        orderId: fixture.orderId,
+        eventType: "job.artifact_download_issued",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit.nodeId).toBe(nodeId);
+    expect(JSON.stringify(audit.payload)).not.toContain("signed");
+    expect(JSON.stringify(audit.payload)).not.toContain("models/");
+  });
+
+  it("fails closed for missing, mismatched and unavailable source storage", async () => {
+    const source = await prisma.modelFile.findUniqueOrThrow({
+      where: { id: fixture.modelFileId },
+    });
+    const metadata = storedObjects.get(source.storageObjectKey)!;
+    storedObjects.delete(source.storageObjectKey);
+    try {
+      expect((await download("SOURCE_MODEL")).status).toBe(410);
+      storedObjects.set(source.storageObjectKey, {
+        ...metadata,
+        contentHash: "b".repeat(64),
+      });
+      expect((await download("SOURCE_MODEL")).status).toBe(409);
+      storedObjects.set(source.storageObjectKey, metadata);
+      headObject.mockRejectedValueOnce(new Error("storage unavailable"));
+      expect((await download("SOURCE_MODEL")).status).toBe(503);
+    } finally {
+      storedObjects.set(source.storageObjectKey, metadata);
+    }
+    expect(createDownloadUrl).toHaveBeenCalledTimes(1);
   });
 
   it("uses bounded, opaque pagination for operational and assisted-work reads", async () => {
@@ -304,6 +457,23 @@ describe("operator read contracts", () => {
     return fetch(new URL(path, baseUrl), {
       headers: { cookie: viewerCookie },
     });
+  }
+
+  async function download(kind: string, withCsrf = true): Promise<Response> {
+    return fetch(
+      new URL(
+        `/admin/jobs/${fixtureJob.jobId}/artifacts/${kind}/download`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: {
+          cookie: viewerCookie,
+          origin: "http://localhost:3002",
+          ...(withCsrf ? { "x-csrf-token": viewerCsrfToken } : {}),
+        },
+      },
+    );
   }
 
   async function cancelOrder(): Promise<Response> {

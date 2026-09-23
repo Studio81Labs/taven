@@ -61,6 +61,226 @@ export class OperatorJobPageDto {
   nextCursor?: string;
 }
 
+export class OperatorJobSlotDto {
+  @ApiProperty(UUID)
+  fulfilmentSlotId!: string;
+
+  @ApiProperty(UUID)
+  orderItemId!: string;
+
+  @ApiProperty({ type: Number, minimum: 1 })
+  quantityOrdinal!: number;
+
+  @ApiProperty(UUID)
+  sourceModelFileId!: string;
+
+  @ApiProperty(UUID)
+  modelGeometryId!: string;
+
+  @ApiProperty({ type: String })
+  material!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  color!: string | null;
+
+  @ApiProperty({ ...DECIMAL, description: "X bound in micrometers" })
+  boundsXMicrometers!: string;
+
+  @ApiProperty({ ...DECIMAL, description: "Y bound in micrometers" })
+  boundsYMicrometers!: string;
+
+  @ApiProperty({ ...DECIMAL, description: "Z bound in micrometers" })
+  boundsZMicrometers!: string;
+
+  @ApiProperty({
+    ...DECIMAL,
+    description: "Canonical volume in cubic micrometers",
+  })
+  volumeCubicMicrometers!: string;
+
+  @ApiProperty({ type: String, pattern: "^[0-9a-f]{64}$" })
+  geometrySha256!: string;
+
+  @ApiProperty({ type: () => [OperatorJobAcceptedRiskDto] })
+  acceptedRisks!: OperatorJobAcceptedRiskDto[];
+}
+
+export class OperatorJobAcceptedRiskDto {
+  @ApiProperty(UUID)
+  findingId!: string;
+
+  @ApiProperty({ type: String })
+  code!: string;
+
+  @ApiProperty({ type: String })
+  severity!: string;
+
+  @ApiProperty({ type: String })
+  message!: string;
+
+  @ApiProperty({ type: String })
+  acknowledgementKey!: string;
+}
+
+export class OperatorJobEstimateDto {
+  @ApiProperty(UUID)
+  candidateResourceEstimateId!: string;
+
+  @ApiProperty(UUID)
+  machineId!: string;
+
+  @ApiProperty(UUID)
+  printConfigRevisionId!: string;
+
+  @ApiProperty(UUID)
+  machineProfileId!: string;
+
+  @ApiProperty(UUID)
+  machineCalibrationId!: string;
+
+  @ApiProperty({ type: Number, minimum: 1 })
+  quantity!: number;
+
+  @ApiProperty({ type: Number, minimum: 1 })
+  partsPerPlate!: number;
+
+  @ApiProperty({ type: Number, minimum: 1 })
+  plateCount!: number;
+
+  @ApiProperty({ ...DECIMAL, description: "Estimated machine seconds" })
+  requiredMachineSeconds!: string;
+
+  @ApiProperty({ ...DECIMAL, description: "Estimated material in milligrams" })
+  requiredMaterialMilligrams!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  calculatedAt!: string;
+
+  @ApiProperty({ type: String, enum: ["CANDIDATE_RESOURCE_ESTIMATE"] })
+  provenance!: "CANDIDATE_RESOURCE_ESTIMATE";
+}
+
+export class OperatorJobDeadlineDto {
+  @ApiProperty({ type: String, format: "date", nullable: true })
+  date!: string | null;
+
+  @ApiProperty({
+    type: String,
+    enum: ["ACCEPTED_INDIVIDUAL_QUOTE", "NO_PROMISED_DATE"],
+    nullable: true,
+  })
+  provenance!: "ACCEPTED_INDIVIDUAL_QUOTE" | "NO_PROMISED_DATE";
+}
+
+export class OperatorJobArtifactAvailabilityDto {
+  @ApiProperty({ type: Boolean })
+  available!: boolean;
+
+  @ApiProperty({
+    type: String,
+    enum: [
+      "NOT_GENERATED",
+      "NOT_READY",
+      "TERMINAL_JOB",
+      "EXPIRED",
+      "DELETED",
+      "MISSING_BYTES",
+      "INTEGRITY_MISMATCH",
+    ],
+    nullable: true,
+  })
+  reason!:
+    | "NOT_GENERATED"
+    | "NOT_READY"
+    | "TERMINAL_JOB"
+    | "EXPIRED"
+    | "DELETED"
+    | "MISSING_BYTES"
+    | "INTEGRITY_MISMATCH"
+    | null;
+}
+
+export class OperatorJobArtifactsDto {
+  @ApiProperty({ type: OperatorJobArtifactAvailabilityDto })
+  sourceModel!: OperatorJobArtifactAvailabilityDto;
+
+  @ApiProperty({ type: OperatorJobArtifactAvailabilityDto })
+  preview!: OperatorJobArtifactAvailabilityDto;
+
+  @ApiProperty({ type: OperatorJobArtifactAvailabilityDto })
+  production!: OperatorJobArtifactAvailabilityDto;
+}
+
+export class OperatorJobDetailDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  nodeId!: string;
+
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty({ type: String })
+  orderReference!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty(UUID)
+  shipmentPlanId!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  shipmentId!: string | null;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  shipmentPlanOrdinal!: number;
+
+  @ApiProperty({ type: String })
+  status!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  replacesJobId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  replacementJobId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  sourceReplacementRequestId!: string | null;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  resultReplacementRequestId!: string | null;
+
+  @ApiProperty({ type: [OperatorJobSlotDto] })
+  slots!: OperatorJobSlotDto[];
+
+  @ApiProperty({ type: OperatorJobEstimateDto })
+  estimate!: OperatorJobEstimateDto;
+
+  @ApiProperty({ type: OperatorJobDeadlineDto })
+  deadline!: OperatorJobDeadlineDto;
+
+  @ApiProperty({ type: OperatorJobArtifactsDto })
+  artifacts!: OperatorJobArtifactsDto;
+}
+
+export class OperatorJobArtifactDownloadDto {
+  @ApiProperty({ type: String, format: "uri" })
+  downloadUrl!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  expiresAt!: string;
+
+  @ApiProperty({ type: String })
+  contentType!: string;
+
+  @ApiProperty({ ...DECIMAL, description: "Object size in bytes" })
+  contentLength!: string;
+
+  @ApiProperty({ type: String, pattern: "^[0-9a-f]{64}$" })
+  sha256!: string;
+}
+
 export class OperatorOrderItemDto {
   @ApiProperty(UUID)
   id!: string;
