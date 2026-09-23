@@ -26,6 +26,7 @@ import {
   type DeliveryCapabilityPort,
 } from "../src/modules/automatic-quotes/delivery-capability.port";
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
+import { LegalApprovalsService } from "../src/modules/legal-approvals/legal-approvals.service";
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import { PrismaService } from "../src/prisma/prisma.service";
@@ -3396,6 +3397,71 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       kind: "BINDING",
       currency: "CZK",
     });
+    const currentPolicyBeforeTermsChange =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+        include: { priceList: true },
+      });
+    const termsChangedParameters = JSON.parse(
+      JSON.stringify(currentPolicyBeforeTermsChange.priceList.parameters),
+    ) as {
+      automaticQuote: { shipmentCategories: { id: string }[] };
+    };
+    termsChangedParameters.automaticQuote.shipmentCategories =
+      termsChangedParameters.automaticQuote.shipmentCategories.filter(
+        ({ id }) => id === "pickup",
+      );
+    const termsChangedList = await prisma.priceList.create({
+      data: {
+        revision: `terms-stale-projection-${randomUUID()}`,
+        termsRevision: currentPolicyBeforeTermsChange.priceList.termsRevision,
+        currency: "CZK",
+        parameters: termsChangedParameters as Prisma.InputJsonObject,
+      },
+    });
+    const approvals = app.get(LegalApprovalsService);
+    const previousLegal = await approvals.availability();
+    const newerTerms = vi.spyOn(approvals, "availability").mockResolvedValue({
+      ...previousLegal,
+      documents: {
+        ...previousLegal.documents,
+        terms: {
+          ...previousLegal.documents.terms,
+          revisionId: randomUUID(),
+        },
+      },
+    });
+    try {
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: termsChangedList.id,
+          selectionVersion: { increment: 1 },
+        },
+      });
+      const legallyStale = await api(
+        `automatic-quote-sessions/${recoverySessionId}`,
+        { headers: { authorization: `Bearer ${recoverySessionToken}` } },
+      );
+      expect(legallyStale.response.status).toBe(200);
+      expect(legallyStale.body.checkoutReady).toBe(false);
+      expect(legallyStale.body.bindingQuote).toBeNull();
+      expect(legallyStale.body.phase).toBe("DESTINATION_REQUIRED");
+      expect(legallyStale.body).toMatchObject({
+        deliveryOptions: expect.arrayContaining([
+          expect.objectContaining({ providerEndpointId: "test-pickup" }),
+        ]),
+      });
+    } finally {
+      newerTerms.mockRestore();
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: currentPolicyBeforeTermsChange.priceListId,
+          selectionVersion: { increment: 1 },
+        },
+      });
+    }
     const expiredRecoveryClock = vi
       .spyOn(Date, "now")
       .mockReturnValue(

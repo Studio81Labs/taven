@@ -4713,6 +4713,7 @@ export class AutomaticQuotesService {
       expressRequested: boolean;
       configurationRevision: number;
     } | null,
+    expectedLegalTermsRevisionId?: string | null,
   ) {
     const active = await client.orderActivePriceBinding.findUnique({
       where: { orderId },
@@ -4725,7 +4726,12 @@ export class AutomaticQuotesService {
     if (
       active &&
       draft &&
-      bindingMatchesAutomaticDraft(active.orderPriceBinding, draft)
+      expectedLegalTermsRevisionId !== null &&
+      bindingMatchesAutomaticDraft(
+        active.orderPriceBinding,
+        draft,
+        expectedLegalTermsRevisionId,
+      )
     ) {
       return active.orderPriceBinding.priceSnapshot.priceList;
     }
@@ -5426,10 +5432,20 @@ export class AutomaticQuotesService {
         "Automatic quote has incomplete checkout evidence",
       );
     }
+    const activeForProjection = order.activePriceBinding?.orderPriceBinding;
+    const currentLegalForProjection =
+      activeForProjection &&
+      frozenEvidenceState === "none" &&
+      bindingMatchesAutomaticDraft(activeForProjection, draft)
+        ? await this.requiredLegalApprovals().availability()
+        : null;
     const projectionPriceList = await this.priceListForOrderProjection(
       client,
       order.id,
       draft,
+      currentLegalForProjection
+        ? currentLegalForProjection.documents.terms.revisionId
+        : undefined,
     );
     const expired =
       session.status === QuoteSessionStatus.EXPIRED ||
@@ -5688,7 +5704,9 @@ export class AutomaticQuotesService {
       Boolean(active && currentPlan && currentReservation);
     let bindingUsesCurrentTerms = hasFrozenEvidence;
     if (!bindingUsesCurrentTerms && canOtherwiseBeCheckoutReady) {
-      const legal = await this.requiredLegalApprovals().availability();
+      const legal =
+        currentLegalForProjection ??
+        (await this.requiredLegalApprovals().availability());
       assertEffectiveLegalDocuments(legal, ["terms"]);
       bindingUsesCurrentTerms =
         active?.legalTermsRevisionId === legal.documents.terms.revisionId;
