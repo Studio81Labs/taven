@@ -17,8 +17,11 @@ export function adminApiBaseUrl(
   }
   const value = configured ?? "http://localhost:3001";
   const url = new URL(value);
-  if (url.origin !== value.replace(/\/$/, "")) {
-    throw new Error("VITE_API_BASE_URL must be an exact origin");
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.origin !== value.replace(/\/$/, "")
+  ) {
+    throw new Error("VITE_API_BASE_URL must be an exact HTTP(S) origin");
   }
   if (
     (environment === "staging" || environment === "production") &&
