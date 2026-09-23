@@ -44,6 +44,7 @@ describe("operator read contracts", () => {
   let viewerCookie: string;
   let viewerCsrfToken: string;
   let foreignCookie: string;
+  let foreignAdminCookie: string;
   let adminCookie: string;
   let adminCsrfToken: string;
   const storedObjects = new Map<string, StoredObjectMetadata>();
@@ -175,6 +176,7 @@ describe("operator read contracts", () => {
       },
     });
     foreignCookie = (await sessionCookie("VIEWER", foreignNode.id)).cookie;
+    foreignAdminCookie = (await sessionCookie("ADMIN", foreignNode.id)).cookie;
     const adminSession = await sessionCookie("ADMIN", nodeId);
     adminCookie = adminSession.cookie;
     adminCsrfToken = adminSession.csrfToken;
@@ -265,6 +267,159 @@ describe("operator read contracts", () => {
     expect(
       (await read(`/admin/catalog/reference-profiles/${randomUUID()}`)).status,
     ).toBe(404);
+  });
+
+  it("recovers scoped actual-cost and platform spend correction evidence", async () => {
+    const source = `read-cost-${randomUUID()}`;
+    const oldCost = await prisma.orderActualCost.create({
+      data: {
+        orderId: fixture.orderId,
+        category: "MATERIAL",
+        amountMinor: 120n,
+        currency: "CZK",
+        occurredAt: new Date(),
+        source: "MANUAL",
+        sourceKey: source,
+        sourceEntityType: "OPERATOR_ENTRY",
+        reason: "Measured invoice",
+      },
+    });
+    const correctedCost = await prisma.orderActualCost.create({
+      data: {
+        orderId: fixture.orderId,
+        category: "MATERIAL",
+        amountMinor: 125n,
+        currency: "CZK",
+        occurredAt: new Date(),
+        source: "MANUAL",
+        sourceKey: `${source}-correction`,
+        sourceEntityType: "OPERATOR_ENTRY",
+        supersedesId: oldCost.id,
+        reason: "Correct invoice amount",
+      },
+    });
+    const costPath = `/admin/orders/${fixture.orderId}/actual-costs`;
+    const costPage = await fetch(new URL(`${costPath}?limit=1`, baseUrl), {
+      headers: { cookie: adminCookie },
+    });
+    expect(costPage.status).toBe(200);
+    const first = (await costPage.json()) as {
+      items: Array<{
+        id: string;
+        amountMinor: string;
+        isCurrent: boolean;
+        successorId: string | null;
+      }>;
+      nextCursor: string;
+    };
+    expect(first.items).toHaveLength(1);
+    const second = await fetch(
+      new URL(`${costPath}?limit=1&cursor=${first.nextCursor}`, baseUrl),
+      { headers: { cookie: adminCookie } },
+    );
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as typeof first;
+    expect([...first.items, ...secondBody.items]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: oldCost.id,
+          amountMinor: "120",
+          isCurrent: false,
+          successorId: correctedCost.id,
+        }),
+        expect.objectContaining({
+          id: correctedCost.id,
+          amountMinor: "125",
+          isCurrent: true,
+        }),
+      ]),
+    );
+    expect(
+      (
+        await fetch(new URL(costPath, baseUrl), {
+          headers: { cookie: viewerCookie },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(new URL(costPath, baseUrl), {
+          headers: { cookie: foreignAdminCookie },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await fetch(new URL(`${costPath}?cursor=${randomUUID()}`, baseUrl), {
+          headers: { cookie: adminCookie },
+        })
+      ).status,
+    ).toBe(400);
+
+    const spendSource = `read-spend-${randomUUID()}`;
+    const oldSpend = await prisma.acquisitionSpend.create({
+      data: {
+        channel: "PAID",
+        periodStart: new Date("2026-01-01T00:00:00Z"),
+        periodEnd: new Date("2026-02-01T00:00:00Z"),
+        amountMinor: 5_000n,
+        currency: "CZK",
+        sourceKey: spendSource,
+        sourceEntityType: "OPERATOR_ENTRY",
+      },
+    });
+    const currentSpend = await prisma.acquisitionSpend.create({
+      data: {
+        channel: "PAID",
+        periodStart: oldSpend.periodStart,
+        periodEnd: oldSpend.periodEnd,
+        amountMinor: 4_500n,
+        currency: "CZK",
+        sourceKey: `${spendSource}-correction`,
+        sourceEntityType: "OPERATOR_ENTRY",
+        supersedesId: oldSpend.id,
+        reason: "Correct campaign invoice",
+      },
+    });
+    const spendPage = await fetch(
+      new URL("/admin/acquisition-spend?channel=PAID&limit=100", baseUrl),
+      { headers: { cookie: adminCookie } },
+    );
+    expect(spendPage.status).toBe(200);
+    const spend = (await spendPage.json()) as {
+      scope: string;
+      items: Array<{
+        id: string;
+        isCurrent: boolean;
+        successorId: string | null;
+      }>;
+    };
+    expect(spend.scope).toBe("PLATFORM");
+    expect(spend.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: oldSpend.id,
+          isCurrent: false,
+          successorId: currentSpend.id,
+        }),
+        expect.objectContaining({ id: currentSpend.id, isCurrent: true }),
+      ]),
+    );
+    expect(
+      (
+        await fetch(new URL("/admin/acquisition-spend", baseUrl), {
+          headers: { cookie: viewerCookie },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(
+          new URL("/admin/acquisition-spend?channel=INVALID", baseUrl),
+          { headers: { cookie: adminCookie } },
+        )
+      ).status,
+    ).toBe(400);
   });
 
   it("enforces the trusted node scope and capacity query boundary", async () => {

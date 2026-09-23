@@ -205,6 +205,87 @@ export class BindingBreakdownDto {
   preflightCohorts!: PreflightCohortsDto;
 }
 
+export class PriceBandConversionCellDto {
+  @ApiProperty({ type: Number, minimum: 0 })
+  issued!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  confirmedPaid!: number;
+
+  @ApiProperty({ type: MetricRatioDto })
+  conversion!: MetricRatioDto;
+}
+
+export class PriceBandConversionBandsDto {
+  @ApiProperty({ type: PriceBandConversionCellDto })
+  under_25000!: PriceBandConversionCellDto;
+
+  @ApiProperty({ type: PriceBandConversionCellDto })
+  "25000_to_49999"!: PriceBandConversionCellDto;
+
+  @ApiProperty({ type: PriceBandConversionCellDto })
+  "50000_to_99999"!: PriceBandConversionCellDto;
+
+  @ApiProperty({ type: PriceBandConversionCellDto })
+  "100000_to_199999"!: PriceBandConversionCellDto;
+
+  @ApiProperty({ type: PriceBandConversionCellDto })
+  "200000_or_more"!: PriceBandConversionCellDto;
+}
+
+export class PriceBandConversionGroupDto {
+  @ApiProperty({ type: Number, minimum: 0 })
+  issued!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  confirmedPaid!: number;
+
+  @ApiProperty({ type: MetricRatioDto })
+  conversion!: MetricRatioDto;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  unavailableGross!: number;
+
+  @ApiProperty({ type: PriceBandConversionBandsDto })
+  bands!: PriceBandConversionBandsDto;
+}
+
+export class PriceBandConversionPreflightDto {
+  @ApiProperty({ type: PriceBandConversionGroupDto })
+  clean!: PriceBandConversionGroupDto;
+
+  @ApiProperty({ type: PriceBandConversionGroupDto })
+  warning!: PriceBandConversionGroupDto;
+
+  @ApiProperty({ type: PriceBandConversionGroupDto })
+  unknown!: PriceBandConversionGroupDto;
+}
+
+export class PriceBandConversionOriginDto {
+  @ApiProperty({ type: PriceBandConversionGroupDto })
+  all!: PriceBandConversionGroupDto;
+
+  @ApiProperty({ type: PriceBandConversionPreflightDto })
+  preflight!: PriceBandConversionPreflightDto;
+}
+
+export class PriceBandConversionV02Dto {
+  @ApiProperty({ enum: ["v0-2"] })
+  metricDefinition!: "v0-2";
+
+  @ApiProperty({ type: String })
+  definition!: string;
+
+  @ApiProperty({ type: PriceBandConversionGroupDto })
+  total!: PriceBandConversionGroupDto;
+
+  @ApiProperty({ type: PriceBandConversionOriginDto })
+  automatic!: PriceBandConversionOriginDto;
+
+  @ApiProperty({ type: PriceBandConversionOriginDto })
+  individual!: PriceBandConversionOriginDto;
+}
+
 export class QuoteToPaidMetricsDto {
   @ApiProperty({ type: String })
   definition!: string;
@@ -226,6 +307,9 @@ export class QuoteToPaidMetricsDto {
 
   @ApiProperty({ type: PriceBandsDto })
   acceptedGrossBands!: PriceBandsDto;
+
+  @ApiProperty({ type: PriceBandConversionV02Dto })
+  priceBandConversion!: PriceBandConversionV02Dto;
 }
 
 export class OriginCountsDto {

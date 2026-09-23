@@ -41,7 +41,7 @@ describe("v0-1 metrics reports", () => {
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
     const node = await prisma.node.findFirstOrThrow({
-      where: { active: true },
+      where: { code: "PRG-01", active: true },
     });
     adminCookie = await sessionCookie("ADMIN", node.id);
     operatorCookie = await sessionCookie("OPERATOR", node.id);
@@ -59,7 +59,18 @@ describe("v0-1 metrics reports", () => {
     await expect(response.json()).resolves.toMatchObject({
       metricDefinition: "v0-1",
       interval: { currency: "CZK" },
-      commercial: { scope: "PLATFORM" },
+      commercial: {
+        scope: "PLATFORM",
+        quoteToPaid: {
+          priceBandConversion: {
+            metricDefinition: "v0-2",
+            total: {
+              issued: expect.any(Number),
+              unavailableGross: expect.any(Number),
+            },
+          },
+        },
+      },
       operational: { scope: "OPERATIONAL_NODE" },
     });
   });
@@ -99,6 +110,75 @@ describe("v0-1 metrics reports", () => {
       scope: "OPERATIONAL_NODE",
       items: expect.any(Array),
     });
+  });
+
+  it("returns bounded factual warnings with explicit unavailable coverage", async () => {
+    const email = await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `warning-email-${randomUUID()}`,
+        aggregateType: "quote",
+        aggregateId: randomUUID(),
+        messageType: "email.quote-offer-issued",
+        schemaVersion: 1,
+        payload: { recipient: "must-not-leak@example.test" },
+        status: "FAILED",
+        availableAt: new Date(Date.now() - 1_000),
+      },
+    });
+    const response = await fetch(
+      new URL("/admin/warnings?limit=100", baseUrl),
+      {
+        headers: { cookie: adminCookie },
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = (await response.json()) as {
+      items: Array<{
+        code: string;
+        sourceId: string;
+        evidence: Record<string, unknown>;
+      }>;
+      coverage: Record<string, unknown>;
+    };
+    expect(body.coverage).toMatchObject({
+      emailDeliveryAttempts: "unavailable",
+      reservationConflictHistory: "unavailable",
+      sourceScanLimited: false,
+      selectedMaterialRate: "available",
+      inventoryLotsWithoutReceipt: 0,
+    });
+    expect(body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "EMAIL_OUTBOX_FAILED",
+          sourceId: email.id,
+        }),
+        expect.objectContaining({ code: "MATERIAL_RATE_BELOW_PURCHASE" }),
+      ]),
+    );
+    expect(JSON.stringify(body)).not.toContain("must-not-leak@example.test");
+    expect(
+      (
+        await fetch(new URL("/admin/warnings", baseUrl), {
+          headers: { cookie: operatorCookie },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await fetch(new URL("/admin/warnings?limit=101", baseUrl), {
+          headers: { cookie: adminCookie },
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(new URL("/admin/warnings?unexpected=1", baseUrl), {
+          headers: { cookie: adminCookie },
+        })
+      ).status,
+    ).toBe(400);
   });
 
   async function sessionCookie(

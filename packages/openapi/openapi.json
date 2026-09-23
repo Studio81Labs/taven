@@ -151,6 +151,100 @@
         ],
         "type": "object"
       },
+      "AcquisitionSpendEvidenceDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "isCurrent": {
+            "type": "boolean"
+          },
+          "periodEnd": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "periodStart": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "recordedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sourceEntityType": {
+            "type": "string"
+          },
+          "sourceKey": {
+            "type": "string"
+          },
+          "successorId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "supersedesId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "channel",
+          "periodStart",
+          "periodEnd",
+          "amountMinor",
+          "currency",
+          "sourceKey",
+          "sourceEntityType",
+          "supersedesId",
+          "successorId",
+          "reason",
+          "recordedAt",
+          "isCurrent"
+        ],
+        "type": "object"
+      },
+      "AcquisitionSpendEvidencePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AcquisitionSpendEvidenceDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "PLATFORM"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "items"
+        ],
+        "type": "object"
+      },
       "ActivateCommercialPolicyDto": {
         "properties": {
           "expectedSelectionVersion": {
@@ -195,6 +289,108 @@
           "carrier",
           "packaging",
           "payment_fee"
+        ],
+        "type": "object"
+      },
+      "ActualCostEvidenceDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "isCurrent": {
+            "type": "boolean"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "recordedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "sourceEntityId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "sourceEntityType": {
+            "type": "string"
+          },
+          "sourceKey": {
+            "type": "string"
+          },
+          "successorId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "supersedesId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "category",
+          "amountMinor",
+          "currency",
+          "occurredAt",
+          "source",
+          "sourceKey",
+          "sourceEntityType",
+          "sourceEntityId",
+          "supersedesId",
+          "successorId",
+          "reason",
+          "recordedAt",
+          "isCurrent"
+        ],
+        "type": "object"
+      },
+      "ActualCostEvidencePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActualCostEvidenceDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "items"
         ],
         "type": "object"
       },
@@ -8240,6 +8436,108 @@
         ],
         "type": "object"
       },
+      "OperatorWarningDto": {
+        "properties": {
+          "code": {
+            "enum": [
+              "REFUND_UNRESOLVED",
+              "CAPTURE_COMPENSATION_DUE",
+              "EMAIL_OUTBOX_DUE",
+              "EMAIL_OUTBOX_FAILED",
+              "RETENTION_DUE",
+              "RETENTION_FAILED",
+              "PROFILE_UNAVAILABLE",
+              "INVENTORY_UNAVAILABLE",
+              "RESERVATION_CONFLICT",
+              "REFERENCE_PROFILE_ACTIVATED",
+              "MATERIAL_RATE_BELOW_PURCHASE"
+            ],
+            "type": "string"
+          },
+          "dueAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/WarningEvidenceDto"
+          },
+          "id": {
+            "type": "string"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "observedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "PLATFORM",
+              "NODE"
+            ],
+            "type": "string"
+          },
+          "sourceId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sourceType": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "scope",
+          "sourceType",
+          "sourceId",
+          "status",
+          "observedAt",
+          "evidence"
+        ],
+        "type": "object"
+      },
+      "OperatorWarningsReportDto": {
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/WarningCoverageDto"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorWarningDto"
+            },
+            "type": "array"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "generatedAt",
+          "nodeId",
+          "items",
+          "truncated",
+          "coverage"
+        ],
+        "type": "object"
+      },
       "OrderMetricsDto": {
         "properties": {
           "acceptedGross": {
@@ -8462,6 +8760,148 @@
         "required": [
           "fulfilmentSlotId",
           "amountMinor"
+        ],
+        "type": "object"
+      },
+      "PriceBandConversionBandsDto": {
+        "properties": {
+          "100000_to_199999": {
+            "$ref": "#/components/schemas/PriceBandConversionCellDto"
+          },
+          "200000_or_more": {
+            "$ref": "#/components/schemas/PriceBandConversionCellDto"
+          },
+          "25000_to_49999": {
+            "$ref": "#/components/schemas/PriceBandConversionCellDto"
+          },
+          "50000_to_99999": {
+            "$ref": "#/components/schemas/PriceBandConversionCellDto"
+          },
+          "under_25000": {
+            "$ref": "#/components/schemas/PriceBandConversionCellDto"
+          }
+        },
+        "required": [
+          "under_25000",
+          "25000_to_49999",
+          "50000_to_99999",
+          "100000_to_199999",
+          "200000_or_more"
+        ],
+        "type": "object"
+      },
+      "PriceBandConversionCellDto": {
+        "properties": {
+          "confirmedPaid": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          },
+          "issued": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "issued",
+          "confirmedPaid",
+          "conversion"
+        ],
+        "type": "object"
+      },
+      "PriceBandConversionGroupDto": {
+        "properties": {
+          "bands": {
+            "$ref": "#/components/schemas/PriceBandConversionBandsDto"
+          },
+          "confirmedPaid": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "conversion": {
+            "$ref": "#/components/schemas/MetricRatioDto"
+          },
+          "issued": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "unavailableGross": {
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "issued",
+          "confirmedPaid",
+          "conversion",
+          "unavailableGross",
+          "bands"
+        ],
+        "type": "object"
+      },
+      "PriceBandConversionOriginDto": {
+        "properties": {
+          "all": {
+            "$ref": "#/components/schemas/PriceBandConversionGroupDto"
+          },
+          "preflight": {
+            "$ref": "#/components/schemas/PriceBandConversionPreflightDto"
+          }
+        },
+        "required": [
+          "all",
+          "preflight"
+        ],
+        "type": "object"
+      },
+      "PriceBandConversionPreflightDto": {
+        "properties": {
+          "clean": {
+            "$ref": "#/components/schemas/PriceBandConversionGroupDto"
+          },
+          "unknown": {
+            "$ref": "#/components/schemas/PriceBandConversionGroupDto"
+          },
+          "warning": {
+            "$ref": "#/components/schemas/PriceBandConversionGroupDto"
+          }
+        },
+        "required": [
+          "clean",
+          "warning",
+          "unknown"
+        ],
+        "type": "object"
+      },
+      "PriceBandConversionV02Dto": {
+        "properties": {
+          "automatic": {
+            "$ref": "#/components/schemas/PriceBandConversionOriginDto"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "individual": {
+            "$ref": "#/components/schemas/PriceBandConversionOriginDto"
+          },
+          "metricDefinition": {
+            "enum": [
+              "v0-2"
+            ],
+            "type": "string"
+          },
+          "total": {
+            "$ref": "#/components/schemas/PriceBandConversionGroupDto"
+          }
+        },
+        "required": [
+          "metricDefinition",
+          "definition",
+          "total",
+          "automatic",
+          "individual"
         ],
         "type": "object"
       },
@@ -9149,6 +9589,9 @@
           "offersIssued": {
             "minimum": 0,
             "type": "number"
+          },
+          "priceBandConversion": {
+            "$ref": "#/components/schemas/PriceBandConversionV02Dto"
           }
         },
         "required": [
@@ -9158,7 +9601,8 @@
           "conversion",
           "automatic",
           "individual",
-          "acceptedGrossBands"
+          "acceptedGrossBands",
+          "priceBandConversion"
         ],
         "type": "object"
       },
@@ -10229,6 +10673,97 @@
         ],
         "type": "object"
       },
+      "WarningCoverageDto": {
+        "properties": {
+          "emailDeliveryAttempts": {
+            "enum": [
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "inventoryLotsWithoutReceipt": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "reservationConflictHistory": {
+            "enum": [
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "selectedMaterialRate": {
+            "enum": [
+              "available",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "sourceScanLimited": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sourceScanLimited",
+          "emailDeliveryAttempts",
+          "reservationConflictHistory",
+          "selectedMaterialRate",
+          "inventoryLotsWithoutReceipt"
+        ],
+        "type": "object"
+      },
+      "WarningEvidenceDto": {
+        "properties": {
+          "amountMinor": {
+            "type": "string"
+          },
+          "candidateIntervalId": {
+            "type": "string"
+          },
+          "conflictReservationId": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "inventoryId": {
+            "type": "string"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "purchaseRateDenominator": {
+            "type": "string"
+          },
+          "purchaseRateNumerator": {
+            "type": "string"
+          },
+          "rateDifferenceDenominator": {
+            "type": "string"
+          },
+          "rateDifferenceNumerator": {
+            "type": "string"
+          },
+          "remainingMilligrams": {
+            "type": "string"
+          },
+          "reservedMilligrams": {
+            "type": "string"
+          },
+          "selectedRateDenominator": {
+            "type": "string"
+          },
+          "selectedRateNumerator": {
+            "type": "string"
+          },
+          "uncompensatedMinor": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "WithdrawClaimDto": {
         "properties": {
           "reason": {
@@ -10266,6 +10801,77 @@
   "openapi": "3.0.0",
   "paths": {
     "/admin/acquisition-spend": {
+      "get": {
+        "operationId": "MeasurementReadController_spend",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "channel",
+            "required": false,
+            "schema": {
+              "enum": [
+                "DIRECT",
+                "ORGANIC",
+                "PAID",
+                "REFERRAL",
+                "UNKNOWN"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionSpendEvidencePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read platform acquisition-spend evidence and corrections",
+        "tags": [
+          "operator measurement"
+        ]
+      },
       "post": {
         "operationId": "MeasurementController_acquisitionSpend",
         "parameters": [
@@ -14955,6 +15561,71 @@
       }
     },
     "/admin/orders/{orderId}/actual-costs": {
+      "get": {
+        "operationId": "MeasurementReadController_actualCosts",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActualCostEvidencePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read scoped actual-cost evidence and corrections",
+        "tags": [
+          "operator measurement"
+        ]
+      },
       "post": {
         "operationId": "MeasurementController_actualCost",
         "parameters": [
@@ -17545,6 +18216,56 @@
         "summary": "Page the operator quote-request queue",
         "tags": [
           "operator quote requests"
+        ]
+      }
+    },
+    "/admin/warnings": {
+      "get": {
+        "description": "Uses retained evidence in one read-only snapshot. Email delivery attempts and historical reservation conflicts are explicitly unavailable until their producers exist.",
+        "operationId": "MetricsReportController_warningsReport",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorWarningsReportDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read bounded factual operational and financial warnings",
+        "tags": [
+          "operator metrics"
         ]
       }
     },

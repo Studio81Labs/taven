@@ -425,6 +425,150 @@ describe("v0-1 metric classifications", () => {
     });
   });
 
+  it("keeps v0-1 counts and adds deduplicated issued-gross to confirmed-paid bands", () => {
+    const facts = [
+      {
+        bindingId: "a",
+        kind: "automatic",
+        channel: "paid",
+        accepted: true,
+        grossMinor: 24_999n,
+        preflight: "clean",
+      },
+      {
+        bindingId: "b",
+        kind: "automatic",
+        channel: "paid",
+        accepted: false,
+        grossMinor: 25_000n,
+        preflight: "warning",
+      },
+      {
+        bindingId: "b",
+        kind: "automatic",
+        channel: "paid",
+        accepted: false,
+        grossMinor: 25_000n,
+        preflight: "warning",
+      },
+      {
+        bindingId: "c",
+        kind: "automatic",
+        channel: "paid",
+        accepted: true,
+        grossMinor: 49_999n,
+        preflight: "warning",
+      },
+      {
+        bindingId: "d",
+        kind: "automatic",
+        channel: "paid",
+        accepted: false,
+        grossMinor: 50_000n,
+        preflight: "unknown",
+      },
+      {
+        bindingId: "e",
+        kind: "automatic",
+        channel: "paid",
+        accepted: true,
+        grossMinor: 100_000n,
+        preflight: "clean",
+      },
+      {
+        bindingId: "f",
+        kind: "individual",
+        channel: "paid",
+        accepted: false,
+        grossMinor: 199_999n,
+        preflight: "unknown",
+      },
+      {
+        bindingId: "g",
+        kind: "individual",
+        channel: "paid",
+        accepted: true,
+        grossMinor: 200_000n,
+        preflight: "unknown",
+      },
+      {
+        bindingId: "h",
+        kind: "individual",
+        channel: "paid",
+        accepted: false,
+        grossMinor: null,
+        preflight: "unknown",
+      },
+      {
+        bindingId: "other",
+        kind: "automatic",
+        channel: "organic",
+        accepted: true,
+        grossMinor: 24_999n,
+        preflight: "clean",
+      },
+    ] as const;
+    const report = quoteMetrics(facts, "CZK", "paid");
+
+    expect(report).toMatchObject({
+      offersIssued: 9,
+      acceptedBindings: 4,
+      priceBandConversion: {
+        metricDefinition: "v0-2",
+        total: {
+          issued: 8,
+          confirmedPaid: 4,
+          conversion: { numerator: 4, denominator: 8, value: 0.5 },
+          unavailableGross: 1,
+          bands: {
+            under_25000: {
+              issued: 1,
+              confirmedPaid: 1,
+              conversion: { value: 1 },
+            },
+            "25000_to_49999": {
+              issued: 2,
+              confirmedPaid: 1,
+              conversion: { value: 0.5 },
+            },
+            "50000_to_99999": {
+              issued: 1,
+              confirmedPaid: 0,
+              conversion: { value: 0 },
+            },
+            "100000_to_199999": {
+              issued: 2,
+              confirmedPaid: 1,
+              conversion: { value: 0.5 },
+            },
+            "200000_or_more": {
+              issued: 1,
+              confirmedPaid: 1,
+              conversion: { value: 1 },
+            },
+          },
+        },
+        automatic: {
+          preflight: {
+            clean: {
+              bands: { "200000_or_more": { conversion: { value: null } } },
+            },
+            warning: {
+              issued: 2,
+              confirmedPaid: 1,
+              bands: { "25000_to_49999": { issued: 2, confirmedPaid: 1 } },
+            },
+          },
+        },
+        individual: {
+          preflight: {
+            unknown: { issued: 3, confirmedPaid: 1, unavailableGross: 1 },
+          },
+        },
+      },
+    });
+  });
+
   it("treats partially fulfilled orders as terminal for final margin eligibility", () => {
     expect(isFinalMarginTerminal("PARTIALLY_FULFILLED")).toBe(true);
     expect(

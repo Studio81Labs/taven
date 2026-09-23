@@ -20,6 +20,8 @@ import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import { MetricsOrderPageDto, MetricsReportDto } from "./metrics-report.dto";
+import { OperatorWarningsReportDto } from "./operator-warnings.dto";
+import { OperatorWarningsService } from "./operator-warnings.service";
 import {
   MetricsReportService,
   parseMetricsQuery,
@@ -27,6 +29,7 @@ import {
 
 const SUMMARY_FIELDS = new Set(["from", "to", "channel", "currency", "nodeId"]);
 const ORDER_FIELDS = new Set([...SUMMARY_FIELDS, "cursor", "limit"]);
+const WARNING_FIELDS = new Set(["limit"]);
 
 @ApiTags("operator metrics")
 @ApiSecurity("operatorSession")
@@ -35,7 +38,35 @@ const ORDER_FIELDS = new Set([...SUMMARY_FIELDS, "cursor", "limit"]);
 @RequireOperatorPermissions(OPERATOR_PERMISSIONS.METRICS_READ)
 @Controller()
 export class MetricsReportController {
-  constructor(private readonly metrics: MetricsReportService) {}
+  constructor(
+    private readonly metrics: MetricsReportService,
+    private readonly warnings: OperatorWarningsService,
+  ) {}
+
+  @Get("admin/warnings")
+  @ApiOperation({
+    summary: "Read bounded factual operational and financial warnings",
+    description:
+      "Uses retained evidence in one read-only snapshot. Email delivery attempts and historical reservation conflicts are explicitly unavailable until their producers exist.",
+  })
+  @ApiOkResponse({ type: OperatorWarningsReportDto })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  warningsReport(
+    @CurrentOperator() operator: OperatorContext,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorWarningsReportDto> {
+    const normalized = normalizeQuery(query, WARNING_FIELDS);
+    return this.warnings.report(
+      operator,
+      normalized.limit === undefined ? undefined : Number(normalized.limit),
+    );
+  }
 
   @Get("admin/metrics")
   @ApiOperation({

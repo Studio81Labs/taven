@@ -53,3 +53,38 @@ The aggregate covers these definitions:
 
 Raw client observations are intentionally not backfilled. The report therefore
 signals coverage uncertainty instead of inventing historical funnel facts.
+
+## Additive v0-2 price-band conversion
+
+`commercial.quoteToPaid.priceBandConversion` has its own `v0-2` label; the
+aggregate and all existing v0-1 fields retain their original definitions.
+It assigns each issued immutable binding to a band using its gross CZK amount
+at issuance: below 250, 250–499, 500–999, 1000–1999, or at least 2000 CZK.
+It reports issued and confirmed-paid counts and nullable conversion ratios for
+the total, automatic and individual origins, and each origin's preflight
+classification. Reissued or expired bindings remain in their issuance cohort.
+An accepted order refers to its exact binding; a deposit never adds a binding.
+Missing or non-CZK gross evidence is counted as unavailable rather than placed
+in a price band. Existing `acceptedGrossBands` still describes accepted-order
+amounts and is not a conversion denominator.
+
+## Evidence and warning reads
+
+`GET /admin/orders/{orderId}/actual-costs` and
+`GET /admin/acquisition-spend` provide bounded, cursor-paged correction
+histories for an authenticated ADMIN with financial-exception permission.
+Order costs additionally prove the operator's node. Amounts are decimal minor
+units, and `successorId`/`isCurrent` distinguish corrected evidence from the
+leaf used in CM or CAC. These reads never change costs.
+
+`GET /admin/warnings` gives an ADMIN a bounded snapshot of factual refund,
+capture-compensation, email-outbox, retention, inventory, profile, live
+reservation-conflict, reference-activation, and receipt-rate observations.
+`truncated` indicates more collected warnings than the requested limit;
+`coverage.sourceScanLimited` signals that a source hit its bounded scan limit
+and additional matching facts may be omitted. The feed has no
+acknowledgement or invented severity threshold. It does not expose outbox
+payloads, addresses, or contacts. Delivery-attempt and historical
+reservation-conflict coverage are explicitly unavailable. Legacy inventory
+lots without receipt evidence are counted separately, and selected material
+rate coverage is unavailable until a CZK commercial policy is selected.

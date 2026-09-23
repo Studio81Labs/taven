@@ -11,7 +11,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Read platform acquisition-spend evidence and corrections */
+        get: operations["MeasurementReadController_spend"];
         put?: never;
         /** Record append-only acquisition spend evidence */
         post: operations["MeasurementController_acquisitionSpend"];
@@ -1047,7 +1048,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Read scoped actual-cost evidence and corrections */
+        get: operations["MeasurementReadController_actualCosts"];
         put?: never;
         /** Record append-only actual order-cost evidence */
         post: operations["MeasurementController_actualCost"];
@@ -1652,6 +1654,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read bounded factual operational and financial warnings
+         * @description Uses retained evidence in one read-only snapshot. Email delivery attempts and historical reservation conflicts are explicitly unavailable until their producers exist.
+         */
+        get: operations["MetricsReportController_warningsReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/automatic-quote-estimates": {
         parameters: {
             query?: never;
@@ -2222,6 +2244,34 @@ export interface components {
             repeatRate: components["schemas"]["MetricRatioDto"];
             unknownCustomerOrAttribution: number;
         };
+        AcquisitionSpendEvidenceDto: {
+            amountMinor: string;
+            channel: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            isCurrent: boolean;
+            /** Format: date-time */
+            periodEnd: string;
+            /** Format: date-time */
+            periodStart: string;
+            reason: string | null;
+            /** Format: date-time */
+            recordedAt: string;
+            sourceEntityType: string;
+            sourceKey: string;
+            /** Format: uuid */
+            successorId: string | null;
+            /** Format: uuid */
+            supersedesId: string | null;
+        };
+        AcquisitionSpendEvidencePageDto: {
+            items: components["schemas"]["AcquisitionSpendEvidenceDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+            /** @enum {string} */
+            scope: "PLATFORM";
+        };
         ActivateCommercialPolicyDto: {
             expectedSelectionVersion: number;
             reason: string;
@@ -2232,6 +2282,37 @@ export interface components {
             packaging: components["schemas"]["MetricMoneyDto"];
             payment_fee: components["schemas"]["MetricMoneyDto"];
             variable_machine: components["schemas"]["MetricMoneyDto"];
+        };
+        ActualCostEvidenceDto: {
+            amountMinor: string;
+            category: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            isCurrent: boolean;
+            /** Format: date-time */
+            occurredAt: string;
+            /** Format: uuid */
+            orderId: string;
+            reason: string | null;
+            /** Format: date-time */
+            recordedAt: string;
+            source: string;
+            /** Format: uuid */
+            sourceEntityId: string | null;
+            sourceEntityType: string;
+            sourceKey: string;
+            /** Format: uuid */
+            successorId: string | null;
+            /** Format: uuid */
+            supersedesId: string | null;
+        };
+        ActualCostEvidencePageDto: {
+            items: components["schemas"]["ActualCostEvidenceDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+            /** Format: uuid */
+            orderId: string;
         };
         ApproveLegacyClaimWindowDto: {
             approvalReference: string;
@@ -4444,6 +4525,35 @@ export interface components {
             /** Format: date-time */
             settledAt: string;
         };
+        OperatorWarningDto: {
+            /** @enum {string} */
+            code: "REFUND_UNRESOLVED" | "CAPTURE_COMPENSATION_DUE" | "EMAIL_OUTBOX_DUE" | "EMAIL_OUTBOX_FAILED" | "RETENTION_DUE" | "RETENTION_FAILED" | "PROFILE_UNAVAILABLE" | "INVENTORY_UNAVAILABLE" | "RESERVATION_CONFLICT" | "REFERENCE_PROFILE_ACTIVATED" | "MATERIAL_RATE_BELOW_PURCHASE";
+            /** Format: date-time */
+            dueAt?: string;
+            evidence: components["schemas"]["WarningEvidenceDto"];
+            id: string;
+            /** Format: uuid */
+            nodeId?: string;
+            /** Format: date-time */
+            observedAt: string;
+            /** Format: uuid */
+            orderId?: string;
+            /** @enum {string} */
+            scope: "PLATFORM" | "NODE";
+            /** Format: uuid */
+            sourceId: string;
+            sourceType: string;
+            status: string;
+        };
+        OperatorWarningsReportDto: {
+            coverage: components["schemas"]["WarningCoverageDto"];
+            /** Format: date-time */
+            generatedAt: string;
+            items: components["schemas"]["OperatorWarningDto"][];
+            /** Format: uuid */
+            nodeId: string;
+            truncated: boolean;
+        };
         OrderMetricsDto: {
             acceptedGross: components["schemas"]["MetricMoneyDto"];
             acceptedGrossBands: components["schemas"]["PriceBandsDto"];
@@ -4498,6 +4608,42 @@ export interface components {
             amountMinor: string;
             /** Format: uuid */
             fulfilmentSlotId: string;
+        };
+        PriceBandConversionBandsDto: {
+            "100000_to_199999": components["schemas"]["PriceBandConversionCellDto"];
+            "200000_or_more": components["schemas"]["PriceBandConversionCellDto"];
+            "25000_to_49999": components["schemas"]["PriceBandConversionCellDto"];
+            "50000_to_99999": components["schemas"]["PriceBandConversionCellDto"];
+            under_25000: components["schemas"]["PriceBandConversionCellDto"];
+        };
+        PriceBandConversionCellDto: {
+            confirmedPaid: number;
+            conversion: components["schemas"]["MetricRatioDto"];
+            issued: number;
+        };
+        PriceBandConversionGroupDto: {
+            bands: components["schemas"]["PriceBandConversionBandsDto"];
+            confirmedPaid: number;
+            conversion: components["schemas"]["MetricRatioDto"];
+            issued: number;
+            unavailableGross: number;
+        };
+        PriceBandConversionOriginDto: {
+            all: components["schemas"]["PriceBandConversionGroupDto"];
+            preflight: components["schemas"]["PriceBandConversionPreflightDto"];
+        };
+        PriceBandConversionPreflightDto: {
+            clean: components["schemas"]["PriceBandConversionGroupDto"];
+            unknown: components["schemas"]["PriceBandConversionGroupDto"];
+            warning: components["schemas"]["PriceBandConversionGroupDto"];
+        };
+        PriceBandConversionV02Dto: {
+            automatic: components["schemas"]["PriceBandConversionOriginDto"];
+            definition: string;
+            individual: components["schemas"]["PriceBandConversionOriginDto"];
+            /** @enum {string} */
+            metricDefinition: "v0-2";
+            total: components["schemas"]["PriceBandConversionGroupDto"];
         };
         PriceBandsDto: {
             "100000_to_199999": number;
@@ -4696,6 +4842,7 @@ export interface components {
             definition: string;
             individual: components["schemas"]["BindingBreakdownDto"];
             offersIssued: number;
+            priceBandConversion: components["schemas"]["PriceBandConversionV02Dto"];
         };
         ReceiveInventoryDto: {
             color?: string | null;
@@ -4970,6 +5117,34 @@ export interface components {
         VoidHandlingSessionDto: {
             reason: string;
         };
+        WarningCoverageDto: {
+            /** @enum {string} */
+            emailDeliveryAttempts: "unavailable";
+            inventoryLotsWithoutReceipt: number;
+            /** @enum {string} */
+            reservationConflictHistory: "unavailable";
+            /** @enum {string} */
+            selectedMaterialRate: "available" | "unavailable";
+            sourceScanLimited: boolean;
+        };
+        WarningEvidenceDto: {
+            amountMinor?: string;
+            candidateIntervalId?: string;
+            conflictReservationId?: string;
+            currency?: string;
+            inventoryId?: string;
+            machineId?: string;
+            material?: string;
+            purchaseRateDenominator?: string;
+            purchaseRateNumerator?: string;
+            rateDifferenceDenominator?: string;
+            rateDifferenceNumerator?: string;
+            remainingMilligrams?: string;
+            reservedMilligrams?: string;
+            selectedRateDenominator?: string;
+            selectedRateNumerator?: string;
+            uncompensatedMinor?: string;
+        };
         WithdrawClaimDto: {
             reason: string;
         };
@@ -4982,6 +5157,32 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    MeasurementReadController_spend: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+                channel?: "DIRECT" | "ORGANIC" | "PAID" | "REFERRAL" | "UNKNOWN";
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcquisitionSpendEvidencePageDto"];
+                };
+            };
+        };
+    };
     MeasurementController_acquisitionSpend: {
         parameters: {
             query?: never;
@@ -7324,6 +7525,33 @@ export interface operations {
             };
         };
     };
+    MeasurementReadController_actualCosts: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActualCostEvidencePageDto"];
+                };
+            };
+        };
+    };
     MeasurementController_actualCost: {
         parameters: {
             query?: never;
@@ -8475,6 +8703,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperatorQuoteRequestPageDto"];
+                };
+            };
+        };
+    };
+    MetricsReportController_warningsReport: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorWarningsReportDto"];
                 };
             };
         };

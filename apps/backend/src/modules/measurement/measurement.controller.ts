@@ -1,10 +1,13 @@
 import {
+  BadRequestException,
   Body,
   Controller,
+  Get,
   Headers,
   HttpCode,
   Param,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -13,6 +16,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiSecurity,
   ApiTags,
 } from "@nestjs/swagger";
@@ -32,6 +36,10 @@ import {
   VoidHandlingSessionDto,
 } from "./measurement.dto";
 import { MeasurementService } from "./measurement.service";
+import {
+  AcquisitionSpendEvidencePageDto,
+  ActualCostEvidencePageDto,
+} from "./measurement-read.dto";
 
 const IDEMPOTENCY_HEADER = {
   name: "Idempotency-Key",
@@ -149,4 +157,88 @@ export class MeasurementController {
   ) {
     return this.measurement.recordAcquisitionSpend(operator, body, key);
   }
+}
+
+@ApiTags("operator measurement")
+@ApiSecurity("operatorSession")
+@ApiHeader(OPERATOR_CSRF_HEADER)
+@UseGuards(OperatorAccessGuard)
+@RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
+@Controller("admin")
+export class MeasurementReadController {
+  constructor(private readonly measurement: MeasurementService) {}
+
+  @Get("orders/:orderId/actual-costs")
+  @ApiOperation({ summary: "Read scoped actual-cost evidence and corrections" })
+  @ApiParam(ORDER_ID)
+  @ApiOkResponse({ type: ActualCostEvidencePageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  actualCosts(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<ActualCostEvidencePageDto> {
+    const page = evidenceQuery(query, new Set(["cursor", "limit"]));
+    return this.measurement.actualCostEvidence(
+      operator,
+      orderId,
+      page.cursor,
+      page.limit,
+    );
+  }
+
+  @Get("acquisition-spend")
+  @ApiOperation({
+    summary: "Read platform acquisition-spend evidence and corrections",
+  })
+  @ApiOkResponse({ type: AcquisitionSpendEvidencePageDto })
+  @ApiQuery({
+    name: "channel",
+    required: false,
+    enum: ["DIRECT", "ORGANIC", "PAID", "REFERRAL", "UNKNOWN"],
+  })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  spend(
+    @CurrentOperator() operator: OperatorContext,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<AcquisitionSpendEvidencePageDto> {
+    const page = evidenceQuery(query, new Set(["channel", "cursor", "limit"]));
+    return this.measurement.acquisitionSpendEvidence(
+      operator,
+      page.channel,
+      page.cursor,
+      page.limit,
+    );
+  }
+}
+
+function evidenceQuery(
+  query: Record<string, string | string[] | undefined>,
+  allowed: ReadonlySet<string>,
+): { channel?: string; cursor?: string; limit?: number } {
+  for (const [key, value] of Object.entries(query)) {
+    if (!allowed.has(key) || typeof value !== "string")
+      throw new BadRequestException(`${key} is invalid`);
+  }
+  return {
+    ...(query.channel !== undefined
+      ? { channel: query.channel as string }
+      : {}),
+    ...(query.cursor !== undefined ? { cursor: query.cursor as string } : {}),
+    ...(query.limit !== undefined ? { limit: Number(query.limit) } : {}),
+  };
 }
