@@ -702,8 +702,17 @@ describe("operator catalog commands", () => {
       priceMinorUnitsDenominator: "100",
       currency: "CZK",
       purchasedAt: receiptBody.purchasedAt,
-      reason: "Correct purchase document",
+      reason: "🧵".repeat(500),
     };
+    expect(
+      (
+        await command(
+          correctionPath,
+          { ...correctionBody, reason: "🧵".repeat(501) },
+          `catalog-correct-long-reason-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
     expect(
       (
         await command(
@@ -842,7 +851,7 @@ describe("operator catalog commands", () => {
     const stop = new Date(start.getTime() + 3_600_000);
     const availabilityBody = {
       expectedVersion: 1,
-      reason: "Staffed print shift",
+      reason: "🧵".repeat(500),
       windows: [
         {
           startsAt: `${start.toISOString().slice(0, -1)}456Z`,
@@ -851,6 +860,15 @@ describe("operator catalog commands", () => {
       ],
     };
     const availabilityKey = `catalog-availability-${randomUUID()}`;
+    expect(
+      (
+        await command(
+          availabilityPath,
+          { ...availabilityBody, reason: "🧵".repeat(501) },
+          `catalog-availability-long-reason-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
     expect(
       (
         await command(

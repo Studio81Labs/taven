@@ -711,7 +711,7 @@ export class OperatorCatalogService {
     const receiptCurrency = currency(body.currency);
     const purchasedAt = explicitInstant(body.purchasedAt, "purchasedAt");
     const reason = reasonText(body);
-    if (reason.length > 500)
+    if (codePointLength(reason) > 500)
       throw new BadRequestException("reason is too long");
     return this.command(
       operator,
@@ -858,7 +858,7 @@ export class OperatorCatalogService {
     machineId = uuid(machineId, "machineId");
     body = commandBody(body);
     const reason = reasonText(body);
-    if (reason.length > 500)
+    if (codePointLength(reason) > 500)
       throw new BadRequestException("reason is too long");
     if (reason === "LEGACY_LIVE_RESERVATION_BOOTSTRAP") {
       throw new BadRequestException(
