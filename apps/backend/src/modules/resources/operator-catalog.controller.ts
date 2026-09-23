@@ -32,6 +32,7 @@ import {
   CreateMachineCalibrationDto,
   CreateMachineProfileDto,
   CreatePrintConfigRevisionDto,
+  CreatePriceListDto,
   CreateReferenceProfileDto,
   InventoryStatusDto,
   InventoryAdjustmentDto,
@@ -91,6 +92,22 @@ export class OperatorCatalogController {
     @Headers("idempotency-key") key?: string,
   ) {
     return this.catalog.createPrintConfigRevision(operator, body, key);
+  }
+
+  @Post("admin/catalog/price-lists")
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Create an immutable, inactive price-list revision",
+  })
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreatePriceListDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  createPriceList(
+    @CurrentOperator() operator: OperatorContext,
+    @Body() body: CreatePriceListDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.createPriceList(operator, body, key);
   }
 
   @Post("admin/nodes/:nodeId/machines")

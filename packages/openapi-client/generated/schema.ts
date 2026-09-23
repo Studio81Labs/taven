@@ -238,7 +238,8 @@ export interface paths {
         /** List global immutable price lists */
         get: operations["OperatorReadsController_priceLists"];
         put?: never;
-        post?: never;
+        /** Create an immutable, inactive price-list revision */
+        post: operations["OperatorCatalogController_createPriceList"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2312,6 +2313,60 @@ export interface components {
             /** Format: uuid */
             modelFileId: string;
         };
+        AutomaticQuoteParametersDto: {
+            amortizationRateMinorPerSecond: components["schemas"]["PriceRationalDto"];
+            /** Format: int64 */
+            expressAvailableProductionWindowSeconds: string;
+            /** @enum {string} */
+            expressMaximumPlateCount: "1" | "2";
+            expressMultiplier: components["schemas"]["PriceRationalDto"];
+            /** Format: int64 */
+            expressPackagingBufferSeconds: string;
+            fillCoefficient: components["schemas"]["PriceRationalDto"];
+            /** Format: int64 */
+            freeShippingPrintThresholdMinor: string;
+            /** Format: int64 */
+            handlingOrderFixedSeconds: string;
+            /** Format: int64 */
+            handlingPackSeconds: string;
+            /** Format: int64 */
+            handlingPieceSeconds: string;
+            /** Format: int64 */
+            handlingPlateSeconds: string;
+            laborRateMinorPerSecond: components["schemas"]["PriceRationalDto"];
+            machineRateMinorPerSecond: components["schemas"]["PriceRationalDto"];
+            marginRate: components["schemas"]["PriceRationalDto"];
+            materialRateMinorPerMilligram: components["schemas"]["PriceMaterialRatesDto"];
+            /** Format: int64 */
+            maximumAutomaticAmountMinor: string;
+            /** Format: int64 */
+            maximumAutomaticQuantity: string;
+            /** Format: int64 */
+            minimumPrintPriceMinor: string;
+            /** Format: int64 */
+            packagingWeightMilligrams: string;
+            /** Format: int64 */
+            packingPaddingMicrometers: string;
+            /** Format: int64 */
+            paymentFeeFixedMinor: string;
+            paymentFeeRateBasisPoints: number;
+            paymentProviderConfig: {
+                [key: string]: unknown;
+            };
+            reprintRate: components["schemas"]["PriceRationalDto"];
+            roughExtrusionMilligramsPerSecond: components["schemas"]["PriceRationalDto"];
+            roughMaterialDensityMilligramsPerCubicMillimeter: components["schemas"]["PriceMaterialRatesDto"];
+            roughMaterialVolumeRatioByInfillPreset: components["schemas"]["PriceInfillRatiosDto"];
+            shipmentCategories: components["schemas"]["PriceShipmentCategoryDto"][];
+            /** Format: int64 */
+            shippingTripPricingDivisor: string;
+            /** Format: int64 */
+            shippingTripSeconds: string;
+            /** Format: int64 */
+            smallOrderSurchargeMinor: string;
+            /** Format: int64 */
+            smallOrderWeightThresholdMilligrams: string;
+        };
         AutomaticQuotePriceComponentDto: {
             amountMinor: number;
             id: string;
@@ -2725,6 +2780,13 @@ export interface components {
             rationale: string;
             /** @enum {string} */
             reason: "EXPRESS_BREACH" | "PRODUCTION_FAILURE" | "SHIPMENT_INCIDENT" | "POST_DELIVERY_ISSUE";
+        };
+        CreatePriceListDto: {
+            /** @enum {string} */
+            currency: "CZK";
+            parameters: components["schemas"]["PriceListParametersDto"];
+            revision: string;
+            termsRevision: string;
         };
         CreatePrintConfigRevisionDto: {
             brimEnabled: boolean;
@@ -4226,21 +4288,28 @@ export interface components {
             "50000_to_99999": number;
             under_25000: number;
         };
+        PriceInfillRatiosDto: {
+            DECORATIVE: components["schemas"]["PriceRationalDto"];
+            STANDARD: components["schemas"]["PriceRationalDto"];
+            STRONG: components["schemas"]["PriceRationalDto"];
+        };
         PriceListDetailDto: {
             /** Format: date-time */
             createdAt: string;
             currency: string;
             /** Format: uuid */
             id: string;
-            parameters: {
-                [key: string]: unknown;
-            };
+            parameters: components["schemas"]["PriceListParametersDto"];
             revision: string;
             termsRevision: string;
         };
         PriceListPageDto: {
             items: components["schemas"]["PriceListReadDto"][];
             nextCursor?: string;
+        };
+        PriceListParametersDto: {
+            automaticQuote: components["schemas"]["AutomaticQuoteParametersDto"];
+            sellerTaxPolicy: components["schemas"]["SellerTaxPolicyDto"];
         };
         PriceListReadDto: {
             /** Format: date-time */
@@ -4250,6 +4319,37 @@ export interface components {
             id: string;
             revision: string;
             termsRevision: string;
+        };
+        PriceMaterialRatesDto: {
+            PETG: components["schemas"]["PriceRationalDto"];
+            PLA: components["schemas"]["PriceRationalDto"];
+        };
+        PriceRationalDto: {
+            /** Format: int64 */
+            denominator: string;
+            /** Format: int64 */
+            numerator: string;
+        };
+        PriceShipmentCategoryDto: {
+            /** Format: int64 */
+            carrierCostMinor: string;
+            /** Format: int64 */
+            customerShippingRateMinor: string;
+            id: string;
+            /** Format: int64 */
+            maxDimensionSumMicrometers: string;
+            /** Format: int64 */
+            maxParcelVolumeCubicMicrometers: string;
+            /** Format: int64 */
+            maxWeightMilligrams: string;
+            /** Format: int64 */
+            maxXMicrometers: string;
+            /** Format: int64 */
+            maxYMicrometers: string;
+            /** Format: int64 */
+            maxZMicrometers: string;
+            /** Format: int64 */
+            packagingCostMinor: string;
         };
         PrintConfigRevisionDetailDto: {
             brimEnabled: boolean;
@@ -4532,6 +4632,11 @@ export interface components {
         SelectAutomaticQuoteDestinationDto: {
             endpointType: string;
             providerEndpointId: string;
+        };
+        SellerTaxPolicyDto: {
+            /** @enum {string} */
+            regime: "NON_VAT_PAYER" | "VAT_PAYER";
+            vatRateBasisPoints: number;
         };
         SetAutomaticQuoteExpressDto: {
             requested: boolean;
@@ -5109,6 +5214,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PriceListPageDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_createPriceList: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePriceListDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
                 };
             };
         };

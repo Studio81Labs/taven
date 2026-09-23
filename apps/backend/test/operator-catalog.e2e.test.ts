@@ -221,6 +221,95 @@ describe("operator catalog commands", () => {
     ).toBe(403);
   });
 
+  it("creates a validated immutable price list without publishing it", async () => {
+    const baseline = await prisma.priceList.findUniqueOrThrow({
+      where: {
+        currency_revision: { currency: "CZK", revision: "automatic-v0-czk" },
+      },
+    });
+    const parameters = JSON.parse(JSON.stringify(baseline.parameters)) as {
+      automaticQuote: Record<string, unknown>;
+      sellerTaxPolicy: Record<string, unknown>;
+    };
+    const body = {
+      currency: "CZK",
+      revision: `operator-${randomUUID()}`,
+      termsRevision: baseline.termsRevision,
+      parameters,
+    };
+    const key = `catalog-price-${randomUUID()}`;
+    const created = await responseBody(
+      command("/admin/catalog/price-lists", body, key),
+    );
+    await expect(
+      command("/admin/catalog/price-lists", body, key).then((response) =>
+        response.json(),
+      ),
+    ).resolves.toEqual(created);
+    await expect(
+      prisma.priceList.findUnique({ where: { id: created.id } }),
+    ).resolves.toMatchObject({
+      currency: "CZK",
+      revision: body.revision,
+      parameters,
+    });
+    const detail = await fetch(
+      new URL(`/admin/catalog/price-lists/${created.id}`, baseUrl),
+      {
+        headers: { cookie: adminCookie },
+      },
+    );
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      id: created.id,
+      parameters,
+    });
+    const unsafe = {
+      ...body,
+      revision: `operator-${randomUUID()}`,
+      parameters: {
+        ...parameters,
+        automaticQuote: {
+          ...parameters.automaticQuote,
+          expressMaximumPlateCount: "3",
+        },
+      },
+    };
+    expect(
+      (
+        await command(
+          "/admin/catalog/price-lists",
+          unsafe,
+          `catalog-price-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await command(
+          "/admin/catalog/price-lists",
+          {
+            ...body,
+            revision: `operator-${randomUUID()}`,
+            parameters: { ...parameters, unsupported: true },
+          },
+          `catalog-price-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await commandAs(
+          viewerCookie,
+          viewerCsrfToken,
+          "/admin/catalog/price-lists",
+          body,
+          `catalog-viewer-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(403);
+  });
+
   it("writes revision and node catalog resources with idempotency and audit evidence", async () => {
     const referenceKey = `catalog-reference-${randomUUID()}`;
     const referenceBody = {

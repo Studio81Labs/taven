@@ -749,7 +749,7 @@ export class OperatorReadsService {
       termsRevision: row.termsRevision,
       currency: row.currency,
       createdAt: row.createdAt.toISOString(),
-      parameters: row.parameters as Record<string, unknown>,
+      parameters: row.parameters as unknown as PriceListDetailDto["parameters"],
     };
   }
 

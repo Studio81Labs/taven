@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { FulfilmentProjectionDto } from "../orders/orders.dto";
 import { ReferenceProfileActivationNoticeDto } from "../resources/reference-profile-activation-notice.dto";
+import { PriceListParametersDto } from "../resources/operator-catalog.dto";
 
 const UUID = { type: String, format: "uuid" } as const;
 const DECIMAL = { type: String, pattern: "^-?[0-9]+$" } as const;
@@ -754,8 +755,8 @@ export class PrintConfigRevisionDetailDto extends PrintConfigRevisionReadDto {
 }
 
 export class PriceListDetailDto extends PriceListReadDto {
-  @ApiProperty(CATALOG_JSON)
-  parameters!: Record<string, unknown>;
+  @ApiProperty({ type: () => PriceListParametersDto })
+  parameters!: PriceListParametersDto;
 }
 
 export class InventoryDetailDto extends InventoryReadDto {

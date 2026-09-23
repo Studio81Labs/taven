@@ -108,6 +108,13 @@ export type CreatePrintConfigRevisionInput = {
   settings: JsonSettings;
 };
 
+export type CreatePriceListInput = {
+  revision: string;
+  termsRevision: string;
+  currency: string;
+  parameters: JsonSettings;
+};
+
 type RevisionTable =
   "referenceProfile" | "machineProfile" | "machineCalibration";
 type CatalogSnapshotKind =
@@ -246,6 +253,19 @@ export class ResourceCatalogService {
       return transaction
         ? await create(transaction)
         : await this.prisma.$transaction(create);
+    } catch (error) {
+      return catalogWriteError(error);
+    }
+  }
+
+  async createPriceList(
+    input: CreatePriceListInput,
+    transaction?: Transaction,
+  ) {
+    try {
+      return await (transaction ?? this.prisma).priceList.create({
+        data: input,
+      });
     } catch (error) {
       return catalogWriteError(error);
     }

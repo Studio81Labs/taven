@@ -38,6 +38,7 @@ import {
   type CreateMachineCalibrationInput,
   type CreateMachineProfileInput,
   type CreatePrintConfigRevisionInput,
+  type CreatePriceListInput,
   type CreateReferenceProfileInput,
   type RegisterMachineInput,
   type VerifiedCatalogSnapshot,
@@ -55,12 +56,14 @@ import type {
   CreateMachineCalibrationDto,
   CreateMachineProfileDto,
   CreatePrintConfigRevisionDto,
+  CreatePriceListDto,
   CreateReferenceProfileDto,
   InventoryStatusDto,
   InventoryAdjustmentDto,
   MachineStatusDto,
   RegisterMachineDto,
 } from "./operator-catalog.dto";
+import { validatePriceListParameters } from "./price-list-validation";
 
 type Transaction = Prisma.TransactionClient;
 type CatalogResult = CatalogCommandResultDto;
@@ -185,6 +188,33 @@ export class OperatorCatalogService {
           payload: { operation: "create", revisionKind: "PRINT_CONFIG" },
         });
         return { id: revision.id };
+      },
+    );
+  }
+
+  async createPriceList(
+    operator: OperatorContext,
+    body: CreatePriceListDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    const nodeId = this.globalNode(operator);
+    const input = priceListInput(body);
+    return this.command(
+      operator,
+      "catalog:price-list:create",
+      key,
+      { nodeId, input },
+      async (tx, idempotencyKey) => {
+        const priceList = await this.catalog.createPriceList(input, tx);
+        await this.record(tx, operator, nodeId, idempotencyKey, priceList.id, {
+          eventType: "catalog.price-list.created",
+          payload: {
+            operation: "create",
+            currency: input.currency,
+            revision: input.revision,
+          },
+        });
+        return { id: priceList.id };
       },
     );
   }
@@ -991,6 +1021,21 @@ function printConfigRevisionInput(
     supportsEnabled: body.supportsEnabled,
     brimEnabled: body.brimEnabled,
     settings: settings(body.settings),
+  };
+}
+
+function priceListInput(body: CreatePriceListDto): CreatePriceListInput {
+  body = commandBody(body);
+  if (body.currency !== "CZK") {
+    throw new BadRequestException("currency must be CZK in v0");
+  }
+  const parameters = settings(body.parameters);
+  validatePriceListParameters(parameters);
+  return {
+    revision: text(body.revision, "revision", 100),
+    termsRevision: text(body.termsRevision, "termsRevision", 100),
+    currency: "CZK",
+    parameters,
   };
 }
 
