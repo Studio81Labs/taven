@@ -380,6 +380,7 @@ export async function archiveE2eCheckoutDocumentsForBrowser(
 /** Forward-only replacement in the disposable browser database; run after other scenarios. */
 export async function replaceE2eCheckoutDocumentsForBrowser(
   databaseUrl: string,
+  startDelayMilliseconds = 0,
 ): Promise<
   Record<
     "terms" | "claims" | "photoConsent",
@@ -390,10 +391,18 @@ export async function replaceE2eCheckoutDocumentsForBrowser(
       revision: string;
       contentHash: string;
       title: string;
+      startsAt: string | null;
     }
   >
 > {
   assertIsolatedBrowserDatabase(databaseUrl);
+  if (
+    !Number.isInteger(startDelayMilliseconds) ||
+    startDelayMilliseconds < 0 ||
+    startDelayMilliseconds > 60_000
+  ) {
+    throw new Error("Invalid isolated legal replacement schedule");
+  }
   const pool = new Pool({ connectionString: databaseUrl });
   const client = await pool.connect();
   try {
@@ -409,6 +418,14 @@ export async function replaceE2eCheckoutDocumentsForBrowser(
     if (documents.rows.length !== 3) {
       throw new Error("Checkout legal replacement fixtures are missing");
     }
+    const scheduledStart = startDelayMilliseconds
+      ? (
+          await client.query<{ starts_at: Date }>(
+            `SELECT clock_timestamp() + ($1::integer * interval '1 millisecond') AS starts_at`,
+            [startDelayMilliseconds],
+          )
+        ).rows[0]!.starts_at
+      : null;
     const replacements = {} as Record<
       "terms" | "claims" | "photoConsent",
       {
@@ -418,6 +435,7 @@ export async function replaceE2eCheckoutDocumentsForBrowser(
         revision: string;
         contentHash: string;
         title: string;
+        startsAt: string | null;
       }
     >;
     for (const document of documents.rows) {
@@ -468,7 +486,8 @@ export async function replaceE2eCheckoutDocumentsForBrowser(
             title, summary, sections, content_hash, revision_code, effective_at,
             approval_evidence, approved_by, approved_at)
          VALUES ($1, $2, $3, 1, 'APPROVED', 1,
-                 $4, $5, $6::jsonb, $7, $8, clock_timestamp() - interval '1 minute',
+                 $4, $5, $6::jsonb, $7, $8,
+                 coalesce($10::timestamptz, clock_timestamp() - interval '1 minute'),
                  'Isolated browser replacement fixture', $9, clock_timestamp())`,
         [
           revisionId,
@@ -480,15 +499,16 @@ export async function replaceE2eCheckoutDocumentsForBrowser(
           contentHash,
           revision,
           operatorId,
+          scheduledStart,
         ],
       );
       // The database publication trigger closes the predecessor at the new start.
       await client.query(
         `INSERT INTO legal_document_publications
            (id, document_id, revision_id, starts_at, published_by, reason)
-         VALUES ($1, $2, $3, clock_timestamp(), $4,
+         VALUES ($1, $2, $3, coalesce($5::timestamptz, clock_timestamp()), $4,
                  'Isolated browser replacement fixture')`,
-        [randomUUID(), document.id, revisionId, operatorId],
+        [randomUUID(), document.id, revisionId, operatorId, scheduledStart],
       );
       await client.query(
         `UPDATE legal_documents SET generation = generation + 1 WHERE id = $1`,
@@ -501,6 +521,7 @@ export async function replaceE2eCheckoutDocumentsForBrowser(
         revision,
         contentHash,
         title,
+        startsAt: scheduledStart?.toISOString() ?? null,
       };
     }
     await client.query("COMMIT");
