@@ -21,7 +21,12 @@ import {
 } from "vitest";
 import { AppModule } from "../src/app.module";
 import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
+import {
+  DELIVERY_CAPABILITY,
+  type DeliveryCapabilityPort,
+} from "../src/modules/automatic-quotes/delivery-capability.port";
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
+import { LegalApprovalsService } from "../src/modules/legal-approvals/legal-approvals.service";
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 import { PrismaService } from "../src/prisma/prisma.service";
@@ -1558,6 +1563,119 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         ),
       ),
     );
+    const selectionBeforeProjection =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+        include: { priceList: true },
+      });
+    const changedParameters = JSON.parse(
+      JSON.stringify(selectionBeforeProjection.priceList.parameters),
+    ) as { automaticQuote: Record<string, unknown> };
+    changedParameters.automaticQuote.minimumPrintPriceMinor = "500000";
+    const changedPriceList = await prisma.priceList.create({
+      data: {
+        revision: `projection-race-${randomUUID()}`,
+        termsRevision: selectionBeforeProjection.priceList.termsRevision,
+        currency: "CZK",
+        parameters: changedParameters as Prisma.InputJsonObject,
+      },
+    });
+    const projectionService = automaticQuotes as unknown as {
+      roughQuote: (...args: unknown[]) => Promise<unknown>;
+      priceListForOrderProjection: (...args: unknown[]) => Promise<unknown>;
+    };
+    const originalRoughQuote =
+      projectionService.roughQuote.bind(automaticQuotes);
+    let roughFinished!: () => void;
+    let releaseProjection!: () => void;
+    const roughComplete = new Promise<void>((resolve) => {
+      roughFinished = resolve;
+    });
+    const projectionGate = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    const roughProjectionSpy = vi
+      .spyOn(projectionService, "roughQuote")
+      .mockImplementation(async (...args) => {
+        const result = await originalRoughQuote(...args);
+        roughFinished();
+        await projectionGate;
+        return result;
+      });
+    const selectedProjectionSpy = vi.spyOn(
+      projectionService,
+      "priceListForOrderProjection",
+    );
+    try {
+      const pendingProjection = api(`automatic-quote-sessions/${sessionId}`, {
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
+      await roughComplete;
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: changedPriceList.id,
+          selectionVersion: { increment: 1 },
+        },
+      });
+      releaseProjection();
+      const projection = await pendingProjection;
+      expect(projection.response.status).toBe(200);
+      expect(selectedProjectionSpy).toHaveBeenCalledTimes(1);
+      expect(projection.body.roughEstimate).toEqual(
+        immediateRough.body.roughEstimate,
+      );
+      expect(projection.body.quantityComparisons).toEqual(
+        immediateRough.body.quantityComparisons,
+      );
+    } finally {
+      releaseProjection();
+      selectedProjectionSpy.mockRestore();
+      roughProjectionSpy.mockRestore();
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: selectionBeforeProjection.priceListId,
+          selectionVersion: { increment: 1 },
+        },
+      });
+    }
+    const legacyUnsafeParameters = JSON.parse(
+      JSON.stringify(selectionBeforeProjection.priceList.parameters),
+    ) as { automaticQuote: Record<string, unknown> };
+    legacyUnsafeParameters.automaticQuote.minimumPrintPriceMinor =
+      "9007199254740992";
+    const legacyUnsafeList = await prisma.priceList.create({
+      data: {
+        revision: `legacy-unsafe-money-${randomUUID()}`,
+        termsRevision: selectionBeforeProjection.priceList.termsRevision,
+        currency: "CZK",
+        parameters: legacyUnsafeParameters as Prisma.InputJsonObject,
+      },
+    });
+    try {
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: legacyUnsafeList.id,
+          selectionVersion: { increment: 1 },
+        },
+      });
+      const oversizedRead = await api(`automatic-quote-sessions/${sessionId}`, {
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
+      expect(oversizedRead.response.status).toBe(200);
+      expect(oversizedRead.body.roughEstimate).toBeNull();
+      expect(oversizedRead.body.quantityComparisons).toEqual([]);
+    } finally {
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: selectionBeforeProjection.priceListId,
+          selectionVersion: { increment: 1 },
+        },
+      });
+    }
     expect(immediateRough.body.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -2089,6 +2207,70 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       (await configure(0, "body-b", 1, "configure-after-incompatible")).response
         .status,
     ).toBe(200);
+
+    const deliveryCapabilities =
+      app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY);
+    const validateSelection =
+      deliveryCapabilities.validateSelection.bind(deliveryCapabilities);
+    let providerEntered!: () => void;
+    let releaseProvider!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      providerEntered = resolve;
+    });
+    const providerGate = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const providerSpy = vi
+      .spyOn(deliveryCapabilities, "validateSelection")
+      .mockImplementation(async (input) => {
+        providerEntered();
+        await providerGate;
+        return validateSelection(input);
+      });
+    const staleKey = key("destination-policy-race");
+    const destinationBeforeRace =
+      await prisma.automaticQuoteDraft.findUniqueOrThrow({
+        where: { orderId },
+        select: { selectedDeliveryDestinationId: true },
+      });
+    try {
+      const staleDestination = api(
+        `automatic-quote-sessions/${sessionId}/delivery-destination`,
+        {
+          method: "PUT",
+          headers: capabilityHeaders(sessionToken, staleKey),
+          body: JSON.stringify({
+            providerEndpointId: "test-pickup",
+            endpointType: "pickup_point",
+          }),
+        },
+      );
+      await entered;
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: { selectionVersion: { increment: 1 } },
+      });
+      releaseProvider();
+      expect((await staleDestination).response.status).toBe(409);
+      expect(
+        (
+          await prisma.automaticQuoteDraft.findUniqueOrThrow({
+            where: { orderId },
+          })
+        ).selectedDeliveryDestinationId,
+      ).toBe(destinationBeforeRace.selectedDeliveryDestinationId);
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: {
+            namespace: "automatic-quote.select-destination",
+            idempotencyKey: staleKey,
+          },
+        }),
+      ).toBe(0);
+    } finally {
+      releaseProvider();
+      providerSpy.mockRestore();
+    }
 
     const destination = await api(
       `automatic-quote-sessions/${sessionId}/delivery-destination`,
@@ -2819,16 +3001,191 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(recoveryFallback.body.express).toMatchObject({ requested: false });
     expect(recoveryFallback.body.checkoutReady).toBe(false);
     expect(recoveryFallback.body.bindingQuote).toBeNull();
-    const recoveryRestaged = await api(
-      `automatic-quote-sessions/${recoverySessionId}/prepare`,
-      {
-        method: "POST",
-        headers: capabilityHeaders(
-          recoverySessionToken,
-          key("capacity-recovery-restage"),
+    const bindingRacePort =
+      app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY);
+    const originalBindingValidation =
+      bindingRacePort.validateSelection.bind(bindingRacePort);
+    let bindingProviderEntered!: () => void;
+    let releaseBindingProvider!: () => void;
+    const bindingProviderStarted = new Promise<void>((resolve) => {
+      bindingProviderEntered = resolve;
+    });
+    const bindingProviderGate = new Promise<void>((resolve) => {
+      releaseBindingProvider = resolve;
+    });
+    const bindingProviderSpy = vi
+      .spyOn(bindingRacePort, "validateSelection")
+      .mockImplementation(async (input) => {
+        bindingProviderEntered();
+        await bindingProviderGate;
+        return originalBindingValidation(input);
+      });
+    const staleBindingKey = key("capacity-recovery-stale-provider");
+    try {
+      const pendingBinding = api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(recoverySessionToken, staleBindingKey),
+        },
+      );
+      await bindingProviderStarted;
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: { selectionVersion: { increment: 1 } },
+      });
+      releaseBindingProvider();
+      expect((await pendingBinding).response.status).toBe(409);
+      expect(
+        (
+          await prisma.orderActivePriceBinding.findUniqueOrThrow({
+            where: { orderId: recoveryOrderId },
+          })
+        ).orderPriceBindingId,
+      ).toBe(staleExpressBinding.orderPriceBindingId);
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: {
+            namespace: "automatic-quote.prepare",
+            idempotencyKey: staleBindingKey,
+          },
+        }),
+      ).toBe(0);
+    } finally {
+      releaseBindingProvider();
+      bindingProviderSpy.mockRestore();
+    }
+    const gapKey = key("capacity-recovery-policy-gap");
+    const gapClient = await pool.connect();
+    let gapValidated!: () => void;
+    const validationFinished = new Promise<void>((resolve) => {
+      gapValidated = resolve;
+    });
+    const gapProviderSpy = vi
+      .spyOn(bindingRacePort, "validateSelection")
+      .mockImplementation(async (input) => {
+        const result = await originalBindingValidation(input);
+        gapValidated();
+        return result;
+      });
+    try {
+      await gapClient.query("BEGIN");
+      await gapClient.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`automatic-quote.prepare:${gapKey}`],
+      );
+      const pendingAfterValidation = api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(recoverySessionToken, gapKey),
+        },
+      );
+      await validationFinished;
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: { selectionVersion: { increment: 1 } },
+      });
+      await gapClient.query("COMMIT");
+      expect((await pendingAfterValidation).response.status).toBe(409);
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: {
+            namespace: "automatic-quote.prepare",
+            idempotencyKey: gapKey,
+          },
+        }),
+      ).toBe(0);
+    } finally {
+      await gapClient.query("ROLLBACK").catch(() => undefined);
+      gapClient.release();
+      gapProviderSpy.mockRestore();
+    }
+    const recoveryExpiresAt = (
+      await prisma.quoteSession.findUniqueOrThrow({
+        where: { id: recoverySessionId },
+        select: { expiresAt: true },
+      })
+    ).expiresAt;
+    const expiredClock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(recoveryExpiresAt.getTime() + 1);
+    const expiredProviderSpy = vi.spyOn(bindingRacePort, "validateSelection");
+    try {
+      const expiredPrepare = await api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-expired-before-provider"),
+          ),
+        },
+      );
+      expect(expiredPrepare.response.status).toBe(410);
+      expect(expiredProviderSpy).not.toHaveBeenCalled();
+    } finally {
+      expiredProviderSpy.mockRestore();
+      expiredClock.mockRestore();
+    }
+    const bindingService = automaticQuotes as unknown as {
+      persistBinding: (...args: unknown[]) => Promise<void>;
+    };
+    const actualPersistBinding =
+      bindingService.persistBinding.bind(automaticQuotes);
+    let bindingEntered!: () => void;
+    let releaseBinding!: () => void;
+    const bindingStarted = new Promise<void>((resolve) => {
+      bindingEntered = resolve;
+    });
+    const bindingGate = new Promise<void>((resolve) => {
+      releaseBinding = resolve;
+    });
+    const persistBindingSpy = vi
+      .spyOn(bindingService, "persistBinding")
+      .mockImplementation(async (...args) => {
+        bindingEntered();
+        await bindingGate;
+        return actualPersistBinding(...args);
+      });
+    let recoveryRestaged!: Awaited<ReturnType<typeof api>>;
+    try {
+      const pendingRestage = api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-restage"),
+          ),
+        },
+      );
+      await bindingStarted;
+      await expect(
+        pool.query(
+          `SELECT currency FROM commercial_policy_selections
+           WHERE currency = 'CZK' FOR UPDATE NOWAIT`,
         ),
-      },
-    );
+      ).rejects.toMatchObject({ code: "55P03" });
+      let activationSettled = false;
+      const pendingActivation = prisma.commercialPolicySelection
+        .update({
+          where: { currency: "CZK" },
+          data: { selectionVersion: { increment: 1 } },
+        })
+        .then((result) => {
+          activationSettled = true;
+          return result;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(activationSettled).toBe(false);
+      releaseBinding();
+      recoveryRestaged = await pendingRestage;
+      await pendingActivation;
+    } finally {
+      releaseBinding();
+      persistBindingSpy.mockRestore();
+    }
     expect(recoveryRestaged.response.status).toBe(200);
     expect(recoveryRestaged.body.checkoutReady).toBe(false);
     const standardRecoveryBinding =
@@ -2994,16 +3351,81 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     expect(recoveredCandidateFrontier.response.status).toBe(200);
     expect(recoveredCandidateFrontier.body.phase).toBe("ELIGIBILITY_PENDING");
     expect(recoveredCandidateFrontier.body.handoff).toBeNull();
-    const standardRecoveryReady = await api(
-      `automatic-quote-sessions/${recoverySessionId}/prepare`,
-      {
-        method: "POST",
-        headers: capabilityHeaders(
-          recoverySessionToken,
-          key("capacity-recovery-standard-ready"),
-        ),
+    const pinnedPolicy =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+        include: { priceList: true },
+      });
+    const alternateList = await prisma.priceList.create({
+      data: {
+        revision: `automatic-publication-${randomUUID()}`,
+        termsRevision: pinnedPolicy.priceList.termsRevision,
+        currency: "CZK",
+        parameters: pinnedPolicy.priceList.parameters as Prisma.InputJsonObject,
       },
-    );
+    });
+    await prisma.commercialPolicySelection.update({
+      where: { currency: "CZK" },
+      data: {
+        priceListId: alternateList.id,
+        selectionVersion: { increment: 1 },
+      },
+    });
+    const outagePort = app.get<DeliveryCapabilityPort>(DELIVERY_CAPABILITY);
+    const providerOutage = vi
+      .spyOn(outagePort, "validateSelection")
+      .mockRejectedValue(new Error("provider outage during pinned binding"));
+    let standardRecoveryReady: Awaited<ReturnType<typeof api>>;
+    try {
+      standardRecoveryReady = await api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-standard-ready"),
+          ),
+        },
+      );
+      const pinnedReplay = await api(
+        `automatic-quote-sessions/${recoverySessionId}/prepare`,
+        {
+          method: "POST",
+          headers: capabilityHeaders(
+            recoverySessionToken,
+            key("capacity-recovery-standard-ready"),
+          ),
+        },
+      );
+      expect(pinnedReplay.response.status).toBe(200);
+      expect(providerOutage).not.toHaveBeenCalled();
+      await expect(
+        prisma.orderActivePriceBinding.findUniqueOrThrow({
+          where: { orderId: recoveryOrderId },
+          include: {
+            orderPriceBinding: { include: { priceSnapshot: true } },
+          },
+        }),
+      ).resolves.toMatchObject({
+        orderPriceBindingId: standardRecoveryBinding.orderPriceBindingId,
+        orderPriceBinding: {
+          priceSnapshot: {
+            priceListId:
+              standardRecoveryBinding.orderPriceBinding.priceSnapshot
+                .priceListId,
+          },
+        },
+      });
+    } finally {
+      providerOutage.mockRestore();
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: pinnedPolicy.priceListId,
+          selectionVersion: { increment: 1 },
+        },
+      });
+    }
     expect(standardRecoveryReady.response.status).toBe(200);
     expect(standardRecoveryReady.body.phase).toBe("CHECKOUT_READY");
     expect(standardRecoveryReady.body.checkoutReady).toBe(true);
@@ -3011,6 +3433,71 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       kind: "BINDING",
       currency: "CZK",
     });
+    const currentPolicyBeforeTermsChange =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+        include: { priceList: true },
+      });
+    const termsChangedParameters = JSON.parse(
+      JSON.stringify(currentPolicyBeforeTermsChange.priceList.parameters),
+    ) as {
+      automaticQuote: { shipmentCategories: { id: string }[] };
+    };
+    termsChangedParameters.automaticQuote.shipmentCategories =
+      termsChangedParameters.automaticQuote.shipmentCategories.filter(
+        ({ id }) => id === "pickup",
+      );
+    const termsChangedList = await prisma.priceList.create({
+      data: {
+        revision: `terms-stale-projection-${randomUUID()}`,
+        termsRevision: currentPolicyBeforeTermsChange.priceList.termsRevision,
+        currency: "CZK",
+        parameters: termsChangedParameters as Prisma.InputJsonObject,
+      },
+    });
+    const approvals = app.get(LegalApprovalsService);
+    const previousLegal = await approvals.availability();
+    const newerTerms = vi.spyOn(approvals, "availability").mockResolvedValue({
+      ...previousLegal,
+      documents: {
+        ...previousLegal.documents,
+        terms: {
+          ...previousLegal.documents.terms,
+          revisionId: randomUUID(),
+        },
+      },
+    });
+    try {
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: termsChangedList.id,
+          selectionVersion: { increment: 1 },
+        },
+      });
+      const legallyStale = await api(
+        `automatic-quote-sessions/${recoverySessionId}`,
+        { headers: { authorization: `Bearer ${recoverySessionToken}` } },
+      );
+      expect(legallyStale.response.status).toBe(200);
+      expect(legallyStale.body.checkoutReady).toBe(false);
+      expect(legallyStale.body.bindingQuote).toBeNull();
+      expect(legallyStale.body.phase).toBe("DESTINATION_REQUIRED");
+      expect(legallyStale.body).toMatchObject({
+        deliveryOptions: expect.arrayContaining([
+          expect.objectContaining({ providerEndpointId: "test-pickup" }),
+        ]),
+      });
+    } finally {
+      newerTerms.mockRestore();
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: currentPolicyBeforeTermsChange.priceListId,
+          selectionVersion: { increment: 1 },
+        },
+      });
+    }
     const expiredRecoveryClock = vi
       .spyOn(Date, "now")
       .mockReturnValue(

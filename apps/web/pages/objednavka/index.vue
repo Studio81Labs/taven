@@ -29,6 +29,7 @@ const {
   commandError,
   commandPending,
   decideRisk,
+  destinationReselectionRequired,
   errorMessage,
   filename,
   geometry,
@@ -460,6 +461,7 @@ function inspectionLabel(status: string | undefined): string {
           <OrderQuoteConfigurator
             v-if="showConfigurator && quote"
             :command-error="commandError"
+            :destination-reselection-required="destinationReselectionRequired"
             :on-decide-risk="decideRisk"
             :on-prepare="prepareQuote"
             :on-refresh="refreshQuote"

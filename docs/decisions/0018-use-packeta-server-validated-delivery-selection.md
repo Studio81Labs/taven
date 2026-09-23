@@ -39,6 +39,18 @@ checkout-acceptance fence under its existing lock; a changed configuration is
 not depend on provider availability.
 
 Only Czech internal Packeta pickup points and Z-BOXes are allowed. A Z-BOX maps
+The destination selection and immutable automatic binding commit are separate
+transactions. Before a genuinely new binding, the server derives the exact
+parcels again under the selected immutable PriceList and calls
+`validateSelection()` outside the binding transaction. The binding transaction
+then checks the same selector version, destination, draft revision and parcel
+fingerprint under the selector lock. Changed provider address or capability
+evidence requires explicit destination reselection (409). A prepared but
+unready order waits until its references are ready. Existing committed bindings
+and exact replays remain usable during a provider outage; worker completion,
+handoff, payment, capture and resource reacquisition do not call the provider.
+
+Only Czech internal Packeta pickup points and Z-BOXes are allowed. A Z-BOX maps
 only to `zbox`; a staffed point maps only to `pickup`; `oversize` is never
 inferred from Packeta feed data. Endpoint evidence can narrow an existing
 versioned PriceList limit (currently max weight); it can never add a category or

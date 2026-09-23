@@ -1,6 +1,15 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  ApiExtraModels,
+  ApiProperty,
+  ApiPropertyOptional,
+  getSchemaPath,
+} from "@nestjs/swagger";
 import { FulfilmentProjectionDto } from "../orders/orders.dto";
 import { ReferenceProfileActivationNoticeDto } from "../resources/reference-profile-activation-notice.dto";
+import {
+  PriceListParametersDto,
+  SellerTaxPolicyDto,
+} from "../resources/operator-catalog.dto";
 
 const UUID = { type: String, format: "uuid" } as const;
 const DECIMAL = { type: String, pattern: "^-?[0-9]+$" } as const;
@@ -734,6 +743,66 @@ export class InventoryReadDto {
 
   @ApiProperty({ type: String })
   status!: string;
+}
+
+const CATALOG_JSON = { type: Object, additionalProperties: true } as const;
+
+export class ReferenceProfileDetailDto extends ReferenceProfileReadDto {
+  @ApiProperty(CATALOG_JSON)
+  settings!: Record<string, unknown>;
+}
+
+export class MachineProfileDetailDto extends MachineProfileReadDto {
+  @ApiProperty(CATALOG_JSON)
+  settings!: Record<string, unknown>;
+}
+
+export class PrintConfigRevisionDetailDto extends PrintConfigRevisionReadDto {
+  @ApiProperty(CATALOG_JSON)
+  settings!: Record<string, unknown>;
+}
+
+export class LegacyPriceListParametersDto {
+  @ApiProperty({ type: () => SellerTaxPolicyDto })
+  sellerTaxPolicy!: SellerTaxPolicyDto;
+
+  @ApiProperty({ type: "integer", minimum: 0 })
+  balance_payment_days!: number;
+
+  @ApiProperty({ type: [String] })
+  balance_timeout_earned_component_kinds!: string[];
+}
+
+@ApiExtraModels(PriceListParametersDto, LegacyPriceListParametersDto)
+export class PriceListDetailDto extends PriceListReadDto {
+  @ApiProperty({
+    type: Object,
+    oneOf: [
+      { $ref: getSchemaPath(PriceListParametersDto) },
+      { $ref: getSchemaPath(LegacyPriceListParametersDto) },
+    ],
+  })
+  parameters!: PriceListParametersDto | LegacyPriceListParametersDto;
+}
+
+export class InventoryDetailDto extends InventoryReadDto {
+  @ApiProperty(UUID)
+  nodeId!: string;
+
+  @ApiProperty({ type: String })
+  vendor!: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  lotCode!: string | null;
+
+  @ApiProperty(DECIMAL)
+  priceMinorUnitsNumerator!: string;
+
+  @ApiProperty(DECIMAL)
+  priceMinorUnitsDenominator!: string;
+
+  @ApiProperty({ type: String })
+  currency!: string;
 }
 
 export class MachineCalibrationReadDto {

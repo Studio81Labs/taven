@@ -39,6 +39,11 @@ import {
   type OperatorOrderListItemDto,
   type ReferenceProfileReadDto,
   InventoryPageDto,
+  InventoryDetailDto,
+  MachineProfileDetailDto,
+  PriceListDetailDto,
+  PrintConfigRevisionDetailDto,
+  ReferenceProfileDetailDto,
 } from "./operator-reads.dto";
 
 const DEFAULT_LIMIT = 25;
@@ -549,6 +554,23 @@ export class OperatorReadsService {
     );
   }
 
+  async referenceProfileDetail(
+    operator: OperatorContext,
+    id: string,
+  ): Promise<ReferenceProfileDetailDto> {
+    this.requireRead(operator);
+    assertUuid(id, "id");
+    const row = await this.prisma.referenceProfile.findUnique({
+      where: { id },
+      include: { revision: { select: { digest: true } } },
+    });
+    if (!row) throw new NotFoundException("Reference profile was not found");
+    return {
+      ...referenceProfile(row),
+      settings: row.settings as Record<string, unknown>,
+    };
+  }
+
   async referenceProfileActivationNotices(
     operator: OperatorContext,
     input: PageInput,
@@ -626,6 +648,23 @@ export class OperatorReadsService {
     return pageResult(rows, pageLimit(input.limit), filterHash, machineProfile);
   }
 
+  async machineProfileDetail(
+    operator: OperatorContext,
+    id: string,
+  ): Promise<MachineProfileDetailDto> {
+    this.requireRead(operator);
+    assertUuid(id, "id");
+    const row = await this.prisma.machineProfile.findUnique({
+      where: { id },
+      include: { revision: { select: { digest: true } } },
+    });
+    if (!row) throw new NotFoundException("Machine profile was not found");
+    return {
+      ...machineProfile(row),
+      settings: row.settings as Record<string, unknown>,
+    };
+  }
+
   async printConfigRevisions(
     operator: OperatorContext,
     input: PageInput,
@@ -651,6 +690,30 @@ export class OperatorReadsService {
     }));
   }
 
+  async printConfigRevisionDetail(
+    operator: OperatorContext,
+    id: string,
+  ): Promise<PrintConfigRevisionDetailDto> {
+    this.requireRead(operator);
+    assertUuid(id, "id");
+    const row = await this.prisma.printConfigRevision.findUnique({
+      where: { id },
+      include: { revision: { select: { digest: true } } },
+    });
+    if (!row) throw new NotFoundException("Print config was not found");
+    return {
+      id: row.id,
+      digest: row.revision.digest,
+      quality: row.quality,
+      infillPercent: row.infillPercent,
+      layerHeightMicrometers: row.layerHeightMicrometers,
+      supportsEnabled: row.supportsEnabled,
+      brimEnabled: row.brimEnabled,
+      createdAt: row.createdAt.toISOString(),
+      settings: row.settings as Record<string, unknown>,
+    };
+  }
+
   async priceLists(
     operator: OperatorContext,
     input: PageInput,
@@ -670,6 +733,49 @@ export class OperatorReadsService {
       currency: row.currency,
       createdAt: row.createdAt.toISOString(),
     }));
+  }
+
+  async priceListDetail(
+    operator: OperatorContext,
+    id: string,
+  ): Promise<PriceListDetailDto> {
+    this.requireRead(operator);
+    assertUuid(id, "id");
+    const row = await this.prisma.priceList.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException("Price list was not found");
+    return {
+      id: row.id,
+      revision: row.revision,
+      termsRevision: row.termsRevision,
+      currency: row.currency,
+      createdAt: row.createdAt.toISOString(),
+      parameters: row.parameters as unknown as PriceListDetailDto["parameters"],
+    };
+  }
+
+  async commercialPolicySelection(
+    operator: OperatorContext,
+    currency: string,
+  ): Promise<{
+    currency: string;
+    priceListId: string;
+    selectionVersion: number;
+  }> {
+    this.requireRead(operator);
+    if (currency !== "CZK") {
+      throw new NotFoundException("Commercial policy selection was not found");
+    }
+    const selected = await this.prisma.commercialPolicySelection.findUnique({
+      where: { currency },
+    });
+    if (!selected) {
+      throw new NotFoundException("Commercial policy selection was not found");
+    }
+    return {
+      currency: selected.currency,
+      priceListId: selected.priceListId,
+      selectionVersion: selected.selectionVersion,
+    };
   }
 
   async machineCapabilities(
@@ -699,6 +805,26 @@ export class OperatorReadsService {
       supportedNozzleMicrometers: row.supportedNozzleMicrometers,
       supportedMaterials: row.supportedMaterials,
     }));
+  }
+
+  async machineCapabilityDetail(operator: OperatorContext, id: string) {
+    this.requireRead(operator);
+    assertUuid(id, "id");
+    const row = await this.prisma.machineCapability.findUnique({
+      where: { id },
+    });
+    if (!row) throw new NotFoundException("Machine capability was not found");
+    return {
+      id: row.id,
+      capabilityKey: row.capabilityKey,
+      manufacturer: row.manufacturer,
+      model: row.model,
+      buildVolumeXMicrometers: row.buildVolumeXMicrometers.toString(),
+      buildVolumeYMicrometers: row.buildVolumeYMicrometers.toString(),
+      buildVolumeZMicrometers: row.buildVolumeZMicrometers.toString(),
+      supportedNozzleMicrometers: row.supportedNozzleMicrometers,
+      supportedMaterials: row.supportedMaterials,
+    };
   }
 
   async machines(
@@ -761,6 +887,38 @@ export class OperatorReadsService {
       ).toString(),
       status: row.status,
     }));
+  }
+
+  async inventoryDetail(
+    operator: OperatorContext,
+    nodeId: string,
+    id: string,
+  ): Promise<InventoryDetailDto> {
+    this.requireNode(operator, nodeId);
+    assertUuid(id, "id");
+    const row = await this.prisma.inventory.findFirst({
+      where: { id, nodeId },
+    });
+    if (!row) throw new NotFoundException("Inventory was not found");
+    return {
+      id: row.id,
+      nodeId: row.nodeId,
+      machineId: row.machineId,
+      sku: row.sku,
+      material: row.material,
+      color: row.color,
+      remainingMilligrams: row.remainingMilligrams.toString(),
+      reservedMilligrams: row.reservedMilligrams.toString(),
+      availableMilligrams: (
+        row.remainingMilligrams - row.reservedMilligrams
+      ).toString(),
+      status: row.status,
+      vendor: row.vendor,
+      lotCode: row.lotCode,
+      priceMinorUnitsNumerator: row.priceMinorUnitsNumerator.toString(),
+      priceMinorUnitsDenominator: row.priceMinorUnitsDenominator.toString(),
+      currency: row.currency,
+    };
   }
 
   async calibrations(

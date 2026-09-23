@@ -49,16 +49,28 @@ highest; a command uses the core `orderLockTargets` policy, acquires every
 target in rank order, and sorts canonical kind/node/ID identities
 lexicographically within each rank:
 
-0. `IdempotencyRecord` / provider event receipt
-1. `LegalDocument` (shared for fresh legal reads; exclusive for management)
-2. `QuoteRequest` / `Order`
-3. `OrderPhase`
-4. `FulfilmentSlot`
-5. `Claim` / `ClaimSlotResolution`
-6. `ShipmentPlan` / `Shipment` / `Job`
-7. `Payment` / active `RefundTransaction`
-8. price snapshots and component-credit allocations
-9. resource estimates, inventory reservations, and capacity reservations
+| Rank | Targets                                                                            |
+| ---- | ---------------------------------------------------------------------------------- |
+| 0    | `IdempotencyRecord`, provider event receipt                                        |
+| 1    | `LegalDocument`                                                                    |
+| 2    | `CommercialPolicySelection` (global currency key)                                  |
+| 3    | `QuoteRequest`, `Order` and automatic session business locks                       |
+| 4    | `OrderPhase`                                                                       |
+| 5    | `FulfilmentSlot`                                                                   |
+| 6    | `Claim`, `ClaimSlotResolution`                                                     |
+| 7    | `Job`, `Shipment`, `ShipmentPlan`                                                  |
+| 8    | `Payment`, `RefundTransaction`                                                     |
+| 9    | `ComponentAllocation`, `PriceSnapshot`, `EligibilitySnapshot`, `PhaseResourcePlan` |
+| 10   | `CandidateResourceEstimate`                                                        |
+| 11   | `MachineProfile`                                                                   |
+| 12   | `Machine`                                                                          |
+| 13   | `MachineCalibration`                                                               |
+| 14   | `Inventory`                                                                        |
+| 15   | `CandidateCapacityInterval`                                                        |
+| 16   | `PhaseReservationSet`                                                              |
+| 17   | `ProductionReservation`                                                            |
+| 18   | `InventoryReservation`                                                             |
+| 19   | `CapacityReservation`                                                              |
 
 The legal-document rank is added by
 [ADR 0020](0020-persist-legal-document-revisions.md) for the database-backed
@@ -67,6 +79,10 @@ all required legal keys in canonical order before business locks, then use the
 command's post-lock database decision instant. Management never locks or
 rewrites accepted orders. Committed replay precedes fresh legal eligibility.
 Do not acquire legal locks from a late helper after higher-ranked targets.
+Fresh policy-dependent mutations acquire the selector row `FOR SHARE` after
+legal locks and before business locks; activation acquires it `FOR UPDATE`.
+The selected immutable PriceList remains pinned to an already committed
+binding. See [ADR 0023](0023-fence-commercial-policy-publication.md).
 
 Commands must not acquire a lower-ranked target after a higher-ranked target.
 When a command touches multiple aggregates, it includes all parent and child

@@ -75,6 +75,27 @@ export class CatalogReasonDto {
   reason!: string;
 }
 
+export class ActivateCommercialPolicyDto extends CatalogReasonDto {
+  @ApiProperty({ type: Number, minimum: 1, maximum: 2147483646 })
+  expectedSelectionVersion!: number;
+}
+
+export class CommercialPolicySelectionDto {
+  @ApiProperty({ type: String })
+  currency!: string;
+
+  @ApiProperty(UUID)
+  priceListId!: string;
+
+  @ApiProperty({ type: Number })
+  selectionVersion!: number;
+}
+
+export class CommercialPolicyActivationResultDto extends CommercialPolicySelectionDto {
+  @ApiProperty(UUID)
+  id!: string;
+}
+
 export class CreateReferenceProfileDto {
   @ApiProperty({ type: String, enum: MATERIALS })
   material!: string;
@@ -114,6 +135,255 @@ export class CreateMachineProfileDto extends CreateReferenceProfileDto {
 
   @ApiProperty({ type: String, enum: PRODUCTION_ARTIFACT_FORMATS })
   productionArtifactFormat!: string;
+}
+
+export class CreateMachineCapabilityDto {
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  capabilityKey!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  manufacturer!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  model!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  buildVolumeXMicrometers!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  buildVolumeYMicrometers!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  buildVolumeZMicrometers!: string;
+
+  @ApiProperty({
+    type: [Number],
+    minItems: 1,
+    uniqueItems: true,
+    items: { type: "integer", minimum: 1, maximum: 2_147_483_647 },
+  })
+  supportedNozzleMicrometers!: number[];
+
+  @ApiProperty({
+    type: [String],
+    minItems: 1,
+    uniqueItems: true,
+    items: { type: "string", enum: [...MATERIALS] },
+  })
+  supportedMaterials!: string[];
+}
+
+export class RegisterMachineDto {
+  @ApiProperty(UUID)
+  machineCapabilityId!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 50,
+    pattern: NON_BLANK_TEXT,
+  })
+  code!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    pattern: NON_BLANK_TEXT,
+  })
+  displayName!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 2_147_483_647 })
+  installedNozzleMicrometers!: number;
+}
+
+export class CreatePrintConfigRevisionDto {
+  @ApiProperty({ type: String, enum: PRINT_QUALITIES })
+  quality!: string;
+
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 100 })
+  infillPercent!: number;
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 2_147_483_647 })
+  layerHeightMicrometers!: number;
+
+  @ApiProperty({ type: Boolean })
+  supportsEnabled!: boolean;
+
+  @ApiProperty({ type: Boolean })
+  brimEnabled!: boolean;
+
+  @ApiProperty(SETTINGS)
+  settings!: Record<string, unknown>;
+}
+
+export class PriceRationalDto {
+  @ApiProperty(NON_NEGATIVE_INTEGER)
+  numerator!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  denominator!: string;
+}
+
+export class PriceMaterialRatesDto {
+  @ApiProperty({ type: () => PriceRationalDto })
+  PLA!: PriceRationalDto;
+
+  @ApiProperty({ type: () => PriceRationalDto })
+  PETG!: PriceRationalDto;
+}
+
+export class PriceInfillRatiosDto {
+  @ApiProperty({ type: () => PriceRationalDto })
+  DECORATIVE!: PriceRationalDto;
+
+  @ApiProperty({ type: () => PriceRationalDto })
+  STANDARD!: PriceRationalDto;
+
+  @ApiProperty({ type: () => PriceRationalDto })
+  STRONG!: PriceRationalDto;
+}
+
+export class PriceShipmentCategoryDto {
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  id!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  maxXMicrometers!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  maxYMicrometers!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  maxZMicrometers!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  maxDimensionSumMicrometers!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  maxWeightMilligrams!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  maxParcelVolumeCubicMicrometers!: string;
+
+  @ApiProperty(NON_NEGATIVE_INTEGER)
+  carrierCostMinor!: string;
+
+  @ApiProperty(NON_NEGATIVE_INTEGER)
+  customerShippingRateMinor!: string;
+
+  @ApiProperty(NON_NEGATIVE_INTEGER)
+  packagingCostMinor!: string;
+}
+
+export class SellerTaxPolicyDto {
+  @ApiProperty({ type: String, enum: ["NON_VAT_PAYER", "VAT_PAYER"] })
+  regime!: string;
+
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 10_000 })
+  vatRateBasisPoints!: number;
+}
+
+export class AutomaticQuoteParametersDto {
+  @ApiProperty({ type: () => PriceRationalDto })
+  machineRateMinorPerSecond!: PriceRationalDto;
+  @ApiProperty({ type: () => PriceRationalDto })
+  laborRateMinorPerSecond!: PriceRationalDto;
+  @ApiProperty({ type: () => PriceRationalDto })
+  amortizationRateMinorPerSecond!: PriceRationalDto;
+  @ApiProperty({ type: () => PriceRationalDto }) reprintRate!: PriceRationalDto;
+  @ApiProperty({ type: () => PriceRationalDto }) marginRate!: PriceRationalDto;
+  @ApiProperty({ type: () => PriceMaterialRatesDto })
+  materialRateMinorPerMilligram!: PriceMaterialRatesDto;
+  @ApiProperty({ type: () => PriceMaterialRatesDto })
+  roughMaterialDensityMilligramsPerCubicMillimeter!: PriceMaterialRatesDto;
+  @ApiProperty({ type: () => PriceInfillRatiosDto })
+  roughMaterialVolumeRatioByInfillPreset!: PriceInfillRatiosDto;
+  @ApiProperty({ type: () => PriceRationalDto })
+  roughExtrusionMilligramsPerSecond!: PriceRationalDto;
+  @ApiProperty(NON_NEGATIVE_INTEGER) handlingOrderFixedSeconds!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) handlingPlateSeconds!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) handlingPieceSeconds!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) handlingPackSeconds!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) shippingTripSeconds!: string;
+  @ApiProperty(POSITIVE_INTEGER) shippingTripPricingDivisor!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) minimumPrintPriceMinor!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER)
+  smallOrderWeightThresholdMilligrams!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) smallOrderSurchargeMinor!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) freeShippingPrintThresholdMinor!: string;
+  @ApiProperty({ type: () => PriceRationalDto })
+  expressMultiplier!: PriceRationalDto;
+  @ApiProperty({ type: String, enum: ["1", "2"] })
+  expressMaximumPlateCount!: string;
+  @ApiProperty(POSITIVE_INTEGER)
+  expressAvailableProductionWindowSeconds!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) expressPackagingBufferSeconds!: string;
+  @ApiProperty(POSITIVE_INTEGER) maximumAutomaticQuantity!: string;
+  @ApiProperty(POSITIVE_INTEGER) maximumAutomaticAmountMinor!: string;
+  @ApiProperty(NON_NEGATIVE_INTEGER) packingPaddingMicrometers!: string;
+  @ApiProperty({ type: () => PriceRationalDto })
+  fillCoefficient!: PriceRationalDto;
+  @ApiProperty(NON_NEGATIVE_INTEGER) packagingWeightMilligrams!: string;
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 10_000 })
+  paymentFeeRateBasisPoints!: number;
+  @ApiProperty(NON_NEGATIVE_INTEGER) paymentFeeFixedMinor!: string;
+  @ApiProperty({ type: Object, additionalProperties: true })
+  paymentProviderConfig!: Record<string, unknown>;
+  @ApiProperty({ type: [PriceShipmentCategoryDto], minItems: 1 })
+  shipmentCategories!: PriceShipmentCategoryDto[];
+}
+
+export class PriceListParametersDto {
+  @ApiProperty({ type: () => SellerTaxPolicyDto })
+  sellerTaxPolicy!: SellerTaxPolicyDto;
+
+  @ApiProperty({ type: () => AutomaticQuoteParametersDto })
+  automaticQuote!: AutomaticQuoteParametersDto;
+}
+
+export class CreatePriceListDto {
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  revision!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  termsRevision!: string;
+
+  @ApiProperty({ type: String, enum: ["CZK"] })
+  currency!: string;
+
+  @ApiProperty({ type: () => PriceListParametersDto })
+  parameters!: PriceListParametersDto;
 }
 
 export class CreateMachineCalibrationDto {

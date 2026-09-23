@@ -23,22 +23,29 @@ import { OPERATOR_CSRF_HEADER } from "../admin-access/operator-auth.openapi";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
+import { CommercialPolicySelectionDto } from "../resources/operator-catalog.dto";
 import {
   CapacityReservationPageDto,
   InventoryPageDto,
+  InventoryDetailDto,
   MachineCalibrationPageDto,
   MachineCapabilityPageDto,
   MachinePageDto,
   MachineProfilePageDto,
+  MachineProfileDetailDto,
   OperatorJobPageDto,
   OperatorJobDetailDto,
   OperatorJobArtifactDownloadDto,
   OperatorOrderDetailDto,
   OperatorOrderPageDto,
   PriceListPageDto,
+  PriceListDetailDto,
   ReferenceProfileActivationNoticePageDto,
   PrintConfigRevisionPageDto,
+  PrintConfigRevisionDetailDto,
   ReferenceProfilePageDto,
+  ReferenceProfileDetailDto,
+  MachineCapabilityReadDto,
 } from "./operator-reads.dto";
 import { OperatorJobArtifactsService } from "./operator-job-artifacts.service";
 import { OperatorReadsService } from "./operator-reads.service";
@@ -178,6 +185,17 @@ export class OperatorReadsController {
     );
   }
 
+  @Get("admin/catalog/reference-profiles/:id")
+  @ApiOperation({ summary: "Read an immutable reference-profile revision" })
+  @ApiParam({ name: "id", type: String, format: "uuid" })
+  @ApiOkResponse({ type: ReferenceProfileDetailDto })
+  referenceProfileDetail(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("id") id: string,
+  ): Promise<ReferenceProfileDetailDto> {
+    return this.reads.referenceProfileDetail(operator, id);
+  }
+
   @Get("admin/catalog/reference-profile-activation-notices")
   @ApiOperation({
     summary: "List durable notices for committed reference-profile activations",
@@ -219,6 +237,17 @@ export class OperatorReadsController {
     return this.reads.machineProfiles(operator, pageQuery(query, PAGE_FIELDS));
   }
 
+  @Get("admin/catalog/machine-profiles/:id")
+  @ApiOperation({ summary: "Read an immutable machine-profile revision" })
+  @ApiParam({ name: "id", type: String, format: "uuid" })
+  @ApiOkResponse({ type: MachineProfileDetailDto })
+  machineProfileDetail(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("id") id: string,
+  ): Promise<MachineProfileDetailDto> {
+    return this.reads.machineProfileDetail(operator, id);
+  }
+
   @Get("admin/catalog/print-config-revisions")
   @ApiOperation({ summary: "List immutable print-config revisions" })
   @ApiOkResponse({ type: PrintConfigRevisionPageDto })
@@ -240,6 +269,17 @@ export class OperatorReadsController {
     );
   }
 
+  @Get("admin/catalog/print-config-revisions/:id")
+  @ApiOperation({ summary: "Read an immutable print-config revision" })
+  @ApiParam({ name: "id", type: String, format: "uuid" })
+  @ApiOkResponse({ type: PrintConfigRevisionDetailDto })
+  printConfigRevisionDetail(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("id") id: string,
+  ): Promise<PrintConfigRevisionDetailDto> {
+    return this.reads.printConfigRevisionDetail(operator, id);
+  }
+
   @Get("admin/catalog/price-lists")
   @ApiOperation({ summary: "List global immutable price lists" })
   @ApiOkResponse({ type: PriceListPageDto })
@@ -256,6 +296,28 @@ export class OperatorReadsController {
     @Query() query: Record<string, string | string[] | undefined>,
   ): Promise<PriceListPageDto> {
     return this.reads.priceLists(operator, pageQuery(query, PAGE_FIELDS));
+  }
+
+  @Get("admin/catalog/price-lists/:id")
+  @ApiOperation({ summary: "Read immutable price-list parameters" })
+  @ApiParam({ name: "id", type: String, format: "uuid" })
+  @ApiOkResponse({ type: PriceListDetailDto })
+  priceListDetail(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("id") id: string,
+  ): Promise<PriceListDetailDto> {
+    return this.reads.priceListDetail(operator, id);
+  }
+
+  @Get("admin/catalog/commercial-policy-selections/:currency")
+  @ApiOperation({ summary: "Read the current commercial policy selection" })
+  @ApiParam({ name: "currency", type: String })
+  @ApiOkResponse({ type: CommercialPolicySelectionDto })
+  commercialPolicySelection(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("currency") currency: string,
+  ) {
+    return this.reads.commercialPolicySelection(operator, currency);
   }
 
   @Get("admin/catalog/machine-capabilities")
@@ -277,6 +339,17 @@ export class OperatorReadsController {
       operator,
       pageQuery(query, PAGE_FIELDS),
     );
+  }
+
+  @Get("admin/catalog/machine-capabilities/:id")
+  @ApiOperation({ summary: "Read an immutable machine capability" })
+  @ApiParam({ name: "id", type: String, format: "uuid" })
+  @ApiOkResponse({ type: MachineCapabilityReadDto })
+  machineCapabilityDetail(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("id") id: string,
+  ): Promise<MachineCapabilityReadDto> {
+    return this.reads.machineCapabilityDetail(operator, id);
   }
 
   @Get("admin/nodes/:nodeId/machines")
@@ -327,6 +400,19 @@ export class OperatorReadsController {
       nodeId,
       pageQuery(query, NODE_FIELDS),
     );
+  }
+
+  @Get("admin/nodes/:nodeId/inventories/:id")
+  @ApiOperation({ summary: "Read scoped inventory and its purchase rate" })
+  @ApiParam({ name: "nodeId", type: String, format: "uuid" })
+  @ApiParam({ name: "id", type: String, format: "uuid" })
+  @ApiOkResponse({ type: InventoryDetailDto })
+  inventoryDetail(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("nodeId") nodeId: string,
+    @Param("id") id: string,
+  ): Promise<InventoryDetailDto> {
+    return this.reads.inventoryDetail(operator, nodeId, id);
   }
 
   @Get("admin/nodes/:nodeId/calibrations")

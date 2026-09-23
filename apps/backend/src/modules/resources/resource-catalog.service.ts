@@ -10,6 +10,10 @@ import {
   RevisionState,
 } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import {
+  assertRevisionPresetBundle,
+  PresetBundleValidationError,
+} from "../slicing/preset-bundle";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
   ResourceConflictError,
@@ -74,6 +78,41 @@ export type CreateInventoryInput = {
   priceMinorUnitsDenominator: bigint;
   currency: string;
   remainingMilligrams: bigint;
+};
+
+export type CreateMachineCapabilityInput = {
+  capabilityKey: string;
+  manufacturer: string;
+  model: string;
+  buildVolumeXMicrometers: bigint;
+  buildVolumeYMicrometers: bigint;
+  buildVolumeZMicrometers: bigint;
+  supportedNozzleMicrometers: number[];
+  supportedMaterials: Material[];
+};
+
+export type RegisterMachineInput = {
+  nodeId: string;
+  machineCapabilityId: string;
+  code: string;
+  displayName: string;
+  installedNozzleMicrometers: number;
+};
+
+export type CreatePrintConfigRevisionInput = {
+  quality: PrintQuality;
+  infillPercent: number;
+  layerHeightMicrometers: number;
+  supportsEnabled: boolean;
+  brimEnabled: boolean;
+  settings: JsonSettings;
+};
+
+export type CreatePriceListInput = {
+  revision: string;
+  termsRevision: string;
+  currency: string;
+  parameters: JsonSettings;
 };
 
 type RevisionTable =
@@ -161,6 +200,76 @@ export class ResourceCatalogService {
     @Inject(SlicerProfileSnapshotService)
     private readonly snapshots: SlicerProfileSnapshotService,
   ) {}
+
+  async createMachineCapability(
+    input: CreateMachineCapabilityInput,
+    transaction?: Transaction,
+  ) {
+    try {
+      return await (transaction ?? this.prisma).machineCapability.create({
+        data: input,
+      });
+    } catch (error) {
+      return catalogWriteError(error);
+    }
+  }
+
+  async registerMachine(
+    input: RegisterMachineInput,
+    transaction?: Transaction,
+  ) {
+    try {
+      return await (transaction ?? this.prisma).machine.create({ data: input });
+    } catch (error) {
+      return catalogWriteError(error);
+    }
+  }
+
+  async createPrintConfigRevision(
+    input: CreatePrintConfigRevisionInput,
+    transaction?: Transaction,
+  ) {
+    try {
+      assertRevisionPresetBundle(input.settings as Prisma.JsonValue, "print");
+    } catch (error) {
+      if (error instanceof PresetBundleValidationError) {
+        throw new ResourceValidationError(error.message);
+      }
+      throw error;
+    }
+    const payload = { ...input, settings: canonicalSettings(input.settings) };
+    const id = randomUUID();
+    try {
+      const create = async (tx: Transaction) => {
+        await tx.revisionIdentity.create({
+          data: {
+            id,
+            kind: RevisionKind.PRINT_CONFIG,
+            digest: resourceRevisionDigest("PRINT_CONFIG", payload),
+          },
+        });
+        return tx.printConfigRevision.create({ data: { id, ...input } });
+      };
+      return transaction
+        ? await create(transaction)
+        : await this.prisma.$transaction(create);
+    } catch (error) {
+      return catalogWriteError(error);
+    }
+  }
+
+  async createPriceList(
+    input: CreatePriceListInput,
+    transaction?: Transaction,
+  ) {
+    try {
+      return await (transaction ?? this.prisma).priceList.create({
+        data: input,
+      });
+    } catch (error) {
+      return catalogWriteError(error);
+    }
+  }
 
   async createReferenceProfile(
     input: CreateReferenceProfileInput,

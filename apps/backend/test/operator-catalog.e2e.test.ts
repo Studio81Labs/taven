@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
+import { Prisma } from "@prisma/client";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -111,6 +112,526 @@ describe("operator catalog commands", () => {
   afterAll(async () => {
     await app?.close();
     await pool?.end();
+  });
+
+  it("registers immutable capability, machine and supported print config with replay", async () => {
+    const capabilityBody = {
+      capabilityKey: `operator-${randomUUID()}`,
+      manufacturer: "Operator test",
+      model: "V0",
+      buildVolumeXMicrometers: "220000",
+      buildVolumeYMicrometers: "220000",
+      buildVolumeZMicrometers: "250000",
+      supportedNozzleMicrometers: [400],
+      supportedMaterials: ["PLA", "PETG"],
+    };
+    const key = `catalog-capability-${randomUUID()}`;
+    const capability = await responseBody(
+      command("/admin/catalog/machine-capabilities", capabilityBody, key),
+    );
+    await expect(
+      command("/admin/catalog/machine-capabilities", capabilityBody, key).then(
+        (response) => response.json(),
+      ),
+    ).resolves.toEqual(capability);
+    expect(
+      (
+        await command(
+          "/admin/catalog/machine-capabilities",
+          { ...capabilityBody, model: "V1" },
+          key,
+        )
+      ).status,
+    ).toBe(409);
+
+    const machineBody = {
+      machineCapabilityId: capability.id,
+      code: `machine-${randomUUID()}`.slice(0, 50),
+      displayName: "Operator test machine",
+      installedNozzleMicrometers: 400,
+    };
+    const machine = await responseBody(
+      command(
+        `/admin/nodes/${fixture.nodeId}/machines`,
+        machineBody,
+        `catalog-machine-${randomUUID()}`,
+      ),
+    );
+    await expect(
+      prisma.machine.findUnique({ where: { id: machine.id } }),
+    ).resolves.toMatchObject({
+      nodeId: fixture.nodeId,
+      machineCapabilityId: capability.id,
+    });
+    expect(
+      (
+        await command(
+          `/admin/nodes/${fixture.nodeId}/machines`,
+          { ...machineBody, installedNozzleMicrometers: 600 },
+          `catalog-machine-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await command(
+          `/admin/nodes/${randomUUID()}/machines`,
+          machineBody,
+          `catalog-machine-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(404);
+
+    const configBody = {
+      quality: "STANDARD",
+      infillPercent: 35,
+      layerHeightMicrometers: 200,
+      supportsEnabled: false,
+      brimEnabled: false,
+      settings: overrideBundle({ testScope, infill: 35 }),
+    };
+    const config = await responseBody(
+      command(
+        "/admin/catalog/print-config-revisions",
+        configBody,
+        `catalog-config-${randomUUID()}`,
+      ),
+    );
+    await expect(
+      prisma.revisionIdentity.findUnique({ where: { id: config.id } }),
+    ).resolves.toMatchObject({ kind: "PRINT_CONFIG" });
+    expect(
+      (
+        await command(
+          "/admin/catalog/print-config-revisions",
+          { ...configBody, settings: machineBundle() },
+          `catalog-config-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await commandAs(
+          viewerCookie,
+          viewerCsrfToken,
+          "/admin/catalog/machine-capabilities",
+          capabilityBody,
+          `catalog-viewer-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(403);
+  });
+
+  it("creates a validated immutable price list without publishing it", async () => {
+    const baseline = await prisma.priceList.findUniqueOrThrow({
+      where: {
+        currency_revision: { currency: "CZK", revision: "automatic-v0-czk" },
+      },
+    });
+    const parameters = JSON.parse(JSON.stringify(baseline.parameters)) as {
+      automaticQuote: Record<string, unknown>;
+      sellerTaxPolicy: Record<string, unknown>;
+    };
+    const body = {
+      currency: "CZK",
+      revision: `operator-${randomUUID()}`,
+      termsRevision: baseline.termsRevision,
+      parameters,
+    };
+    const key = `catalog-price-${randomUUID()}`;
+    const created = await responseBody(
+      command("/admin/catalog/price-lists", body, key),
+    );
+    await expect(
+      command("/admin/catalog/price-lists", body, key).then((response) =>
+        response.json(),
+      ),
+    ).resolves.toEqual(created);
+    await expect(
+      prisma.priceList.findUnique({ where: { id: created.id } }),
+    ).resolves.toMatchObject({
+      currency: "CZK",
+      revision: body.revision,
+      parameters,
+    });
+    const detail = await fetch(
+      new URL(`/admin/catalog/price-lists/${created.id}`, baseUrl),
+      {
+        headers: { cookie: adminCookie },
+      },
+    );
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      id: created.id,
+      parameters,
+    });
+    for (const revision of ["legacy-v0-czk", "legacy-v0-eur"]) {
+      const legacy = await prisma.priceList.findFirstOrThrow({
+        where: { revision },
+      });
+      const legacyDetail = await fetch(
+        new URL(`/admin/catalog/price-lists/${legacy.id}`, baseUrl),
+        { headers: { cookie: adminCookie } },
+      );
+      expect(legacyDetail.status).toBe(200);
+      await expect(legacyDetail.json()).resolves.toMatchObject({
+        id: legacy.id,
+        parameters: {
+          sellerTaxPolicy: {
+            regime: "NON_VAT_PAYER",
+            vatRateBasisPoints: 0,
+          },
+          balance_payment_days: 7,
+          balance_timeout_earned_component_kinds: [
+            "ITEM_PRODUCTION",
+            "ITEM_QUANTITY",
+            "ITEM_POSTPROCESSING",
+          ],
+        },
+      });
+    }
+    const unsafe = {
+      ...body,
+      revision: `operator-${randomUUID()}`,
+      parameters: {
+        ...parameters,
+        automaticQuote: {
+          ...parameters.automaticQuote,
+          expressMaximumPlateCount: "3",
+        },
+      },
+    };
+    expect(
+      (
+        await command(
+          "/admin/catalog/price-lists",
+          unsafe,
+          `catalog-price-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    for (const [index, automaticQuote] of [
+      { minimumPrintPriceMinor: "9007199254740992" },
+      { minimumPrintPriceMinor: "5000000000000000" },
+      { paymentFeeFixedMinor: "9007199254740991" },
+      {
+        shipmentCategories: (
+          parameters.automaticQuote.shipmentCategories as Record<
+            string,
+            unknown
+          >[]
+        ).map((category, index) =>
+          index === 0
+            ? { ...category, customerShippingRateMinor: "9007199254741" }
+            : category,
+        ),
+      },
+    ].entries()) {
+      const rejected = await command(
+        "/admin/catalog/price-lists",
+        {
+          ...body,
+          revision: `unsafe-money-${randomUUID()}`,
+          parameters: {
+            ...parameters,
+            automaticQuote: { ...parameters.automaticQuote, ...automaticQuote },
+          },
+        },
+        `catalog-price-${randomUUID()}`,
+      );
+      expect(rejected.status, `unsafe monetary case ${index}`).toBe(400);
+    }
+    for (const feeRate of [9_000, 10_000]) {
+      const rejected = await command(
+        "/admin/catalog/price-lists",
+        {
+          ...body,
+          revision: `unsustainable-fee-${randomUUID()}`,
+          parameters: {
+            ...parameters,
+            sellerTaxPolicy: {
+              regime: "VAT_PAYER",
+              vatRateBasisPoints: 2_100,
+            },
+            automaticQuote: {
+              ...parameters.automaticQuote,
+              paymentFeeRateBasisPoints: feeRate,
+            },
+          },
+        },
+        `catalog-price-${randomUUID()}`,
+      );
+      expect(rejected.status, `unsafe fee rate ${feeRate}`).toBe(400);
+    }
+    const selectedBeforeUnsafeActivation =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+      });
+    for (const unsafeParameters of [
+      {
+        ...parameters,
+        automaticQuote: {
+          ...parameters.automaticQuote,
+          minimumPrintPriceMinor: "9007199254740992",
+        },
+      },
+      {
+        ...parameters,
+        sellerTaxPolicy: {
+          regime: "VAT_PAYER",
+          vatRateBasisPoints: 2_100,
+        },
+        automaticQuote: {
+          ...parameters.automaticQuote,
+          paymentFeeRateBasisPoints: 9_000,
+        },
+      },
+    ]) {
+      const persistedUnsafeList = await prisma.priceList.create({
+        data: {
+          revision: `persisted-unsafe-policy-${randomUUID()}`,
+          termsRevision: baseline.termsRevision,
+          currency: "CZK",
+          parameters: unsafeParameters as Prisma.InputJsonObject,
+        },
+      });
+      expect(
+        (
+          await command(
+            `/admin/catalog/price-lists/${persistedUnsafeList.id}/activate`,
+            {
+              expectedSelectionVersion:
+                selectedBeforeUnsafeActivation.selectionVersion,
+              reason: "Reject unsafe persisted commercial configuration",
+            },
+            `catalog-unsafe-activation-${randomUUID()}`,
+          )
+        ).status,
+      ).toBe(400);
+    }
+    await expect(
+      prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+      }),
+    ).resolves.toMatchObject({
+      priceListId: selectedBeforeUnsafeActivation.priceListId,
+      selectionVersion: selectedBeforeUnsafeActivation.selectionVersion,
+    });
+    expect(
+      (
+        await command(
+          "/admin/catalog/price-lists",
+          {
+            ...body,
+            revision: `operator-${randomUUID()}`,
+            parameters: { ...parameters, unsupported: true },
+          },
+          `catalog-price-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await commandAs(
+          viewerCookie,
+          viewerCsrfToken,
+          "/admin/catalog/price-lists",
+          body,
+          `catalog-viewer-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(403);
+  });
+
+  it("publishes one selected list with version CAS, replay, audit and a shared-row fence", async () => {
+    const original = await prisma.commercialPolicySelection.findUniqueOrThrow({
+      where: { currency: "CZK" },
+      include: { priceList: true },
+    });
+    const body = {
+      currency: "CZK",
+      revision: `publication-${randomUUID()}`,
+      termsRevision: original.priceList.termsRevision,
+      parameters: original.priceList.parameters,
+    };
+    const created = await responseBody(
+      command(
+        "/admin/catalog/price-lists",
+        body,
+        `catalog-price-${randomUUID()}`,
+      ),
+    );
+    const path = `/admin/catalog/price-lists/${created.id}/activate`;
+    const input = {
+      expectedSelectionVersion: original.selectionVersion,
+      reason: "Publish tested commercial list",
+    };
+    const key = `commercial-activation-${randomUUID()}`;
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(
+        `SELECT currency FROM commercial_policy_selections
+         WHERE currency = 'CZK' FOR SHARE`,
+      );
+      let settled = false;
+      const activation = command(path, input, key).then(async (response) => {
+        settled = true;
+        expect(response.status).toBe(200);
+        return response.json() as Promise<{
+          priceListId: string;
+          selectionVersion: number;
+        }>;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(settled).toBe(false);
+      await holder.query("COMMIT");
+      const result = await activation;
+      expect(result).toMatchObject({
+        priceListId: created.id,
+        selectionVersion: original.selectionVersion + 1,
+      });
+      const selected = await prisma.commercialPolicySelection.findUniqueOrThrow(
+        {
+          where: { currency: "CZK" },
+        },
+      );
+      expect(selected.priceListId).toBe(created.id);
+      expect(selected.selectionVersion).toBe(original.selectionVersion + 1);
+      const replay = await command(path, input, key);
+      expect(replay.status).toBe(200);
+      await expect(replay.json()).resolves.toEqual(result);
+      expect(
+        (
+          await prisma.commercialPolicySelection.findUniqueOrThrow({
+            where: { currency: "CZK" },
+          })
+        ).selectionVersion,
+      ).toBe(original.selectionVersion + 1);
+      expect(
+        await prisma.auditEvent.count({
+          where: { eventType: "catalog.commercial-policy.activated" },
+        }),
+      ).toBeGreaterThan(0);
+      expect(
+        (await command(path, input, `commercial-stale-${randomUUID()}`)).status,
+      ).toBe(409);
+      expect(
+        (
+          await commandAs(
+            viewerCookie,
+            viewerCsrfToken,
+            path,
+            { ...input, expectedSelectionVersion: result.selectionVersion },
+            `commercial-viewer-${randomUUID()}`,
+          )
+        ).status,
+      ).toBe(403);
+      const withoutCsrf = await fetch(new URL(path, baseUrl), {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json",
+          "idempotency-key": `commercial-no-csrf-${randomUUID()}`,
+          origin: "http://localhost:3002",
+        },
+        body: JSON.stringify({
+          expectedSelectionVersion: result.selectionVersion,
+          reason: "Missing CSRF proof",
+        }),
+      });
+      expect(withoutCsrf.status).toBe(403);
+      const eurList = await prisma.priceList.findUniqueOrThrow({
+        where: {
+          currency_revision: { currency: "EUR", revision: "legacy-v0-eur" },
+        },
+      });
+      expect(
+        (
+          await command(
+            `/admin/catalog/price-lists/${eurList.id}/activate`,
+            {
+              expectedSelectionVersion: result.selectionVersion,
+              reason: "Wrong currency",
+            },
+            `commercial-wrong-currency-${randomUUID()}`,
+          )
+        ).status,
+      ).toBe(400);
+      const read = await fetch(
+        new URL("/admin/catalog/commercial-policy-selections/CZK", baseUrl),
+        { headers: { cookie: adminCookie } },
+      );
+      expect(read.status).toBe(200);
+      await expect(read.json()).resolves.toMatchObject({
+        currency: "CZK",
+        priceListId: created.id,
+        selectionVersion: result.selectionVersion,
+      });
+      const sameTarget = await command(
+        path,
+        {
+          expectedSelectionVersion: result.selectionVersion,
+          reason: "Confirm same revision",
+        },
+        `commercial-same-${randomUUID()}`,
+      );
+      expect(sameTarget.status).toBe(200);
+      const same = (await sameTarget.json()) as { selectionVersion: number };
+      expect(same.selectionVersion).toBe(result.selectionVersion + 1);
+      const rollback = await command(
+        `/admin/catalog/price-lists/${original.priceListId}/activate`,
+        {
+          expectedSelectionVersion: same.selectionVersion,
+          reason: "Restore baseline policy after publication test",
+        },
+        `commercial-restore-${randomUUID()}`,
+      );
+      expect(rollback.status).toBe(200);
+      await expect(rollback.json()).resolves.toMatchObject({
+        priceListId: original.priceListId,
+        selectionVersion: same.selectionVersion + 1,
+      });
+      const afterRollbackVersion = same.selectionVersion + 1;
+      expect(
+        (await command(path, input, `commercial-aba-stale-${randomUUID()}`))
+          .status,
+      ).toBe(409);
+      const auditCountBeforeRace = await prisma.auditEvent.count({
+        where: { eventType: "catalog.commercial-policy.activated" },
+      });
+      const competing = await Promise.all(
+        ["first", "second"].map((suffix) =>
+          command(
+            `/admin/catalog/price-lists/${original.priceListId}/activate`,
+            {
+              expectedSelectionVersion: afterRollbackVersion,
+              reason: `Concurrent publication ${suffix}`,
+            },
+            `commercial-concurrent-${randomUUID()}`,
+          ),
+        ),
+      );
+      expect(competing.map((response) => response.status).sort()).toEqual([
+        200, 409,
+      ]);
+      expect(
+        await prisma.auditEvent.count({
+          where: { eventType: "catalog.commercial-policy.activated" },
+        }),
+      ).toBe(auditCountBeforeRace + 1);
+      await expect(
+        prisma.commercialPolicySelection.findUniqueOrThrow({
+          where: { currency: "CZK" },
+        }),
+      ).resolves.toMatchObject({
+        priceListId: original.priceListId,
+        selectionVersion: afterRollbackVersion + 1,
+      });
+    } finally {
+      await holder.query("ROLLBACK");
+      holder.release();
+    }
   });
 
   it("writes revision and node catalog resources with idempotency and audit evidence", async () => {

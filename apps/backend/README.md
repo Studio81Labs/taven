@@ -17,11 +17,16 @@ objects, then records success or a retryable failure. OpenAPI export uses an
 explicit offline mode and does not connect to PostgreSQL or object storage. Do
 not expose Prisma models through shared packages or frontend code.
 
-Automatic quotes select an immutable database price-list revision through
-`TAVEN_AUTOMATIC_PRICE_LIST_REVISION` (default `automatic-v0-czk`). A future VAT
-transition is deployed by creating a new validated revision with its
-`sellerTaxPolicy`, then switching this runtime value; already persisted price
-snapshots are never recalculated.
+Automatic quotes select the currency-keyed `CommercialPolicySelection` row.
+The migration initializes CZK only from the exact known `automatic-v0-czk`
+PriceList and fails if that list is missing. Before migration, inspect any
+custom `TAVEN_AUTOMATIC_PRICE_LIST_REVISION` deployment value: the Prisma
+preflight rejects a different value rather than guessing which legacy list
+was active. Create a validated immutable PriceList, then publish it with the
+ADMIN version-checked activation command. Already committed DRAFT and QUOTED
+bindings retain their original list. Drain old policy-writing processes before
+enabling activation. New binding preparation performs one bounded provider
+validation call, so an outage can defer only a genuinely new binding.
 
 Anonymous checkout freezes normalized electronic contact and billing details
 on the order before creating a provider intent. No phone or customer account is

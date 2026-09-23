@@ -151,6 +151,26 @@
         ],
         "type": "object"
       },
+      "ActivateCommercialPolicyDto": {
+        "properties": {
+          "expectedSelectionVersion": {
+            "maximum": 2147483646,
+            "minimum": 1,
+            "type": "number"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "expectedSelectionVersion"
+        ],
+        "type": "object"
+      },
       "ActualCostBreakdownDto": {
         "properties": {
           "carrier": {
@@ -901,6 +921,186 @@
           "format",
           "inspectionStatus",
           "discoveredBodyIds"
+        ],
+        "type": "object"
+      },
+      "AutomaticQuoteParametersDto": {
+        "properties": {
+          "amortizationRateMinorPerSecond": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "expressAvailableProductionWindowSeconds": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "expressMaximumPlateCount": {
+            "enum": [
+              "1",
+              "2"
+            ],
+            "type": "string"
+          },
+          "expressMultiplier": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "expressPackagingBufferSeconds": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "fillCoefficient": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "freeShippingPrintThresholdMinor": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "handlingOrderFixedSeconds": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "handlingPackSeconds": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "handlingPieceSeconds": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "handlingPlateSeconds": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "laborRateMinorPerSecond": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "machineRateMinorPerSecond": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "marginRate": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "materialRateMinorPerMilligram": {
+            "$ref": "#/components/schemas/PriceMaterialRatesDto"
+          },
+          "maximumAutomaticAmountMinor": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "maximumAutomaticQuantity": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "minimumPrintPriceMinor": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "packagingWeightMilligrams": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "packingPaddingMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "paymentFeeFixedMinor": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "paymentFeeRateBasisPoints": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "paymentProviderConfig": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "reprintRate": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "roughExtrusionMilligramsPerSecond": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "roughMaterialDensityMilligramsPerCubicMillimeter": {
+            "$ref": "#/components/schemas/PriceMaterialRatesDto"
+          },
+          "roughMaterialVolumeRatioByInfillPreset": {
+            "$ref": "#/components/schemas/PriceInfillRatiosDto"
+          },
+          "shipmentCategories": {
+            "items": {
+              "$ref": "#/components/schemas/PriceShipmentCategoryDto"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "shippingTripPricingDivisor": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "shippingTripSeconds": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "smallOrderSurchargeMinor": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "smallOrderWeightThresholdMilligrams": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "machineRateMinorPerSecond",
+          "laborRateMinorPerSecond",
+          "amortizationRateMinorPerSecond",
+          "reprintRate",
+          "marginRate",
+          "materialRateMinorPerMilligram",
+          "roughMaterialDensityMilligramsPerCubicMillimeter",
+          "roughMaterialVolumeRatioByInfillPreset",
+          "roughExtrusionMilligramsPerSecond",
+          "handlingOrderFixedSeconds",
+          "handlingPlateSeconds",
+          "handlingPieceSeconds",
+          "handlingPackSeconds",
+          "shippingTripSeconds",
+          "shippingTripPricingDivisor",
+          "minimumPrintPriceMinor",
+          "smallOrderWeightThresholdMilligrams",
+          "smallOrderSurchargeMinor",
+          "freeShippingPrintThresholdMinor",
+          "expressMultiplier",
+          "expressMaximumPlateCount",
+          "expressAvailableProductionWindowSeconds",
+          "expressPackagingBufferSeconds",
+          "maximumAutomaticQuantity",
+          "maximumAutomaticAmountMinor",
+          "packingPaddingMicrometers",
+          "fillCoefficient",
+          "packagingWeightMilligrams",
+          "paymentFeeRateBasisPoints",
+          "paymentFeeFixedMinor",
+          "paymentProviderConfig",
+          "shipmentCategories"
         ],
         "type": "object"
       },
@@ -1908,6 +2108,51 @@
         ],
         "type": "object"
       },
+      "CommercialPolicyActivationResultDto": {
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "priceListId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionVersion": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currency",
+          "priceListId",
+          "selectionVersion",
+          "id"
+        ],
+        "type": "object"
+      },
+      "CommercialPolicySelectionDto": {
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "priceListId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionVersion": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currency",
+          "priceListId",
+          "selectionVersion"
+        ],
+        "type": "object"
+      },
       "CompleteHandlingSessionDto": {
         "properties": {
           "allocations": {
@@ -2478,6 +2723,76 @@
         ],
         "type": "object"
       },
+      "CreateMachineCapabilityDto": {
+        "properties": {
+          "buildVolumeXMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "buildVolumeYMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "buildVolumeZMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "capabilityKey": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "manufacturer": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "model": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "supportedMaterials": {
+            "items": {
+              "enum": [
+                "PLA",
+                "PETG"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "supportedNozzleMicrometers": {
+            "items": {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "capabilityKey",
+          "manufacturer",
+          "model",
+          "buildVolumeXMicrometers",
+          "buildVolumeYMicrometers",
+          "buildVolumeZMicrometers",
+          "supportedNozzleMicrometers",
+          "supportedMaterials"
+        ],
+        "type": "object"
+      },
       "CreateMachineProfileDto": {
         "properties": {
           "machineCapabilityId": {
@@ -2584,6 +2899,80 @@
           "rationale",
           "amountMinor",
           "allocation"
+        ],
+        "type": "object"
+      },
+      "CreatePriceListDto": {
+        "properties": {
+          "currency": {
+            "enum": [
+              "CZK"
+            ],
+            "type": "string"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/PriceListParametersDto"
+          },
+          "revision": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "termsRevision": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "termsRevision",
+          "currency",
+          "parameters"
+        ],
+        "type": "object"
+      },
+      "CreatePrintConfigRevisionDto": {
+        "properties": {
+          "brimEnabled": {
+            "type": "boolean"
+          },
+          "infillPercent": {
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "layerHeightMicrometers": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "quality": {
+            "enum": [
+              "DRAFT",
+              "STANDARD",
+              "FINE"
+            ],
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "description": "Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates.",
+            "type": "object"
+          },
+          "supportsEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "quality",
+          "infillPercent",
+          "layerHeightMicrometers",
+          "supportsEnabled",
+          "brimEnabled",
+          "settings"
         ],
         "type": "object"
       },
@@ -4170,6 +4559,81 @@
         ],
         "type": "object"
       },
+      "InventoryDetailDto": {
+        "properties": {
+          "availableMilligrams": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "color": {
+            "nullable": true,
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "lotCode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "priceMinorUnitsDenominator": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "priceMinorUnitsNumerator": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "remainingMilligrams": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "reservedMilligrams": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "machineId",
+          "sku",
+          "material",
+          "remainingMilligrams",
+          "reservedMilligrams",
+          "availableMilligrams",
+          "status",
+          "nodeId",
+          "vendor",
+          "priceMinorUnitsNumerator",
+          "priceMinorUnitsDenominator",
+          "currency"
+        ],
+        "type": "object"
+      },
       "InventoryPageDto": {
         "properties": {
           "items": {
@@ -4435,6 +4899,29 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "LegacyPriceListParametersDto": {
+        "properties": {
+          "balance_payment_days": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "balance_timeout_earned_component_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sellerTaxPolicy": {
+            "$ref": "#/components/schemas/SellerTaxPolicyDto"
+          }
+        },
+        "required": [
+          "sellerTaxPolicy",
+          "balance_payment_days",
+          "balance_timeout_earned_component_kinds"
+        ],
         "type": "object"
       },
       "LegalDocumentAvailabilityDocumentsDto": {
@@ -5052,6 +5539,71 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "MachineProfileDetailDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineCapabilityId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "nozzleDiameterMicrometers": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "productionArtifactFormat": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "slicerEngine": {
+            "type": "string"
+          },
+          "slicerVersion": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "digest",
+          "material",
+          "quality",
+          "slicerEngine",
+          "slicerVersion",
+          "state",
+          "createdAt",
+          "machineCapabilityId",
+          "referenceProfileId",
+          "nozzleDiameterMicrometers",
+          "productionArtifactFormat",
+          "settings"
         ],
         "type": "object"
       },
@@ -7671,6 +8223,65 @@
         ],
         "type": "object"
       },
+      "PriceInfillRatiosDto": {
+        "properties": {
+          "DECORATIVE": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "STANDARD": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "STRONG": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          }
+        },
+        "required": [
+          "DECORATIVE",
+          "STANDARD",
+          "STRONG"
+        ],
+        "type": "object"
+      },
+      "PriceListDetailDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "parameters": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PriceListParametersDto"
+              },
+              {
+                "$ref": "#/components/schemas/LegacyPriceListParametersDto"
+              }
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "termsRevision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "termsRevision",
+          "currency",
+          "createdAt",
+          "parameters"
+        ],
+        "type": "object"
+      },
       "PriceListPageDto": {
         "properties": {
           "items": {
@@ -7685,6 +8296,21 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "PriceListParametersDto": {
+        "properties": {
+          "automaticQuote": {
+            "$ref": "#/components/schemas/AutomaticQuoteParametersDto"
+          },
+          "sellerTaxPolicy": {
+            "$ref": "#/components/schemas/SellerTaxPolicyDto"
+          }
+        },
+        "required": [
+          "sellerTaxPolicy",
+          "automaticQuote"
         ],
         "type": "object"
       },
@@ -7714,6 +8340,156 @@
           "termsRevision",
           "currency",
           "createdAt"
+        ],
+        "type": "object"
+      },
+      "PriceMaterialRatesDto": {
+        "properties": {
+          "PETG": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          },
+          "PLA": {
+            "$ref": "#/components/schemas/PriceRationalDto"
+          }
+        },
+        "required": [
+          "PLA",
+          "PETG"
+        ],
+        "type": "object"
+      },
+      "PriceRationalDto": {
+        "properties": {
+          "denominator": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "numerator": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "numerator",
+          "denominator"
+        ],
+        "type": "object"
+      },
+      "PriceShipmentCategoryDto": {
+        "properties": {
+          "carrierCostMinor": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "customerShippingRateMinor": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "maxDimensionSumMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "maxParcelVolumeCubicMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "maxWeightMilligrams": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "maxXMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "maxYMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "maxZMicrometers": {
+            "format": "int64",
+            "pattern": "^(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807)$",
+            "type": "string"
+          },
+          "packagingCostMinor": {
+            "format": "int64",
+            "pattern": "^(?:0|(?:[1-9][0-9]{0,17}|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0}|9223372036854775807))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "maxXMicrometers",
+          "maxYMicrometers",
+          "maxZMicrometers",
+          "maxDimensionSumMicrometers",
+          "maxWeightMilligrams",
+          "maxParcelVolumeCubicMicrometers",
+          "carrierCostMinor",
+          "customerShippingRateMinor",
+          "packagingCostMinor"
+        ],
+        "type": "object"
+      },
+      "PrintConfigRevisionDetailDto": {
+        "properties": {
+          "brimEnabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "infillPercent": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "layerHeightMicrometers": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "supportsEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "digest",
+          "quality",
+          "infillPercent",
+          "layerHeightMicrometers",
+          "supportsEnabled",
+          "brimEnabled",
+          "createdAt",
+          "settings"
         ],
         "type": "object"
       },
@@ -8407,6 +9183,52 @@
         ],
         "type": "object"
       },
+      "ReferenceProfileDetailDto": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "slicerEngine": {
+            "type": "string"
+          },
+          "slicerVersion": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "digest",
+          "material",
+          "quality",
+          "slicerEngine",
+          "slicerVersion",
+          "state",
+          "createdAt",
+          "settings"
+        ],
+        "type": "object"
+      },
       "ReferenceProfilePageDto": {
         "properties": {
           "items": {
@@ -8503,6 +9325,38 @@
           "succeededRefunds",
           "pendingOrSuspendedRefunds",
           "activeContract"
+        ],
+        "type": "object"
+      },
+      "RegisterMachineDto": {
+        "properties": {
+          "code": {
+            "maxLength": 50,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "displayName": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^(?=[\\s\\S]*\\S)[\\u0001-\\uD7FF\\uE000-\\u{10FFFF}]*$",
+            "type": "string"
+          },
+          "installedNozzleMicrometers": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "machineCapabilityId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "machineCapabilityId",
+          "code",
+          "displayName",
+          "installedNozzleMicrometers"
         ],
         "type": "object"
       },
@@ -8635,6 +9489,27 @@
         "required": [
           "providerEndpointId",
           "endpointType"
+        ],
+        "type": "object"
+      },
+      "SellerTaxPolicyDto": {
+        "properties": {
+          "regime": {
+            "enum": [
+              "NON_VAT_PAYER",
+              "VAT_PAYER"
+            ],
+            "type": "string"
+          },
+          "vatRateBasisPoints": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "regime",
+          "vatRateBasisPoints"
         ],
         "type": "object"
       },
@@ -9343,6 +10218,53 @@
         ]
       }
     },
+    "/admin/catalog/commercial-policy-selections/{currency}": {
+      "get": {
+        "operationId": "OperatorReadsController_commercialPolicySelection",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "currency",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommercialPolicySelectionDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read the current commercial policy selection",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/catalog/machine-capabilities": {
       "get": {
         "operationId": "OperatorReadsController_machineCapabilities",
@@ -9396,6 +10318,111 @@
           }
         ],
         "summary": "List global machine capabilities",
+        "tags": [
+          "operator reads"
+        ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_createMachineCapability",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMachineCapabilityDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Create an immutable machine capability",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/machine-capabilities/{id}": {
+      "get": {
+        "operationId": "OperatorReadsController_machineCapabilityDetail",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineCapabilityReadDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read an immutable machine capability",
         "tags": [
           "operator reads"
         ]
@@ -9513,6 +10540,54 @@
         "summary": "Create an immutable machine-profile revision",
         "tags": [
           "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/machine-profiles/{id}": {
+      "get": {
+        "operationId": "OperatorReadsController_machineProfileDetail",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineProfileDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read an immutable machine-profile revision",
+        "tags": [
+          "operator reads"
         ]
       }
     },
@@ -9714,6 +10789,182 @@
         "tags": [
           "operator reads"
         ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_createPriceList",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePriceListDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Create an immutable, inactive price-list revision",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/price-lists/{id}": {
+      "get": {
+        "operationId": "OperatorReadsController_priceListDetail",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceListDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read immutable price-list parameters",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/catalog/price-lists/{id}/activate": {
+      "post": {
+        "operationId": "OperatorCatalogController_activateCommercialPolicy",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateCommercialPolicyDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommercialPolicyActivationResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Selection version changed"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Activate an immutable commercial price list",
+        "tags": [
+          "operator catalog"
+        ]
       }
     },
     "/admin/catalog/print-config-revisions": {
@@ -9769,6 +11020,111 @@
           }
         ],
         "summary": "List immutable print-config revisions",
+        "tags": [
+          "operator reads"
+        ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_createPrintConfigRevision",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePrintConfigRevisionDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Create an immutable print-config revision",
+        "tags": [
+          "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/print-config-revisions/{id}": {
+      "get": {
+        "operationId": "OperatorReadsController_printConfigRevisionDetail",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintConfigRevisionDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read an immutable print-config revision",
         "tags": [
           "operator reads"
         ]
@@ -9944,6 +11300,54 @@
         "summary": "Create an immutable reference-profile revision",
         "tags": [
           "operator catalog"
+        ]
+      }
+    },
+    "/admin/catalog/reference-profiles/{id}": {
+      "get": {
+        "operationId": "OperatorReadsController_referenceProfileDetail",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferenceProfileDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read an immutable reference-profile revision",
+        "tags": [
+          "operator reads"
         ]
       }
     },
@@ -12136,6 +13540,63 @@
         ]
       }
     },
+    "/admin/nodes/{nodeId}/inventories/{id}": {
+      "get": {
+        "operationId": "OperatorReadsController_inventoryDetail",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read scoped inventory and its purchase rate",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/nodes/{nodeId}/inventories/{inventoryId}/adjustments": {
       "post": {
         "operationId": "OperatorCatalogController_adjustInventory",
@@ -12354,6 +13815,72 @@
         "summary": "List machines in the granted node",
         "tags": [
           "operator reads"
+        ]
+      },
+      "post": {
+        "operationId": "OperatorCatalogController_registerMachine",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "nodeId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterMachineDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Register a node machine with an immutable capability",
+        "tags": [
+          "operator catalog"
         ]
       }
     },

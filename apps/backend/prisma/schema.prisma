@@ -1972,10 +1972,22 @@ model PriceList {
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   priceSnapshots PriceSnapshot[]
+  commercialPolicySelections CommercialPolicySelection[]
 
   @@unique([currency, revision])
+  @@unique([id, currency])
   @@unique([id, currency, revision])
   @@map("price_lists")
+}
+
+model CommercialPolicySelection {
+  currency         String    @id @db.Char(3)
+  priceListId      String    @map("price_list_id") @db.Uuid
+  selectionVersion Int       @map("selection_version")
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  priceList        PriceList @relation(fields: [priceListId, currency], references: [id, currency], onDelete: Restrict)
+
+  @@map("commercial_policy_selections")
 }
 
 model PriceSnapshotComponent {

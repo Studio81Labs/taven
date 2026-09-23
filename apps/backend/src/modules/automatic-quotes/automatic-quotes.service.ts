@@ -51,6 +51,11 @@ import { ResourceReservationService } from "../resources/resource-reservation.se
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import { reserveAnonymousQuote } from "../quotes/anonymous-quote-limit";
+import {
+  currentCommercialPolicy,
+  lockCommercialPolicy,
+  type SelectedCommercialPolicy,
+} from "../resources/commercial-policy-selection";
 import { LegalApprovalsService } from "../legal-approvals/legal-approvals.service";
 import { assertEffectiveLegalDocuments } from "../legal-approvals/legal-approvals.catalog";
 import {
@@ -104,8 +109,6 @@ const CANONICALIZER_CONFIG_SHA256 = createHash("sha256")
   .digest("hex");
 const MAX_ITEM_QUANTITY = 1_000;
 const MAX_SLICING_JOB_ATTEMPTS = 100;
-const AUTOMATIC_PRICE_LIST_REVISION =
-  process.env.TAVEN_AUTOMATIC_PRICE_LIST_REVISION?.trim() || "automatic-v0-czk";
 const CANDIDATE_UNUSABLE_DISPOSITION_TYPE =
   "automatic_quote.candidate-estimation.unusable";
 const INFILL_PERCENT = {
@@ -116,6 +119,11 @@ const INFILL_PERCENT = {
 
 type Transaction = Prisma.TransactionClient;
 type JsonRecord = Record<string, unknown>;
+type FreshBindingValidation = Readonly<{
+  priceListId: string;
+  selectionVersion: number;
+  inputFingerprint: string;
+}>;
 type AutomaticQuoteHandoffSnapshot = {
   reasons: string[];
   modelFileIds: string[];
@@ -469,14 +477,9 @@ export class AutomaticQuotesService {
       boundsZMicrometers: millimetersToMicrometers(input.dimensionsMm.height),
     };
     const [priceList, capabilities] = await Promise.all([
-      this.prisma.priceList.findUnique({
-        where: {
-          currency_revision: {
-            currency: "CZK",
-            revision: AUTOMATIC_PRICE_LIST_REVISION,
-          },
-        },
-      }),
+      currentCommercialPolicy(this.prisma).then(
+        (selection) => selection.priceList,
+      ),
       this.configurationCapabilities(),
     ]);
     if (!priceList) {
@@ -658,6 +661,11 @@ export class AutomaticQuotesService {
     sessionId = normalizedUuid(sessionId, "sessionId");
     const sessionCapability = bearerCapability(authorization);
     const commandKey = requireIdempotencyKey(idempotencyKey);
+    const alreadyIssued =
+      await this.prisma.automaticQuoteHandoffCapability.findFirst({
+        where: { sourceQuoteSessionId: sessionId },
+        select: { id: true },
+      });
     return this.serializableHandoffIssuance(async (transaction) => {
       const namespace = `automatic-quote.handoff:${sessionId}`;
       const fingerprint = fingerprintOf({
@@ -669,6 +677,7 @@ export class AutomaticQuotesService {
       // That makes a command retry and a competing browser tab converge on one
       // canonical key without creating an alternate idempotency record.
       await lockIdempotencyKey(transaction, namespace, commandKey);
+      if (!alreadyIssued) await lockCommercialPolicy(transaction);
       const session = await lockedSession(transaction, sessionId);
       const decisionAt = await databaseNow(transaction);
       assertOpenSession(session, sessionCapability, decisionAt);
@@ -863,6 +872,7 @@ export class AutomaticQuotesService {
       commandKey,
       fingerprint,
       async (transaction) => {
+        const selectedPolicy = await lockCommercialPolicy(transaction);
         const session = await lockedSession(transaction, sessionId);
         assertOpenSession(session, sessionCapability);
         const origin = await transaction.automaticOrderOrigin.findUnique({
@@ -949,17 +959,7 @@ export class AutomaticQuotesService {
         const current = await transaction.automaticQuoteItemDraft.findUnique({
           where: { orderId_ordinal: { orderId: origin.orderId, ordinal } },
         });
-        const priceList = await transaction.priceList.findUnique({
-          where: {
-            currency_revision: {
-              currency: "CZK",
-              revision: AUTOMATIC_PRICE_LIST_REVISION,
-            },
-          },
-        });
-        if (!priceList) {
-          throw new ConflictException("Automatic quote pricing is unavailable");
-        }
+        const priceList = selectedPolicy.priceList;
         const proposedItem = {
           id:
             current?.id ??
@@ -1101,6 +1101,7 @@ export class AutomaticQuotesService {
       commandKey,
       fingerprint,
       async (transaction) => {
+        const selectedPolicy = await lockCommercialPolicy(transaction);
         const session = await lockedSession(transaction, sessionId);
         assertOpenSession(session, sessionCapability);
         const origin = await transaction.automaticOrderOrigin.findUnique({
@@ -1216,17 +1217,7 @@ export class AutomaticQuotesService {
             configurationFingerprint,
           });
         }
-        const priceList = await transaction.priceList.findUnique({
-          where: {
-            currency_revision: {
-              currency: "CZK",
-              revision: AUTOMATIC_PRICE_LIST_REVISION,
-            },
-          },
-        });
-        if (!priceList) {
-          throw new ConflictException("Automatic quote pricing is unavailable");
-        }
+        const priceList = selectedPolicy.priceList;
         const proposedPricing = await this.pricingItemsFromDraft(
           transaction,
           origin.orderId,
@@ -1509,11 +1500,30 @@ export class AutomaticQuotesService {
       endpointType,
       parcels,
     });
+    if (
+      fingerprintOf(candidate.addressSnapshot) !==
+        fingerprintOf(resolved.addressSnapshot) ||
+      fingerprintOf(candidate.capabilitySnapshot) !==
+        fingerprintOf(resolved.capabilitySnapshot)
+    ) {
+      throw new ConflictException("Delivery changed; select delivery again");
+    }
     await this.idempotentEffect(
       "automatic-quote.select-destination",
       commandKey,
       fingerprint,
       async (transaction) => {
+        const selectedPolicy = await lockCommercialPolicy(transaction);
+        if (
+          selectedPolicy.currency !== prevalidated.policy.currency ||
+          selectedPolicy.priceListId !== prevalidated.policy.priceListId ||
+          selectedPolicy.selectionVersion !==
+            prevalidated.policy.selectionVersion
+        ) {
+          throw new ConflictException(
+            "Commercial policy changed; select delivery again",
+          );
+        }
         const session = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(session, sessionCapability);
         const origin = await transaction.automaticOrderOrigin.findUnique({
@@ -1636,12 +1646,34 @@ export class AutomaticQuotesService {
     // all mutable/legal state used for preparation is read again after locks.
     const session = await this.loadSession(sessionId);
     assertSessionCapability(session, sessionCapability);
+    const prepareDraft =
+      session.automaticOrderOrigin?.order.automaticQuoteDraft;
+    if (!prepareDraft) {
+      throw new ConflictException("Automatic order is missing");
+    }
+    if (
+      await this.completedCommandReplay(
+        "automatic-quote.prepare",
+        commandKey,
+        fingerprintOf({
+          sessionId,
+          configurationRevision: prepareDraft.configurationRevision,
+        }),
+      )
+    ) {
+      return this.getSession(sessionId, authorization);
+    }
+    const bindingValidation = await this.prevalidateFreshBinding(
+      sessionId,
+      sessionCapability,
+    );
     let automaticOrderId: string | undefined;
     await this.idempotentEffect(
       "automatic-quote.prepare",
       commandKey,
       async (transaction) => {
         await this.requiredLegalApprovals().lock(transaction, ["terms"]);
+        await lockCommercialPolicy(transaction);
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const draft = await transaction.automaticQuoteDraft.findFirst({
@@ -1662,6 +1694,17 @@ export class AutomaticQuotesService {
       async (transaction) => {
         const legalApprovals = this.requiredLegalApprovals();
         await legalApprovals.lock(transaction, ["terms"]);
+        const selectedPolicy = await lockCommercialPolicy(transaction);
+        if (
+          bindingValidation &&
+          (bindingValidation.priceListId !== selectedPolicy.priceListId ||
+            bindingValidation.selectionVersion !==
+              selectedPolicy.selectionVersion)
+        ) {
+          throw new ConflictException(
+            "Commercial policy changed; select delivery again",
+          );
+        }
         const locked = await lockedSession(transaction, sessionId);
         assertOpenOrConvertedSession(locked, sessionCapability);
         const order = await transaction.order.findFirst({
@@ -1769,6 +1812,8 @@ export class AutomaticQuotesService {
             transaction,
             order.id,
             legal.approvals.documents.terms.revisionId!,
+            selectedPolicy,
+            bindingValidation,
           );
         }
       },
@@ -2255,6 +2300,7 @@ export class AutomaticQuotesService {
     orderId: string,
     items: readonly AutomaticQuoteCandidateDraftItem[],
     client: Transaction | PrismaService = this.prisma,
+    projectionPriceList?: SelectedCommercialPolicy["priceList"],
   ): Promise<boolean> {
     for (const item of items) {
       const geometry = await client.modelGeometry.findUnique({
@@ -2307,15 +2353,10 @@ export class AutomaticQuotesService {
       where: { orderId },
       include: { selectedDeliveryDestination: true },
     });
-    const priceList = await client.priceList.findUnique({
-      where: {
-        currency_revision: {
-          currency: "CZK",
-          revision: AUTOMATIC_PRICE_LIST_REVISION,
-        },
-      },
-    });
-    if (!draft?.selectedDeliveryDestination || !priceList) return false;
+    const priceList =
+      projectionPriceList ??
+      (await this.priceListForOrderProjection(client, orderId, draft));
+    if (!draft?.selectedDeliveryDestination) return false;
     const pricing = await this.pricingItemsFromDraft(
       client,
       orderId,
@@ -2444,13 +2485,18 @@ export class AutomaticQuotesService {
     transaction: Transaction,
     orderId: string,
     legalTermsRevisionId: string,
+    selectedPolicy: SelectedCommercialPolicy,
+    bindingValidation: FreshBindingValidation | null,
   ): Promise<void> {
     if (!(await this.riskAllowsAutomaticQuote(transaction, orderId))) return;
     const draftOrder = await transaction.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {
         automaticQuoteDraft: {
-          include: { selectedDeliveryDestination: true, items: true },
+          include: {
+            selectedDeliveryDestination: true,
+            items: { orderBy: { ordinal: "asc" } },
+          },
         },
         activePriceBinding: {
           include: {
@@ -2472,17 +2518,7 @@ export class AutomaticQuotesService {
     ) {
       return;
     }
-    const priceList = await transaction.priceList.findUnique({
-      where: {
-        currency_revision: {
-          currency: "CZK",
-          revision: AUTOMATIC_PRICE_LIST_REVISION,
-        },
-      },
-    });
-    if (!priceList) {
-      throw new ConflictException("Automatic quote pricing is unavailable");
-    }
+    const priceList = selectedPolicy.priceList;
     const draftsByOrdinal = new Map(
       draft.items.map((item) => [item.ordinal, item]),
     );
@@ -2512,6 +2548,24 @@ export class AutomaticQuotesService {
       withinBuildLimits: true,
     });
     if (provisionalPlan.prepared.kind !== "binding_quote") return;
+    if (bindingValidation) {
+      const currentValidation = await this.bindingValidationInput(
+        transaction,
+        orderId,
+        draft,
+        destination,
+        selectedPolicy,
+      );
+      if (
+        !currentValidation ||
+        currentValidation.inputFingerprint !==
+          bindingValidation.inputFingerprint
+      ) {
+        throw new ConflictException(
+          "Delivery validation is stale; select delivery again",
+        );
+      }
+    }
     if (
       await this.enqueueMissingCandidateReferenceSlices(
         transaction,
@@ -2523,6 +2577,7 @@ export class AutomaticQuotesService {
     ) {
       return;
     }
+    if (!bindingValidation) return;
     const candidateResourcesAvailable = await this.candidateResourcesAvailable(
       transaction,
       draft.items,
@@ -4650,11 +4705,45 @@ export class AutomaticQuotesService {
     return { items, allReferenceSliced };
   }
 
+  private async priceListForOrderProjection(
+    client: Transaction | PrismaService,
+    orderId: string,
+    draft: {
+      selectedDeliveryDestinationId: string | null;
+      expressRequested: boolean;
+      configurationRevision: number;
+    } | null,
+    expectedLegalTermsRevisionId?: string | null,
+  ) {
+    const active = await client.orderActivePriceBinding.findUnique({
+      where: { orderId },
+      include: {
+        orderPriceBinding: {
+          include: { priceSnapshot: { include: { priceList: true } } },
+        },
+      },
+    });
+    if (
+      active &&
+      draft &&
+      expectedLegalTermsRevisionId !== null &&
+      bindingMatchesAutomaticDraft(
+        active.orderPriceBinding,
+        draft,
+        expectedLegalTermsRevisionId,
+      )
+    ) {
+      return active.orderPriceBinding.priceSnapshot.priceList;
+    }
+    return (await currentCommercialPolicy(client)).priceList;
+  }
+
   private async roughQuote(
     orderId: string,
     candidateAdmissionSatisfied = false,
     client: Transaction | PrismaService = this.prisma,
     configuredDeliveryOptions?: readonly DeliveryCapabilityOption[],
+    projectionPriceList?: SelectedCommercialPolicy["priceList"],
   ): Promise<{
     quote: AutomaticQuoteSessionDto["roughEstimate"];
     deliveryOptions: AutomaticQuoteSessionDto["deliveryOptions"];
@@ -4668,15 +4757,10 @@ export class AutomaticQuotesService {
         items: { orderBy: { ordinal: "asc" } },
       },
     });
-    const priceList = await client.priceList.findUnique({
-      where: {
-        currency_revision: {
-          currency: "CZK",
-          revision: AUTOMATIC_PRICE_LIST_REVISION,
-        },
-      },
-    });
-    if (!draft || !priceList || draft.items.length === 0) return null;
+    const priceList =
+      projectionPriceList ??
+      (await this.priceListForOrderProjection(client, orderId, draft));
+    if (!draft || draft.items.length === 0) return null;
     const pricing = await this.pricingItemsFromDraft(
       client,
       orderId,
@@ -4743,7 +4827,9 @@ export class AutomaticQuotesService {
           })
         ).prepared;
     return {
-      quote: provisionalPriceDto(result.price, itemOrdinals),
+      quote: priceFitsApiRange(result.price)
+        ? provisionalPriceDto(result.price, itemOrdinals)
+        : null,
       deliveryOptions,
       express: result.expressEligibility,
       reasons: pricing.allReferenceSliced ? result.reasons : [],
@@ -4755,6 +4841,161 @@ export class AutomaticQuotesService {
    * transaction. The transaction below fences this read with the revision it
    * observed, so a concurrent configuration change cannot commit its result.
    */
+  private async prevalidateFreshBinding(
+    sessionId: string,
+    sessionCapability: string,
+  ): Promise<FreshBindingValidation | null> {
+    const session = await this.loadSession(sessionId);
+    assertOpenOrConvertedSession(session, sessionCapability);
+    const order = session.automaticOrderOrigin?.order;
+    const draft = order?.automaticQuoteDraft;
+    const destination = draft?.selectedDeliveryDestination;
+    if (!order || !draft || !destination || draft.items.length === 0) {
+      return null;
+    }
+    // Checkout acceptance freezes the binding and legal evidence. A failed
+    // payment retry must not ask the carrier to revalidate that contract.
+    if (frozenCheckoutEvidenceState(order) !== "none") return null;
+    const active = order.activePriceBinding?.orderPriceBinding;
+    if (active) {
+      const legal = await this.requiredLegalApprovals().availability();
+      if (
+        bindingMatchesAutomaticDraft(
+          active,
+          draft,
+          legal.documents.terms.revisionId ?? undefined,
+        )
+      ) {
+        return null;
+      }
+    }
+    const policy = await currentCommercialPolicy(this.prisma);
+    const validation = await this.bindingValidationInput(
+      this.prisma,
+      order.id,
+      draft,
+      destination,
+      policy,
+    );
+    if (!validation) return null;
+    const resolved = await this.deliveryCapabilities.validateSelection({
+      providerEndpointId: destination.providerEndpointId,
+      endpointType: destination.endpointType,
+      parcels: validation.parcels,
+    });
+    if (
+      resolved.providerEndpointId !== destination.providerEndpointId ||
+      resolved.endpointType !== destination.endpointType ||
+      fingerprintOf(resolved.addressSnapshot) !==
+        fingerprintOf(destination.addressSnapshot) ||
+      fingerprintOf(resolved.capabilitySnapshot) !==
+        fingerprintOf(destination.capabilitySnapshot)
+    ) {
+      throw new ConflictException("Delivery changed; select delivery again");
+    }
+    return {
+      priceListId: policy.priceListId,
+      selectionVersion: policy.selectionVersion,
+      inputFingerprint: validation.inputFingerprint,
+    };
+  }
+
+  private async bindingValidationInput(
+    client: Transaction | PrismaService,
+    orderId: string,
+    draft: {
+      configurationRevision: number;
+      expressRequested: boolean;
+      items: readonly AutomaticQuoteCandidateDraftItem[];
+    },
+    destination: {
+      id: string;
+      providerEndpointId: string;
+      endpointType: string;
+      addressSnapshot: Prisma.JsonValue;
+      capabilitySnapshot: Prisma.JsonValue;
+    },
+    policy: SelectedCommercialPolicy,
+  ) {
+    const sortedDraftItems = [...draft.items].sort(
+      (left, right) => left.ordinal - right.ordinal,
+    );
+    const pricing = await this.pricingItemsFromDraft(
+      client,
+      orderId,
+      sortedDraftItems,
+      null,
+    );
+    if (!pricing) return null;
+    const prepared = await prepareAutomaticQuote({
+      priceList: policy.priceList,
+      items: pricing.items,
+      expressRequested: draft.expressRequested,
+      materialAndColorAvailable: true,
+      withinBuildLimits: true,
+      riskAcknowledgementsComplete: true,
+      hasBlockingPreflightFinding: false,
+      deliveryDestination: destination,
+      shipmentPlanIdForOrdinal: (ordinal) =>
+        deterministicUuid(
+          `automatic-validation-plan:${orderId}:${draft.configurationRevision}:${ordinal}`,
+        ),
+    });
+    if (prepared.prepared.kind !== "binding_quote") return null;
+    const demands = candidateParcelDemands(
+      pricing.items,
+      prepared.prepared.shipmentPlan,
+    );
+    if (!demands) return null;
+    const draftByPricingItemId = new Map(
+      pricing.items.map((item, index) => [item.id, sortedDraftItems[index]]),
+    );
+    for (const demand of demands) {
+      const item = draftByPricingItemId.get(demand.itemId);
+      const pricingItem = pricing.items.find(({ id }) => id === demand.itemId);
+      if (!item || !pricingItem) return null;
+      const geometry = await client.modelGeometry.findUnique({
+        where: { id: item.targetModelGeometryId },
+      });
+      if (!geometry) return null;
+      const occupancies = referenceOccupancies(
+        demand.quantity,
+        Math.min(pricingItem.referencePartsPerPlate, demand.quantity),
+      );
+      if (
+        (await this.missingReferenceSlices(client, item, geometry, occupancies))
+          .length > 0
+      ) {
+        return null;
+      }
+    }
+    const parcels = prepared.prepared.shipmentPlan.parcels.map((parcel) => ({
+      weightMilligrams: parcel.weightMilligrams,
+      xMicrometers: parcel.packingBox.xMicrometers,
+      yMicrometers: parcel.packingBox.yMicrometers,
+      zMicrometers: parcel.packingBox.zMicrometers,
+    }));
+    return {
+      parcels,
+      inputFingerprint: fingerprintOf({
+        priceListId: policy.priceListId,
+        selectionVersion: policy.selectionVersion,
+        configurationRevision: draft.configurationRevision,
+        destinationId: destination.id,
+        providerEndpointId: destination.providerEndpointId,
+        endpointType: destination.endpointType,
+        addressSnapshot: destination.addressSnapshot,
+        capabilitySnapshot: destination.capabilitySnapshot,
+        parcels: parcels.map((parcel) => ({
+          weightMilligrams: parcel.weightMilligrams.toString(),
+          xMicrometers: parcel.xMicrometers.toString(),
+          yMicrometers: parcel.yMicrometers.toString(),
+          zMicrometers: parcel.zMicrometers.toString(),
+        })),
+      }),
+    };
+  }
+
   private async prevalidateDestination(
     sessionId: string,
     sessionCapability: string,
@@ -4762,6 +5003,11 @@ export class AutomaticQuotesService {
     endpointType: string,
     deliverySelector: DeliverySelectorProjection,
   ): Promise<{
+    policy: {
+      currency: string;
+      priceListId: string;
+      selectionVersion: number;
+    };
     configurationRevision: number;
     expressRequested: boolean;
     items: readonly AutomaticQuotePricingItem[];
@@ -4785,16 +5031,8 @@ export class AutomaticQuotesService {
         "Automatic order is not ready for delivery selection",
       );
     }
-    const priceList = await this.prisma.priceList.findUnique({
-      where: {
-        currency_revision: {
-          currency: "CZK",
-          revision: AUTOMATIC_PRICE_LIST_REVISION,
-        },
-      },
-    });
-    if (!priceList)
-      throw new ConflictException("Automatic pricing is unavailable");
+    const policy = await currentCommercialPolicy(this.prisma);
+    const priceList = policy.priceList;
     const parameters = parseAutomaticQuotePricingParameters(
       priceList.parameters,
     );
@@ -4817,6 +5055,11 @@ export class AutomaticQuotesService {
       );
     }
     return {
+      policy: {
+        currency: policy.currency,
+        priceListId: policy.priceListId,
+        selectionVersion: policy.selectionVersion,
+      },
       configurationRevision: draft.configurationRevision,
       expressRequested: draft.expressRequested,
       items: pricing.items,
@@ -4829,10 +5072,22 @@ export class AutomaticQuotesService {
     idempotencyKey: string,
     fingerprint: string,
   ): Promise<boolean> {
+    return this.completedCommandReplay(
+      "automatic-quote.select-destination",
+      idempotencyKey,
+      fingerprint,
+    );
+  }
+
+  private async completedCommandReplay(
+    namespace: string,
+    idempotencyKey: string,
+    fingerprint: string,
+  ): Promise<boolean> {
     const observedAt = await databaseNow(this.prisma);
     const existing = await this.prisma.idempotencyRecord.findFirst({
       where: {
-        namespace: "automatic-quote.select-destination",
+        namespace,
         idempotencyKey,
       },
       orderBy: { generation: "desc" },
@@ -5179,6 +5434,21 @@ export class AutomaticQuotesService {
         "Automatic quote has incomplete checkout evidence",
       );
     }
+    const activeForProjection = order.activePriceBinding?.orderPriceBinding;
+    const currentLegalForProjection =
+      activeForProjection &&
+      frozenEvidenceState === "none" &&
+      bindingMatchesAutomaticDraft(activeForProjection, draft)
+        ? await this.requiredLegalApprovals().availability()
+        : null;
+    const projectionPriceList = await this.priceListForOrderProjection(
+      client,
+      order.id,
+      draft,
+      currentLegalForProjection
+        ? currentLegalForProjection.documents.terms.revisionId
+        : undefined,
+    );
     const expired =
       session.status === QuoteSessionStatus.EXPIRED ||
       session.expiresAt.getTime() <= Date.now();
@@ -5295,7 +5565,12 @@ export class AutomaticQuotesService {
     );
     const handoffReasons: string[] = [];
     if (
-      await this.preprocessingRequiresHandoff(order.id, draft.items, client)
+      await this.preprocessingRequiresHandoff(
+        order.id,
+        draft.items,
+        client,
+        projectionPriceList,
+      )
     ) {
       handoffReasons.push("PREPROCESSING_FAILED");
     }
@@ -5381,10 +5656,22 @@ export class AutomaticQuotesService {
     const hasLiveReservation = Boolean(currentPlan && currentReservation);
     const rough =
       itemDtos.length > 0
-        ? await this.roughQuote(order.id, hasLiveReservation, client)
+        ? await this.roughQuote(
+            order.id,
+            hasLiveReservation,
+            client,
+            undefined,
+            projectionPriceList,
+          )
         : null;
     const deliveryOptions =
-      rough?.deliveryOptions ?? (await this.deliveryOptions(undefined, client));
+      rough?.deliveryOptions ??
+      (await this.deliveryOptions(
+        undefined,
+        client,
+        undefined,
+        projectionPriceList,
+      ));
     const selectedDeliveryDestination = draft.selectedDeliveryDestination
       ? {
           providerEndpointId:
@@ -5419,7 +5706,9 @@ export class AutomaticQuotesService {
       Boolean(active && currentPlan && currentReservation);
     let bindingUsesCurrentTerms = hasFrozenEvidence;
     if (!bindingUsesCurrentTerms && canOtherwiseBeCheckoutReady) {
-      const legal = await this.requiredLegalApprovals().availability();
+      const legal =
+        currentLegalForProjection ??
+        (await this.requiredLegalApprovals().availability());
       assertEffectiveLegalDocuments(legal, ["terms"]);
       bindingUsesCurrentTerms =
         active?.legalTermsRevisionId === legal.documents.terms.revisionId;
@@ -5459,7 +5748,7 @@ export class AutomaticQuotesService {
       rough?.reasons.includes("SHIPMENT_INELIGIBLE") ?? false;
     const quantityComparisons =
       itemDtos.length > 0
-        ? await this.quantityComparisons(order.id, client)
+        ? await this.quantityComparisons(order.id, projectionPriceList, client)
         : [];
     const phase = expired
       ? "EXPIRED"
@@ -5682,17 +5971,12 @@ export class AutomaticQuotesService {
       | undefined,
     client: Transaction | PrismaService = this.prisma,
     configuredOptions?: readonly DeliveryCapabilityOption[],
+    projectionPriceList?: SelectedCommercialPolicy["priceList"],
   ) {
     const priceList =
       input?.priceList ??
-      (await client.priceList.findUnique({
-        where: {
-          currency_revision: {
-            currency: "CZK",
-            revision: AUTOMATIC_PRICE_LIST_REVISION,
-          },
-        },
-      }));
+      projectionPriceList ??
+      (await currentCommercialPolicy(client)).priceList;
     const options =
       configuredOptions ?? this.deliveryCapabilities.configuredOptions();
     if (!priceList) return [];
@@ -5748,6 +6032,7 @@ export class AutomaticQuotesService {
 
   private async quantityComparisons(
     orderId: string,
+    priceList: SelectedCommercialPolicy["priceList"],
     client: Transaction | PrismaService = this.prisma,
   ): Promise<AutomaticQuoteSessionDto["quantityComparisons"]> {
     const draft = await client.automaticQuoteDraft.findUnique({
@@ -5758,15 +6043,7 @@ export class AutomaticQuotesService {
         items: { orderBy: { ordinal: "asc" } },
       },
     });
-    const priceList = await client.priceList.findUnique({
-      where: {
-        currency_revision: {
-          currency: "CZK",
-          revision: AUTOMATIC_PRICE_LIST_REVISION,
-        },
-      },
-    });
-    if (!draft || !priceList || draft.items.length === 0) return [];
+    if (!draft || draft.items.length === 0) return [];
     const parameters = parseAutomaticQuotePricingParameters(
       priceList.parameters,
     );
@@ -5864,6 +6141,7 @@ export class AutomaticQuotesService {
               }
             : {}),
         });
+        if (!priceFitsApiRange(prepared.prepared.price)) continue;
         comparisons.push({
           itemOrdinal: activeItem.ordinal,
           quantity,
@@ -7235,4 +7513,18 @@ function safeNumber(value: bigint): number {
     throw new ConflictException("Persisted money exceeds the API range");
   }
   return number;
+}
+
+function priceFitsApiRange(price: {
+  customerTotal: { minorUnits: bigint };
+  tax: { net: { minorUnits: bigint }; vat: { minorUnits: bigint } };
+  components: ReadonlyArray<{ amount: { minorUnits: bigint } }>;
+}): boolean {
+  const maximum = BigInt(Number.MAX_SAFE_INTEGER);
+  return [
+    price.customerTotal.minorUnits,
+    price.tax.net.minorUnits,
+    price.tax.vat.minorUnits,
+    ...price.components.map(({ amount }) => amount.minorUnits),
+  ].every((value) => value >= 0n && value <= maximum);
 }
