@@ -3686,8 +3686,6 @@ export interface components {
             settlements: components["schemas"]["OperatorSettlementDto"][];
         };
         OperatorJobAcceptedRiskDto: {
-            /** Format: date-time */
-            acknowledgedAt: string;
             acknowledgementKey: string;
             code: string;
             /** Format: uuid */

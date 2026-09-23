@@ -4,6 +4,7 @@ import type { PrismaService } from "../../prisma/prisma.service";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import type { AuditService } from "../audit/audit.service";
+import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import type {
   ObjectStorage,
   StoredObjectMetadata,
@@ -94,11 +95,13 @@ function harness() {
               modelGeometryId: geometryId,
               printConfigRevisionId: configId,
               referencePartsPerPlate: 1,
+              quantity: 1,
               primaryReferenceSliceResult: {
                 kind: SliceKind.REFERENCE,
                 modelGeometryId: geometryId,
                 printConfigRevisionId: configId,
                 referenceProfileId: profileId,
+                partsPerPlate: 1,
               },
               tailReferenceSliceResult: null,
               material: "PLA",
@@ -118,6 +121,7 @@ function harness() {
                 boundsZMicrometers: 3000n,
                 volumeCubicMicrometers: 4000n,
                 geometryHash: "c".repeat(64),
+                canonicalObjectKey: "geometries/exact-source.3mf",
               },
             },
           },
@@ -174,18 +178,29 @@ describe("operator job artifact downloads", () => {
         {
           ordinal: 0,
           sourceModelFileId: sourceId,
+          bodyIds: ["body-1"],
+          selectionSha256: "d".repeat(64),
           targetModelGeometryId: geometryId,
           printConfigRevisionId: configId,
           referenceProfileId: profileId,
           referencePartsPerPlate: 1,
+          quantity: 1,
           configurationFingerprint: "current",
+          referenceProfile: {
+            settings: {},
+            slicerEngine: "orcaslicer",
+            slicerVersion: "2.4.2",
+          },
+          printConfigRevision: { settings: {} },
           riskDecisions: [
             {
               configurationFingerprint: "current",
               preflightFindingId: "14141414-1414-4414-8414-141414141414",
               acknowledgementKey: "ack-test",
-              createdAt: new Date("2026-01-02T00:00:00Z"),
               preflightFinding: {
+                modelFileId: sourceId,
+                modelGeometryId: geometryId,
+                inspectionRevision: "inspection-v1",
                 code: "THIN_WALL",
                 severity: "WARNING",
                 message: "Thin wall detected",
@@ -206,12 +221,53 @@ describe("operator job artifact downloads", () => {
             {
               code: "THIN_WALL",
               acknowledgementKey: "ack-test",
-              acknowledgedAt: "2026-01-02T00:00:00.000Z",
             },
           ],
         },
       ],
     });
+    const decisions = test.job.order.automaticQuoteDraft!.items[0]!
+      .riskDecisions as Array<{
+      preflightFinding: { modelFileId: string; inspectionRevision: string };
+    }>;
+    decisions[0]!.preflightFinding.modelFileId = phaseId;
+    expect(
+      (await test.service.detail(operator, jobId)).slots[0]!.acceptedRisks,
+    ).toEqual([]);
+    decisions[0]!.preflightFinding.modelFileId = sourceId;
+    decisions[0]!.preflightFinding.inspectionRevision = "foreign-revision";
+    expect(
+      (await test.service.detail(operator, jobId)).slots[0]!.acceptedRisks,
+    ).toEqual([]);
+    const { slicingInputFingerprint } = await import("@taven/slicer-contracts");
+    decisions[0]!.preflightFinding.inspectionRevision = slicingInputFingerprint(
+      "reference_slice",
+      {
+        geometry: {
+          sourceModelFileId: sourceId,
+          sourceContentSha256: sourceHash,
+          modelGeometryId: geometryId,
+          canonicalObjectKey: "geometries/exact-source.3mf",
+          geometrySha256: "c".repeat(64),
+          bodyIds: ["body-1"],
+          selectionSha256: "d".repeat(64),
+        },
+        referenceProfile: {
+          revisionId: profileId,
+          contentSha256: slicerSettingsSnapshot({}).contentSha256,
+          slicerEngine: "orcaslicer",
+          slicerVersion: "2.4.2",
+        },
+        printConfig: {
+          revisionId: configId,
+          contentSha256: slicerSettingsSnapshot({}).contentSha256,
+        },
+        partsPerPlate: 1,
+      },
+    );
+    expect(
+      (await test.service.detail(operator, jobId)).slots[0]!.acceptedRisks,
+    ).toHaveLength(1);
   });
 
   it("scopes the exact source, caps URL expiry by retention and audits without URL/key", async () => {

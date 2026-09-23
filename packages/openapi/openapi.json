@@ -6327,10 +6327,6 @@
       },
       "OperatorJobAcceptedRiskDto": {
         "properties": {
-          "acknowledgedAt": {
-            "format": "date-time",
-            "type": "string"
-          },
           "acknowledgementKey": {
             "type": "string"
           },
@@ -6353,8 +6349,7 @@
           "code",
           "severity",
           "message",
-          "acknowledgementKey",
-          "acknowledgedAt"
+          "acknowledgementKey"
         ],
         "type": "object"
       },

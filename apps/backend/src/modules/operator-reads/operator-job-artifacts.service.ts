@@ -23,6 +23,7 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
+import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import {
   OBJECT_STORAGE,
   ObjectStorageDeadlineError,
@@ -72,10 +73,13 @@ const jobInclude = {
             select: {
               ordinal: true,
               sourceModelFileId: true,
+              bodyIds: true,
+              selectionSha256: true,
               targetModelGeometryId: true,
               printConfigRevisionId: true,
               referenceProfileId: true,
               referencePartsPerPlate: true,
+              quantity: true,
               configurationFingerprint: true,
               riskDecisions: {
                 where: { decision: AutomaticQuoteRiskDecision.ACKNOWLEDGED },
@@ -83,12 +87,26 @@ const jobInclude = {
                   configurationFingerprint: true,
                   preflightFindingId: true,
                   acknowledgementKey: true,
-                  createdAt: true,
                   preflightFinding: {
-                    select: { code: true, severity: true, message: true },
+                    select: {
+                      modelFileId: true,
+                      modelGeometryId: true,
+                      inspectionRevision: true,
+                      code: true,
+                      severity: true,
+                      message: true,
+                    },
                   },
                 },
               },
+              referenceProfile: {
+                select: {
+                  settings: true,
+                  slicerEngine: true,
+                  slicerVersion: true,
+                },
+              },
+              printConfigRevision: { select: { settings: true } },
             },
           },
         },
@@ -120,6 +138,7 @@ const jobInclude = {
                       modelGeometryId: true,
                       printConfigRevisionId: true,
                       referenceProfileId: true,
+                      partsPerPlate: true,
                     },
                   },
                   tailReferenceSliceResult: {
@@ -128,6 +147,7 @@ const jobInclude = {
                       modelGeometryId: true,
                       printConfigRevisionId: true,
                       referenceProfileId: true,
+                      partsPerPlate: true,
                     },
                   },
                 },
@@ -180,6 +200,19 @@ export class OperatorJobArtifactsService {
         item,
       ]),
     );
+    const risksByItemId = new Map<
+      string,
+      OperatorJobDetailDto["slots"][number]["acceptedRisks"]
+    >();
+    for (const { fulfilmentSlot } of slots) {
+      const item = fulfilmentSlot.orderItem;
+      if (!risksByItemId.has(item.id)) {
+        risksByItemId.set(
+          item.id,
+          await acceptedRisks(item, acceptedItems.get(item.ordinal)),
+        );
+      }
+    }
 
     return {
       id: job.id,
@@ -211,7 +244,7 @@ export class OperatorJobArtifactsService {
           volumeCubicMicrometers:
             item.modelGeometry.volumeCubicMicrometers.toString(),
           geometrySha256: item.modelGeometry.geometryHash,
-          acceptedRisks: acceptedRisks(item, acceptedItems.get(item.ordinal)),
+          acceptedRisks: risksByItemId.get(item.id) ?? [],
         };
       }),
       estimate: {
@@ -444,18 +477,19 @@ function isArtifactKind(value: string): value is JobArtifactKind {
   );
 }
 
-function acceptedRisks(
+async function acceptedRisks(
   item: ScopedJob["phaseResourcePlanJob"]["slots"][number]["fulfilmentSlot"]["orderItem"],
   snapshot:
     | NonNullable<ScopedJob["order"]["automaticQuoteDraft"]>["items"][number]
     | undefined,
-): OperatorJobDetailDto["slots"][number]["acceptedRisks"] {
+): Promise<OperatorJobDetailDto["slots"][number]["acceptedRisks"]> {
   if (
     !snapshot ||
     snapshot.sourceModelFileId !== item.sourceModelFileId ||
     snapshot.targetModelGeometryId !== item.modelGeometryId ||
     snapshot.printConfigRevisionId !== item.printConfigRevisionId ||
-    snapshot.referencePartsPerPlate !== item.referencePartsPerPlate
+    snapshot.referencePartsPerPlate !== item.referencePartsPerPlate ||
+    snapshot.quantity !== item.quantity
   ) {
     return [];
   }
@@ -465,6 +499,7 @@ function acceptedRisks(
   ].filter((slice) => slice !== null);
   if (
     references.length === 0 ||
+    snapshot.referencePartsPerPlate === null ||
     references.some(
       (slice) =>
         slice.kind !== SliceKind.REFERENCE ||
@@ -475,10 +510,64 @@ function acceptedRisks(
   ) {
     return [];
   }
-  return snapshot.riskDecisions
-    .filter(
-      (decision) =>
-        decision.configurationFingerprint === snapshot.configurationFingerprint,
+  const scopedDecisions = snapshot.riskDecisions.filter(
+    (decision) =>
+      decision.configurationFingerprint === snapshot.configurationFingerprint &&
+      decision.preflightFinding.modelFileId === item.sourceModelFileId &&
+      decision.preflightFinding.modelGeometryId === item.modelGeometryId,
+  );
+  if (scopedDecisions.length === 0) return [];
+  const partsPerPlate = snapshot.referencePartsPerPlate;
+  const remainder = snapshot.quantity % partsPerPlate;
+  const expectedOccupancies =
+    snapshot.quantity <= partsPerPlate
+      ? [snapshot.quantity]
+      : remainder === 0
+        ? [partsPerPlate]
+        : [partsPerPlate, remainder];
+  if (
+    references.length !== expectedOccupancies.length ||
+    references.some(
+      (slice, index) => slice.partsPerPlate !== expectedOccupancies[index],
+    )
+  ) {
+    return [];
+  }
+  const { slicingInputFingerprint } = await import("@taven/slicer-contracts");
+  const inspectionRevisions = new Set([
+    "inspection-v1",
+    ...expectedOccupancies.map((occupancy) =>
+      slicingInputFingerprint("reference_slice", {
+        geometry: {
+          sourceModelFileId: item.sourceModelFileId,
+          sourceContentSha256: item.sourceModelFile.contentHash,
+          modelGeometryId: item.modelGeometryId,
+          canonicalObjectKey: item.modelGeometry.canonicalObjectKey,
+          geometrySha256: item.modelGeometry.geometryHash,
+          bodyIds: snapshot.bodyIds,
+          selectionSha256: snapshot.selectionSha256,
+        },
+        referenceProfile: {
+          revisionId: snapshot.referenceProfileId,
+          contentSha256: slicerSettingsSnapshot(
+            snapshot.referenceProfile.settings,
+          ).contentSha256,
+          slicerEngine: snapshot.referenceProfile.slicerEngine,
+          slicerVersion: snapshot.referenceProfile.slicerVersion,
+        },
+        printConfig: {
+          revisionId: snapshot.printConfigRevisionId,
+          contentSha256: slicerSettingsSnapshot(
+            snapshot.printConfigRevision.settings,
+          ).contentSha256,
+        },
+        partsPerPlate: occupancy,
+      }),
+    ),
+  ]);
+  return scopedDecisions
+    .filter((decision) =>
+      inspectionRevisions.has(decision.preflightFinding.inspectionRevision),
     )
     .map((decision) => ({
       findingId: decision.preflightFindingId,
@@ -486,7 +575,6 @@ function acceptedRisks(
       severity: decision.preflightFinding.severity,
       message: decision.preflightFinding.message,
       acknowledgementKey: decision.acknowledgementKey,
-      acknowledgedAt: decision.createdAt.toISOString(),
     }))
     .sort((left, right) => left.findingId.localeCompare(right.findingId));
 }

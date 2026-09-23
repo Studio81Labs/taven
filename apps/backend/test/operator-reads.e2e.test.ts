@@ -50,6 +50,20 @@ describe("operator read contracts", () => {
   const headObject = vi.fn(
     async (key: string) => storedObjects.get(key) ?? null,
   );
+  const putImmutableObject = vi.fn(
+    async (input: {
+      objectKey: string;
+      bytes: Uint8Array;
+      contentHash: string;
+      contentType: string;
+    }) => {
+      storedObjects.set(input.objectKey, {
+        contentType: input.contentType,
+        contentLength: input.bytes.byteLength,
+        contentHash: input.contentHash,
+      });
+    },
+  );
   const createDownloadUrl = vi.fn(
     async ({ expiresAt }: { objectKey: string; expiresAt: Date }) => ({
       url: "https://storage.example.test/signed?token=opaque",
@@ -64,7 +78,7 @@ describe("operator read contracts", () => {
       imports: [AppModule],
     })
       .overrideProvider(OBJECT_STORAGE)
-      .useValue({ headObject, createDownloadUrl })
+      .useValue({ headObject, putImmutableObject, createDownloadUrl })
       .compile();
     app = moduleRef.createNestApplication<NestExpressApplication>({
       bodyParser: false,

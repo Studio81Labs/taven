@@ -120,9 +120,6 @@ export class OperatorJobAcceptedRiskDto {
 
   @ApiProperty({ type: String })
   acknowledgementKey!: string;
-
-  @ApiProperty({ type: String, format: "date-time" })
-  acknowledgedAt!: string;
 }
 
 export class OperatorJobEstimateDto {
