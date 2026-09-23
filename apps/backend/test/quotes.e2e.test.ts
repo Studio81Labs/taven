@@ -11,7 +11,9 @@ import {
   HTTP_BODY_LIMIT_BYTES,
 } from "../src/http-body.config";
 import type { IssueOfferDto } from "../src/modules/quotes/quotes.dto";
+import { computeLegalRevisionContentHash } from "../src/modules/legal-documents/legal-documents.service";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
+import { LegalDocumentsService } from "../src/modules/legal-documents/legal-documents.service";
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
@@ -38,6 +40,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let baseUrl: URL;
   let prisma: PrismaService;
   let quotes: QuotesService;
+  let legalDocuments: LegalDocumentsService;
   let priceListId: string;
   let termsSnapshot: Record<string, unknown>;
   let claimsSnapshot: Record<string, unknown>;
@@ -58,6 +61,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
     quotes = app.get(QuotesService);
+    legalDocuments = app.get(LegalDocumentsService);
     const node = await prisma.node.findFirstOrThrow({
       where: { active: true },
     });
@@ -1274,6 +1278,325 @@ describe("QuoteRequest and tokenized individual offers", () => {
       status: "QUOTED",
       currentQuoteId: successful.body.quoteId,
     });
+  });
+
+  it("reissues a retained unaccepted legacy offer through preview, acceptance, and payment schedules", async () => {
+    const created = await quotes.createRequest(
+      requestInput("legacy-reissue-payment"),
+      "198.51.100.92",
+      key("legacy-reissue-payment-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("legacy-reissue-payment-review"),
+    );
+    const initialExpiry = new Date(Date.now() + 60 * 60 * 1_000);
+    const initialIssueKey = key("legacy-reissue-payment-issue");
+    const initial = await issueOffer(
+      created.requestId,
+      initialIssueKey,
+      initialExpiry,
+    );
+    expect(initial.response.status).toBe(201);
+
+    // This is a migration-owned historical fixture. The real migration marks
+    // the row in legacy_quote_request_imports and leaves its legal columns
+    // absent; disabling user triggers for this isolated fixture reproduces
+    // that retained shape without changing production writers.
+    await prisma.$transaction(async (transaction) => {
+      await transaction.$executeRawUnsafe(
+        "SET LOCAL session_replication_role = 'replica'",
+      );
+      await transaction.$executeRaw`
+        UPDATE quotes
+        SET public_token_hash = NULL,
+            capability_key_id = NULL,
+            terms_revision = 'legacy-terms',
+            terms_snapshot = '{}'::jsonb,
+            legal_terms_revision_id = NULL,
+            legal_claims_revision_id = NULL,
+            claim_window_days = NULL,
+            issuance_command_key = 'legacy-import'
+        WHERE id = ${initial.body.quoteId}::uuid
+      `;
+      await transaction.$executeRaw`
+        UPDATE quote_requests
+        SET current_state_command_key = 'legacy-import'
+        WHERE id = ${created.requestId}::uuid
+      `;
+      await transaction.$executeRaw`
+        INSERT INTO legacy_quote_request_imports
+          (quote_request_id, quote_id, photo_publication_consent_granted_at)
+        VALUES (${created.requestId}::uuid, ${initial.body.quoteId}::uuid, NULL)
+      `;
+    });
+
+    const reissued = await reissueOffer(
+      created.requestId,
+      key("legacy-reissue-payment-command"),
+      initial.body.quoteId,
+      initial.body.version,
+      new Date(Date.now() + 2 * 60 * 60 * 1_000),
+    );
+    expect(reissued.response.status, JSON.stringify(reissued.body)).toBe(201);
+    expect(reissued.body.version).toBe(2);
+
+    const preview = await apiJson<{
+      version: number;
+      claimPolicyRevision: string;
+      paymentSchedules: Array<{ role: string; grossAmountMinor: number }>;
+    }>(`offers/${reissued.body.quoteId}`, {
+      headers: bearer(reissued.body.offerToken),
+    });
+    expect(preview.response.status).toBe(200);
+    expect(preview.body).toMatchObject({
+      version: 2,
+      claimPolicyRevision: e2eLegalRevisionCodes.claims,
+    });
+    expect(
+      preview.body.paymentSchedules.map((schedule) => schedule.role),
+    ).toEqual(["DEPOSIT", "BALANCE"]);
+
+    const accepted = await acceptOffer(
+      reissued.body,
+      key("legacy-reissue-payment-accept"),
+    );
+    expect(accepted.response.status).toBe(200);
+    expect(accepted.body.status).toBe("DRAFT");
+
+    const current = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: created.requestId },
+      select: { status: true, currentQuoteId: true },
+    });
+    expect(current).toEqual({
+      status: "ACCEPTED",
+      currentQuoteId: reissued.body.quoteId,
+    });
+    const legacy = await prisma.quote.findUniqueOrThrow({
+      where: { id: initial.body.quoteId },
+      select: {
+        issuanceCommandKey: true,
+        version: true,
+        publicTokenHash: true,
+        legalTermsRevisionId: true,
+        legalClaimsRevisionId: true,
+      },
+    });
+    expect(legacy).toEqual({
+      issuanceCommandKey: "legacy-import",
+      version: 1,
+      publicTokenHash: null,
+      legalTermsRevisionId: null,
+      legalClaimsRevisionId: null,
+    });
+
+    const priceSnapshot = await prisma.quotePriceBinding.findUniqueOrThrow({
+      where: { quoteId: reissued.body.quoteId },
+      select: { priceSnapshotId: true },
+    });
+    await expect(
+      prisma.paymentSchedule.findMany({
+        where: { priceSnapshotId: priceSnapshot.priceSnapshotId },
+        orderBy: { sequence: "asc" },
+        select: { role: true },
+      }),
+    ).resolves.toEqual([{ role: "DEPOSIT" }, { role: "BALANCE" }]);
+
+    await expect(
+      prisma.auditEvent.findMany({
+        where: {
+          quoteRequestId: created.requestId,
+          eventType: "quote_offer.issued",
+        },
+        select: { quoteId: true, payload: true },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ quoteId: initial.body.quoteId }),
+      expect.objectContaining({ quoteId: reissued.body.quoteId }),
+    ]);
+    await expect(
+      prisma.outboxMessage.findMany({
+        where: {
+          aggregateType: "Quote",
+          aggregateId: reissued.body.quoteId,
+          messageType: "email.quote-offer-issued",
+        },
+        select: { messageType: true },
+      }),
+    ).resolves.toEqual([{ messageType: "email.quote-offer-issued" }]);
+
+    // The historical issuance idempotency response remains replayable even
+    // though its quote is no longer the current version.
+    const oldReplay = await issueOffer(
+      created.requestId,
+      initialIssueKey,
+      initialExpiry,
+    );
+    expect(oldReplay.response.status).toBe(201);
+    expect(oldReplay.body).toEqual(initial.body);
+  });
+
+  it("serializes reissue against acceptance without creating a duplicate order", async () => {
+    const created = await quotes.createRequest(
+      requestInput("reissue-accept-race"),
+      "198.51.100.93",
+      key("reissue-accept-race-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("reissue-accept-race-review"),
+    );
+    const initial = await issueOffer(
+      created.requestId,
+      key("reissue-accept-race-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
+    const [reissue, acceptance] = await Promise.all([
+      reissueOffer(
+        created.requestId,
+        key("reissue-accept-race-reissue"),
+        initial.body.quoteId,
+        initial.body.version,
+        new Date(Date.now() + 2 * 60 * 60 * 1_000),
+      ),
+      acceptOffer(initial.body, key("reissue-accept-race-accept")),
+    ]);
+
+    expect([
+      [201, 409],
+      [201, 410],
+      [409, 200],
+      [410, 200],
+    ]).toContainEqual([reissue.response.status, acceptance.response.status]);
+    const acceptedOrders = await prisma.individualOrderOrigin.count({
+      where: { quote: { quoteRequestId: created.requestId } },
+    });
+    expect(acceptedOrders).toBe(acceptance.response.status === 200 ? 1 : 0);
+    const request = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: created.requestId },
+      select: { status: true, currentQuoteId: true },
+    });
+    expect(request.currentQuoteId).toBe(
+      reissue.response.status === 201
+        ? reissue.body.quoteId
+        : initial.body.quoteId,
+    );
+    expect(request.status).toBe(
+      acceptance.response.status === 200 ? "ACCEPTED" : "QUOTED",
+    );
+  });
+
+  it("serializes reissue against rejection without changing the current pointer", async () => {
+    const created = await quotes.createRequest(
+      requestInput("reissue-reject-race"),
+      "198.51.100.94",
+      key("reissue-reject-race-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("reissue-reject-race-review"),
+    );
+    const initial = await issueOffer(
+      created.requestId,
+      key("reissue-reject-race-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
+    const [reissue, rejection] = await Promise.all([
+      reissueOffer(
+        created.requestId,
+        key("reissue-reject-race-reissue"),
+        initial.body.quoteId,
+        initial.body.version,
+        new Date(Date.now() + 2 * 60 * 60 * 1_000),
+      ),
+      rejectOffer(initial.body, key("reissue-reject-race-reject")),
+    ]);
+
+    expect([
+      [201, 409],
+      [201, 410],
+      [409, 200],
+      [410, 200],
+    ]).toContainEqual([reissue.response.status, rejection.response.status]);
+    const request = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: created.requestId },
+      select: { status: true, currentQuoteId: true },
+    });
+    expect(request.currentQuoteId).toBe(
+      reissue.response.status === 201
+        ? reissue.body.quoteId
+        : initial.body.quoteId,
+    );
+    expect(request.status).toBe(
+      rejection.response.status === 200 ? "REJECTED" : "QUOTED",
+    );
+  });
+
+  it("serializes expiry against reissue at the immutable deadline", async () => {
+    const created = await quotes.createRequest(
+      requestInput("expiry-reissue"),
+      "198.51.100.95",
+      key("expiry-reissue-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("expiry-reissue-review"),
+    );
+    const initial = await issueOffer(
+      created.requestId,
+      key("expiry-reissue-issue"),
+      new Date(Date.now() + 700),
+    );
+    const barrier = new Promise<void>((resolve) => setTimeout(resolve, 550));
+    const [reissue, expiration] = await Promise.allSettled([
+      barrier.then(() =>
+        reissueOffer(
+          created.requestId,
+          key("expiry-reissue-command"),
+          initial.body.quoteId,
+          initial.body.version,
+          new Date(Date.now() + 2 * 60 * 60 * 1_000),
+        ),
+      ),
+      barrier.then(() =>
+        quotes.expireOffer(
+          operator,
+          created.requestId,
+          key("expiry-reissue-expire"),
+        ),
+      ),
+    ]);
+    expect(reissue.status).toBe("fulfilled");
+    if (reissue.status !== "fulfilled")
+      throw new Error("Reissue did not settle");
+    expect([201, 409, 410]).toContain(reissue.value.response.status);
+    if (expiration.status === "fulfilled") {
+      expect(expiration.value.status).toBe("EXPIRED");
+    } else {
+      expect(expiration.reason).toMatchObject({ status: 409 });
+    }
+    const request = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: created.requestId },
+      select: { status: true, currentQuoteId: true },
+    });
+    const expired = request.status === "EXPIRED";
+    if (expired) {
+      expect(reissue.value.response.status).not.toBe(201);
+      expect(request.currentQuoteId).toBe(initial.body.quoteId);
+    } else {
+      expect(request.status).toBe("QUOTED");
+      expect(reissue.value.response.status).toBe(201);
+      expect(request.currentQuoteId).toBe(reissue.value.body.quoteId);
+    }
+    await expect(
+      prisma.quoteRequest.findUniqueOrThrow({
+        where: { id: created.requestId },
+        select: { status: true, currentQuoteId: true },
+      }),
+    ).resolves.toEqual(request);
+    await expect(
+      prisma.quote.count({ where: { quoteRequestId: created.requestId } }),
+    ).resolves.toBe(expired ? 1 : 2);
   });
 
   it("accepts and canonicalizes uppercase UUIDs allowed by the API contract", async () => {
@@ -2498,6 +2821,145 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).rejects.toThrow("New legal acceptance requires a database decision");
   });
 
+  it("reissues against the newly published terms revision", async () => {
+    const created = await quotes.createRequest(
+      requestInput("publication-reissue"),
+      "198.51.100.96",
+      key("publication-reissue-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("publication-reissue-review"),
+    );
+    const initial = await issueOffer(
+      created.requestId,
+      key("publication-reissue-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
+    const termsDocument = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "terms" },
+    });
+    const previousGeneration = termsDocument.generation;
+    const previousPublications = await prisma.legalDocumentPublication.findMany(
+      {
+        where: { documentId: termsDocument.id },
+      },
+    );
+    const latestTerms = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { documentId: termsDocument.id },
+      orderBy: { sequence: "desc" },
+    });
+    const title = "Published terms revision for reissue";
+    const summary = "A rotated terms document used by the reissue regression.";
+    const sections = [{ title: "Reissue", paragraphs: ["Updated terms."] }];
+    const nextTerms = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: termsDocument.id,
+        sequence: latestTerms.sequence + 1,
+        editVersion: 1,
+        status: "APPROVED",
+        contentVersion: 1,
+        title,
+        summary,
+        sections,
+        contentHash: computeLegalRevisionContentHash({
+          contentVersion: 1,
+          title,
+          summary,
+          sections,
+        }),
+        revisionCode: `terms-reissue-${randomUUID()}`,
+        effectiveAt: new Date(Date.now() - 1_000),
+        approvalEvidence: "Quote reissue E2E fixture",
+        approvedBy: operator.operatorId,
+        approvedAt: new Date(),
+      },
+    });
+    const previousTermsSnapshot = termsSnapshot;
+    try {
+      const [publication, reissued] = await Promise.allSettled([
+        legalDocuments.publishRevision(
+          operator,
+          "terms",
+          nextTerms.id,
+          {
+            expectedGeneration: previousGeneration,
+            reason: "Quote reissue publication race E2E fixture",
+            reasonCode: "E2E_PUBLICATION_RACE",
+          },
+          key("publication-reissue-publication"),
+        ),
+        reissueOffer(
+          created.requestId,
+          key("publication-reissue-command"),
+          initial.body.quoteId,
+          initial.body.version,
+          new Date(Date.now() + 2 * 60 * 60 * 1_000),
+        ),
+      ]);
+      expect(publication.status, JSON.stringify(publication)).toBe("fulfilled");
+      expect(reissued.status).toBe("fulfilled");
+      if (publication.status !== "fulfilled" || reissued.status !== "fulfilled")
+        throw new Error("Publication/reissue race did not settle");
+      const reissueResponse = reissued.value;
+      expect([201, 400]).toContain(reissueResponse.response.status);
+      if (reissueResponse.response.status === 400) {
+        expect(reissueResponse.body).toMatchObject({
+          message:
+            "termsSnapshot must match the current immutable terms revision",
+        });
+      }
+      const versions = await prisma.quote.findMany({
+        where: { quoteRequestId: created.requestId },
+        orderBy: { version: "asc" },
+        select: { id: true, version: true, legalTermsRevisionId: true },
+      });
+      expect(versions).toHaveLength(
+        reissueResponse.response.status === 201 ? 2 : 1,
+      );
+      await expect(
+        prisma.quoteRequest.findUniqueOrThrow({
+          where: { id: created.requestId },
+          select: { currentQuoteId: true, status: true },
+        }),
+      ).resolves.toMatchObject({
+        status: "QUOTED",
+        ...(reissueResponse.response.status === 201
+          ? { currentQuoteId: reissueResponse.body.quoteId }
+          : { currentQuoteId: initial.body.quoteId }),
+      });
+    } finally {
+      termsSnapshot = previousTermsSnapshot;
+      await prisma.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          "SET LOCAL session_replication_role = 'replica'",
+        );
+        await transaction.$executeRaw`
+          DELETE FROM legal_document_publications
+          WHERE document_id = ${termsDocument.id}::uuid
+        `;
+        for (const publication of previousPublications) {
+          await transaction.$executeRaw`
+            INSERT INTO legal_document_publications
+              (id, document_id, revision_id, starts_at, ends_at, cancelled_at,
+               published_by, reason, created_at, updated_at)
+            VALUES
+              (${publication.id}::uuid, ${publication.documentId}::uuid,
+               ${publication.revisionId}::uuid, ${publication.startsAt},
+               ${publication.endsAt}, ${publication.cancelledAt},
+               ${publication.publishedBy}::uuid, ${publication.reason},
+               ${publication.createdAt}, ${publication.updatedAt})
+          `;
+        }
+        await transaction.$executeRaw`
+          UPDATE legal_documents
+          SET generation = ${previousGeneration}
+          WHERE id = ${termsDocument.id}::uuid
+        `;
+      });
+    }
+  });
+
   function requestInput(scope: string) {
     return {
       description: `A detailed individual quote request for ${scope}`,
@@ -2853,6 +3315,33 @@ describe("QuoteRequest and tokenized individual offers", () => {
         acknowledgeWithdrawalException: true,
       }),
     });
+  }
+
+  async function rejectOffer(
+    issued: {
+      quoteId: string;
+      offerToken: string;
+      version: number;
+      termsRevision: string;
+    },
+    idempotencyKey: string,
+  ) {
+    return apiJson<{ requestId: string; status: string }>(
+      `offers/${issued.quoteId}/reject`,
+      {
+        method: "POST",
+        headers: {
+          ...bearer(issued.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+        },
+        body: JSON.stringify({
+          version: issued.version,
+          termsRevision: issued.termsRevision,
+          reason: "Customer declined the offer",
+        }),
+      },
+    );
   }
 
   async function operatorCommand(path: string, idempotencyKey: string) {
