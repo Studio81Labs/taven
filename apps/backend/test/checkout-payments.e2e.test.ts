@@ -2373,6 +2373,110 @@ describe("checkout payment capture protocol", () => {
             }),
           },
         );
+      const raceTermsDocument = await prisma.legalDocument.findUniqueOrThrow({
+        where: { key: "terms" },
+        include: {
+          publications: {
+            where: { endsAt: null, cancelledAt: null },
+            take: 1,
+          },
+        },
+      });
+      const raceTermsPublication = raceTermsDocument.publications[0];
+      if (!raceTermsPublication) {
+        throw new Error("Checkout race terms publication is unavailable");
+      }
+      const raceApprovals = app.get(LegalApprovalsService);
+      const originalLegalLock = raceApprovals.lock.bind(raceApprovals);
+      let releaseCheckout!: () => void;
+      const checkoutMayContinue = new Promise<void>((resolve) => {
+        releaseCheckout = resolve;
+      });
+      let checkoutBeforeLock = false;
+      const legalLockSpy = vi
+        .spyOn(raceApprovals, "lock")
+        .mockImplementation(async (tx, keys) => {
+          if (!checkoutBeforeLock && keys.includes("terms")) {
+            checkoutBeforeLock = true;
+            await checkoutMayContinue;
+          }
+          return originalLegalLock(tx, keys);
+        });
+      const raceCommandKey = "sandbox-checkout-publication-race";
+      const racedCheckout = createOutagePayment(raceCommandKey);
+      try {
+        await vi.waitFor(() => expect(checkoutBeforeLock).toBe(true), {
+          timeout: 3_000,
+          interval: 25,
+        });
+        await app.get(LegalDocumentsService).archivePublication(
+          {
+            operatorId: "f0000000-0000-4000-8000-000000000001",
+            role: "ADMIN",
+            permissions: [OPERATOR_PERMISSIONS.LEGAL_WRITE],
+            nodeIds: [],
+            authenticationMethod: "DEVELOPMENT_PASSWORD",
+            sessionId: randomUUID(),
+          },
+          "terms",
+          raceTermsPublication.id,
+          {
+            expectedGeneration: raceTermsDocument.generation,
+            reason: "Checkout publication race E2E fixture",
+            reasonCode: "E2E_CHECKOUT_PUBLICATION_RACE",
+          },
+          `checkout-race-archive-${randomUUID()}`,
+        );
+        releaseCheckout();
+        const rejected = await racedCheckout;
+        expect(rejected.status).toBe(503);
+        await expect(rejected.json()).resolves.toMatchObject({
+          code: "LAUNCH_APPROVAL_REQUIRED",
+        });
+        await expect(
+          prisma.order.findUniqueOrThrow({
+            where: { id: outageFoundation.orderId },
+            select: { acceptedOrderPriceBindingId: true },
+          }),
+        ).resolves.toEqual({ acceptedOrderPriceBindingId: null });
+        await expect(
+          prisma.legalAcceptanceDecision.count({
+            where: { orderId: outageFoundation.orderId },
+          }),
+        ).resolves.toBe(0);
+        await expect(
+          prisma.payment.count({
+            where: { orderId: outageFoundation.orderId },
+          }),
+        ).resolves.toBe(0);
+        await expect(
+          prisma.idempotencyRecord.count({
+            where: {
+              namespace: `checkout-payment:${outageFoundation.quoteSessionId}`,
+              idempotencyKey: raceCommandKey,
+            },
+          }),
+        ).resolves.toBe(0);
+      } finally {
+        releaseCheckout();
+        await racedCheckout.catch(() => undefined);
+        legalLockSpy.mockRestore();
+        await prisma.$transaction(async (transaction) => {
+          await transaction.$executeRawUnsafe(
+            "SET LOCAL session_replication_role = 'replica'",
+          );
+          await transaction.$executeRaw`
+            UPDATE legal_document_publications
+            SET ends_at = ${raceTermsPublication.endsAt}
+            WHERE id = ${raceTermsPublication.id}::uuid
+          `;
+          await transaction.$executeRaw`
+            UPDATE legal_documents
+            SET generation = ${raceTermsDocument.generation}
+            WHERE id = ${raceTermsDocument.id}::uuid
+          `;
+        });
+      }
       const createCallbackPayment = () =>
         fetch(
           new URL(
