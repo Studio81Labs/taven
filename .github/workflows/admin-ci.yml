@@ -44,3 +44,5 @@ jobs:
       - run: pnpm admin:typecheck
       - run: pnpm admin:test
       - run: pnpm admin:build
+      - run: pnpm -C apps/admin exec playwright install chromium --with-deps
+      - run: pnpm admin:test:e2e

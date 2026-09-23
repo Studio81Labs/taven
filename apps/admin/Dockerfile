@@ -26,11 +26,12 @@ RUN --mount=type=cache,id=taven-pnpm-store,target=/pnpm/store \
   pnpm --filter @taven/admin... install --frozen-lockfile
 
 COPY . .
-ARG VITE_API_BASE_URL=http://localhost:3001
-ARG VITE_APP_ENV=local
+ARG VITE_API_BASE_URL
+ARG VITE_APP_ENV
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_APP_ENV=${VITE_APP_ENV}
-RUN pnpm --filter @taven/admin... build
+RUN test -n "$VITE_API_BASE_URL" && test -n "$VITE_APP_ENV" && \
+    pnpm --filter @taven/admin... build
 
 FROM ${NGINX_IMAGE} AS runtime
 

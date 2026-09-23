@@ -61,6 +61,7 @@
     "admin:lint": "pnpm -C apps/admin lint",
     "admin:typecheck": "pnpm -C apps/admin typecheck",
     "admin:test": "pnpm -C apps/admin test",
+    "admin:test:e2e": "pnpm -C apps/admin test:e2e",
     "slicer-worker:dev": "pnpm -C apps/slicer-worker dev",
     "slicer-worker:build": "pnpm -C apps/slicer-worker build",
     "slicer-worker:lint": "pnpm -C apps/slicer-worker lint",
