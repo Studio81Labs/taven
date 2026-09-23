@@ -895,6 +895,51 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it("serializes unmount with print start so the resulting state stays safe", async () => {
+    const fixture = await preparePaidOrder("printing-unmount-race");
+    const { orderId, inventoryId, nodeId } = fixture.foundation;
+    const jobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, jobId, "printing-unmount-race-accept");
+    await makeGcodeReady(jobId);
+    const catalog = new OperatorCatalogService(
+      prisma,
+      null as unknown as ResourceCatalogService,
+      new AuditService(prisma),
+    );
+    const [unmount, printing] = await Promise.allSettled([
+      catalog.setInventoryMount(
+        operatorForTest(testOperatorId, nodeId),
+        nodeId,
+        inventoryId,
+        { mountStatus: "UNMOUNTED", reason: "Concurrent spool removal" },
+        `printing-unmount-race-${randomUUID()}`,
+      ),
+      orders.startPrinting(orderId, jobId, "printing-unmount-race-start"),
+    ]);
+    expect([unmount.status, printing.status].sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    if (unmount.status === "rejected") {
+      expect(unmount.reason).toBeInstanceOf(ConflictException);
+    } else {
+      expect(printing.status).toBe("rejected");
+      if (printing.status === "rejected") {
+        expect(printing.reason).toBeInstanceOf(ConflictException);
+      }
+    }
+    const [inventory, reservation] = await Promise.all([
+      prisma.inventory.findUniqueOrThrow({ where: { id: inventoryId } }),
+      prisma.productionReservation.findFirstOrThrow({ where: { jobId } }),
+    ]);
+    expect(
+      (inventory.mountStatus === "MOUNTED" &&
+        reservation.status === "PRINTING") ||
+        (inventory.mountStatus === "UNMOUNTED" &&
+          reservation.status === "HELD"),
+    ).toBe(true);
+  });
+
   it("rejects absent refund request bodies before command execution", async () => {
     const operator = operatorForTest(testOperatorId, randomUUID());
     const orderId = randomUUID();
