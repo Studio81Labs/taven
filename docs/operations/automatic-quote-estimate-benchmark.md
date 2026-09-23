@@ -59,9 +59,11 @@ also recorded for checkout context but are not used to hide estimator error
 behind the order floor.
 
 Four warm HTTP samples after one warm-up request measured 127.22, 130.53,
-147.15 and 133.99 ms. Median warm latency was 132.26 ms, meeting the ≤200 ms
-post-parse target. The p95 of this small sample was 145.18 ms and is retained
-as an operational observation, not as a customer-facing performance promise.
+147.15 and 133.99 ms. Median warm latency was 132.26 ms; this is network
+evidence only. It is not a browser parse-complete → visible
+acceptance result and must not be read as passing that gate. The p95 of this
+small sample was 145.18 ms and is retained as an operational observation, not
+as a customer-facing performance promise.
 
 ## Browser-visible measurement
 
