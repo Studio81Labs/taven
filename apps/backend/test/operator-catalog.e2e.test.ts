@@ -113,6 +113,114 @@ describe("operator catalog commands", () => {
     await pool?.end();
   });
 
+  it("registers immutable capability, machine and supported print config with replay", async () => {
+    const capabilityBody = {
+      capabilityKey: `operator-${randomUUID()}`,
+      manufacturer: "Operator test",
+      model: "V0",
+      buildVolumeXMicrometers: "220000",
+      buildVolumeYMicrometers: "220000",
+      buildVolumeZMicrometers: "250000",
+      supportedNozzleMicrometers: [400],
+      supportedMaterials: ["PLA", "PETG"],
+    };
+    const key = `catalog-capability-${randomUUID()}`;
+    const capability = await responseBody(
+      command("/admin/catalog/machine-capabilities", capabilityBody, key),
+    );
+    await expect(
+      command("/admin/catalog/machine-capabilities", capabilityBody, key).then(
+        (response) => response.json(),
+      ),
+    ).resolves.toEqual(capability);
+    expect(
+      (
+        await command(
+          "/admin/catalog/machine-capabilities",
+          { ...capabilityBody, model: "V1" },
+          key,
+        )
+      ).status,
+    ).toBe(409);
+
+    const machineBody = {
+      machineCapabilityId: capability.id,
+      code: `machine-${randomUUID()}`.slice(0, 50),
+      displayName: "Operator test machine",
+      installedNozzleMicrometers: 400,
+    };
+    const machine = await responseBody(
+      command(
+        `/admin/nodes/${fixture.nodeId}/machines`,
+        machineBody,
+        `catalog-machine-${randomUUID()}`,
+      ),
+    );
+    await expect(
+      prisma.machine.findUnique({ where: { id: machine.id } }),
+    ).resolves.toMatchObject({
+      nodeId: fixture.nodeId,
+      machineCapabilityId: capability.id,
+    });
+    expect(
+      (
+        await command(
+          `/admin/nodes/${fixture.nodeId}/machines`,
+          { ...machineBody, installedNozzleMicrometers: 600 },
+          `catalog-machine-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await command(
+          `/admin/nodes/${randomUUID()}/machines`,
+          machineBody,
+          `catalog-machine-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(404);
+
+    const configBody = {
+      quality: "STANDARD",
+      infillPercent: 35,
+      layerHeightMicrometers: 200,
+      supportsEnabled: false,
+      brimEnabled: false,
+      settings: overrideBundle({ testScope, infill: 35 }),
+    };
+    const config = await responseBody(
+      command(
+        "/admin/catalog/print-config-revisions",
+        configBody,
+        `catalog-config-${randomUUID()}`,
+      ),
+    );
+    await expect(
+      prisma.revisionIdentity.findUnique({ where: { id: config.id } }),
+    ).resolves.toMatchObject({ kind: "PRINT_CONFIG" });
+    expect(
+      (
+        await command(
+          "/admin/catalog/print-config-revisions",
+          { ...configBody, settings: machineBundle() },
+          `catalog-config-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await commandAs(
+          viewerCookie,
+          viewerCsrfToken,
+          "/admin/catalog/machine-capabilities",
+          capabilityBody,
+          `catalog-viewer-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(403);
+  });
+
   it("writes revision and node catalog resources with idempotency and audit evidence", async () => {
     const referenceKey = `catalog-reference-${randomUUID()}`;
     const referenceBody = {

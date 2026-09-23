@@ -206,6 +206,64 @@ describe("operator read contracts", () => {
     }
   });
 
+  it("returns exact catalog settings and scoped inventory purchase evidence", async () => {
+    const machine = await prisma.machine.findUniqueOrThrow({
+      where: { id: fixture.machineId },
+    });
+    const details = [
+      [
+        `/admin/catalog/reference-profiles/${fixture.referenceProfileId}`,
+        "settings",
+      ],
+      [
+        `/admin/catalog/machine-profiles/${fixture.machineProfileId}`,
+        "settings",
+      ],
+      [
+        `/admin/catalog/print-config-revisions/${fixture.printConfigRevisionId}`,
+        "settings",
+      ],
+      [
+        `/admin/catalog/machine-capabilities/${machine.machineCapabilityId}`,
+        "capabilityKey",
+      ],
+      [
+        `/admin/nodes/${nodeId}/inventories/${fixture.inventoryId}`,
+        "priceMinorUnitsNumerator",
+      ],
+    ] as const;
+    for (const [path, field] of details) {
+      const response = await read(path);
+      expect(response.status, path).toBe(200);
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body[field], path).toBeDefined();
+    }
+    const inventory = (await (
+      await read(`/admin/nodes/${nodeId}/inventories/${fixture.inventoryId}`)
+    ).json()) as Record<string, unknown>;
+    expect(inventory).toMatchObject({
+      nodeId,
+      machineId: fixture.machineId,
+      vendor: expect.any(String),
+      priceMinorUnitsNumerator: expect.any(String),
+      priceMinorUnitsDenominator: expect.any(String),
+      currency: expect.any(String),
+    });
+    expect(
+      (
+        await read(
+          `/admin/nodes/${randomUUID()}/inventories/${fixture.inventoryId}`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await read(`/admin/nodes/${nodeId}/inventories/${randomUUID()}`)).status,
+    ).toBe(404);
+    expect(
+      (await read(`/admin/catalog/reference-profiles/${randomUUID()}`)).status,
+    ).toBe(404);
+  });
+
   it("enforces the trusted node scope and capacity query boundary", async () => {
     const unavailableNode = await read(`/admin/nodes/${randomUUID()}/machines`);
     expect(unavailableNode.status).toBe(404);

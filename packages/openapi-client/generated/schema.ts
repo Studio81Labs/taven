@@ -134,6 +134,24 @@ export interface paths {
         /** List global machine capabilities */
         get: operations["OperatorReadsController_machineCapabilities"];
         put?: never;
+        /** Create an immutable machine capability */
+        post: operations["OperatorCatalogController_createMachineCapability"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/machine-capabilities/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an immutable machine capability */
+        get: operations["OperatorReadsController_machineCapabilityDetail"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -153,6 +171,23 @@ export interface paths {
         put?: never;
         /** Create an immutable machine-profile revision */
         post: operations["OperatorCatalogController_createMachineProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/machine-profiles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an immutable machine-profile revision */
+        get: operations["OperatorReadsController_machineProfileDetail"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -210,6 +245,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/catalog/price-lists/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read immutable price-list parameters */
+        get: operations["OperatorReadsController_priceListDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/catalog/print-config-revisions": {
         parameters: {
             query?: never;
@@ -219,6 +271,24 @@ export interface paths {
         };
         /** List immutable print-config revisions */
         get: operations["OperatorReadsController_printConfigRevisions"];
+        put?: never;
+        /** Create an immutable print-config revision */
+        post: operations["OperatorCatalogController_createPrintConfigRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/print-config-revisions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an immutable print-config revision */
+        get: operations["OperatorReadsController_printConfigRevisionDetail"];
         put?: never;
         post?: never;
         delete?: never;
@@ -256,6 +326,23 @@ export interface paths {
         put?: never;
         /** Create an immutable reference-profile revision */
         post: operations["OperatorCatalogController_createReferenceProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/catalog/reference-profiles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read an immutable reference-profile revision */
+        get: operations["OperatorReadsController_referenceProfileDetail"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -712,6 +799,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/nodes/{nodeId}/inventories/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read scoped inventory and its purchase rate */
+        get: operations["OperatorReadsController_inventoryDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/nodes/{nodeId}/inventories/{inventoryId}/adjustments": {
         parameters: {
             query?: never;
@@ -756,7 +860,8 @@ export interface paths {
         /** List machines in the granted node */
         get: operations["OperatorReadsController_machines"];
         put?: never;
-        post?: never;
+        /** Register a node machine with an immutable capability */
+        post: operations["OperatorCatalogController_registerMachine"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2578,6 +2683,19 @@ export interface components {
             };
             xyCompensationMicrometers: number;
         };
+        CreateMachineCapabilityDto: {
+            /** Format: int64 */
+            buildVolumeXMicrometers: string;
+            /** Format: int64 */
+            buildVolumeYMicrometers: string;
+            /** Format: int64 */
+            buildVolumeZMicrometers: string;
+            capabilityKey: string;
+            manufacturer: string;
+            model: string;
+            supportedMaterials: ("PLA" | "PETG")[];
+            supportedNozzleMicrometers: number[];
+        };
         CreateMachineProfileDto: {
             /** Format: uuid */
             machineCapabilityId: string;
@@ -2607,6 +2725,18 @@ export interface components {
             rationale: string;
             /** @enum {string} */
             reason: "EXPRESS_BREACH" | "PRODUCTION_FAILURE" | "SHIPMENT_INCIDENT" | "POST_DELIVERY_ISSUE";
+        };
+        CreatePrintConfigRevisionDto: {
+            brimEnabled: boolean;
+            infillPercent: number;
+            layerHeightMicrometers: number;
+            /** @enum {string} */
+            quality: "DRAFT" | "STANDARD" | "FINE";
+            /** @description Settings must not exceed 64 nested object or array levels. String keys and values must not contain U+0000 or unpaired UTF-16 surrogates. */
+            settings: {
+                [key: string]: unknown;
+            };
+            supportsEnabled: boolean;
         };
         CreateQuoteRequestDto: {
             attribution?: components["schemas"]["AttributionDto"];
@@ -3103,6 +3233,26 @@ export interface components {
             deltaMilligrams: string;
             reason: string;
         };
+        InventoryDetailDto: {
+            availableMilligrams: string;
+            color?: string | null;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            lotCode?: string | null;
+            /** Format: uuid */
+            machineId: string;
+            material: string;
+            /** Format: uuid */
+            nodeId: string;
+            priceMinorUnitsDenominator: string;
+            priceMinorUnitsNumerator: string;
+            remainingMilligrams: string;
+            reservedMilligrams: string;
+            sku: string;
+            status: string;
+            vendor: string;
+        };
         InventoryPageDto: {
             items: components["schemas"]["InventoryReadDto"][];
             nextCursor?: string;
@@ -3346,6 +3496,27 @@ export interface components {
         MachinePageDto: {
             items: components["schemas"]["MachineReadDto"][];
             nextCursor?: string;
+        };
+        MachineProfileDetailDto: {
+            /** Format: date-time */
+            createdAt: string;
+            digest: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            machineCapabilityId: string;
+            material: string;
+            nozzleDiameterMicrometers: number;
+            productionArtifactFormat: string;
+            quality: string;
+            /** Format: uuid */
+            referenceProfileId: string;
+            settings: {
+                [key: string]: unknown;
+            };
+            slicerEngine: string;
+            slicerVersion: string;
+            state: string;
         };
         MachineProfilePageDto: {
             items: components["schemas"]["MachineProfileReadDto"][];
@@ -4055,6 +4226,18 @@ export interface components {
             "50000_to_99999": number;
             under_25000: number;
         };
+        PriceListDetailDto: {
+            /** Format: date-time */
+            createdAt: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            parameters: {
+                [key: string]: unknown;
+            };
+            revision: string;
+            termsRevision: string;
+        };
         PriceListPageDto: {
             items: components["schemas"]["PriceListReadDto"][];
             nextCursor?: string;
@@ -4067,6 +4250,21 @@ export interface components {
             id: string;
             revision: string;
             termsRevision: string;
+        };
+        PrintConfigRevisionDetailDto: {
+            brimEnabled: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            digest: string;
+            /** Format: uuid */
+            id: string;
+            infillPercent: number;
+            layerHeightMicrometers: number;
+            quality: string;
+            settings: {
+                [key: string]: unknown;
+            };
+            supportsEnabled: boolean;
         };
         PrintConfigRevisionPageDto: {
             items: components["schemas"]["PrintConfigRevisionReadDto"][];
@@ -4257,6 +4455,21 @@ export interface components {
             state?: string;
             status?: string;
         };
+        ReferenceProfileDetailDto: {
+            /** Format: date-time */
+            createdAt: string;
+            digest: string;
+            /** Format: uuid */
+            id: string;
+            material: string;
+            quality: string;
+            settings: {
+                [key: string]: unknown;
+            };
+            slicerEngine: string;
+            slicerVersion: string;
+            state: string;
+        };
         ReferenceProfilePageDto: {
             items: components["schemas"]["ReferenceProfileReadDto"][];
             nextCursor?: string;
@@ -4282,6 +4495,13 @@ export interface components {
             definition: string;
             pendingOrSuspendedRefunds: number;
             succeededRefunds: components["schemas"]["MetricMoneyDto"];
+        };
+        RegisterMachineDto: {
+            code: string;
+            displayName: string;
+            installedNozzleMicrometers: number;
+            /** Format: uuid */
+            machineCapabilityId: string;
         };
         ReissueOfferDto: {
             /** Format: uuid */
@@ -4669,6 +4889,57 @@ export interface operations {
             };
         };
     };
+    OperatorCatalogController_createMachineCapability: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMachineCapabilityDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_machineCapabilityDetail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineCapabilityReadDto"];
+                };
+            };
+        };
+    };
     OperatorReadsController_machineProfiles: {
         parameters: {
             query?: {
@@ -4717,6 +4988,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_machineProfileDetail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineProfileDetailDto"];
                 };
             };
         };
@@ -4818,6 +5113,30 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_priceListDetail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PriceListDetailDto"];
+                };
+            };
+        };
+    };
     OperatorReadsController_printConfigRevisions: {
         parameters: {
             query?: {
@@ -4839,6 +5158,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrintConfigRevisionPageDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_createPrintConfigRevision: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePrintConfigRevisionDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_printConfigRevisionDetail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrintConfigRevisionDetailDto"];
                 };
             };
         };
@@ -4916,6 +5286,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_referenceProfileDetail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferenceProfileDetailDto"];
                 };
             };
         };
@@ -6085,6 +6479,31 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_inventoryDetail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                id: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InventoryDetailDto"];
+                };
+            };
+        };
+    };
     OperatorCatalogController_adjustInventory: {
         parameters: {
             query?: never;
@@ -6168,6 +6587,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachinePageDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_registerMachine: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterMachineDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
                 };
             };
         };

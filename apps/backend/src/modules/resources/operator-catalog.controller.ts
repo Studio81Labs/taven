@@ -28,12 +28,15 @@ import {
   CatalogCommandResultDto,
   CatalogReasonDto,
   CreateInventoryDto,
+  CreateMachineCapabilityDto,
   CreateMachineCalibrationDto,
   CreateMachineProfileDto,
+  CreatePrintConfigRevisionDto,
   CreateReferenceProfileDto,
   InventoryStatusDto,
   InventoryAdjustmentDto,
   MachineStatusDto,
+  RegisterMachineDto,
   ReferenceProfileActivationResultDto,
 } from "./operator-catalog.dto";
 import { OperatorCatalogService } from "./operator-catalog.service";
@@ -61,6 +64,52 @@ const CALIBRATION_ID = { name: "calibrationId", type: String, format: "uuid" };
 @Controller()
 export class OperatorCatalogController {
   constructor(private readonly catalog: OperatorCatalogService) {}
+
+  @Post("admin/catalog/machine-capabilities")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Create an immutable machine capability" })
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreateMachineCapabilityDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  createMachineCapability(
+    @CurrentOperator() operator: OperatorContext,
+    @Body() body: CreateMachineCapabilityDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.createMachineCapability(operator, body, key);
+  }
+
+  @Post("admin/catalog/print-config-revisions")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Create an immutable print-config revision" })
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreatePrintConfigRevisionDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  createPrintConfigRevision(
+    @CurrentOperator() operator: OperatorContext,
+    @Body() body: CreatePrintConfigRevisionDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.createPrintConfigRevision(operator, body, key);
+  }
+
+  @Post("admin/nodes/:nodeId/machines")
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Register a node machine with an immutable capability",
+  })
+  @ApiParam(NODE_ID)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: RegisterMachineDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  registerMachine(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("nodeId") nodeId: string,
+    @Body() body: RegisterMachineDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.registerMachine(operator, nodeId, body, key);
+  }
 
   @Post("admin/catalog/reference-profiles")
   @HttpCode(200)

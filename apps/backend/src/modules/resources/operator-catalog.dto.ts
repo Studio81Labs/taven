@@ -116,6 +116,101 @@ export class CreateMachineProfileDto extends CreateReferenceProfileDto {
   productionArtifactFormat!: string;
 }
 
+export class CreateMachineCapabilityDto {
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  capabilityKey!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  manufacturer!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: NON_BLANK_TEXT,
+  })
+  model!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  buildVolumeXMicrometers!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  buildVolumeYMicrometers!: string;
+
+  @ApiProperty(POSITIVE_INTEGER)
+  buildVolumeZMicrometers!: string;
+
+  @ApiProperty({
+    type: [Number],
+    minItems: 1,
+    uniqueItems: true,
+    items: { type: "integer", minimum: 1, maximum: 2_147_483_647 },
+  })
+  supportedNozzleMicrometers!: number[];
+
+  @ApiProperty({
+    type: [String],
+    minItems: 1,
+    uniqueItems: true,
+    items: { type: "string", enum: [...MATERIALS] },
+  })
+  supportedMaterials!: string[];
+}
+
+export class RegisterMachineDto {
+  @ApiProperty(UUID)
+  machineCapabilityId!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 50,
+    pattern: NON_BLANK_TEXT,
+  })
+  code!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    pattern: NON_BLANK_TEXT,
+  })
+  displayName!: string;
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 2_147_483_647 })
+  installedNozzleMicrometers!: number;
+}
+
+export class CreatePrintConfigRevisionDto {
+  @ApiProperty({ type: String, enum: PRINT_QUALITIES })
+  quality!: string;
+
+  @ApiProperty({ type: "integer", minimum: 0, maximum: 100 })
+  infillPercent!: number;
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 2_147_483_647 })
+  layerHeightMicrometers!: number;
+
+  @ApiProperty({ type: Boolean })
+  supportsEnabled!: boolean;
+
+  @ApiProperty({ type: Boolean })
+  brimEnabled!: boolean;
+
+  @ApiProperty(SETTINGS)
+  settings!: Record<string, unknown>;
+}
+
 export class CreateMachineCalibrationDto {
   @ApiProperty(UUID)
   machineId!: string;

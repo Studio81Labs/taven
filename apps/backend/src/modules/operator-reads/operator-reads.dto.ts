@@ -736,6 +736,48 @@ export class InventoryReadDto {
   status!: string;
 }
 
+const CATALOG_JSON = { type: Object, additionalProperties: true } as const;
+
+export class ReferenceProfileDetailDto extends ReferenceProfileReadDto {
+  @ApiProperty(CATALOG_JSON)
+  settings!: Record<string, unknown>;
+}
+
+export class MachineProfileDetailDto extends MachineProfileReadDto {
+  @ApiProperty(CATALOG_JSON)
+  settings!: Record<string, unknown>;
+}
+
+export class PrintConfigRevisionDetailDto extends PrintConfigRevisionReadDto {
+  @ApiProperty(CATALOG_JSON)
+  settings!: Record<string, unknown>;
+}
+
+export class PriceListDetailDto extends PriceListReadDto {
+  @ApiProperty(CATALOG_JSON)
+  parameters!: Record<string, unknown>;
+}
+
+export class InventoryDetailDto extends InventoryReadDto {
+  @ApiProperty(UUID)
+  nodeId!: string;
+
+  @ApiProperty({ type: String })
+  vendor!: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  lotCode!: string | null;
+
+  @ApiProperty(DECIMAL)
+  priceMinorUnitsNumerator!: string;
+
+  @ApiProperty(DECIMAL)
+  priceMinorUnitsDenominator!: string;
+
+  @ApiProperty({ type: String })
+  currency!: string;
+}
+
 export class MachineCalibrationReadDto {
   @ApiProperty(UUID)
   id!: string;

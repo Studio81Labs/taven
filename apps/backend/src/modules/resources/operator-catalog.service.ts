@@ -34,9 +34,12 @@ import {
 import {
   ResourceCatalogService,
   type CreateInventoryInput,
+  type CreateMachineCapabilityInput,
   type CreateMachineCalibrationInput,
   type CreateMachineProfileInput,
+  type CreatePrintConfigRevisionInput,
   type CreateReferenceProfileInput,
+  type RegisterMachineInput,
   type VerifiedCatalogSnapshot,
 } from "./resource-catalog.service";
 import {
@@ -48,12 +51,15 @@ import type {
   CatalogCommandResultDto,
   CatalogReasonDto,
   CreateInventoryDto,
+  CreateMachineCapabilityDto,
   CreateMachineCalibrationDto,
   CreateMachineProfileDto,
+  CreatePrintConfigRevisionDto,
   CreateReferenceProfileDto,
   InventoryStatusDto,
   InventoryAdjustmentDto,
   MachineStatusDto,
+  RegisterMachineDto,
 } from "./operator-catalog.dto";
 
 type Transaction = Prisma.TransactionClient;
@@ -79,6 +85,109 @@ export class OperatorCatalogService {
     private readonly catalog: ResourceCatalogService,
     private readonly audit: AuditService,
   ) {}
+
+  async createMachineCapability(
+    operator: OperatorContext,
+    body: CreateMachineCapabilityDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    const nodeId = this.globalNode(operator);
+    const input = machineCapabilityInput(body);
+    return this.command(
+      operator,
+      "catalog:machine-capability:create",
+      key,
+      {
+        nodeId,
+        ...input,
+        buildVolumeXMicrometers: input.buildVolumeXMicrometers.toString(),
+        buildVolumeYMicrometers: input.buildVolumeYMicrometers.toString(),
+        buildVolumeZMicrometers: input.buildVolumeZMicrometers.toString(),
+      },
+      async (tx, idempotencyKey) => {
+        const capability = await this.catalog.createMachineCapability(
+          input,
+          tx,
+        );
+        await this.record(tx, operator, nodeId, idempotencyKey, capability.id, {
+          eventType: "catalog.machine-capability.created",
+          payload: {
+            operation: "create",
+            capabilityKey: capability.capabilityKey,
+          },
+        });
+        return { id: capability.id };
+      },
+    );
+  }
+
+  async registerMachine(
+    operator: OperatorContext,
+    nodeId: string,
+    body: RegisterMachineDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    nodeId = this.node(operator, nodeId);
+    const input = registerMachineInput(nodeId, body);
+    return this.command(
+      operator,
+      `cat:n:${nodeId}:m:create`,
+      key,
+      input,
+      async (tx, idempotencyKey) => {
+        const capability = await tx.machineCapability.findUnique({
+          where: { id: input.machineCapabilityId },
+          select: { supportedNozzleMicrometers: true },
+        });
+        if (!capability)
+          throw new NotFoundException("Machine capability was not found");
+        if (
+          !capability.supportedNozzleMicrometers.includes(
+            input.installedNozzleMicrometers,
+          )
+        ) {
+          throw new BadRequestException(
+            "Installed nozzle is not supported by capability",
+          );
+        }
+        const machine = await this.catalog.registerMachine(input, tx);
+        await this.record(tx, operator, nodeId, idempotencyKey, machine.id, {
+          eventType: "catalog.machine.registered",
+          payload: {
+            operation: "register",
+            capabilityId: input.machineCapabilityId,
+          },
+        });
+        return { id: machine.id, status: machine.status };
+      },
+    );
+  }
+
+  async createPrintConfigRevision(
+    operator: OperatorContext,
+    body: CreatePrintConfigRevisionDto,
+    key?: string,
+  ): Promise<CatalogResult> {
+    const nodeId = this.globalNode(operator);
+    const input = printConfigRevisionInput(body);
+    return this.command(
+      operator,
+      "catalog:print-config:create",
+      key,
+      { nodeId, input },
+      async (tx, idempotencyKey) => {
+        const revision = await this.catalog.createPrintConfigRevision(
+          input,
+          tx,
+        );
+        await this.record(tx, operator, nodeId, idempotencyKey, revision.id, {
+          eventType: "catalog.print-config.created",
+          payload: { operation: "create", revisionKind: "PRINT_CONFIG" },
+        });
+        return { id: revision.id };
+      },
+    );
+  }
 
   async createReferenceProfile(
     operator: OperatorContext,
@@ -771,6 +880,117 @@ function machineProfileInput(
       ProductionArtifactFormat,
       "productionArtifactFormat",
     ),
+  };
+}
+
+function machineCapabilityInput(
+  body: CreateMachineCapabilityDto,
+): CreateMachineCapabilityInput {
+  body = commandBody(body);
+  if (
+    !Array.isArray(body.supportedNozzleMicrometers) ||
+    body.supportedNozzleMicrometers.length === 0
+  ) {
+    throw new BadRequestException(
+      "supportedNozzleMicrometers must not be empty",
+    );
+  }
+  if (
+    !Array.isArray(body.supportedMaterials) ||
+    body.supportedMaterials.length === 0
+  ) {
+    throw new BadRequestException("supportedMaterials must not be empty");
+  }
+  const nozzles = body.supportedNozzleMicrometers.map((value) =>
+    positiveInteger(value, "supportedNozzleMicrometers"),
+  );
+  const materials = body.supportedMaterials.map((value) =>
+    enumValue(value, Material, "supportedMaterials"),
+  );
+  if (
+    new Set(nozzles).size !== nozzles.length ||
+    new Set(materials).size !== materials.length
+  ) {
+    throw new BadRequestException(
+      "Supported nozzle and material values must be unique",
+    );
+  }
+  const buildVolumeXMicrometers = integer(
+    body.buildVolumeXMicrometers,
+    "buildVolumeXMicrometers",
+  );
+  const buildVolumeYMicrometers = integer(
+    body.buildVolumeYMicrometers,
+    "buildVolumeYMicrometers",
+  );
+  const buildVolumeZMicrometers = integer(
+    body.buildVolumeZMicrometers,
+    "buildVolumeZMicrometers",
+  );
+  if (
+    [
+      buildVolumeXMicrometers,
+      buildVolumeYMicrometers,
+      buildVolumeZMicrometers,
+    ].some((value) => value <= 0n)
+  ) {
+    throw new BadRequestException("Build volume dimensions must be positive");
+  }
+  return {
+    capabilityKey: text(body.capabilityKey, "capabilityKey", 100),
+    manufacturer: text(body.manufacturer, "manufacturer", 100),
+    model: text(body.model, "model", 100),
+    buildVolumeXMicrometers,
+    buildVolumeYMicrometers,
+    buildVolumeZMicrometers,
+    supportedNozzleMicrometers: nozzles,
+    supportedMaterials: materials,
+  };
+}
+
+function registerMachineInput(
+  nodeId: string,
+  body: RegisterMachineDto,
+): RegisterMachineInput {
+  body = commandBody(body);
+  return {
+    nodeId,
+    machineCapabilityId: uuid(body.machineCapabilityId, "machineCapabilityId"),
+    code: text(body.code, "code", 50),
+    displayName: text(body.displayName, "displayName", 200),
+    installedNozzleMicrometers: positiveInteger(
+      body.installedNozzleMicrometers,
+      "installedNozzleMicrometers",
+    ),
+  };
+}
+
+function printConfigRevisionInput(
+  body: CreatePrintConfigRevisionDto,
+): CreatePrintConfigRevisionInput {
+  body = commandBody(body);
+  const infillPercent = integerNumber(body.infillPercent, "infillPercent");
+  if (infillPercent < 0 || infillPercent > 100) {
+    throw new BadRequestException("infillPercent must be between 0 and 100");
+  }
+  if (
+    typeof body.supportsEnabled !== "boolean" ||
+    typeof body.brimEnabled !== "boolean"
+  ) {
+    throw new BadRequestException(
+      "supportsEnabled and brimEnabled must be booleans",
+    );
+  }
+  return {
+    quality: enumValue(body.quality, PrintQuality, "quality"),
+    infillPercent,
+    layerHeightMicrometers: positiveInteger(
+      body.layerHeightMicrometers,
+      "layerHeightMicrometers",
+    ),
+    supportsEnabled: body.supportsEnabled,
+    brimEnabled: body.brimEnabled,
+    settings: settings(body.settings),
   };
 }
 
