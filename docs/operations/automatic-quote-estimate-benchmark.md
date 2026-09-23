@@ -1,9 +1,10 @@
-# Automatic estimate calibration record
+# Automatic estimate calibration and browser-timing record
 
-This record closes the measurement obligation for #141 without changing the
-estimate contract or pricing policy. It compares the immediate STANDARD
-estimate with a real OrcaSlicer reference result generated from the exact
-STANDARD 20% process configuration selected by the estimate endpoint.
+This record documents the immediate STANDARD estimate's accuracy evidence and
+the browser-visible timing protocol for #141 without changing the estimate
+contract or pricing policy. The HTTP samples below are useful operational
+evidence, but they do not substitute for the browser parse-complete → visible
+estimate measurement.
 
 ## Representative run
 
@@ -58,9 +59,47 @@ also recorded for checkout context but are not used to hide estimator error
 behind the order floor.
 
 Four warm HTTP samples after one warm-up request measured 127.22, 130.53,
-147.15 and 133.99 ms. Median warm latency was 132.26 ms, meeting the ≤200 ms
-post-parse target. The p95 of this small sample was 145.18 ms and is retained
-as an operational observation, not as a customer-facing performance promise.
+147.15 and 133.99 ms. Median warm latency was 132.26 ms; this is network
+evidence only. It is not a browser parse-complete → visible
+acceptance result and must not be read as passing that gate. The p95 of this
+small sample was 145.18 ms and is retained as an operational observation, not
+as a customer-facing performance promise.
+
+## Browser-visible measurement
+
+The reference acceptance gate is a warm median ≤200 ms from browser-recorded
+geometry parser completion to the first animation-frame opportunity after the
+matching numeric estimate and assumptions are committed to the visible DOM. The
+run uses the same cube and STANDARD assumptions as the calibration above, one
+excluded warm-up selection, then four consecutive successful selections on a
+foreground Chromium Desktop profile at 1280 × 800. It must use a production
+build of Nuxt and Nest on loopback, real isolated PostgreSQL/catalog/limiter
+state, and no mock response or quota bypass. The test records parser,
+post-parse scheduling, request/response, response-to-render, total and maximum
+for every sample using the browser's monotonic clock; Playwright assertion
+polling is not part of the measured interval.
+
+The opt-in harness is
+`apps/web/e2e/integration/automatic-quote-estimate-timing.spec.ts`. Start the
+production web and API on loopback with the isolated development database, then
+run:
+
+```bash
+INTEGRATION_TEST=true \
+INTEGRATION_BENCHMARK=true \
+INTEGRATION_BENCHMARK_LOCAL=true \
+INTEGRATION_WEB_URL=http://127.0.0.1:3000 \
+INTEGRATION_BENCHMARK_SAMPLES=4 \
+pnpm -C apps/web exec playwright test \
+  e2e/integration/automatic-quote-estimate-timing.spec.ts --project=integration
+```
+
+The same command against `https://staging.taven.cz` is a separate operational
+observation: omit `INTEGRATION_BENCHMARK_LOCAL=true` so the run reports remote
+latency without enforcing the local gate. Remote ingress/network latency is
+reported honestly and is not used as the local ≤200 ms acceptance gate or a
+customer-wide SLA. Failed, gated, rate-limited or incomplete runs are not timing
+samples.
 
 ## Reproduction
 
@@ -73,6 +112,8 @@ TAVEN_BENCHMARK_SAMPLES=4 \
 pnpm exec tsx tools/benchmarks/automatic-quote-estimate.mts
 ```
 
-The harness is intentionally read-only apart from the endpoint's existing
+The HTTP harness is intentionally read-only apart from the endpoint's existing
 anonymous estimate limiter. It reports the selected profile/configuration,
-latency samples, estimate amount, slice-derived amount and percentage delta.
+latency samples, estimate amount, slice-derived amount and percentage delta. The
+browser harness likewise uses the normal limiter; an aborted transmitted
+request may consume allowance and is never treated as refunded.

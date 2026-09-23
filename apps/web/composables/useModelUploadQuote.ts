@@ -39,10 +39,6 @@ const backgroundQuotePhases: ReadonlySet<QuoteSession["phase"]> = new Set([
   "REFERENCE_SLICES_PENDING",
   "ELIGIBILITY_PENDING",
 ]);
-// Keep this below the 200 ms post-parse estimate budget while coalescing
-// rapid file reselections before they spend an anonymous estimate allowance.
-const ESTIMATE_SELECTION_SETTLE_DELAY_MS = 100;
-
 export function isBackgroundQuotePhase(phase: QuoteSession["phase"]): boolean {
   return backgroundQuotePhases.has(phase);
 }
@@ -243,7 +239,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   let selectionRevision = 0;
   let uploadController: AbortController | undefined;
   let estimateController: AbortController | undefined;
-  let estimateTimer: ReturnType<typeof setTimeout> | undefined;
+  let estimateScheduleToken = 0;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let pollController: AbortController | undefined;
   let commandController: AbortController | undefined;
@@ -272,8 +268,20 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
   }
 
   function cancelScheduledEstimate(): void {
-    if (estimateTimer) clearTimeout(estimateTimer);
-    estimateTimer = undefined;
+    estimateScheduleToken += 1;
+  }
+
+  function markEstimateTiming(
+    phase:
+      | "parser-start"
+      | "parser-complete"
+      | "dispatch"
+      | "response-complete"
+      | "committed",
+    revision: number,
+  ): void {
+    if (typeof performance === "undefined") return;
+    performance.mark(`taven-estimate:${phase}:${revision}`);
   }
 
   function scheduleEstimate(
@@ -281,12 +289,16 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     revision: number,
   ): void {
     cancelScheduledEstimate();
-    estimateTimer = setTimeout(() => {
-      estimateTimer = undefined;
-      if (!disposed && revision === selectionRevision) {
+    const scheduleToken = estimateScheduleToken;
+    queueMicrotask(() => {
+      if (
+        scheduleToken === estimateScheduleToken &&
+        !disposed &&
+        revision === selectionRevision
+      ) {
         void requestEstimate(parsedGeometry, revision);
       }
-    }, ESTIMATE_SELECTION_SETTLE_DELAY_MS);
+    });
   }
 
   function scheduleQuoteRefresh(delay: number): void {
@@ -374,8 +386,10 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       const hashPromise = sha256Hex(buffer);
       if (buffer.byteLength <= MAX_LOCAL_PREVIEW_BYTES) {
         try {
+          markEstimateTiming("parser-start", revision);
           geometry.value = await parseModelGeometry(valid.format, buffer);
           if (requestsImmediateEstimate(options)) {
+            markEstimateTiming("parser-complete", revision);
             scheduleEstimate(geometry.value, revision);
           }
         } catch (error) {
@@ -427,6 +441,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
     estimate.value = undefined;
     estimateMessage.value = undefined;
     try {
+      markEstimateTiming("dispatch", revision);
       const result = await $api.POST("/automatic-quote-estimates", {
         body: {
           dimensionsMm: parsedGeometry.dimensions,
@@ -448,11 +463,13 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
       ) {
         return;
       }
+      markEstimateTiming("response-complete", revision);
       if (!result.response.ok || !result.data) {
         estimateMessage.value = estimateRequestMessage(result.response.status);
         return;
       }
       estimate.value = result.data;
+      markEstimateTiming("committed", revision);
     } catch {
       if (
         !disposed &&
