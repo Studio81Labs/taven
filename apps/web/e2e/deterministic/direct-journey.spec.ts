@@ -172,9 +172,13 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     const terms = page.getByRole("checkbox", { name: /VOP/i });
     const claims = page.getByRole("checkbox", { name: /reklamačním řádem/i });
     const withdrawal = page.getByRole("checkbox", { name: /výjimka/i });
+    const photoConsent = page.getByRole("checkbox", {
+      name: /Dobrovolně souhlasím s pořízením/i,
+    });
     await terms.check();
     await claims.check();
     await withdrawal.check();
+    await photoConsent.check();
 
     await request.post("http://127.0.0.1:4175/__test/state", {
       data: { legalRevisionVersion: 2 },
@@ -191,6 +195,53 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     await expect(terms).not.toBeChecked();
     await expect(claims).not.toBeChecked();
     await expect(withdrawal).not.toBeChecked();
+    await expect(photoConsent).not.toBeChecked();
+
+    const replacementHash = "9".repeat(64);
+    await expect(
+      page.getByRole("link", { name: "VOP", exact: true }),
+    ).toHaveAttribute(
+      "href",
+      `/vop?revision=terms-test-v2&contentHash=${replacementHash}`,
+    );
+    await expect(
+      page.getByRole("link", { name: "reklamačním řádem" }),
+    ).toHaveAttribute(
+      "href",
+      `/reklamace?revision=claims-test-v2&contentHash=${replacementHash}`,
+    );
+    await expect(
+      page.getByRole("link", { name: "pravidel fotografování" }),
+    ).toHaveAttribute(
+      "href",
+      `/fotografie-a-duvernost?revision=photo-consent-test-v2&contentHash=${replacementHash}`,
+    );
+
+    await terms.check();
+    await claims.check();
+    await withdrawal.check();
+    await photoConsent.check();
+    const pay = page.getByRole("button", { name: /Objednat a zaplatit/i });
+    await expect(pay).toBeEnabled();
+    await pay.click();
+    await expect(
+      page.getByRole("heading", { name: "Testovací platební brána" }),
+    ).toBeVisible();
+    const accepted = await request.get("http://127.0.0.1:4175/__test/state");
+    expect((await accepted.json()).lastCheckoutPayload).toMatchObject({
+      acceptTerms: true,
+      acceptClaimPolicy: true,
+      acknowledgeWithdrawalException: true,
+      termsRevision: "terms-test-v2",
+      claimPolicyRevision: "claims-test-v2",
+      photoPublicationConsent: true,
+      photoConsentRevision: "photo-consent-test-v2",
+    });
+    await page.locator("#btn-pay-success").click();
+    await expect(page).toHaveURL(/\/checkout\/payment\/success/);
+    await expect(
+      page.getByRole("heading", { name: "Platba byla potvrzena.", level: 1 }),
+    ).toBeVisible();
   });
 
   test("backend capacity failure (503) during checkout presents clear error feedback and allows retry", async ({
