@@ -55,7 +55,8 @@ test.describe("Automatic estimate concurrency", () => {
     let requestCount = 0;
     await page.route("**/automatic-quote-estimates", async (route) => {
       requestCount += 1;
-      if (requestCount === 1) {
+      const requestIndex = requestCount;
+      if (requestIndex === 1) {
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
       try {
@@ -63,7 +64,7 @@ test.describe("Automatic estimate concurrency", () => {
           status: 200,
           contentType: "application/json",
           body: JSON.stringify(
-            estimateResponse(requestCount === 1 ? 11100 : 22200),
+            estimateResponse(requestIndex === 1 ? 11100 : 22200),
           ),
         });
       } catch {

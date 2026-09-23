@@ -85,6 +85,7 @@ run:
 ```bash
 INTEGRATION_TEST=true \
 INTEGRATION_BENCHMARK=true \
+INTEGRATION_BENCHMARK_LOCAL=true \
 INTEGRATION_WEB_URL=http://127.0.0.1:3000 \
 INTEGRATION_BENCHMARK_SAMPLES=4 \
 pnpm -C apps/web exec playwright test \
@@ -92,9 +93,11 @@ pnpm -C apps/web exec playwright test \
 ```
 
 The same command against `https://staging.taven.cz` is a separate operational
-observation. Remote ingress/network latency is reported honestly and is not
-used as the local ≤200 ms acceptance gate or a customer-wide SLA. Failed,
-gated, rate-limited or incomplete runs are not timing samples.
+observation: omit `INTEGRATION_BENCHMARK_LOCAL=true` so the run reports remote
+latency without enforcing the local gate. Remote ingress/network latency is
+reported honestly and is not used as the local ≤200 ms acceptance gate or a
+customer-wide SLA. Failed, gated, rate-limited or incomplete runs are not timing
+samples.
 
 ## Reproduction
 
