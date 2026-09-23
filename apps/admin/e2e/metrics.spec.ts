@@ -244,6 +244,20 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   await expect(
     page.getByText("emailové pokusy unavailable", { exact: false }),
   ).toBeVisible();
+  const newCost = page.locator(".operator-card").filter({
+    has: page.getByRole("heading", { name: "Skutečné náklady objednávky" }),
+  });
+  await newCost.getByRole("button", { name: "Zapsat skutečný náklad" }).click();
+  const newCostEditor = page
+    .locator(".operator-card")
+    .filter({ has: page.getByRole("heading", { name: "Skutečný náklad" }) });
+  await newCostEditor
+    .getByRole("textbox", { name: "ID objednávky" })
+    .fill("00000000-0000-0000-0000-000000000099");
+  await expect(
+    newCostEditor.getByRole("heading", { name: "Skutečný náklad" }),
+  ).toBeVisible();
+  await newCostEditor.getByRole("button", { name: "Zavřít" }).click();
   await page.getByRole("textbox", { name: "Začátek" }).fill("2026-09-02");
   await page.getByRole("combobox", { name: "Kanál" }).selectOption("paid");
   holdOrderPage = true;

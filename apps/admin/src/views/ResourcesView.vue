@@ -192,7 +192,8 @@ async function inspectInventory(id: string): Promise<void> {
       supersedesReceiptId.value = detail.receipts.at(-1)?.id ?? "";
     }
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (generation === inventoryReadGeneration)
+      error.value = errorMessage(cause);
   }
 }
 
@@ -211,6 +212,12 @@ function openCorrection(): void {
   receivedMilligrams.value = receipt.receivedMilligrams;
   priceNumerator.value = receipt.priceMinorUnitsNumerator;
   priceDenominator.value = receipt.priceMinorUnitsDenominator;
+}
+
+function openLegacyReceipt(): void {
+  purchasedAt.value = "";
+  receivedMilligrams.value = "";
+  form.value = "legacy-receipt";
 }
 
 async function inspectAvailability(): Promise<void> {
@@ -244,7 +251,11 @@ async function inspectAvailability(): Promise<void> {
       endsAt: item.endsAt,
     }));
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (
+      generation === availabilityReadGeneration &&
+      machineId === availabilityMachineId.value
+    )
+      error.value = errorMessage(cause);
   }
 }
 
@@ -943,7 +954,7 @@ onMounted(() => void refresh());
           <button
             v-if="inventory.receiptCoverage === 'UNKNOWN'"
             type="button"
-            @click="form = 'legacy-receipt'"
+            @click="openLegacyReceipt"
           >
             Doplnit počáteční doklad</button
           ><button v-if="currentReceipt" type="button" @click="openCorrection">

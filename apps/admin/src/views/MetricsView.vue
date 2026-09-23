@@ -45,6 +45,7 @@ const actualCosts = ref<S["ActualCostEvidenceDto"][]>([]);
 const actualCursor = ref<string | null>(null);
 const costPageLoading = ref(false);
 const orderId = ref("");
+const draftOrderId = ref("");
 const costOrderId = ref("");
 let costReadGeneration = 0;
 const error = ref("");
@@ -266,8 +267,8 @@ async function recordEvidence(): Promise<void> {
   success.value = "";
   try {
     if (entry.value === "cost") {
-      if (!orderId.value) throw new Error("Vyberte objednávku.");
-      const id = orderId.value;
+      if (!draftOrderId.value) throw new Error("Vyberte objednávku.");
+      const id = draftOrderId.value;
       const body: S["RecordActualCostDto"] = {
         amountMinor: amountMinor.value,
         category: category.value,
@@ -296,6 +297,7 @@ async function recordEvidence(): Promise<void> {
             }),
           ),
       );
+      orderId.value = id;
       await loadCosts();
     } else if (entry.value === "spend") {
       const body: S["RecordAcquisitionSpendDto"] = {
@@ -330,6 +332,7 @@ async function recordEvidence(): Promise<void> {
 }
 
 function editEvidence(kind: "cost" | "spend", id = ""): void {
+  draftOrderId.value = orderId.value;
   amountMinor.value = "";
   sourceKey.value = "";
   sourceEntityType.value = "MANUAL";
@@ -945,7 +948,7 @@ onMounted(() => void refresh());
           <input v-model="amountMinor" inputmode="numeric" required
         /></label>
         <template v-if="entry === 'cost'">
-          <label>ID objednávky <input v-model="orderId" required /></label
+          <label>ID objednávky <input v-model="draftOrderId" required /></label
           ><label
             >Kategorie
             <select v-model="category">

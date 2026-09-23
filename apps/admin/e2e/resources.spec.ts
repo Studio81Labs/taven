@@ -12,6 +12,8 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   let mountHeaders: Record<string, string> = {};
   let availabilityPosts = 0;
   const availabilityPostPaths: string[] = [];
+  let holdNextAvailability = false;
+  let releaseStaleAvailability: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
     route.fulfill({
       json: {
@@ -117,6 +119,16 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
       method === "GET" &&
       path.endsWith(`/machines/${machineId}/availability`)
     ) {
+      if (holdNextAvailability) {
+        holdNextAvailability = false;
+        await new Promise<void>((resolve) => {
+          releaseStaleAvailability = resolve;
+        });
+        return route.fulfill({
+          status: 503,
+          json: { message: "obsolete availability failed" },
+        });
+      }
       await route.fulfill({
         json: {
           machineId,
@@ -139,6 +151,19 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
               status: "CONFIRMED",
             },
           ],
+        },
+      });
+    } else if (
+      method === "GET" &&
+      path.endsWith(`/machines/${otherMachineId}/availability`)
+    ) {
+      await route.fulfill({
+        json: {
+          machineId: otherMachineId,
+          revisionId: "revision-2",
+          selectionVersion: 2,
+          windows: [],
+          occupiedIntervals: [],
         },
       });
     } else if (
@@ -192,6 +217,23 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
     `/admin/nodes/${nodeId}/machines/${machineId}/availability`,
   ]);
   await expect(page.locator(".form-success")).toHaveCount(0);
+  holdNextAvailability = true;
+  await page.getByRole("button", { name: "Dostupnost" }).first().click();
+  await expect.poll(() => Boolean(releaseStaleAvailability)).toBe(true);
+  await page.getByRole("button", { name: "Dostupnost" }).nth(1).click();
+  await expect(
+    page.getByText("Verze výběru 2", { exact: false }),
+  ).toBeVisible();
+  const staleAvailabilityResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/machines/${machineId}/availability`) &&
+      response.status() === 503,
+  );
+  releaseStaleAvailability?.();
+  await staleAvailabilityResponse;
+  await expect(page.getByRole("alert")).not.toContainText(
+    "obsolete availability failed",
+  );
 });
 
 test("a confirmed receipt closes its form when the following read fails", async ({
@@ -282,6 +324,8 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
   let releaseAdjustment: (() => void) | undefined;
   let releaseOtherDetail: (() => void) | undefined;
   let delayOtherDetail = true;
+  let holdNextFirstDetail = false;
+  let releaseStaleInventory: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
     route.fulfill({
       json: {
@@ -332,7 +376,17 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
     }
     if (failReads)
       return route.fulfill({ status: 503, json: { message: "read outage" } });
-    if (path.endsWith(`/inventories/${inventoryId}`))
+    if (path.endsWith(`/inventories/${inventoryId}`)) {
+      if (holdNextFirstDetail) {
+        holdNextFirstDetail = false;
+        await new Promise<void>((resolve) => {
+          releaseStaleInventory = resolve;
+        });
+        return route.fulfill({
+          status: 503,
+          json: { message: "obsolete inventory failed" },
+        });
+      }
       return route.fulfill({
         json: {
           id: inventoryId,
@@ -346,6 +400,7 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
           receipts: [],
         },
       });
+    }
     if (path.endsWith("/inventories"))
       return route.fulfill({
         json: {
@@ -411,6 +466,27 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
   failReads = false;
   await page.getByRole("button", { name: "Obnovit zdroje" }).click();
   await expect(adjust).toBeEnabled();
+  holdNextFirstDetail = true;
+  await page
+    .getByRole("button", { name: "Detail a rychlé změny" })
+    .first()
+    .click();
+  await expect.poll(() => Boolean(releaseStaleInventory)).toBe(true);
+  await page
+    .getByRole("button", { name: "Detail a rychlé změny" })
+    .nth(1)
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Šarže PETG-blue" }),
+  ).toBeVisible();
+  const staleInventoryResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/inventories/${inventoryId}`) &&
+      response.status() === 503,
+  );
+  releaseStaleInventory?.();
+  await staleInventoryResponse;
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("receipt correction copies only the current evidence and waits for refresh", async ({
@@ -418,6 +494,7 @@ test("receipt correction copies only the current evidence and waits for refresh"
 }) => {
   const nodeId = "00000000-0000-0000-0000-000000000002";
   const inventoryId = "00000000-0000-0000-0000-000000000004";
+  const legacyInventoryId = "00000000-0000-0000-0000-000000000005";
   const firstId = "00000000-0000-0000-0000-000000000011";
   const secondId = "00000000-0000-0000-0000-000000000012";
   await page.route("**/admin/auth/session", (route) =>
@@ -439,6 +516,21 @@ test("receipt correction copies only the current evidence and waits for refresh"
   );
   await page.route("**/admin/nodes/**", (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith(`/inventories/${legacyInventoryId}`))
+      return route.fulfill({
+        json: {
+          id: legacyInventoryId,
+          nodeId,
+          machineId: "machine",
+          sku: "PETG-blue",
+          vendor: "Legacy vendor",
+          currency: "CZK",
+          priceMinorUnitsNumerator: "9",
+          priceMinorUnitsDenominator: "1000",
+          receiptCoverage: "UNKNOWN",
+          receipts: [],
+        },
+      });
     if (path.endsWith(`/inventories/${inventoryId}`))
       return route.fulfill({
         json: {
@@ -494,13 +586,29 @@ test("receipt correction copies only the current evidence and waits for refresh"
               reservedMilligrams: "0",
               availableMilligrams: "500000",
             },
+            {
+              id: legacyInventoryId,
+              nodeId,
+              machineId: "machine",
+              sku: "PETG-blue",
+              material: "PETG",
+              status: "AVAILABLE",
+              mountStatus: "UNMOUNTED",
+              receiptCoverage: "UNKNOWN",
+              remainingMilligrams: "500000",
+              reservedMilligrams: "0",
+              availableMilligrams: "500000",
+            },
           ],
         },
       });
     return route.fulfill({ json: { items: [] } });
   });
   await page.goto("/zdroje");
-  await page.getByRole("button", { name: "Detail a rychlé změny" }).click();
+  await page
+    .getByRole("button", { name: "Detail a rychlé změny" })
+    .first()
+    .click();
   await page.getByRole("button", { name: "Opravit doklad" }).click();
   await expect(page.getByRole("textbox", { name: "Dodavatel" })).toHaveValue(
     "Second vendor",
@@ -535,4 +643,13 @@ test("receipt correction copies only the current evidence and waits for refresh"
   await expect(
     page.getByRole("button", { name: "Zapsat", exact: true }),
   ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Detail a rychlé změny" })
+    .nth(1)
+    .click();
+  await page.getByRole("button", { name: "Doplnit počáteční doklad" }).click();
+  await expect(page.getByRole("textbox", { name: /Nakoupeno/ })).toBeEmpty();
+  await expect(
+    page.getByRole("textbox", { name: "Přijaté množství mg" }),
+  ).toBeEmpty();
 });
