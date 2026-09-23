@@ -30,7 +30,11 @@ ARG VITE_API_BASE_URL
 ARG VITE_APP_ENV
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_APP_ENV=${VITE_APP_ENV}
-RUN test -n "$VITE_API_BASE_URL" && test -n "$VITE_APP_ENV" && \
+RUN case "$VITE_APP_ENV" in \
+      local|staging|production) ;; \
+      *) echo "VITE_APP_ENV must be local, staging, or production" >&2; exit 1 ;; \
+    esac
+RUN test -n "$VITE_API_BASE_URL" && \
     pnpm --filter @taven/admin... build
 
 FROM ${NGINX_IMAGE} AS runtime

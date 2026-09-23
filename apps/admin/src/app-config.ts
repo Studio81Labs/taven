@@ -6,6 +6,15 @@ export function adminApiBaseUrl(
   environment: string | undefined,
   configured: string | undefined,
 ): string {
+  if (
+    environment !== "local" &&
+    environment !== "development" &&
+    environment !== "test" &&
+    environment !== "staging" &&
+    environment !== "production"
+  ) {
+    throw new Error("VITE_APP_ENV must name a supported environment");
+  }
   const value = configured ?? "http://localhost:3001";
   const url = new URL(value);
   if (url.origin !== value.replace(/\/$/, "")) {

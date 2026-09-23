@@ -20,5 +20,7 @@ describe("adminApiBaseUrl", () => {
     expect(() =>
       adminApiBaseUrl("staging", "https://api.example.test/path"),
     ).toThrow();
+    expect(() => adminApiBaseUrl("prod", "http://api.example.test")).toThrow();
+    expect(() => adminApiBaseUrl(undefined, undefined)).toThrow();
   });
 });
