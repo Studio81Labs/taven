@@ -3271,6 +3271,98 @@ describe("QuoteRequest and tokenized individual offers", () => {
     }
   });
 
+  it("rejects a fresh assisted request when privacy is archived before its legal lock", async () => {
+    const requestBody = requestInput("privacy-archive-request-race");
+    const commandKey = key("privacy-archive-request-race-create");
+    const document = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "privacy" },
+      include: {
+        publications: {
+          where: { endsAt: null, cancelledAt: null },
+          take: 1,
+        },
+      },
+    });
+    const publication = document.publications[0];
+    if (!publication) {
+      throw new Error("Quote request privacy publication is unavailable");
+    }
+    const approvals = app.get(LegalApprovalsService);
+    const originalLock = approvals.lock.bind(approvals);
+    let releaseRequest!: () => void;
+    const requestMayContinue = new Promise<void>((resolve) => {
+      releaseRequest = resolve;
+    });
+    let requestBeforeLock = false;
+    const lockSpy = vi
+      .spyOn(approvals, "lock")
+      .mockImplementation(async (tx, keys) => {
+        if (!requestBeforeLock && keys.includes("privacy")) {
+          requestBeforeLock = true;
+          await requestMayContinue;
+        }
+        return originalLock(tx, keys);
+      });
+    const request = quotes
+      .createRequest(requestBody, "198.51.100.99", commandKey)
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    try {
+      await vi.waitFor(() => expect(requestBeforeLock).toBe(true), {
+        timeout: 3_000,
+        interval: 25,
+      });
+      await legalDocuments.archivePublication(
+        operator,
+        "privacy",
+        publication.id,
+        {
+          expectedGeneration: document.generation,
+          reason: "Assisted request publication race E2E fixture",
+          reasonCode: "E2E_REQUEST_PUBLICATION_RACE",
+        },
+        key("privacy-archive-request-race-archive"),
+      );
+      releaseRequest();
+      await expect(request).resolves.toMatchObject({
+        status: 503,
+        response: { code: "LAUNCH_APPROVAL_REQUIRED" },
+      });
+      await expect(
+        prisma.customer.count({ where: { email: requestBody.contact.email } }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.idempotencyRecord.count({
+          where: {
+            namespace: "quote-request.create",
+            idempotencyKey: commandKey,
+          },
+        }),
+      ).resolves.toBe(0);
+    } finally {
+      releaseRequest();
+      await request.catch(() => undefined);
+      lockSpy.mockRestore();
+      await prisma.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          "SET LOCAL session_replication_role = 'replica'",
+        );
+        await transaction.$executeRaw`
+          UPDATE legal_document_publications
+          SET ends_at = ${publication.endsAt}
+          WHERE id = ${publication.id}::uuid
+        `;
+        await transaction.$executeRaw`
+          UPDATE legal_documents
+          SET generation = ${document.generation}
+          WHERE id = ${document.id}::uuid
+        `;
+      });
+    }
+  });
+
   function requestInput(scope: string) {
     return {
       description: `A detailed individual quote request for ${scope}`,
