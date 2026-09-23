@@ -15,9 +15,16 @@ returns to the backend-configured `TAVEN_ADMIN_COMPLETION_URL`.
 The page checks `/admin/auth/session` before showing protected routes. A
 node-free administrator sees the scoped-unavailable page; operational views
 require one granted node. The backend remains authoritative for every action.
-The current feature routes are shell placeholders for the later Epic #10 PRs.
+The catalog, resources, and metrics routes consume the generated operator API.
+Catalog publication reads the CZK selector version and confirms that activation
+applies to newly committed bindings; a stale version requires a refresh and a
+new deliberate confirmation. Reference-profile activation notices load from the
+durable feed. Resource availability inputs require absolute ISO instants with
+an explicit offset; the UI checks Prague local time at daylight-saving changes.
+Financial entry uses append-only actual-cost and acquisition-spend commands.
+Other feature routes remain placeholders for later Epic #10 PRs.
 
 Run `pnpm admin:test`, `pnpm admin:test:e2e`, `pnpm admin:typecheck`, and
 `pnpm admin:build` from the repository root. The initial browser suite uses a
-mock authentication API and exercises the shell; connected operator journeys
-belong to issue #185.
+mock operator API and exercises the shell and these controls. Connected operator
+journeys belong to issue #185.

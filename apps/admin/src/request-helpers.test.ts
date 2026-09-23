@@ -3,6 +3,7 @@ import { CommandIntent } from "./command-intent";
 import { CursorPager } from "./cursor-pager";
 import { formatCzkMinor, formatGrams, formatPragueInstant } from "./format";
 import { requestFeedback } from "./request-feedback";
+import { CommandJournal, requireData } from "./operator-requests";
 
 describe("operator request helpers", () => {
   it("formats exact decimal strings without converting large amounts to Number", () => {
@@ -35,6 +36,23 @@ describe("operator request helpers", () => {
       { amountMinor: "100", nested: { reason: "A" } },
       "same-key",
     );
+  });
+
+  it("reuses the command key for an unchanged retry and changes it with the body", async () => {
+    const journal = new CommandJournal();
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("lost response"))
+      .mockResolvedValue("done");
+    await expect(journal.submit("receive", { sku: "A" }, send)).rejects.toThrow(
+      "lost response",
+    );
+    await expect(journal.submit("receive", { sku: "A" }, send)).resolves.toBe(
+      "done",
+    );
+    expect(send.mock.calls[0]?.[1]).toBe(send.mock.calls[1]?.[1]);
+    await journal.submit("receive", { sku: "B" }, send);
+    expect(send.mock.calls[2]?.[1]).not.toBe(send.mock.calls[1]?.[1]);
   });
 
   it("discards a late page after the filters change", async () => {
@@ -105,5 +123,15 @@ describe("operator request helpers", () => {
     expect(requestFeedback(409).refreshRequired).toBe(true);
     expect(requestFeedback(429, "12").retryAfterSeconds).toBe(12);
     expect(requestFeedback(503).refreshRequired).toBe(false);
+  });
+
+  it("reports exact reservation conflicts from a rejected availability publication", () => {
+    const id = "00000000-0000-0000-0000-000000000123";
+    expect(() =>
+      requireData({
+        response: new Response(null, { status: 409 }),
+        error: { conflictReservationIds: [id], moreConflicts: false },
+      }),
+    ).toThrow(id);
   });
 });

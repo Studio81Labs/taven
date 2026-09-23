@@ -46,7 +46,14 @@ export const router = createRouter({
     },
     ...navigation.map((item) => ({
       path: item.path,
-      component: () => import("./views/ShellSectionView.vue"),
+      component:
+        item.path === "/zdroje"
+          ? () => import("./views/ResourcesView.vue")
+          : item.path === "/katalog"
+            ? () => import("./views/CatalogView.vue")
+            : item.path === "/metriky"
+              ? () => import("./views/MetricsView.vue")
+              : () => import("./views/ShellSectionView.vue"),
       meta: { label: item.label, permission: item.permission },
     })),
     {
