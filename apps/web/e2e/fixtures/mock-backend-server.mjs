@@ -1030,6 +1030,17 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (subpath === "/risk-decisions" && method === "POST") {
+        const idempotencyKey = req.headers["idempotency-key"];
+        if (
+          typeof idempotencyKey !== "string" ||
+          idempotencyKey.trim().length === 0
+        ) {
+          sendJson(res, 400, {
+            statusCode: 400,
+            message: "Idempotency-Key header is required",
+          });
+          return;
+        }
         const body = await parseJson(req);
         const finding = session.items[body.itemOrdinal]?.findings.find(
           (candidate) => candidate.id === body.findingId,
