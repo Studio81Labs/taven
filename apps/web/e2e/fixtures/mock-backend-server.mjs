@@ -97,6 +97,12 @@ function parseJson(req) {
   });
 }
 
+function deliveryPriceMinor(session) {
+  return session.selectedDeliveryDestination?.providerEndpointId === "packeta-2"
+    ? 11900
+    : 8900;
+}
+
 function createDefaultSession(
   sessionId = crypto.randomUUID(),
   sessionToken = generateCapabilityToken(),
@@ -185,6 +191,11 @@ function createDefaultSession(
         providerEndpointId: "packeta-1",
         endpointType: "pickup_point",
         label: "Zásilkovna — Výdejní místo",
+      },
+      {
+        providerEndpointId: "packeta-2",
+        endpointType: "pickup_point",
+        label: "Zásilkovna — Druhé výdejní místo",
       },
     ],
     deliverySelector: {
@@ -938,7 +949,7 @@ const server = http.createServer(async (req, res) => {
 
         if (session.selectedDeliveryDestination) {
           // Recalculate binding quote
-          const deliveryMinor = 8900;
+          const deliveryMinor = deliveryPriceMinor(session);
           const expressMinor = session.express.requested ? 15000 : 0;
           const total = priceMinor + deliveryMinor + expressMinor;
           session.bindingQuote = {
@@ -982,16 +993,33 @@ const server = http.createServer(async (req, res) => {
 
       if (subpath === "/delivery-destination" && method === "PUT") {
         const body = await parseJson(req);
+        const providerEndpointId =
+          body.providerEndpointId ||
+          body.destination?.providerEndpointId ||
+          "packeta-1";
+        const endpointType =
+          body.endpointType || body.destination?.endpointType || "pickup_point";
+        const option = session.deliveryOptions.find(
+          (candidate) =>
+            candidate.providerEndpointId === providerEndpointId &&
+            candidate.endpointType === endpointType,
+        );
+        if (
+          !session.selectedDeliveryDestination ||
+          session.selectedDeliveryDestination.providerEndpointId !==
+            providerEndpointId ||
+          session.selectedDeliveryDestination.endpointType !== endpointType
+        ) {
+          session.configurationRevision += 1;
+          session.bindingQuote = null;
+          session.checkoutReady = false;
+          session.phase = "ELIGIBILITY_PENDING";
+        }
         session.selectedDeliveryDestination = {
-          providerEndpointId:
-            body.providerEndpointId ||
-            body.destination?.providerEndpointId ||
-            "packeta-1",
-          endpointType:
-            body.endpointType ||
-            body.destination?.endpointType ||
-            "pickup_point",
+          providerEndpointId,
+          endpointType,
           label:
+            option?.label ||
             body.label ||
             body.destination?.label ||
             "Zásilkovna — Výdejní místo",
@@ -1043,7 +1071,7 @@ const server = http.createServer(async (req, res) => {
         session.handoff = null;
 
         const baseMinor = session.roughEstimate?.totalMinor || 35000;
-        const deliveryMinor = 8900;
+        const deliveryMinor = deliveryPriceMinor(session);
         const expressMinor = session.express?.requested ? 15000 : 0;
         const total = baseMinor + deliveryMinor + expressMinor;
 
@@ -1091,7 +1119,7 @@ const server = http.createServer(async (req, res) => {
 
         if (session.bindingQuote) {
           const baseMinor = session.roughEstimate?.totalMinor || 35000;
-          const deliveryMinor = 8900;
+          const deliveryMinor = deliveryPriceMinor(session);
           const expressMinor = session.express.requested ? 15000 : 0;
           const total = baseMinor + deliveryMinor + expressMinor;
           session.bindingQuote.totalMinor = total;

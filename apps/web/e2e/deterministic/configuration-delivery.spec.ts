@@ -123,4 +123,75 @@ test.describe("Rendered configuration and delivery", () => {
     const state = await request.get("http://127.0.0.1:4175/__test/state");
     expect((await state.json()).lastAssistedQuote).toBeNull();
   });
+
+  test("invalidates the old binding before requoting a different delivery endpoint", async ({
+    page,
+  }) => {
+    const initialPrepareResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/prepare"),
+    );
+    await page
+      .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+      .click();
+    const initialPrepared = await (await initialPrepareResponse).json();
+    expect(initialPrepared.bindingQuote.totalMinor).toBe(43900);
+    await expect(page.locator(".price-summary .total-price")).toContainText(
+      "439,00",
+    );
+
+    await page
+      .getByRole("combobox", { name: "Způsob a místo" })
+      .selectOption({ label: "Zásilkovna — Druhé výdejní místo" });
+    const destinationResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        response.url().includes("/delivery-destination"),
+    );
+    const requoteResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/prepare"),
+    );
+    await page
+      .getByRole("button", { name: "Přepočítat s jiným místem" })
+      .click();
+
+    const destination = await destinationResponse;
+    expect(destination.status()).toBe(200);
+    expect(destination.request().postDataJSON()).toMatchObject({
+      providerEndpointId: "packeta-2",
+      endpointType: "pickup_point",
+    });
+    expect(await destination.json()).toMatchObject({
+      phase: "ELIGIBILITY_PENDING",
+      configurationRevision: initialPrepared.configurationRevision + 1,
+      checkoutReady: false,
+      bindingQuote: null,
+      selectedDeliveryDestination: {
+        providerEndpointId: "packeta-2",
+        label: "Zásilkovna — Druhé výdejní místo",
+      },
+    });
+
+    const requoted = await requoteResponse;
+    expect(requoted.status()).toBe(200);
+    expect(await requoted.json()).toMatchObject({
+      phase: "CHECKOUT_READY",
+      checkoutReady: true,
+      bindingQuote: {
+        totalMinor: 46900,
+        components: expect.arrayContaining([
+          expect.objectContaining({ kind: "DELIVERY", amountMinor: 11900 }),
+        ]),
+      },
+    });
+    await expect(page.locator(".price-summary .total-price")).toContainText(
+      "469,00",
+    );
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible();
+  });
 });
