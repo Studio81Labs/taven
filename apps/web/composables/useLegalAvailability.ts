@@ -1,6 +1,7 @@
 import type { components } from "@taven/openapi-client";
 import {
   isLegalAvailability,
+  LEGAL_READ_TIMEOUT_MS,
   type LegalAvailability,
 } from "../utils/legal-availability";
 
@@ -26,7 +27,7 @@ export function useLegalAvailability() {
       const response = await Promise.race([
         $api.GET("/legal-documents/availability"),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("timeout")), 1_000),
+          setTimeout(() => reject(new Error("timeout")), LEGAL_READ_TIMEOUT_MS),
         ),
       ]);
       const value = isLegalAvailability(response.data)

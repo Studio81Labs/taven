@@ -12,6 +12,8 @@ const LEGAL_DOCUMENT_KEYS = [
   "photoConsent",
 ] as const satisfies readonly LegalDocumentKey[];
 
+export const LEGAL_READ_TIMEOUT_MS = 5_000;
+
 export type LegalAvailability = Readonly<{
   schemaVersion: 1;
   policyRevision: string;
