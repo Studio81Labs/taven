@@ -145,6 +145,54 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     ).toBeVisible();
   });
 
+  test("requires fresh consent after the server rotates legal revisions before checkout", async ({
+    page,
+    request,
+  }) => {
+    await page.goto("/");
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.getByText("Přetáhni soubor sem").click();
+    await (await fileChooserPromise).setFiles(FIXTURE_PATH);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+    await page
+      .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible();
+
+    await page.getByLabel("Jméno kontaktní osoby").fill("Jan Zákazník");
+    await page.getByLabel("E-mail").fill("jan.zakaznik@example.cz");
+    await page.getByLabel("Fakturační jméno nebo název").fill("Jan Zákazník");
+    await page.getByLabel("Ulice a číslo").fill("Hlavní 123");
+    await page.getByLabel("Město").fill("Brno");
+    await page.getByLabel("PSČ").fill("60200");
+    const terms = page.getByRole("checkbox", { name: /VOP/i });
+    const claims = page.getByRole("checkbox", { name: /reklamačním řádem/i });
+    const withdrawal = page.getByRole("checkbox", { name: /výjimka/i });
+    await terms.check();
+    await claims.check();
+    await withdrawal.check();
+
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { legalRevisionVersion: 2 },
+    });
+    await page.getByRole("button", { name: /Objednat a zaplatit/i }).click();
+    await expect(
+      page.getByRole("heading", { name: "Objednávku zatím nelze zaplatit." }),
+    ).toBeVisible();
+    const state = await request.get("http://127.0.0.1:4175/__test/state");
+    expect((await state.json()).lastCheckoutPayload).toBeNull();
+
+    await page.reload();
+    await expect(page.getByText("terms-test-v2")).toBeVisible();
+    await expect(terms).not.toBeChecked();
+    await expect(claims).not.toBeChecked();
+    await expect(withdrawal).not.toBeChecked();
+  });
+
   test("backend capacity failure (503) during checkout presents clear error feedback and allows retry", async ({
     page,
     request,

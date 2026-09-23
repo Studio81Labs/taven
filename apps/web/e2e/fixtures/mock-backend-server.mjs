@@ -13,6 +13,7 @@ process.on("unhandledRejection", (err) => {
 
 let testState = {
   legalStatus: "approved", // "approved" | "draft" | "error503"
+  legalRevisionVersion: 1,
   legalEvaluatedAt: null, // custom ISO string or null for current UTC
   capacityStatus: "available", // "available" | "out_of_capacity"
   expressEligible: true,
@@ -48,6 +49,7 @@ function generateCapabilityToken() {
 function resetState() {
   testState = {
     legalStatus: "approved",
+    legalRevisionVersion: 1,
     legalEvaluatedAt: null,
     capacityStatus: "available",
     expressEligible: true,
@@ -362,12 +364,14 @@ const server = http.createServer(async (req, res) => {
     );
     if (legalRevisionMatch && method === "GET") {
       const [, key, revisionCode] = legalRevisionMatch;
-      const expectedRevision =
+      const baseRevision =
         key === "prohibitedContent"
-          ? "prohibited-content-test-v1"
+          ? "prohibited-content-test"
           : key === "photoConsent"
-            ? "photo-consent-test-v1"
-            : `${key}-test-v1`;
+            ? "photo-consent-test"
+            : `${key}-test`;
+      const expectedRevision = `${baseRevision}-v${testState.legalRevisionVersion}`;
+      const isHistoricalRevision = revisionCode === `${baseRevision}-v1`;
       const contentHash = {
         terms: "a",
         claims: "b",
@@ -376,9 +380,12 @@ const server = http.createServer(async (req, res) => {
         retention: "e",
         photoConsent: "f",
       }[key].repeat(64);
+      const revisionHash = revisionCode.endsWith("-v2")
+        ? "9".repeat(64)
+        : contentHash;
       if (
         testState.legalStatus !== "approved" ||
-        revisionCode !== expectedRevision
+        (revisionCode !== expectedRevision && !isHistoricalRevision)
       ) {
         sendJson(res, 404, {
           statusCode: 404,
@@ -391,8 +398,8 @@ const server = http.createServer(async (req, res) => {
         key,
         revisionCode,
         contentVersion: 1,
-        contentHash,
-        title: `Test ${key}`,
+        contentHash: revisionHash,
+        title: `Test ${key}${revisionCode.endsWith("-v2") ? " v2" : ""}`,
         summary: "Testovací neměnné znění.",
         sections: [
           {
@@ -423,18 +430,24 @@ const server = http.createServer(async (req, res) => {
         evaluatedAt,
         documents: {
           terms: {
-            revision: "terms-test-v1",
+            revision: `terms-test-v${testState.legalRevisionVersion}`,
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
-            contentHash: "a".repeat(64),
+            contentHash:
+              testState.legalRevisionVersion === 2
+                ? "9".repeat(64)
+                : "a".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
           claims: {
-            revision: "claims-test-v1",
+            revision: `claims-test-v${testState.legalRevisionVersion}`,
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
-            contentHash: "b".repeat(64),
+            contentHash:
+              testState.legalRevisionVersion === 2
+                ? "9".repeat(64)
+                : "b".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
@@ -463,10 +476,13 @@ const server = http.createServer(async (req, res) => {
             effective: status === "approved",
           },
           photoConsent: {
-            revision: "photo-consent-test-v1",
+            revision: `photo-consent-test-v${testState.legalRevisionVersion}`,
             status,
             effectiveAt: "2000-01-01T00:00:00.000Z",
-            contentHash: "f".repeat(64),
+            contentHash:
+              testState.legalRevisionVersion === 2
+                ? "9".repeat(64)
+                : "f".repeat(64),
             approvalEvidence: "test fixture",
             effective: status === "approved",
           },
@@ -505,9 +521,9 @@ const server = http.createServer(async (req, res) => {
         methods: ["CARD"],
         legalDocuments: isApproved
           ? {
-              termsRevision: "terms-test-v1",
-              claimPolicyRevision: "claims-test-v1",
-              photoConsentRevision: "photo-consent-test-v1",
+              termsRevision: `terms-test-v${testState.legalRevisionVersion}`,
+              claimPolicyRevision: `claims-test-v${testState.legalRevisionVersion}`,
+              photoConsentRevision: `photo-consent-test-v${testState.legalRevisionVersion}`,
             }
           : null,
       });
@@ -1156,10 +1172,13 @@ const server = http.createServer(async (req, res) => {
           body.acceptClaimPolicy === true &&
           body.acknowledgeWithdrawalException === true &&
           typeof body.photoPublicationConsent === "boolean" &&
-          body.termsRevision === "terms-test-v1" &&
-          body.claimPolicyRevision === "claims-test-v1" &&
+          body.termsRevision ===
+            `terms-test-v${testState.legalRevisionVersion}` &&
+          body.claimPolicyRevision ===
+            `claims-test-v${testState.legalRevisionVersion}` &&
           (!body.photoPublicationConsent ||
-            body.photoConsentRevision === "photo-consent-test-v1");
+            body.photoConsentRevision ===
+              `photo-consent-test-v${testState.legalRevisionVersion}`);
 
         if (!isValid) {
           sendJson(res, 400, {
