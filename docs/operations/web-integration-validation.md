@@ -2,10 +2,11 @@
 
 The browser integration profile runs the real Nuxt site against the real API;
 it does not start the deterministic mock backend or fixture web server. The
-test uploads the checked-in STL through the public page, waits for the API
+test inspects the checked-in STL through the public page, waits for the API
 estimate, verifies the STANDARD assumption, and asserts that the server's
 checkout approval state is represented by either an enabled proceed action or
-the explicit approval gate.
+the explicit approval gate. With `INTEGRATION_REQUIRE_CHECKOUT=true`, it also
+clicks through the real storage upload and asserts the configurator route.
 
 Run against staging with:
 

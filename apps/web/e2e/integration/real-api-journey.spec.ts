@@ -5,6 +5,7 @@ import { test, expect } from "@playwright/test";
 const INTEGRATION_API_URL =
   process.env.INTEGRATION_API_URL || "https://api-staging.taven.cz";
 const integrationTest = process.env.INTEGRATION_TEST === "true";
+const requireCheckout = process.env.INTEGRATION_REQUIRE_CHECKOUT === "true";
 const FIXTURE_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../tools/slicing-fixtures/fixtures/single-pla/cube.stl",
@@ -52,8 +53,13 @@ test.describe("Real API Integration Journey", () => {
       name: "Kalkulace čeká na schválení",
     });
     await expect(proceed.or(approvalGate)).toBeVisible();
-    if (process.env.INTEGRATION_REQUIRE_CHECKOUT) {
+    if (requireCheckout) {
       await expect(proceed).toBeEnabled();
+      await proceed.click();
+      await expect(page).toHaveURL(/\/objednavka/, { timeout: 120_000 });
+      await expect(
+        page.getByRole("heading", { name: "Nastavte výrobu.", level: 2 }),
+      ).toBeVisible();
     } else if (await approvalGate.isVisible()) {
       await expect(approvalGate).toBeDisabled();
     }

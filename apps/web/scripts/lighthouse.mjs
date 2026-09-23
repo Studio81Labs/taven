@@ -14,11 +14,16 @@ const enforceBudgets = process.env.TAVEN_LIGHTHOUSE_ENFORCE_BUDGETS === "true";
 
 let previewError = "";
 let mockBackendError = "";
+let mockBackendReady = false;
 const mockBackend = spawn(
   process.execPath,
   ["e2e/fixtures/mock-backend-server.mjs"],
-  { stdio: ["ignore", "ignore", "pipe"] },
+  { stdio: ["ignore", "pipe", "pipe"] },
 );
+mockBackend.stdout.setEncoding("utf8");
+mockBackend.stdout.on("data", (chunk) => {
+  if (chunk.includes("Mock backend server running")) mockBackendReady = true;
+});
 mockBackend.stderr.setEncoding("utf8");
 mockBackend.stderr.on("data", (chunk) => {
   mockBackendError += chunk;
@@ -80,7 +85,7 @@ async function waitForApi() {
         `Mock backend exited before Lighthouse started.\n${mockBackendError}`,
       );
     }
-    if (await apiIsReady()) return;
+    if (mockBackendReady && (await apiIsReady())) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(
