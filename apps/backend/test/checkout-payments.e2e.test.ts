@@ -2029,6 +2029,7 @@ describe("checkout payment capture protocol", () => {
     let providerCreateCalls = 0;
     let providerVerifyCalls = 0;
     let providerCancelCalls = 0;
+    let commercialPriceListToRestore: string | undefined;
     let sandboxCheckoutBaseUrl = "http://sandbox.local";
     let applicationBaseUrl: URL | undefined;
     let failNextFinalizationBeforeCommit = false;
@@ -2756,6 +2757,44 @@ describe("checkout payment capture protocol", () => {
           new Error("simulated ownership reconciliation read failure"),
         );
       const actualApplicationNow = Date.now();
+      const quotedBinding =
+        await prisma.orderActivePriceBinding.findUniqueOrThrow({
+          where: { orderId: foundation.orderId },
+          include: {
+            orderPriceBinding: { include: { priceSnapshot: true } },
+          },
+        });
+      await expect(
+        prisma.order.findUniqueOrThrow({
+          where: { id: foundation.orderId },
+          select: { status: true, acceptedOrderPriceBindingId: true },
+        }),
+      ).resolves.toEqual({
+        status: "QUOTED",
+        acceptedOrderPriceBindingId: null,
+      });
+      const selectedBeforePayment =
+        await prisma.commercialPolicySelection.findUniqueOrThrow({
+          where: { currency: "CZK" },
+          include: { priceList: true },
+        });
+      const nextPriceList = await prisma.priceList.create({
+        data: {
+          revision: `quoted-payment-publication-${randomUUID()}`,
+          currency: "CZK",
+          termsRevision: selectedBeforePayment.priceList.termsRevision,
+          parameters: selectedBeforePayment.priceList
+            .parameters as Prisma.InputJsonObject,
+        },
+      });
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: nextPriceList.id,
+          selectionVersion: { increment: 1 },
+        },
+      });
+      commercialPriceListToRestore = selectedBeforePayment.priceListId;
       const applicationClock = vi
         .spyOn(Date, "now")
         .mockReturnValue(actualApplicationNow + 24 * 60 * 60 * 1_000);
@@ -2780,6 +2819,37 @@ describe("checkout payment capture protocol", () => {
         currency: "EUR",
         checkoutUrl: `${baseUrl.origin}/payments/sandbox/sandbox-${created.paymentId}`,
       });
+      await expect(
+        prisma.payment.findUniqueOrThrow({
+          where: { id: created.paymentId },
+          select: {
+            orderPriceBindingId: true,
+            priceSnapshotId: true,
+            requestedAmountMinor: true,
+          },
+        }),
+      ).resolves.toMatchObject({
+        orderPriceBindingId: quotedBinding.orderPriceBindingId,
+        priceSnapshotId: quotedBinding.orderPriceBinding.priceSnapshotId,
+        requestedAmountMinor:
+          quotedBinding.orderPriceBinding.priceSnapshot.contractTotalMinor,
+      });
+      await expect(
+        prisma.order.findUniqueOrThrow({
+          where: { id: foundation.orderId },
+          select: { acceptedOrderPriceBindingId: true },
+        }),
+      ).resolves.toEqual({
+        acceptedOrderPriceBindingId: quotedBinding.orderPriceBindingId,
+      });
+      await prisma.commercialPolicySelection.update({
+        where: { currency: "CZK" },
+        data: {
+          priceListId: commercialPriceListToRestore,
+          selectionVersion: { increment: 1 },
+        },
+      });
+      commercialPriceListToRestore = undefined;
       const returnQuery = `?sessionId=${foundation.quoteSessionId}&paymentId=${created.paymentId}`;
       expect(latestReturnUrls).toEqual({
         success: `https://taven.cz/checkout/payment/success${returnQuery}`,
@@ -3643,6 +3713,15 @@ describe("checkout payment capture protocol", () => {
       });
       expect(providerCreateCalls).toBe(callsBeforeAmbiguity + 2);
     } finally {
+      if (commercialPriceListToRestore) {
+        await app?.get(PrismaService).commercialPolicySelection.update({
+          where: { currency: "CZK" },
+          data: {
+            priceListId: commercialPriceListToRestore,
+            selectionVersion: { increment: 1 },
+          },
+        });
+      }
       await app?.close();
       restoreEnvironment(
         "TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED",
