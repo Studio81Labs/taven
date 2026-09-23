@@ -9,8 +9,10 @@ import {
 } from "@playwright/test";
 import {
   archiveE2eCheckoutDocumentsForBrowser,
+  readE2eAcceptedLegalVersionsForBrowser,
   readE2eCheckoutEffectsForBrowser,
   readE2eParcelAllocationsForBrowser,
+  replaceE2eCheckoutDocumentsForBrowser,
   resetE2eAnonymousAdmissionLimitsForBrowser,
 } from "../../../backend/test/support/publish-e2e-legal-fixtures";
 
@@ -29,10 +31,11 @@ const TWO_BODY_FIXTURE_PATH = path.resolve(
   "../../../../tools/slicing-fixtures/fixtures/two-body/two-body.3mf",
 );
 
-async function startSandboxPayment(
+async function prepareSandboxCheckout(
   page: Page,
   method: "CARD" | "BANK_TRANSFER",
   consentToPhotos = false,
+  acceptLegal = true,
 ) {
   await page.goto("/");
   const fileChooserPromise = page.waitForEvent("filechooser");
@@ -64,11 +67,15 @@ async function startSandboxPayment(
   await page.getByLabel("Ulice a číslo").fill("Testovací 123");
   await page.getByLabel("Město").fill("Brno");
   await page.getByLabel("PSČ").fill("60200");
-  await page.getByRole("checkbox", { name: /VOP/i }).check();
-  await page.getByRole("checkbox", { name: /reklamačním řádem/i }).check();
-  await page.getByRole("checkbox", { name: /výjimka/i }).check();
-  if (consentToPhotos) {
-    await page.getByRole("checkbox", { name: /Dobrovolně souhlasím/i }).check();
+  if (acceptLegal) {
+    await page.getByRole("checkbox", { name: /VOP/i }).check();
+    await page.getByRole("checkbox", { name: /reklamačním řádem/i }).check();
+    await page.getByRole("checkbox", { name: /výjimka/i }).check();
+    if (consentToPhotos) {
+      await page
+        .getByRole("checkbox", { name: /Dobrovolně souhlasím/i })
+        .check();
+    }
   }
   const checkoutSession = await page.evaluate(() => {
     const raw = sessionStorage.getItem("taven:automatic-quote-session:v1");
@@ -79,6 +86,19 @@ async function startSandboxPayment(
   if (!checkoutSession) {
     throw new Error("Checkout session evidence is unavailable");
   }
+  return { checkoutSession };
+}
+
+async function startSandboxPayment(
+  page: Page,
+  method: "CARD" | "BANK_TRANSFER",
+  consentToPhotos = false,
+) {
+  const { checkoutSession } = await prepareSandboxCheckout(
+    page,
+    method,
+    consentToPhotos,
+  );
   await page.getByRole("button", { name: /Objednat a zaplatit/i }).click();
   await expect(
     page.getByRole("heading", { name: "TAVEN. sandbox checkout" }),
@@ -835,5 +855,163 @@ test.describe("Real API Integration Journey", () => {
       status: "VOIDED",
       provider: "sandbox",
     });
+  });
+
+  test("requires fresh consent and binding after real legal revision replacement", async ({
+    page,
+    browser,
+    request,
+  }) => {
+    test.skip(
+      !completePayment || process.env.INTEGRATION_MUTABLE_FIXTURES !== "true",
+      "Requires the isolated mutable sandbox checkout profile",
+    );
+    test.setTimeout(360_000);
+    const databaseUrl = process.env.DATABASE_URL!;
+    const { checkoutSession: staleSession } = await prepareSandboxCheckout(
+      page,
+      "CARD",
+      true,
+    );
+    const replacements =
+      await replaceE2eCheckoutDocumentsForBrowser(databaseUrl);
+    const availability = await request.get(
+      `${INTEGRATION_API_URL}/legal-documents/availability`,
+    );
+    expect(availability.status()).toBe(200);
+    const documents = (await availability.json()).documents;
+    for (const key of ["terms", "claims", "photoConsent"] as const) {
+      expect(documents[key]).toMatchObject({
+        effective: true,
+        revision: replacements[key].revision,
+        contentHash: replacements[key].contentHash,
+      });
+    }
+
+    await page.getByRole("button", { name: /Objednat a zaplatit/i }).click();
+    await expect(
+      page.getByRole("heading", { name: "Objednávku zatím nelze zaplatit." }),
+    ).toBeVisible({ timeout: 120_000 });
+    expect(
+      await readE2eCheckoutEffectsForBrowser(
+        databaseUrl,
+        staleSession.sessionId,
+      ),
+    ).toEqual({
+      acceptedOrderPriceBindingId: null,
+      paymentCount: 0,
+      acceptanceCount: 0,
+      decisionCount: 0,
+      idempotencyCount: 0,
+    });
+
+    for (const { key, path } of [
+      { key: "terms", path: "/vop" },
+      { key: "claims", path: "/reklamace" },
+      { key: "photoConsent", path: "/fotografie-a-duvernost" },
+    ] as const) {
+      const previous = replacements[key];
+      const historical = await request.get(
+        `${process.env.INTEGRATION_WEB_URL}${path}?revision=${previous.previousRevision}&contentHash=${previous.previousContentHash}`,
+      );
+      expect(historical.status()).toBe(200);
+      const historicalHtml = await historical.text();
+      expect(historicalHtml).toContain("Historické znění");
+      expect(historicalHtml).toContain(previous.previousTitle);
+    }
+
+    await resetE2eAnonymousAdmissionLimitsForBrowser(databaseUrl);
+    const freshContext = await browser.newContext({
+      baseURL: process.env.INTEGRATION_WEB_URL,
+    });
+    try {
+      const freshPage = await freshContext.newPage();
+      const { checkoutSession } = await prepareSandboxCheckout(
+        freshPage,
+        "CARD",
+        false,
+        false,
+      );
+      for (const { key, name, path } of [
+        { key: "terms", name: "VOP", path: "/vop" },
+        { key: "claims", name: "reklamačním řádem", path: "/reklamace" },
+        {
+          key: "photoConsent",
+          name: "pravidel fotografování",
+          path: "/fotografie-a-duvernost",
+        },
+      ] as const) {
+        await expect(
+          freshPage.getByRole("link", { name, exact: true }),
+        ).toHaveAttribute(
+          "href",
+          `${path}?revision=${replacements[key].revision}&contentHash=${replacements[key].contentHash}`,
+        );
+        const current = await request.get(
+          `${process.env.INTEGRATION_WEB_URL}${path}?revision=${replacements[key].revision}&contentHash=${replacements[key].contentHash}`,
+        );
+        expect(current.status()).toBe(200);
+        expect(await current.text()).toContain(replacements[key].title);
+      }
+      const terms = freshPage.getByRole("checkbox", { name: /VOP/i });
+      const claims = freshPage.getByRole("checkbox", {
+        name: /reklamačním řádem/i,
+      });
+      const withdrawal = freshPage.getByRole("checkbox", { name: /výjimka/i });
+      const photos = freshPage.getByRole("checkbox", {
+        name: /Dobrovolně souhlasím/i,
+      });
+      for (const consent of [terms, claims, withdrawal, photos]) {
+        await expect(consent).not.toBeChecked();
+        await consent.check();
+      }
+      await freshPage
+        .getByRole("button", { name: /Objednat a zaplatit/i })
+        .click();
+      await expect(
+        freshPage.getByRole("heading", { name: "TAVEN. sandbox checkout" }),
+      ).toBeVisible({ timeout: 120_000 });
+      const paymentId = await freshPage.locator("main code").textContent();
+      if (!paymentId) {
+        throw new Error("Replacement checkout did not identify its payment");
+      }
+      expect(
+        await readE2eAcceptedLegalVersionsForBrowser(
+          databaseUrl,
+          checkoutSession.sessionId,
+        ),
+      ).toEqual([
+        {
+          purpose: "TERMS_ACCEPTED",
+          revision: replacements.terms.revision,
+          contentHash: replacements.terms.contentHash,
+        },
+        {
+          purpose: "CLAIM_POLICY_ACCEPTED",
+          revision: replacements.claims.revision,
+          contentHash: replacements.claims.contentHash,
+        },
+        {
+          purpose: "PHOTO_PUBLICATION_GRANTED",
+          revision: replacements.photoConsent.revision,
+          contentHash: replacements.photoConsent.contentHash,
+        },
+      ]);
+      await freshPage.getByRole("button", { name: "Capture payment" }).click();
+      await expect(
+        freshPage.getByRole("heading", { name: "Platba byla potvrzena." }),
+      ).toBeVisible({ timeout: 120_000 });
+      const payment = await request.get(
+        `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payment`,
+        {
+          headers: { Authorization: `Bearer ${checkoutSession.sessionToken}` },
+          params: { paymentId },
+        },
+      );
+      expect(payment.status()).toBe(200);
+      expect(await payment.json()).toMatchObject({ status: "CAPTURED" });
+    } finally {
+      await freshContext.close();
+    }
   });
 });
