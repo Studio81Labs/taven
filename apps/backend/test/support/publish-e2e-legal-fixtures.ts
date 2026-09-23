@@ -85,3 +85,80 @@ export async function publishE2eLegalFixturesForDatabase(
     await pool.end();
   }
 }
+
+/** Temporary archive for the isolated browser database; never use against staging. */
+export async function archiveE2eTermsForBrowser(
+  databaseUrl: string,
+): Promise<() => Promise<void>> {
+  const url = new URL(databaseUrl);
+  if (url.hostname !== "127.0.0.1" || url.pathname !== "/taven_web_browser") {
+    throw new Error(
+      "Legal browser fixture requires the isolated local database",
+    );
+  }
+  const pool = new Pool({ connectionString: databaseUrl });
+  let publicationId: string | undefined;
+  let documentId: string | undefined;
+  let generation: number | undefined;
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const document = await client.query<{ id: string; generation: number }>(
+        "SELECT id, generation FROM legal_documents WHERE key = 'terms' FOR UPDATE",
+      );
+      if (document.rows.length !== 1) throw new Error("Terms fixture missing");
+      documentId = document.rows[0]!.id;
+      generation = document.rows[0]!.generation;
+      const publication = await client.query<{ id: string }>(
+        `SELECT id FROM legal_document_publications
+         WHERE document_id = $1 AND cancelled_at IS NULL AND ends_at IS NULL
+         ORDER BY starts_at DESC LIMIT 1 FOR UPDATE`,
+        [documentId],
+      );
+      if (publication.rows.length !== 1)
+        throw new Error("Active terms publication fixture missing");
+      publicationId = publication.rows[0]!.id;
+      await client.query(
+        "UPDATE legal_document_publications SET ends_at = clock_timestamp() WHERE id = $1",
+        [publicationId],
+      );
+      await client.query(
+        "UPDATE legal_documents SET generation = generation + 1 WHERE id = $1",
+        [documentId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    await pool.end();
+    throw error;
+  }
+
+  return async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL session_replication_role = 'replica'");
+      await client.query(
+        "UPDATE legal_document_publications SET ends_at = NULL WHERE id = $1",
+        [publicationId],
+      );
+      await client.query(
+        "UPDATE legal_documents SET generation = $2 WHERE id = $1",
+        [documentId, generation],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+      await pool.end();
+    }
+  };
+}

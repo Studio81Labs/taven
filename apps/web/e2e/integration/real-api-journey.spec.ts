@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Page } from "@playwright/test";
+import { archiveE2eTermsForBrowser } from "../../../backend/test/support/publish-e2e-legal-fixtures";
 
 const INTEGRATION_API_URL =
   process.env.INTEGRATION_API_URL || "https://api-staging.taven.cz";
@@ -345,44 +346,85 @@ test.describe("Real API Integration Journey", () => {
       status: "FAILED",
       provider: "sandbox",
     });
-    await page.getByRole("link", { name: "Zpět ke kalkulaci" }).click();
-    await expect(page).toHaveURL(/\/objednavka\?retry=1/);
-    await expect(
-      page.getByRole("heading", { name: "Dokončení objednávky" }),
-    ).toBeVisible({ timeout: 120_000 });
-    await page
-      .getByRole("button", { name: "Zvolit nový platební pokus" })
-      .click();
-    await expect(
-      page.getByRole("button", { name: /Objednat a zaplatit/i }),
-    ).toBeEnabled({ timeout: 120_000 });
-    await page.getByRole("button", { name: /Objednat a zaplatit/i }).click();
-    await expect(
-      page.getByRole("heading", { name: "TAVEN. sandbox checkout" }),
-    ).toBeVisible({ timeout: 120_000 });
-    const retryPaymentId = await page.locator("main code").textContent();
-    if (!retryPaymentId) {
-      throw new Error("Retry sandbox checkout did not identify its payment");
+    const restoreTerms =
+      process.env.INTEGRATION_MUTABLE_FIXTURES === "true"
+        ? await archiveE2eTermsForBrowser(process.env.DATABASE_URL!)
+        : null;
+    try {
+      if (restoreTerms) {
+        const legal = await request.get(
+          `${INTEGRATION_API_URL}/legal-documents/availability`,
+        );
+        expect(legal.status()).toBe(200);
+        expect((await legal.json()).documents.terms.effective).toBe(false);
+      }
+      await page.getByRole("link", { name: "Zpět ke kalkulaci" }).click();
+      await expect(page).toHaveURL(/\/objednavka\?retry=1/);
+      await expect(
+        page.getByRole("heading", { name: "Dokončení objednávky" }),
+      ).toBeVisible({ timeout: 120_000 });
+      if (restoreTerms) {
+        await page.reload();
+        await expect(
+          page.getByRole("heading", { name: "Platba nebyla dokončena." }),
+        ).toBeVisible({ timeout: 120_000 });
+      }
+      await page
+        .getByRole("button", { name: "Zvolit nový platební pokus" })
+        .click();
+      if (restoreTerms) {
+        const historicalTerms = page.getByRole("link", {
+          name: "Zobrazit VOP",
+        });
+        await expect(historicalTerms).toHaveAttribute(
+          "href",
+          /\/vop\?revision=terms-v1&contentHash=[a-f0-9]{64}/,
+        );
+        await expect(page.getByRole("checkbox", { name: /VOP/i })).toHaveCount(
+          0,
+        );
+        const historicalPage = await request.get(
+          new URL(
+            (await historicalTerms.getAttribute("href"))!,
+            page.url(),
+          ).toString(),
+        );
+        expect(historicalPage.status()).toBe(200);
+        expect(await historicalPage.text()).toContain("Historické znění");
+      }
+      await expect(
+        page.getByRole("button", { name: /Objednat a zaplatit/i }),
+      ).toBeEnabled({ timeout: 120_000 });
+      await page.getByRole("button", { name: /Objednat a zaplatit/i }).click();
+      await expect(
+        page.getByRole("heading", { name: "TAVEN. sandbox checkout" }),
+      ).toBeVisible({ timeout: 120_000 });
+      const retryPaymentId = await page.locator("main code").textContent();
+      if (!retryPaymentId) {
+        throw new Error("Retry sandbox checkout did not identify its payment");
+      }
+      expect(retryPaymentId).not.toBe(paymentId);
+      await page.getByRole("button", { name: "Capture payment" }).click();
+      await expect(page).toHaveURL(/\/checkout\/payment\/success/);
+      await expect(
+        page.getByRole("heading", { name: "Platba byla potvrzena." }),
+      ).toBeVisible({ timeout: 120_000 });
+      const retriedPayment = await request.get(
+        `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payment`,
+        {
+          headers: { Authorization: `Bearer ${checkoutSession.sessionToken}` },
+          params: { paymentId: retryPaymentId },
+        },
+      );
+      expect(retriedPayment.status()).toBe(200);
+      expect(await retriedPayment.json()).toMatchObject({
+        paymentId: retryPaymentId,
+        method: "CARD",
+        status: "CAPTURED",
+      });
+    } finally {
+      await restoreTerms?.();
     }
-    expect(retryPaymentId).not.toBe(paymentId);
-    await page.getByRole("button", { name: "Capture payment" }).click();
-    await expect(page).toHaveURL(/\/checkout\/payment\/success/);
-    await expect(
-      page.getByRole("heading", { name: "Platba byla potvrzena." }),
-    ).toBeVisible({ timeout: 120_000 });
-    const retriedPayment = await request.get(
-      `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payment`,
-      {
-        headers: { Authorization: `Bearer ${checkoutSession.sessionToken}` },
-        params: { paymentId: retryPaymentId },
-      },
-    );
-    expect(retriedPayment.status()).toBe(200);
-    expect(await retriedPayment.json()).toMatchObject({
-      paymentId: retryPaymentId,
-      method: "CARD",
-      status: "CAPTURED",
-    });
   });
 
   test("requires an explicit cancellation before voiding a pending payment", async ({
