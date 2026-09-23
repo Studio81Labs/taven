@@ -1299,6 +1299,32 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(initial.response.status).toBe(201);
 
+    const initialPackage = await prisma.quote.findUniqueOrThrow({
+      where: { id: initial.body.quoteId },
+      include: {
+        items: { orderBy: { ordinal: "asc" } },
+        priceBinding: {
+          include: {
+            priceSnapshot: {
+              include: {
+                components: { orderBy: { id: "asc" } },
+                paymentSchedules: { orderBy: { sequence: "asc" } },
+                quoteShipmentPlans: { orderBy: { ordinal: "asc" } },
+              },
+            },
+          },
+        },
+        deliveryDestination: true,
+        shipmentPlans: { orderBy: { ordinal: "asc" } },
+      },
+    });
+    const initialChildPackage = {
+      items: initialPackage.items,
+      priceBinding: initialPackage.priceBinding,
+      deliveryDestination: initialPackage.deliveryDestination,
+      shipmentPlans: initialPackage.shipmentPlans,
+    };
+
     // This is a migration-owned historical fixture. The real migration marks
     // the row in legacy_quote_request_imports and leaves its legal columns
     // absent; disabling user triggers for this isolated fixture reproduces
@@ -1389,6 +1415,32 @@ describe("QuoteRequest and tokenized individual offers", () => {
       legalTermsRevisionId: null,
       legalClaimsRevisionId: null,
     });
+
+    const retainedChildPackage = await prisma.quote.findUniqueOrThrow({
+      where: { id: initial.body.quoteId },
+      include: {
+        items: { orderBy: { ordinal: "asc" } },
+        priceBinding: {
+          include: {
+            priceSnapshot: {
+              include: {
+                components: { orderBy: { id: "asc" } },
+                paymentSchedules: { orderBy: { sequence: "asc" } },
+                quoteShipmentPlans: { orderBy: { ordinal: "asc" } },
+              },
+            },
+          },
+        },
+        deliveryDestination: true,
+        shipmentPlans: { orderBy: { ordinal: "asc" } },
+      },
+    });
+    expect({
+      items: retainedChildPackage.items,
+      priceBinding: retainedChildPackage.priceBinding,
+      deliveryDestination: retainedChildPackage.deliveryDestination,
+      shipmentPlans: retainedChildPackage.shipmentPlans,
+    }).toEqual(initialChildPackage);
 
     const priceSnapshot = await prisma.quotePriceBinding.findUniqueOrThrow({
       where: { quoteId: reissued.body.quoteId },
@@ -2836,6 +2888,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
       key("publication-reissue-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
     );
+    const initialQuote = await prisma.quote.findUniqueOrThrow({
+      where: { id: initial.body.quoteId },
+      select: { legalTermsRevisionId: true },
+    });
     const termsDocument = await prisma.legalDocument.findUniqueOrThrow({
       where: { key: "terms" },
     });
@@ -2914,9 +2970,28 @@ describe("QuoteRequest and tokenized individual offers", () => {
         orderBy: { version: "asc" },
         select: { id: true, version: true, legalTermsRevisionId: true },
       });
-      expect(versions).toHaveLength(
-        reissueResponse.response.status === 201 ? 2 : 1,
-      );
+      if (reissueResponse.response.status === 201) {
+        expect(versions).toEqual([
+          {
+            id: initial.body.quoteId,
+            version: 1,
+            legalTermsRevisionId: initialQuote.legalTermsRevisionId,
+          },
+          {
+            id: reissueResponse.body.quoteId,
+            version: 2,
+            legalTermsRevisionId: initialQuote.legalTermsRevisionId,
+          },
+        ]);
+      } else {
+        expect(versions).toEqual([
+          {
+            id: initial.body.quoteId,
+            version: 1,
+            legalTermsRevisionId: initialQuote.legalTermsRevisionId,
+          },
+        ]);
+      }
       await expect(
         prisma.quoteRequest.findUniqueOrThrow({
           where: { id: created.requestId },
