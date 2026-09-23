@@ -125,6 +125,19 @@ describe("v0-1 metrics reports", () => {
         availableAt: new Date(Date.now() - 1_000),
       },
     });
+    const processingEmail = await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `warning-processing-email-${randomUUID()}`,
+        aggregateType: "quote",
+        aggregateId: randomUUID(),
+        messageType: "email.quote-offer-issued",
+        schemaVersion: 1,
+        payload: {},
+        status: "PROCESSING",
+        availableAt: new Date(Date.now() - 1_000),
+        lockedAt: new Date(),
+      },
+    });
     const response = await fetch(
       new URL("/admin/warnings?limit=100", baseUrl),
       {
@@ -158,6 +171,9 @@ describe("v0-1 metrics reports", () => {
       ]),
     );
     expect(JSON.stringify(body)).not.toContain("must-not-leak@example.test");
+    expect(
+      body.items.some((item) => item.sourceId === processingEmail.id),
+    ).toBe(false);
     expect(
       (
         await fetch(new URL("/admin/warnings", baseUrl), {

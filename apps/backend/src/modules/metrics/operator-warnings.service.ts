@@ -83,7 +83,10 @@ export class OperatorWarningsService {
         };
 
         const refunds = await tx.refundTransaction.findMany({
-          where: { status: { in: ["PENDING", "FAILED", "SUSPENDED"] } },
+          where: {
+            status: { in: ["PENDING", "FAILED", "SUSPENDED"] },
+            replacementRefundTransactions: { none: {} },
+          },
           include: { payment: { select: { orderId: true, currency: true } } },
           orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
           take,
@@ -153,7 +156,7 @@ export class OperatorWarningsService {
             OR: [
               { status: "FAILED" },
               {
-                status: { in: ["PENDING", "PROCESSING"] },
+                status: "PENDING",
                 availableAt: { lte: now },
               },
             ],

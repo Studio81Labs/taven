@@ -84,7 +84,8 @@ reservation-conflict, reference-activation, and receipt-rate observations.
 `coverage.sourceScanLimited` signals that a source hit its bounded scan limit
 and additional matching facts may be omitted. The feed has no
 acknowledgement or invented severity threshold. It does not expose outbox
-payloads, addresses, or contacts. Delivery-attempt and historical
+payloads, addresses, or contacts. Actively processing email is excluded until
+the email runtime defines a durable stale-claim lease; delivery-attempt and historical
 reservation-conflict coverage are explicitly unavailable. Legacy inventory
 lots without receipt evidence are counted separately, and selected material
 rate coverage is unavailable until a CZK commercial policy is selected.
