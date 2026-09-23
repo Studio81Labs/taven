@@ -1758,6 +1758,7 @@ export class AutomaticQuotesService {
         }
         if (draft.items.length === 0) return;
         let enqueued = false;
+        let referenceResolved = false;
         for (const item of draft.items) {
           const geometry = await transaction.modelGeometry.findUnique({
             where: { id: item.targetModelGeometryId },
@@ -1774,6 +1775,12 @@ export class AutomaticQuotesService {
             order.id,
             true,
           );
+          if (
+            item.referencePartsPerPlate === null &&
+            occupancy.kind === "resolved"
+          ) {
+            referenceResolved = true;
+          }
           if (occupancy.kind === "failed") {
             enqueued = true;
             continue;
@@ -1806,7 +1813,7 @@ export class AutomaticQuotesService {
             enqueued = true;
           }
         }
-        if (enqueued) return;
+        if (enqueued || referenceResolved) return;
         if (evidenceState === "none") {
           await this.stageOrFinalizeBinding(
             transaction,
@@ -2490,7 +2497,10 @@ export class AutomaticQuotesService {
       where: { id: orderId },
       include: {
         automaticQuoteDraft: {
-          include: { selectedDeliveryDestination: true, items: true },
+          include: {
+            selectedDeliveryDestination: true,
+            items: { orderBy: { ordinal: "asc" } },
+          },
         },
         activePriceBinding: {
           include: {
@@ -4704,6 +4714,14 @@ export class AutomaticQuotesService {
     client: Transaction | PrismaService,
     orderId: string,
   ) {
+    const draft = await client.automaticQuoteDraft.findUnique({
+      where: { orderId },
+      select: {
+        selectedDeliveryDestinationId: true,
+        expressRequested: true,
+        configurationRevision: true,
+      },
+    });
     const active = await client.orderActivePriceBinding.findUnique({
       where: { orderId },
       include: {
@@ -4712,10 +4730,14 @@ export class AutomaticQuotesService {
         },
       },
     });
-    return (
-      active?.orderPriceBinding.priceSnapshot.priceList ??
-      (await currentCommercialPolicy(client)).priceList
-    );
+    if (
+      active &&
+      draft &&
+      bindingMatchesAutomaticDraft(active.orderPriceBinding, draft)
+    ) {
+      return active.orderPriceBinding.priceSnapshot.priceList;
+    }
+    return (await currentCommercialPolicy(client)).priceList;
   }
 
   private async roughQuote(
@@ -4892,7 +4914,7 @@ export class AutomaticQuotesService {
     const pricing = await this.pricingItemsFromDraft(
       client,
       orderId,
-      draft.items,
+      [...draft.items].sort((left, right) => left.ordinal - right.ordinal),
       null,
     );
     if (!pricing) return null;
