@@ -413,16 +413,36 @@ test.describe("Real API Integration Journey", () => {
         await expect(page.getByRole("checkbox", { name: /VOP/i })).toHaveCount(
           0,
         );
-        for (const link of [
-          historicalTerms,
-          page.getByRole("link", { name: "reklamační řád" }),
-          page.getByRole("link", { name: /pravidel fotografování/i }),
+        const frozenEvidence = frozenRetry.acceptedEvidence as {
+          terms: { revision: string; contentHash: string };
+          claims: { revision: string; contentHash: string };
+          photoConsent: { revision: string; contentHash: string };
+        };
+        for (const { link, path, evidence } of [
+          {
+            link: historicalTerms,
+            path: "/vop",
+            evidence: frozenEvidence.terms,
+          },
+          {
+            link: page.getByRole("link", { name: "reklamační řád" }),
+            path: "/reklamace",
+            evidence: frozenEvidence.claims,
+          },
+          {
+            link: page.getByRole("link", { name: /pravidel fotografování/i }),
+            path: "/fotografie-a-duvernost",
+            evidence: frozenEvidence.photoConsent,
+          },
         ]) {
           const href = await link.getAttribute("href");
-          expect(href).toMatch(/revision=.+&contentHash=[a-f0-9]{64}/);
-          const historicalPage = await request.get(
-            new URL(href!, page.url()).toString(),
+          const url = new URL(href!, page.url());
+          expect(url.pathname).toBe(path);
+          expect(url.searchParams.get("revision")).toBe(evidence.revision);
+          expect(url.searchParams.get("contentHash")).toBe(
+            evidence.contentHash,
           );
+          const historicalPage = await request.get(url.toString());
           expect(historicalPage.status()).toBe(200);
           expect(await historicalPage.text()).toContain("Historické znění");
         }
