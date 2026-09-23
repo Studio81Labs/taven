@@ -542,6 +542,22 @@ test.describe("Real API Integration Journey", () => {
       process.env.DATABASE_URL!,
       checkoutSession.sessionId,
     );
+    expect(allocations.itemBoundsMicrometers).toEqual([
+      {
+        ordinal: 0,
+        bodyIds: ["body-0001"],
+        x: "20000",
+        y: "20000",
+        z: "20000",
+      },
+      {
+        ordinal: 1,
+        bodyIds: ["body-0002"],
+        x: "20000",
+        y: "20000",
+        z: "20000",
+      },
+    ]);
     expect(allocations.destinationCount).toBe(1);
     expect(allocations.parcels.length).toBe(shipmentComponents.length);
     expect(

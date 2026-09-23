@@ -103,6 +103,7 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
           : twoBodySource
             ? ["body-0001", "body-0002"]
             : ["body-0001"];
+      const includesBothFixtureBodies = twoBodySource && bodyIds.length === 2;
       const geometrySha256 = fixtureHash(
         job.input.source.contentSha256,
         job.input.canonicalizerRevision,
@@ -133,10 +134,10 @@ export function runFixtureSlicingJob(input: unknown): SlicingResult {
                 }
               : null,
           metrics: {
-            boundingBox: twoBodySource
+            boundingBox: includesBothFixtureBodies
               ? { ...FIXTURE_BOUNDING_BOX, xMicrometers: "50000" }
               : FIXTURE_BOUNDING_BOX,
-            objectCount: twoBodySource ? 2 : 1,
+            objectCount: twoBodySource ? bodyIds.length : 1,
             bodyCount: bodyIds.length,
             unitHint: "millimeter",
             scaleAssessment: "trusted",
