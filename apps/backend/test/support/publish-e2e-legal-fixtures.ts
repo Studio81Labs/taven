@@ -1,4 +1,9 @@
+import { createHash, randomUUID } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
+import {
+  canonicalJson,
+  type CanonicalJson,
+} from "../../src/modules/resources/resource-identity";
 
 type SqlClient = Pick<PoolClient, "query">;
 
@@ -129,6 +134,38 @@ export async function readE2eCheckoutEffectsForBrowser(
       decisionCount: row.decision_count,
       idempotencyCount: row.idempotency_count,
     };
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Exact immutable acceptance versions persisted by the isolated checkout. */
+export async function readE2eAcceptedLegalVersionsForBrowser(
+  databaseUrl: string,
+  sessionId: string,
+): Promise<Array<{ purpose: string; revision: string; contentHash: string }>> {
+  assertIsolatedBrowserDatabase(databaseUrl);
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const result = await pool.query<{
+      purpose: string;
+      revision: string;
+      content_hash: string;
+    }>(
+      `SELECT acceptance.purpose, revision.revision_code AS revision,
+              revision.content_hash
+       FROM automatic_order_origins origin
+       JOIN legal_acceptances acceptance ON acceptance.order_id = origin.order_id
+       JOIN legal_document_revisions revision ON revision.id = acceptance.revision_id
+       WHERE origin.quote_session_id = $1
+       ORDER BY acceptance.purpose`,
+      [sessionId],
+    );
+    return result.rows.map((row) => ({
+      purpose: row.purpose,
+      revision: row.revision,
+      contentHash: row.content_hash,
+    }));
   } finally {
     await pool.end();
   }
@@ -338,4 +375,141 @@ export async function archiveE2eCheckoutDocumentsForBrowser(
       await pool.end();
     }
   };
+}
+
+/** Forward-only replacement in the disposable browser database; run after other scenarios. */
+export async function replaceE2eCheckoutDocumentsForBrowser(
+  databaseUrl: string,
+): Promise<
+  Record<
+    "terms" | "claims" | "photoConsent",
+    {
+      previousRevision: string;
+      previousContentHash: string;
+      previousTitle: string;
+      revision: string;
+      contentHash: string;
+      title: string;
+    }
+  >
+> {
+  assertIsolatedBrowserDatabase(databaseUrl);
+  const pool = new Pool({ connectionString: databaseUrl });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const documents = await client.query<{
+      id: string;
+      key: "terms" | "claims" | "photoConsent";
+    }>(
+      `SELECT id, key FROM legal_documents
+       WHERE key IN ('terms', 'claims', 'photoConsent')
+       ORDER BY key FOR UPDATE`,
+    );
+    if (documents.rows.length !== 3) {
+      throw new Error("Checkout legal replacement fixtures are missing");
+    }
+    const replacements = {} as Record<
+      "terms" | "claims" | "photoConsent",
+      {
+        previousRevision: string;
+        previousContentHash: string;
+        previousTitle: string;
+        revision: string;
+        contentHash: string;
+        title: string;
+      }
+    >;
+    for (const document of documents.rows) {
+      const current = await client.query<{
+        revision_code: string;
+        content_hash: string;
+        title: string;
+        summary: string;
+        sections: CanonicalJson[];
+      }>(
+        `SELECT revision.revision_code, revision.content_hash,
+                revision.title, revision.summary, revision.sections
+         FROM legal_document_publications publication
+         JOIN legal_document_revisions revision
+           ON revision.id = publication.revision_id
+         WHERE publication.document_id = $1
+           AND publication.cancelled_at IS NULL
+           AND publication.ends_at IS NULL
+         ORDER BY publication.starts_at DESC LIMIT 1
+         FOR UPDATE OF publication`,
+        [document.id],
+      );
+      const previous = current.rows[0];
+      if (!previous?.revision_code) {
+        throw new Error(`Current ${document.key} revision is missing`);
+      }
+      const sequence = await client.query<{ next_sequence: number }>(
+        `SELECT coalesce(max(sequence), 0) + 1 AS next_sequence
+         FROM legal_document_revisions WHERE document_id = $1`,
+        [document.id],
+      );
+      const title = `${previous.title} · browser replacement`;
+      const summary = `${previous.summary} Browser replacement fixture.`;
+      const content = {
+        contentVersion: 1,
+        title,
+        summary,
+        sections: previous.sections,
+      };
+      const contentHash = createHash("sha256")
+        .update(canonicalJson(content))
+        .digest("hex");
+      const revisionId = randomUUID();
+      const revision = `${document.key}-browser-${randomUUID()}`;
+      await client.query(
+        `INSERT INTO legal_document_revisions
+           (id, document_id, sequence, edit_version, status, content_version,
+            title, summary, sections, content_hash, revision_code, effective_at,
+            approval_evidence, approved_by, approved_at)
+         VALUES ($1, $2, $3, 1, 'APPROVED', 1,
+                 $4, $5, $6::jsonb, $7, $8, clock_timestamp() - interval '1 minute',
+                 'Isolated browser replacement fixture', $9, clock_timestamp())`,
+        [
+          revisionId,
+          document.id,
+          sequence.rows[0]!.next_sequence,
+          title,
+          summary,
+          JSON.stringify(previous.sections),
+          contentHash,
+          revision,
+          operatorId,
+        ],
+      );
+      // The database publication trigger closes the predecessor at the new start.
+      await client.query(
+        `INSERT INTO legal_document_publications
+           (id, document_id, revision_id, starts_at, published_by, reason)
+         VALUES ($1, $2, $3, clock_timestamp(), $4,
+                 'Isolated browser replacement fixture')`,
+        [randomUUID(), document.id, revisionId, operatorId],
+      );
+      await client.query(
+        `UPDATE legal_documents SET generation = generation + 1 WHERE id = $1`,
+        [document.id],
+      );
+      replacements[document.key] = {
+        previousRevision: previous.revision_code,
+        previousContentHash: previous.content_hash,
+        previousTitle: previous.title,
+        revision,
+        contentHash,
+        title,
+      };
+    }
+    await client.query("COMMIT");
+    return replacements;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+    await pool.end();
+  }
 }
