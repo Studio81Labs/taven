@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
@@ -12,6 +12,8 @@ import type { PaymentProviderPort } from "../src/modules/payments/payment-provid
 import { PaymentsService } from "../src/modules/payments/payments.service";
 import type { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import type { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
+import { OperatorCatalogService } from "../src/modules/resources/operator-catalog.service";
+import type { ResourceCatalogService } from "../src/modules/resources/resource-catalog.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import {
   PersistenceFactory,
@@ -877,6 +879,20 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         data: { mountStatus: "UNMOUNTED" },
       }),
     ).rejects.toThrow(/printing inventory cannot be unmounted/);
+    const catalog = new OperatorCatalogService(
+      prisma,
+      null as unknown as ResourceCatalogService,
+      new AuditService(prisma),
+    );
+    await expect(
+      catalog.setInventoryMount(
+        operatorForTest(testOperatorId, fixture.foundation.nodeId),
+        fixture.foundation.nodeId,
+        inventoryId,
+        { mountStatus: "UNMOUNTED", reason: "Printer is still running" },
+        `printing-unmount-${randomUUID()}`,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it("rejects absent refund request bodies before command execution", async () => {

@@ -818,6 +818,20 @@ export class OperatorCatalogService {
         `;
         if (rows.length !== 1)
           throw new NotFoundException("Inventory was not found");
+        if (mountStatus === "UNMOUNTED") {
+          const printing = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM production_reservations
+            WHERE inventory_id = ${inventoryId}::uuid
+              AND node_id = ${nodeId}::uuid
+              AND status = 'PRINTING'
+            LIMIT 1
+          `;
+          if (printing.length > 0) {
+            throw new ConflictException(
+              "Printing inventory cannot be unmounted",
+            );
+          }
+        }
         const inventory = await tx.inventory.update({
           where: { id: inventoryId },
           data: { mountStatus },
@@ -846,6 +860,11 @@ export class OperatorCatalogService {
     const reason = reasonText(body);
     if (reason.length > 500)
       throw new BadRequestException("reason is too long");
+    if (reason === "LEGACY_LIVE_RESERVATION_BOOTSTRAP") {
+      throw new BadRequestException(
+        "reason is reserved for migration bootstrap",
+      );
+    }
     const expectedVersion = body.expectedVersion;
     if (
       expectedVersion !== null &&

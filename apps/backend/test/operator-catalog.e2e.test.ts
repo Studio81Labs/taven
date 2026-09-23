@@ -841,6 +841,19 @@ describe("operator catalog commands", () => {
       (
         await command(
           availabilityPath,
+          {
+            ...availabilityBody,
+            expectedVersion: 2,
+            reason: "LEGACY_LIVE_RESERVATION_BOOTSTRAP",
+          },
+          `catalog-reserved-reason-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await command(
+          availabilityPath,
           availabilityBody,
           `catalog-availability-${randomUUID()}`,
         )
