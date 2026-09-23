@@ -93,12 +93,55 @@ test.describe("Real API Integration Journey", () => {
           .getByRole("checkbox", { name: /reklamačním řádem/i })
           .check();
         await page.getByRole("checkbox", { name: /výjimka/i }).check();
+        const checkoutSession = await page.evaluate(() => {
+          const raw = sessionStorage.getItem(
+            "taven:automatic-quote-session:v1",
+          );
+          return raw
+            ? (JSON.parse(raw) as {
+                sessionId: string;
+                sessionToken: string;
+              })
+            : null;
+        });
+        if (!checkoutSession) {
+          throw new Error("Checkout session evidence is unavailable");
+        }
         await page
           .getByRole("button", { name: /Objednat a zaplatit/i })
           .click();
         await expect(
           page.getByRole("heading", { name: "TAVEN. sandbox checkout" }),
         ).toBeVisible({ timeout: 120_000 });
+        const sandboxUrl = page.url();
+        const pendingPaymentId = await page.locator("main code").textContent();
+        if (!pendingPaymentId) {
+          throw new Error("Sandbox checkout did not identify its payment");
+        }
+        await page.goto(
+          `/checkout/payment/success?sessionId=${checkoutSession.sessionId}&paymentId=${pendingPaymentId}`,
+        );
+        await expect(
+          page.getByRole("heading", { name: "Čekáme na potvrzení platby." }),
+        ).toBeVisible({ timeout: 120_000 });
+        await expect(
+          page.getByRole("heading", { name: "Platba byla potvrzena." }),
+        ).not.toBeVisible();
+        const prematureStatus = await request.get(
+          `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payment`,
+          {
+            headers: {
+              Authorization: `Bearer ${checkoutSession.sessionToken}`,
+            },
+            params: { paymentId: pendingPaymentId },
+          },
+        );
+        expect(prematureStatus.status()).toBe(200);
+        expect(["CREATED", "PENDING"]).toContain(
+          (await prematureStatus.json()).status,
+        );
+
+        await page.goto(sandboxUrl);
         await page.getByRole("button", { name: "Capture payment" }).click();
         await expect(page).toHaveURL(/\/checkout\/payment\/success/);
         await expect(
@@ -126,6 +169,8 @@ test.describe("Real API Integration Journey", () => {
             "Captured checkout return is missing its session evidence",
           );
         }
+        expect(sessionId).toBe(checkoutSession.sessionId);
+        expect(paymentId).toBe(pendingPaymentId);
         expect(stored.sessionId).toBe(sessionId);
         expect(stored.capturedPaymentId).toBe(paymentId);
         await expect(
