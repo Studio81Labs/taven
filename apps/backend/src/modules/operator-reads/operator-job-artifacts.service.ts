@@ -120,7 +120,9 @@ const jobInclude = {
   replacementRequestResult: { select: { id: true } },
   phaseResourcePlanJob: {
     include: {
-      candidateResourceEstimate: true,
+      candidateResourceEstimate: {
+        include: { inventory: { select: { mountStatus: true } } },
+      },
       slots: {
         include: {
           fulfilmentSlot: {
@@ -250,6 +252,9 @@ export class OperatorJobArtifactsService {
       estimate: {
         candidateResourceEstimateId: estimate.id,
         machineId: estimate.machineId,
+        inventoryId: estimate.inventoryId,
+        inventoryMountStatus: estimate.inventory.mountStatus,
+        mountReadyForPrinting: estimate.inventory.mountStatus === "MOUNTED",
         printConfigRevisionId: estimate.printConfigRevisionId,
         machineProfileId: estimate.machineProfileId,
         machineCalibrationId: estimate.machineCalibrationId,

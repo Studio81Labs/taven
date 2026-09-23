@@ -868,6 +868,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/initial-receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record attested initial purchase evidence for a legacy lot */
+        post: operations["OperatorCatalogController_recordInitialInventoryReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/mount": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record whether a machine lot is physically mounted */
+        post: operations["OperatorCatalogController_setInventoryMount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/inventories/{inventoryId}/receipt-corrections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Supersede a lot's immutable purchase receipt */
+        post: operations["OperatorCatalogController_correctInventoryReceipt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/nodes/{nodeId}/inventories/{inventoryId}/status": {
         parameters: {
             query?: never;
@@ -879,6 +930,23 @@ export interface paths {
         put?: never;
         /** Record an inventory status correction */
         post: operations["OperatorCatalogController_updateInventoryStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/inventory-receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receive a new immutable material lot */
+        post: operations["OperatorCatalogController_receiveInventory"];
         delete?: never;
         options?: never;
         head?: never;
@@ -897,6 +965,24 @@ export interface paths {
         put?: never;
         /** Register a node machine with an immutable capability */
         post: operations["OperatorCatalogController_registerMachine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/nodes/{nodeId}/machines/{machineId}/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read selected machine availability and occupied intervals */
+        get: operations["OperatorReadsController_machineAvailability"];
+        put?: never;
+        /** Replace a machine's bounded availability windows */
+        post: operations["OperatorCatalogController_replaceMachineAvailability"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2707,6 +2793,21 @@ export interface components {
             provisionalOrders: number;
             value: components["schemas"]["MetricMoneyDto"] | null;
         };
+        CorrectInventoryReceiptDto: {
+            currency: string;
+            /** Format: int64 */
+            priceMinorUnitsDenominator: string;
+            /** Format: int64 */
+            priceMinorUnitsNumerator: string;
+            /** Format: date-time */
+            purchasedAt: string;
+            reason: string;
+            /** Format: int64 */
+            receivedMilligrams: string;
+            /** Format: uuid */
+            supersedesReceiptId: string;
+            vendor: string;
+        };
         CreateAutomaticQuoteEstimateDto: {
             dimensionsMm: components["schemas"]["AutomaticQuoteEstimateDimensionsDto"];
             /** @enum {string} */
@@ -3357,15 +3458,25 @@ export interface components {
             /** Format: uuid */
             machineId: string;
             material: string;
+            /** @enum {string} */
+            mountStatus: "UNKNOWN" | "UNMOUNTED" | "MOUNTED";
             /** Format: uuid */
             nodeId: string;
             priceMinorUnitsDenominator: string;
             priceMinorUnitsNumerator: string;
+            /** @enum {string} */
+            receiptCoverage: "UNKNOWN" | "RECORDED";
+            receipts: components["schemas"]["InventoryReceiptReadDto"][];
             remainingMilligrams: string;
             reservedMilligrams: string;
             sku: string;
             status: string;
             vendor: string;
+        };
+        InventoryMountDto: {
+            /** @enum {string} */
+            mountStatus: "MOUNTED" | "UNMOUNTED";
+            reason: string;
         };
         InventoryPageDto: {
             items: components["schemas"]["InventoryReadDto"][];
@@ -3379,10 +3490,32 @@ export interface components {
             /** Format: uuid */
             machineId: string;
             material: string;
+            /** @enum {string} */
+            mountStatus: "UNKNOWN" | "UNMOUNTED" | "MOUNTED";
+            /** @enum {string} */
+            receiptCoverage: "UNKNOWN" | "RECORDED";
             remainingMilligrams: string;
             reservedMilligrams: string;
             sku: string;
             status: string;
+        };
+        InventoryReceiptReadDto: {
+            /** Format: date-time */
+            createdAt: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "INITIAL" | "CORRECTION";
+            priceMinorUnitsDenominator: string;
+            priceMinorUnitsNumerator: string;
+            /** Format: date-time */
+            purchasedAt: string;
+            reason?: string | null;
+            receivedMilligrams: string;
+            /** Format: uuid */
+            supersedesReceiptId?: string | null;
+            vendor: string;
         };
         InventoryStatusDto: {
             reason: string;
@@ -3580,6 +3713,28 @@ export interface components {
             contentHash: string | null;
             key: string;
             revision: string;
+        };
+        MachineAvailabilityReadDto: {
+            /** Format: uuid */
+            machineId: string;
+            occupiedIntervals: components["schemas"]["CapacityReservationReadDto"][];
+            /** Format: uuid */
+            revisionId?: string | null;
+            selectionVersion?: number | null;
+            windows: components["schemas"]["MachineAvailabilityWindowReadDto"][];
+        };
+        MachineAvailabilityWindowDto: {
+            /** Format: date-time */
+            endsAt: string;
+            /** Format: date-time */
+            startsAt: string;
+        };
+        MachineAvailabilityWindowReadDto: {
+            /** Format: date-time */
+            endsAt: string;
+            ordinal: number;
+            /** Format: date-time */
+            startsAt: string;
         };
         MachineCalibrationPageDto: {
             items: components["schemas"]["MachineCalibrationReadDto"][];
@@ -4044,11 +4199,17 @@ export interface components {
             /** Format: uuid */
             candidateResourceEstimateId: string;
             /** Format: uuid */
+            inventoryId: string;
+            /** @enum {string} */
+            inventoryMountStatus: "UNKNOWN" | "UNMOUNTED" | "MOUNTED";
+            /** Format: uuid */
             machineCalibrationId: string;
             /** Format: uuid */
             machineId: string;
             /** Format: uuid */
             machineProfileId: string;
+            /** @description Material must be mounted before printing. */
+            mountReadyForPrinting: boolean;
             partsPerPlate: number;
             plateCount: number;
             /** Format: uuid */
@@ -4536,6 +4697,25 @@ export interface components {
             individual: components["schemas"]["BindingBreakdownDto"];
             offersIssued: number;
         };
+        ReceiveInventoryDto: {
+            color?: string | null;
+            currency: string;
+            lotCode?: string | null;
+            /** Format: uuid */
+            machineId: string;
+            /** @enum {string} */
+            material: "PLA" | "PETG";
+            /** Format: int64 */
+            priceMinorUnitsDenominator: string;
+            /** Format: int64 */
+            priceMinorUnitsNumerator: string;
+            /** Format: date-time */
+            purchasedAt: string;
+            /** Format: int64 */
+            remainingMilligrams: string;
+            sku: string;
+            vendor: string;
+        };
         RecordAcquisitionSpendDto: {
             amountMinor: string;
             /** @enum {string} */
@@ -4572,6 +4752,19 @@ export interface components {
         RecordAutomaticQuoteObservationDto: {
             /** @enum {string} */
             eventType: "quote.viewed" | "checkout.started";
+        };
+        RecordInitialInventoryReceiptDto: {
+            currency: string;
+            /** Format: int64 */
+            priceMinorUnitsDenominator: string;
+            /** Format: int64 */
+            priceMinorUnitsNumerator: string;
+            /** Format: date-time */
+            purchasedAt: string;
+            reason: string;
+            /** Format: int64 */
+            receivedMilligrams: string;
+            vendor: string;
         };
         RecordManualHandlingSessionDto: {
             allocations: components["schemas"]["HandlingAllocationInputDto"][];
@@ -4685,6 +4878,11 @@ export interface components {
         };
         ReplaceAutomaticQuoteConfigurationDto: {
             items: components["schemas"]["ConfigureAutomaticQuoteDraftItemDto"][];
+        };
+        ReplaceMachineAvailabilityDto: {
+            expectedVersion: number | null;
+            reason: string;
+            windows: components["schemas"]["MachineAvailabilityWindowDto"][];
         };
         SelectAutomaticQuoteDestinationDto: {
             endpointType: string;
@@ -6783,6 +6981,96 @@ export interface operations {
             };
         };
     };
+    OperatorCatalogController_recordInitialInventoryReceipt: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                inventoryId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordInitialInventoryReceiptDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_setInventoryMount: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                inventoryId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InventoryMountDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_correctInventoryReceipt: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                inventoryId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorrectInventoryReceiptDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
     OperatorCatalogController_updateInventoryStatus: {
         parameters: {
             query?: never;
@@ -6800,6 +7088,35 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["InventoryStatusDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_receiveInventory: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReceiveInventoryDto"];
             };
         };
         responses: {
@@ -6856,6 +7173,64 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["RegisterMachineDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogCommandResultDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_machineAvailability: {
+        parameters: {
+            query: {
+                to: string;
+                from: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                machineId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineAvailabilityReadDto"];
+                };
+            };
+        };
+    };
+    OperatorCatalogController_replaceMachineAvailability: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                machineId: string;
+                nodeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceMachineAvailabilityDto"];
             };
         };
         responses: {

@@ -352,11 +352,23 @@ export class EligibilityPlanService {
             JOIN order_active_price_bindings active_binding
               ON active_binding.order_id = shipment_plan.order_id
              AND active_binding.order_price_binding_id = shipment_plan.order_price_binding_id
+            JOIN order_price_bindings binding
+              ON binding.id = shipment_plan.order_price_binding_id
+            JOIN price_snapshots price_snapshot
+              ON price_snapshot.id = binding.price_snapshot_id
             JOIN inventories inventory
               ON inventory.id = candidate.inventory_id
              AND inventory.node_id = candidate.node_id
              AND inventory.machine_id = candidate.machine_id
              AND inventory.status = 'AVAILABLE'
+            JOIN machine_availability_selections availability
+              ON availability.machine_id = candidate.machine_id
+             AND availability.node_id = candidate.node_id
+             AND availability.revision_id = candidate.machine_availability_revision_id
+             AND availability.selection_version = candidate.machine_availability_selection_version
+            JOIN machine_availability_revisions availability_revision
+              ON availability_revision.id = availability.revision_id
+             AND availability_revision.reason <> 'LEGACY_LIVE_RESERVATION_BOOTSTRAP'
             JOIN machines machine
               ON machine.id = candidate.machine_id
              AND machine.node_id = candidate.node_id
@@ -389,6 +401,23 @@ export class EligibilityPlanService {
              AND candidate_interval.node_id = candidate.node_id
             WHERE candidate.node_id = ${input.nodeId}::uuid
               AND candidate.expires_at > ${planningNow}
+              AND EXISTS (
+                SELECT 1 FROM inventory_receipts receipt
+                WHERE receipt.inventory_id = inventory.id
+                  AND receipt.node_id = inventory.node_id
+                  AND receipt.kind = 'INITIAL'
+              )
+              AND (
+                price_snapshot.input_snapshot #>> '{automaticQuote,expressRequested}'
+                  IS DISTINCT FROM 'true'
+                OR inventory.mount_status = 'MOUNTED'
+              )
+              AND EXISTS (
+                SELECT 1 FROM machine_availability_windows available
+                WHERE available.revision_id = availability.revision_id
+                  AND available.starts_at <= candidate_interval.starts_at
+                  AND available.ends_at >= candidate_interval.ends_at
+              )
               AND (
                     ${capacityEndsAt}::timestamptz IS NULL
                     OR NOT EXISTS (

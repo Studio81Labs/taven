@@ -76,6 +76,8 @@ function harness() {
         arrangementRevisionId: arrangementId,
         partsPerPlate: 1,
         machineId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        inventoryId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        inventory: { mountStatus: "MOUNTED" },
         requiredMachineSeconds: 3600n,
         requiredMaterialMilligrams: 25000n,
         calculatedAt: new Date("2026-01-01T00:00:00Z"),
@@ -183,7 +185,12 @@ describe("operator job artifact downloads", () => {
       },
     });
     await expect(test.service.detail(operator, jobId)).resolves.toMatchObject({
-      estimate: { quantity: 2, partsPerPlate: 1, plateCount: 2 },
+      estimate: {
+        quantity: 2,
+        partsPerPlate: 1,
+        plateCount: 2,
+        mountReadyForPrinting: true,
+      },
     });
   });
 

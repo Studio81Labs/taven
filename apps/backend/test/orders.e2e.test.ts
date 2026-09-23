@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
@@ -12,6 +12,8 @@ import type { PaymentProviderPort } from "../src/modules/payments/payment-provid
 import { PaymentsService } from "../src/modules/payments/payments.service";
 import type { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import type { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
+import { OperatorCatalogService } from "../src/modules/resources/operator-catalog.service";
+import type { ResourceCatalogService } from "../src/modules/resources/resource-catalog.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 import {
   PersistenceFactory,
@@ -371,6 +373,9 @@ async function createFreshReplacementCandidate(
       machineProfileId: source.machineProfileId,
       machineCalibrationId: source.machineCalibrationId,
       machineId: source.machineId,
+      machineAvailabilityRevisionId: source.machineAvailabilityRevisionId,
+      machineAvailabilitySelectionVersion:
+        source.machineAvailabilitySelectionVersion,
       inventoryId: source.inventoryId,
       shipmentPlanId: source.shipmentPlanId,
       arrangementRevisionId: source.arrangementRevisionId,
@@ -835,6 +840,104 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     for (const [name, value] of Object.entries(previousCheckoutEnvironment)) {
       restoreEnvironment(name, value);
     }
+  });
+
+  it("requires mounted inventory and active selected machine availability before printing", async () => {
+    const fixture = await preparePaidOrder("printing-mount-prerequisite");
+    const { orderId, inventoryId, machineId } = fixture.foundation;
+    const jobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, jobId, "printing-mount-accept");
+    await makeGcodeReady(jobId);
+    await prisma.inventory.update({
+      where: { id: inventoryId },
+      data: { mountStatus: "UNMOUNTED" },
+    });
+    await expect(
+      orders.startPrinting(orderId, jobId, "printing-mount-unready"),
+    ).rejects.toThrow("Required material must be mounted before printing");
+    await prisma.inventory.update({
+      where: { id: inventoryId },
+      data: { mountStatus: "MOUNTED" },
+    });
+    await prisma.machine.update({
+      where: { id: machineId },
+      data: { status: "MAINTENANCE" },
+    });
+    await expect(
+      orders.startPrinting(orderId, jobId, "printing-machine-unready"),
+    ).rejects.toThrow("Machine is unavailable for printing");
+    await prisma.machine.update({
+      where: { id: machineId },
+      data: { status: "ACTIVE" },
+    });
+    await expect(
+      orders.startPrinting(orderId, jobId, "printing-mount-ready"),
+    ).resolves.toMatchObject({ status: "JOB_PRINTING" });
+    await expect(
+      prisma.inventory.update({
+        where: { id: inventoryId },
+        data: { mountStatus: "UNMOUNTED" },
+      }),
+    ).rejects.toThrow(/printing inventory cannot be unmounted/);
+    const catalog = new OperatorCatalogService(
+      prisma,
+      null as unknown as ResourceCatalogService,
+      new AuditService(prisma),
+    );
+    await expect(
+      catalog.setInventoryMount(
+        operatorForTest(testOperatorId, fixture.foundation.nodeId),
+        fixture.foundation.nodeId,
+        inventoryId,
+        { mountStatus: "UNMOUNTED", reason: "Printer is still running" },
+        `printing-unmount-${randomUUID()}`,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("serializes unmount with print start so the resulting state stays safe", async () => {
+    const fixture = await preparePaidOrder("printing-unmount-race");
+    const { orderId, inventoryId, nodeId } = fixture.foundation;
+    const jobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, jobId, "printing-unmount-race-accept");
+    await makeGcodeReady(jobId);
+    const catalog = new OperatorCatalogService(
+      prisma,
+      null as unknown as ResourceCatalogService,
+      new AuditService(prisma),
+    );
+    const [unmount, printing] = await Promise.allSettled([
+      catalog.setInventoryMount(
+        operatorForTest(testOperatorId, nodeId),
+        nodeId,
+        inventoryId,
+        { mountStatus: "UNMOUNTED", reason: "Concurrent spool removal" },
+        `printing-unmount-race-${randomUUID()}`,
+      ),
+      orders.startPrinting(orderId, jobId, "printing-unmount-race-start"),
+    ]);
+    expect([unmount.status, printing.status].sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    if (unmount.status === "rejected") {
+      expect(unmount.reason).toBeInstanceOf(ConflictException);
+    } else {
+      expect(printing.status).toBe("rejected");
+      if (printing.status === "rejected") {
+        expect(printing.reason).toBeInstanceOf(ConflictException);
+      }
+    }
+    const [inventory, reservation] = await Promise.all([
+      prisma.inventory.findUniqueOrThrow({ where: { id: inventoryId } }),
+      prisma.productionReservation.findFirstOrThrow({ where: { jobId } }),
+    ]);
+    expect(
+      (inventory.mountStatus === "MOUNTED" &&
+        reservation.status === "PRINTING") ||
+        (inventory.mountStatus === "UNMOUNTED" &&
+          reservation.status === "HELD"),
+    ).toBe(true);
   });
 
   it("rejects absent refund request bodies before command execution", async () => {

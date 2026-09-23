@@ -920,6 +920,49 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
           status: "AVAILABLE",
         },
       });
+      const addedInventories = await transaction.inventory.findMany({
+        where: { sku: { startsWith: `${inventory.sku}-` } },
+      });
+      await transaction.inventory.updateMany({
+        where: { id: { in: addedInventories.map(({ id }) => id) } },
+        data: { mountStatus: "MOUNTED" },
+      });
+      await transaction.inventoryReceipt.createMany({
+        data: addedInventories.map((lot) => ({
+          nodeId: lot.nodeId,
+          machineId: lot.machineId,
+          inventoryId: lot.id,
+          kind: "INITIAL",
+          receivedMilligrams: lot.remainingMilligrams,
+          vendor: lot.vendor,
+          currency: lot.currency,
+          priceMinorUnitsNumerator: lot.priceMinorUnitsNumerator,
+          priceMinorUnitsDenominator: lot.priceMinorUnitsDenominator,
+          purchasedAt: new Date(Date.now() - 86_400_000),
+        })),
+      });
+      for (const [nodeId, machineId] of [
+        [compatibleMachine.nodeId, invalidMachineId],
+        [compatibleMachine.nodeId, undersizedMachineId],
+        [splitNodeId, splitMachineId],
+      ] as const) {
+        const revision = await transaction.machineAvailabilityRevision.create({
+          data: { nodeId, machineId, reason: "Test fixture availability" },
+        });
+        await transaction.machineAvailabilityWindow.create({
+          data: {
+            revisionId: revision.id,
+            nodeId,
+            machineId,
+            ordinal: 0,
+            startsAt: new Date(Date.now() - 86_400_000),
+            endsAt: new Date(Date.now() + 365 * 86_400_000),
+          },
+        });
+        await transaction.machineAvailabilitySelection.create({
+          data: { nodeId, machineId, revisionId: revision.id },
+        });
+      }
     });
     const printConfig = await prisma.printConfigRevision.findUniqueOrThrow({
       where: { id: foundation.printConfigRevisionId },

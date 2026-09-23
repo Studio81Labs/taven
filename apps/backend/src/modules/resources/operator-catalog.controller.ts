@@ -30,6 +30,11 @@ import {
   CommercialPolicyActivationResultDto,
   CatalogReasonDto,
   CreateInventoryDto,
+  ReceiveInventoryDto,
+  RecordInitialInventoryReceiptDto,
+  CorrectInventoryReceiptDto,
+  InventoryMountDto,
+  ReplaceMachineAvailabilityDto,
   CreateMachineCapabilityDto,
   CreateMachineCalibrationDto,
   CreateMachineProfileDto,
@@ -338,6 +343,122 @@ export class OperatorCatalogController {
     @Headers("idempotency-key") key?: string,
   ) {
     return this.catalog.createInventory(operator, nodeId, body, key);
+  }
+
+  @Post("admin/nodes/:nodeId/inventory-receipts")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Receive a new immutable material lot" })
+  @ApiParam(NODE_ID)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ReceiveInventoryDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  receiveInventory(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("nodeId") nodeId: string,
+    @Body() body: ReceiveInventoryDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.receiveInventory(operator, nodeId, body, key);
+  }
+
+  @Post("admin/nodes/:nodeId/inventories/:inventoryId/initial-receipt")
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Record attested initial purchase evidence for a legacy lot",
+  })
+  @ApiParam(NODE_ID)
+  @ApiParam(INVENTORY_ID)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: RecordInitialInventoryReceiptDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  recordInitialInventoryReceipt(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("nodeId") nodeId: string,
+    @Param("inventoryId") inventoryId: string,
+    @Body() body: RecordInitialInventoryReceiptDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.recordInitialInventoryReceipt(
+      operator,
+      nodeId,
+      inventoryId,
+      body,
+      key,
+    );
+  }
+
+  @Post("admin/nodes/:nodeId/inventories/:inventoryId/receipt-corrections")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Supersede a lot's immutable purchase receipt" })
+  @ApiParam(NODE_ID)
+  @ApiParam(INVENTORY_ID)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CorrectInventoryReceiptDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  correctInventoryReceipt(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("nodeId") nodeId: string,
+    @Param("inventoryId") inventoryId: string,
+    @Body() body: CorrectInventoryReceiptDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.correctInventoryReceipt(
+      operator,
+      nodeId,
+      inventoryId,
+      body,
+      key,
+    );
+  }
+
+  @Post("admin/nodes/:nodeId/inventories/:inventoryId/mount")
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Record whether a machine lot is physically mounted",
+  })
+  @ApiParam(NODE_ID)
+  @ApiParam(INVENTORY_ID)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: InventoryMountDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  setInventoryMount(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("nodeId") nodeId: string,
+    @Param("inventoryId") inventoryId: string,
+    @Body() body: InventoryMountDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.setInventoryMount(
+      operator,
+      nodeId,
+      inventoryId,
+      body,
+      key,
+    );
+  }
+
+  @Post("admin/nodes/:nodeId/machines/:machineId/availability")
+  @HttpCode(200)
+  @ApiOperation({ summary: "Replace a machine's bounded availability windows" })
+  @ApiParam(NODE_ID)
+  @ApiParam(MACHINE_ID)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: ReplaceMachineAvailabilityDto })
+  @ApiOkResponse({ type: CatalogCommandResultDto })
+  replaceMachineAvailability(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("nodeId") nodeId: string,
+    @Param("machineId") machineId: string,
+    @Body() body: ReplaceMachineAvailabilityDto,
+    @Headers("idempotency-key") key?: string,
+  ) {
+    return this.catalog.replaceMachineAvailability(
+      operator,
+      nodeId,
+      machineId,
+      body,
+      key,
+    );
   }
 
   @Post("admin/nodes/:nodeId/machines/:machineId/status")

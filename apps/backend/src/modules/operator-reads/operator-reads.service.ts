@@ -26,6 +26,7 @@ import {
   MachineCalibrationPageDto,
   MachineCapabilityPageDto,
   MachinePageDto,
+  MachineAvailabilityReadDto,
   MachineProfilePageDto,
   OperatorJobPageDto,
   OperatorOrderDetailDto,
@@ -852,6 +853,68 @@ export class OperatorReadsService {
     }));
   }
 
+  async machineAvailability(
+    operator: OperatorContext,
+    nodeId: string,
+    machineId: string,
+    fromInput: string,
+    toInput: string,
+  ): Promise<MachineAvailabilityReadDto> {
+    this.requireNode(operator, nodeId);
+    assertUuid(machineId, "machineId");
+    const from = strictInstant("from", fromInput);
+    const to = strictInstant("to", toInput);
+    if (from >= to || to.getTime() - from.getTime() > MAX_RANGE_MILLISECONDS) {
+      throw new BadRequestException("availability range is invalid");
+    }
+    const machine = await this.prisma.machine.findFirst({
+      where: { id: machineId, nodeId },
+      include: {
+        availabilitySelection: {
+          include: {
+            revision: { include: { windows: { orderBy: { ordinal: "asc" } } } },
+          },
+        },
+      },
+    });
+    if (!machine) throw new NotFoundException("Machine was not found");
+    const occupied = await this.prisma.capacityReservation.findMany({
+      where: {
+        machineId,
+        nodeId,
+        status: { in: ["RESERVED", "HELD", "SCHEDULED", "PRINTING"] },
+        startsAt: { lt: to },
+        endsAt: { gt: from },
+      },
+      orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+      take: 1001,
+    });
+    if (occupied.length > 1000) {
+      throw new BadRequestException(
+        "availability range contains too many occupied intervals",
+      );
+    }
+    return {
+      machineId,
+      revisionId: machine.availabilitySelection?.revisionId ?? null,
+      selectionVersion: machine.availabilitySelection?.selectionVersion ?? null,
+      windows:
+        machine.availabilitySelection?.revision.windows.map((window) => ({
+          ordinal: window.ordinal,
+          startsAt: window.startsAt.toISOString(),
+          endsAt: window.endsAt.toISOString(),
+        })) ?? [],
+      occupiedIntervals: occupied.map((row) => ({
+        id: row.id,
+        machineId: row.machineId,
+        status: row.status,
+        startsAt: row.startsAt.toISOString(),
+        endsAt: row.endsAt.toISOString(),
+        expiresAt: row.expiresAt.toISOString(),
+      })),
+    };
+  }
+
   async inventories(
     operator: OperatorContext,
     nodeId: string,
@@ -874,6 +937,18 @@ export class OperatorReadsService {
       ...(cursor ? { cursor: { id: cursor.id }, skip: 1 } : {}),
       take: pageLimit(input.limit) + 1,
     });
+    const receiptIds = new Set(
+      (
+        await this.prisma.inventoryReceipt.findMany({
+          where: {
+            nodeId,
+            inventoryId: { in: rows.map(({ id }) => id) },
+            kind: "INITIAL",
+          },
+          select: { inventoryId: true },
+        })
+      ).map(({ inventoryId }) => inventoryId),
+    );
     return pageResult(rows, pageLimit(input.limit), filterHash, (row) => ({
       id: row.id,
       machineId: row.machineId,
@@ -886,6 +961,10 @@ export class OperatorReadsService {
         row.remainingMilligrams - row.reservedMilligrams
       ).toString(),
       status: row.status,
+      mountStatus: row.mountStatus,
+      receiptCoverage: receiptIds.has(row.id)
+        ? ("RECORDED" as const)
+        : ("UNKNOWN" as const),
     }));
   }
 
@@ -898,6 +977,7 @@ export class OperatorReadsService {
     assertUuid(id, "id");
     const row = await this.prisma.inventory.findFirst({
       where: { id, nodeId },
+      include: { receipts: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] } },
     });
     if (!row) throw new NotFoundException("Inventory was not found");
     return {
@@ -913,11 +993,29 @@ export class OperatorReadsService {
         row.remainingMilligrams - row.reservedMilligrams
       ).toString(),
       status: row.status,
+      mountStatus: row.mountStatus,
+      receiptCoverage: row.receipts.some(({ kind }) => kind === "INITIAL")
+        ? "RECORDED"
+        : "UNKNOWN",
       vendor: row.vendor,
       lotCode: row.lotCode,
       priceMinorUnitsNumerator: row.priceMinorUnitsNumerator.toString(),
       priceMinorUnitsDenominator: row.priceMinorUnitsDenominator.toString(),
       currency: row.currency,
+      receipts: row.receipts.map((receipt) => ({
+        id: receipt.id,
+        kind: receipt.kind,
+        supersedesReceiptId: receipt.supersedesReceiptId,
+        receivedMilligrams: receipt.receivedMilligrams.toString(),
+        vendor: receipt.vendor,
+        currency: receipt.currency,
+        priceMinorUnitsNumerator: receipt.priceMinorUnitsNumerator.toString(),
+        priceMinorUnitsDenominator:
+          receipt.priceMinorUnitsDenominator.toString(),
+        purchasedAt: receipt.purchasedAt.toISOString(),
+        reason: receipt.reason,
+        createdAt: receipt.createdAt.toISOString(),
+      })),
     };
   }
 

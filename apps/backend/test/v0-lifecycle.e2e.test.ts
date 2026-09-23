@@ -310,6 +310,68 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
       }),
     );
     expect(inventory.status).toBe("AVAILABLE");
+    success(
+      await operatorApi.POST(
+        "/admin/nodes/{nodeId}/inventories/{inventoryId}/initial-receipt",
+        {
+          params: {
+            path: {
+              nodeId: infrastructure.nodeId,
+              inventoryId: inventory.id,
+            },
+            header: operatorHeaders(operator.csrfToken, "initial-receipt"),
+          },
+          body: {
+            receivedMilligrams: "1000000",
+            vendor: "Taven fixture",
+            priceMinorUnitsNumerator: "1",
+            priceMinorUnitsDenominator: "1",
+            currency: "CZK",
+            purchasedAt: new Date(Date.now() - 86_400_000).toISOString(),
+            reason: "Fixture purchase evidence",
+          },
+        },
+      ),
+    );
+    success(
+      await operatorApi.POST(
+        "/admin/nodes/{nodeId}/inventories/{inventoryId}/mount",
+        {
+          params: {
+            path: {
+              nodeId: infrastructure.nodeId,
+              inventoryId: inventory.id,
+            },
+            header: operatorHeaders(operator.csrfToken, "mount"),
+          },
+          body: { mountStatus: "MOUNTED", reason: "Fixture spool loaded" },
+        },
+      ),
+    );
+    success(
+      await operatorApi.POST(
+        "/admin/nodes/{nodeId}/machines/{machineId}/availability",
+        {
+          params: {
+            path: {
+              nodeId: infrastructure.nodeId,
+              machineId: infrastructure.machineId,
+            },
+            header: operatorHeaders(operator.csrfToken, "availability"),
+          },
+          body: {
+            expectedVersion: null,
+            reason: "Fixture machine staffed",
+            windows: [
+              {
+                startsAt: new Date(Date.now() - 60_000).toISOString(),
+                endsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+              },
+            ],
+          },
+        },
+      ),
+    );
 
     const created = success(
       await api.POST("/automatic-quote-sessions", {

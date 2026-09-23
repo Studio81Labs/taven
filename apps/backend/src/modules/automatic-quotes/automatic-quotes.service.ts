@@ -3024,6 +3024,12 @@ export class AutomaticQuotesService {
         JOIN nodes node
           ON node.id = machine.node_id
          AND node.active
+        JOIN machine_availability_selections availability
+          ON availability.machine_id = machine.id
+         AND availability.node_id = machine.node_id
+        JOIN machine_availability_revisions availability_revision
+          ON availability_revision.id = availability.revision_id
+         AND availability_revision.reason <> 'LEGACY_LIVE_RESERVATION_BOOTSTRAP'
         JOIN machine_calibrations calibration
           ON calibration.node_id = machine.node_id
          AND calibration.machine_id = machine.id
@@ -3035,10 +3041,19 @@ export class AutomaticQuotesService {
          AND inventory.remaining_milligrams > inventory.reserved_milligrams
          AND inventory.material = ${item.material}::material
          AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
+         AND EXISTS (
+           SELECT 1 FROM inventory_receipts receipt
+           WHERE receipt.inventory_id = inventory.id AND receipt.kind = 'INITIAL'
+         )
         WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
           AND profile.material = ${item.material}::material
           AND profile.state = 'ACTIVE'
           AND profile.production_artifact_format <> 'bgcode'
+          AND EXISTS (
+            SELECT 1 FROM machine_availability_windows available
+            WHERE available.revision_id = availability.revision_id
+              AND available.ends_at > clock_timestamp()
+          )
       `;
       const byNode = new Map<
         string,
@@ -3120,6 +3135,12 @@ export class AutomaticQuotesService {
         JOIN nodes node
           ON node.id = machine.node_id
          AND node.active
+        JOIN machine_availability_selections availability
+          ON availability.machine_id = machine.id
+         AND availability.node_id = machine.node_id
+        JOIN machine_availability_revisions availability_revision
+          ON availability_revision.id = availability.revision_id
+         AND availability_revision.reason <> 'LEGACY_LIVE_RESERVATION_BOOTSTRAP'
         JOIN machine_calibrations calibration
           ON calibration.node_id = machine.node_id
          AND calibration.machine_id = machine.id
@@ -3131,10 +3152,19 @@ export class AutomaticQuotesService {
          AND inventory.remaining_milligrams > inventory.reserved_milligrams
          AND inventory.material = ${item.material}::material
          AND (${item.color}::text IS NULL OR inventory.color = ${item.color})
+         AND EXISTS (
+           SELECT 1 FROM inventory_receipts receipt
+           WHERE receipt.inventory_id = inventory.id AND receipt.kind = 'INITIAL'
+         )
         WHERE profile.reference_profile_id = ${item.referenceProfileId}::uuid
           AND profile.material = ${item.material}::material
           AND profile.state = 'ACTIVE'
           AND profile.production_artifact_format <> 'bgcode'
+          AND EXISTS (
+            SELECT 1 FROM machine_availability_windows available
+            WHERE available.revision_id = availability.revision_id
+              AND available.ends_at > clock_timestamp()
+          )
           AND taven_geometry_fits_machine_capability(
             ${item.targetModelGeometryId}::uuid,
             machine.machine_capability_id
@@ -3545,11 +3575,28 @@ export class AutomaticQuotesService {
                 latestPlan.nodeId,
                 expressMaximumPlateCount,
               );
+        const latestPlanAvailabilityCurrent =
+          !latestPlan || liveReservation
+            ? true
+            : await this.planAvailabilityCurrent(
+                this.prisma,
+                latestPlan.id,
+                nodeId,
+              );
+        const latestPlanMounted =
+          !latestPlan || !expressRequested
+            ? true
+            : await this.planInventoryMounted(
+                this.prisma,
+                latestPlan.id,
+                nodeId,
+              );
         if (
           latestPlan &&
           liveReservation &&
           liveReservationCapacityFits &&
-          latestPlanPlateCountFits
+          latestPlanPlateCountFits &&
+          latestPlanMounted
         ) {
           const finalized = await this.finalizeAutomaticQuote({
             orderId,
@@ -3570,7 +3617,9 @@ export class AutomaticQuotesService {
         }
         if (
           liveReservation &&
-          (!liveReservationCapacityFits || !latestPlanPlateCountFits)
+          (!liveReservationCapacityFits ||
+            !latestPlanPlateCountFits ||
+            !latestPlanMounted)
         ) {
           await this.resourceReservations.releaseBeforePrint(
             liveReservation.id,
@@ -3580,7 +3629,8 @@ export class AutomaticQuotesService {
           latestPlan &&
           (latestPlan.expiresAt <= planningObservedAt ||
             latestPlan.reservationSets.length > 0 ||
-            !latestPlanPlateCountFits),
+            !latestPlanPlateCountFits ||
+            !latestPlanAvailabilityCurrent),
         );
         const planKey =
           latestPlan && !needsSuccessor
@@ -3768,6 +3818,16 @@ export class AutomaticQuotesService {
                   where: { status: MachineStatus.ACTIVE },
                   include: {
                     node: true,
+                    availabilitySelection: {
+                      include: {
+                        revision: {
+                          select: {
+                            reason: true,
+                            windows: { select: { endsAt: true } },
+                          },
+                        },
+                      },
+                    },
                     calibrations: {
                       where: { state: RevisionState.ACTIVE },
                       orderBy: [{ activatedAt: "desc" }, { id: "asc" }],
@@ -3777,6 +3837,10 @@ export class AutomaticQuotesService {
                         status: InventoryStatus.AVAILABLE,
                         material: item.material,
                         remainingMilligrams: { gt: 0n },
+                        receipts: { some: { kind: "INITIAL" } },
+                        ...(order.automaticQuoteDraft.expressRequested
+                          ? { mountStatus: "MOUNTED" as const }
+                          : {}),
                         ...(item.color ? { color: item.color } : {}),
                       },
                       orderBy: { id: "asc" },
@@ -3809,6 +3873,12 @@ export class AutomaticQuotesService {
           for (const machine of profile.machineCapability.machines) {
             if (
               !machine.node.active ||
+              !machine.availabilitySelection ||
+              machine.availabilitySelection.revision.reason ===
+                "LEGACY_LIVE_RESERVATION_BOOTSTRAP" ||
+              !machine.availabilitySelection.revision.windows.some(
+                ({ endsAt }) => endsAt > observedAt,
+              ) ||
               machine.installedNozzleMicrometers !==
                 profile.nozzleDiameterMicrometers
             ) {
@@ -3894,7 +3964,7 @@ export class AutomaticQuotesService {
                 });
                 const candidateInput = { ...inputBase, occupancySliceTargets };
                 const initialJobId = deterministicUuid(
-                  `automatic-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}:${partsPerPlate}`,
+                  `automatic-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}:${partsPerPlate}:${machine.availabilitySelection.revisionId}:${machine.availabilitySelection.selectionVersion}`,
                 );
                 const dispatchIdentity =
                   await this.nextAutomaticCandidateDispatch(
@@ -4469,6 +4539,10 @@ export class AutomaticQuotesService {
               input.maximumPlateCount,
             )
           : false;
+      const mounted =
+        !input.capacityWindowSeconds || !plan
+          ? true
+          : await this.planInventoryMounted(transaction, plan.id, plan.nodeId);
       if (
         active?.orderPriceBindingId !== input.bindingId ||
         plan?.eligibilitySnapshot.orderPhase.orderId !== input.orderId ||
@@ -4478,6 +4552,7 @@ export class AutomaticQuotesService {
         reservation.expiresAt <= observedAt ||
         !capacityFits ||
         !plateCountFits ||
+        !mounted ||
         !bindingMatchesDraft ||
         !origin
       ) {
@@ -4553,6 +4628,52 @@ export class AutomaticQuotesService {
         AND plan_job.node_id = ${nodeId}::uuid
     `;
     return rows[0]?.fits === true;
+  }
+
+  private async planInventoryMounted(
+    transaction: Transaction | PrismaService,
+    phaseResourcePlanId: string,
+    nodeId: string,
+  ): Promise<boolean> {
+    const rows = await transaction.$queryRaw<Array<{ ready: boolean }>>`
+      SELECT count(*) > 0 AND bool_and(inventory.mount_status = 'MOUNTED') AS ready
+      FROM phase_resource_plan_jobs plan_job
+      JOIN candidate_resource_estimates candidate
+        ON candidate.id = plan_job.candidate_resource_estimate_id
+       AND candidate.node_id = plan_job.node_id
+      JOIN inventories inventory
+        ON inventory.id = candidate.inventory_id
+       AND inventory.node_id = candidate.node_id
+      WHERE plan_job.phase_resource_plan_id = ${phaseResourcePlanId}::uuid
+        AND plan_job.node_id = ${nodeId}::uuid
+    `;
+    return rows[0]?.ready === true;
+  }
+
+  private async planAvailabilityCurrent(
+    transaction: Transaction | PrismaService,
+    phaseResourcePlanId: string,
+    nodeId: string,
+  ): Promise<boolean> {
+    const rows = await transaction.$queryRaw<Array<{ ready: boolean }>>`
+      SELECT count(*) > 0 AND bool_and(
+        selection.revision_id = candidate.machine_availability_revision_id
+        AND selection.selection_version = candidate.machine_availability_selection_version
+        AND revision.reason <> 'LEGACY_LIVE_RESERVATION_BOOTSTRAP'
+      ) AS ready
+      FROM phase_resource_plan_jobs plan_job
+      JOIN candidate_resource_estimates candidate
+        ON candidate.id = plan_job.candidate_resource_estimate_id
+       AND candidate.node_id = plan_job.node_id
+      LEFT JOIN machine_availability_selections selection
+        ON selection.machine_id = candidate.machine_id
+       AND selection.node_id = candidate.node_id
+      LEFT JOIN machine_availability_revisions revision
+        ON revision.id = selection.revision_id
+      WHERE plan_job.phase_resource_plan_id = ${phaseResourcePlanId}::uuid
+        AND plan_job.node_id = ${nodeId}::uuid
+    `;
+    return rows[0]?.ready === true;
   }
 
   private async referenceSlices(
@@ -5902,6 +6023,12 @@ export class AutomaticQuotesService {
       JOIN nodes node
         ON node.id = machine.node_id
        AND node.active
+      JOIN machine_availability_selections availability
+        ON availability.machine_id = machine.id
+       AND availability.node_id = machine.node_id
+      JOIN machine_availability_revisions availability_revision
+        ON availability_revision.id = availability.revision_id
+       AND availability_revision.reason <> 'LEGACY_LIVE_RESERVATION_BOOTSTRAP'
       JOIN machine_calibrations calibration
         ON calibration.node_id = machine.node_id
        AND calibration.machine_id = machine.id
@@ -5912,7 +6039,16 @@ export class AutomaticQuotesService {
        AND inventory.status = 'AVAILABLE'
        AND inventory.remaining_milligrams > inventory.reserved_milligrams
        AND inventory.material = profile.material
+       AND EXISTS (
+         SELECT 1 FROM inventory_receipts receipt
+         WHERE receipt.inventory_id = inventory.id AND receipt.kind = 'INITIAL'
+       )
       WHERE reference.state = 'ACTIVE'
+        AND EXISTS (
+          SELECT 1 FROM machine_availability_windows available
+          WHERE available.revision_id = availability.revision_id
+            AND available.ends_at > clock_timestamp()
+        )
       ORDER BY
         profile.material::text,
         inventory.color NULLS FIRST,
