@@ -20,7 +20,10 @@ import { createHash } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { AuditService } from "../audit/audit.service";
-import { requireOperatorPermission } from "../admin-access/operator-command";
+import {
+  assertOperationalOrderScope,
+  requireOperatorPermission,
+} from "../admin-access/operator-command";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { HANDLING_RATE_POLICY } from "./handling-rate-policy";
@@ -78,8 +81,7 @@ export class MeasurementService {
     const nodeId = operatorNode(operator);
     return this.prisma.$transaction(
       async (tx) => {
-        await tx.$executeRaw`SET TRANSACTION READ ONLY`;
-        await this.assertOrderNode(tx, orderId, nodeId);
+        await assertOperationalOrderScope(tx, orderId, nodeId);
         if (
           cursor &&
           !(await tx.orderActualCost.findFirst({

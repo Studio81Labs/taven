@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  NotFoundException,
 } from "@nestjs/common";
 import { OperatorRole } from "@prisma/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OperatorContext } from "../admin-access/operator-context";
+import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { MeasurementService } from "./measurement.service";
 
 const operator: OperatorContext = {
@@ -18,6 +20,39 @@ const operator: OperatorContext = {
 };
 
 describe("MeasurementService command boundaries", () => {
+  it("denies actual-cost reads when planning lineage spans another node", async () => {
+    const costs = { findMany: vi.fn() };
+    const transaction = {
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { node_id: operator.nodeIds[0] },
+          { node_id: "00000000-0000-4000-8000-000000000004" },
+        ]),
+      orderActualCost: costs,
+    };
+    const service = new MeasurementService(
+      {
+        $transaction: async (operation: (tx: typeof transaction) => unknown) =>
+          operation(transaction),
+      } as never,
+      {} as never,
+    );
+
+    await expect(
+      service.actualCostEvidence(
+        {
+          ...operator,
+          role: OperatorRole.ADMIN,
+          permissions: [OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION],
+        },
+        "00000000-0000-4000-8000-000000000005",
+      ),
+    ).rejects.toThrow(NotFoundException);
+    expect(costs.findMany).not.toHaveBeenCalled();
+  });
+
   it("fingerprints parsed bigint timer evidence without throwing", async () => {
     const now = new Date("2026-09-06T10:01:00.000Z");
     const transaction = {
