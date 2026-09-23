@@ -2,7 +2,7 @@ import "reflect-metadata";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../src/app.module";
 import type { OperatorContext } from "../src/modules/admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
@@ -14,6 +14,7 @@ import type { IssueOfferDto } from "../src/modules/quotes/quotes.dto";
 import { computeLegalRevisionContentHash } from "../src/modules/legal-documents/legal-documents.service";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 import { LegalDocumentsService } from "../src/modules/legal-documents/legal-documents.service";
+import { LegalApprovalsService } from "../src/modules/legal-approvals/legal-approvals.service";
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
@@ -3030,6 +3031,241 @@ describe("QuoteRequest and tokenized individual offers", () => {
           UPDATE legal_documents
           SET generation = ${previousGeneration}
           WHERE id = ${termsDocument.id}::uuid
+        `;
+      });
+    }
+  });
+
+  it("rejects an offer acceptance when terms are archived before its legal lock", async () => {
+    const created = await quotes.createRequest(
+      requestInput("archive-accept-race"),
+      "198.51.100.97",
+      key("archive-accept-race-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("archive-accept-race-review"),
+    );
+    const issued = await issueOffer(
+      created.requestId,
+      key("archive-accept-race-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
+    expect(issued.response.status).toBe(201);
+    const document = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "terms" },
+    });
+    const publication = await prisma.legalDocumentPublication.findFirstOrThrow({
+      where: {
+        documentId: document.id,
+        cancelledAt: null,
+        startsAt: { lte: new Date() },
+        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }],
+      },
+      orderBy: { startsAt: "desc" },
+    });
+    const approvals = app.get(LegalApprovalsService);
+    const originalLock = approvals.lock.bind(approvals);
+    let releaseAcceptance!: () => void;
+    const acceptanceMayContinue = new Promise<void>((resolve) => {
+      releaseAcceptance = resolve;
+    });
+    let intercepted = false;
+    const lockSpy = vi
+      .spyOn(approvals, "lock")
+      .mockImplementation(async (tx, keys) => {
+        if (!intercepted && keys.includes("terms")) {
+          intercepted = true;
+          await acceptanceMayContinue;
+        }
+        return originalLock(tx, keys);
+      });
+    const acceptanceKey = key("archive-accept-race-accept");
+    const acceptance = acceptOffer(issued.body, acceptanceKey);
+    try {
+      await vi.waitFor(() => expect(intercepted).toBe(true), {
+        timeout: 3_000,
+        interval: 25,
+      });
+      await legalDocuments.archivePublication(
+        operator,
+        "terms",
+        publication.id,
+        {
+          expectedGeneration: document.generation,
+          reason: "Quote acceptance archival race E2E fixture",
+          reasonCode: "E2E_ACCEPTANCE_RACE",
+        },
+        key("archive-accept-race-archive"),
+      );
+      releaseAcceptance();
+      const rejected = await acceptance;
+      expect(rejected.response.status).toBe(503);
+      expect(rejected.body).toMatchObject({ code: "LAUNCH_APPROVAL_REQUIRED" });
+      await expect(
+        prisma.quoteRequest.findUniqueOrThrow({
+          where: { id: created.requestId },
+          select: { status: true, currentQuoteId: true },
+        }),
+      ).resolves.toEqual({
+        status: "QUOTED",
+        currentQuoteId: issued.body.quoteId,
+      });
+      await expect(
+        prisma.individualOrderOrigin.count({
+          where: { quoteId: issued.body.quoteId },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.legalAcceptanceDecision.count({
+          where: { sourceQuoteId: issued.body.quoteId },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.idempotencyRecord.count({
+          where: {
+            namespace: "quote-offer.accept",
+            idempotencyKey: acceptanceKey,
+          },
+        }),
+      ).resolves.toBe(0);
+    } finally {
+      releaseAcceptance();
+      await acceptance.catch(() => undefined);
+      lockSpy.mockRestore();
+      await prisma.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          "SET LOCAL session_replication_role = 'replica'",
+        );
+        await transaction.$executeRaw`
+          UPDATE legal_document_publications
+          SET ends_at = ${publication.endsAt}
+          WHERE id = ${publication.id}::uuid
+        `;
+        await transaction.$executeRaw`
+          UPDATE legal_documents
+          SET generation = ${document.generation}
+          WHERE id = ${document.id}::uuid
+        `;
+      });
+    }
+  });
+
+  it("finishes an acceptance before a publication archive waiting on its legal lock", async () => {
+    const created = await quotes.createRequest(
+      requestInput("accept-before-archive-race"),
+      "198.51.100.98",
+      key("accept-before-archive-race-create"),
+    );
+    await operatorCommand(
+      `admin/quote-requests/${created.requestId}/review`,
+      key("accept-before-archive-race-review"),
+    );
+    const issued = await issueOffer(
+      created.requestId,
+      key("accept-before-archive-race-issue"),
+      new Date(Date.now() + 60 * 60 * 1_000),
+    );
+    expect(issued.response.status).toBe(201);
+    const document = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "terms" },
+    });
+    const publication = await prisma.legalDocumentPublication.findFirstOrThrow({
+      where: {
+        documentId: document.id,
+        cancelledAt: null,
+        startsAt: { lte: new Date() },
+        OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }],
+      },
+      orderBy: { startsAt: "desc" },
+    });
+    const approvals = app.get(LegalApprovalsService);
+    const originalLock = approvals.lock.bind(approvals);
+    let releaseAcceptance!: () => void;
+    const acceptanceMayContinue = new Promise<void>((resolve) => {
+      releaseAcceptance = resolve;
+    });
+    let intercepted = false;
+    const lockSpy = vi
+      .spyOn(approvals, "lock")
+      .mockImplementation(async (tx, keys) => {
+        await originalLock(tx, keys);
+        if (!intercepted && keys.includes("terms")) {
+          intercepted = true;
+          await acceptanceMayContinue;
+        }
+      });
+    const acceptance = acceptOffer(
+      issued.body,
+      key("accept-before-archive-race-accept"),
+    );
+    let archival:
+      ReturnType<LegalDocumentsService["archivePublication"]> | undefined;
+    try {
+      await vi.waitFor(() => expect(intercepted).toBe(true), {
+        timeout: 3_000,
+        interval: 25,
+      });
+      archival = legalDocuments.archivePublication(
+        operator,
+        "terms",
+        publication.id,
+        {
+          expectedGeneration: document.generation,
+          reason: "Quote acceptance lock race E2E fixture",
+          reasonCode: "E2E_ACCEPTANCE_LOCK_RACE",
+        },
+        key("accept-before-archive-race-archive"),
+      );
+      await vi.waitFor(
+        async () => {
+          const rows = await prisma.$queryRaw<Array<{ blocked: bigint }>>`
+          SELECT count(*)::bigint AS blocked
+          FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND query LIKE '%FROM "legal_documents"%'
+            AND query LIKE '%FOR UPDATE%'
+        `;
+          expect(rows[0]?.blocked).toBeGreaterThan(0n);
+        },
+        { timeout: 3_000, interval: 25 },
+      );
+      releaseAcceptance();
+      const accepted = await acceptance;
+      expect(accepted.response.status).toBe(200);
+      const archived = await archival;
+      const decision = await prisma.legalAcceptanceDecision.findUniqueOrThrow({
+        where: { sourceQuoteId: issued.body.quoteId },
+      });
+      expect(archived.endsAt).toBeDefined();
+      expect(decision.decidedAt.getTime()).toBeLessThanOrEqual(
+        new Date(archived.endsAt!).getTime(),
+      );
+      await expect(
+        prisma.order.findUniqueOrThrow({
+          where: { id: accepted.body.orderId },
+          select: { acceptedTermsRevision: true },
+        }),
+      ).resolves.toEqual({ acceptedTermsRevision: issued.body.termsRevision });
+    } finally {
+      releaseAcceptance();
+      await acceptance.catch(() => undefined);
+      await archival?.catch(() => undefined);
+      lockSpy.mockRestore();
+      await prisma.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          "SET LOCAL session_replication_role = 'replica'",
+        );
+        await transaction.$executeRaw`
+          UPDATE legal_document_publications
+          SET ends_at = ${publication.endsAt}
+          WHERE id = ${publication.id}::uuid
+        `;
+        await transaction.$executeRaw`
+          UPDATE legal_documents
+          SET generation = ${document.generation}
+          WHERE id = ${document.id}::uuid
         `;
       });
     }
