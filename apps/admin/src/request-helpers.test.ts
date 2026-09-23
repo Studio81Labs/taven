@@ -1,0 +1,109 @@
+import { describe, expect, it, vi } from "vitest";
+import { CommandIntent } from "./command-intent";
+import { CursorPager } from "./cursor-pager";
+import { formatCzkMinor, formatGrams, formatPragueInstant } from "./format";
+import { requestFeedback } from "./request-feedback";
+
+describe("operator request helpers", () => {
+  it("formats exact decimal strings without converting large amounts to Number", () => {
+    expect(formatCzkMinor("900719925474099300")).toContain(
+      "9 007 199 254 740 993,00 Kč",
+    );
+    expect(formatCzkMinor("-1")).toBe("−0,01 Kč");
+    expect(formatGrams("1234")).toContain("1 234 g");
+    expect(formatPragueInstant("2026-09-23T12:00:00Z")).toContain("14:00");
+    expect(formatPragueInstant("2026-09-23T12:00:00")).toBe("Neplatný čas");
+  });
+
+  it("retains the body and key when an outcome is unknown", async () => {
+    const body = { amountMinor: "100", nested: { reason: "A" } };
+    const intent = new CommandIntent(body, "same-key");
+    body.nested.reason = "B";
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("lost response"))
+      .mockResolvedValueOnce("done");
+    await expect(intent.submit(send)).rejects.toThrow("lost response");
+    await expect(intent.submit(send)).resolves.toBe("done");
+    expect(send).toHaveBeenNthCalledWith(
+      1,
+      { amountMinor: "100", nested: { reason: "A" } },
+      "same-key",
+    );
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      { amountMinor: "100", nested: { reason: "A" } },
+      "same-key",
+    );
+  });
+
+  it("discards a late page after the filters change", async () => {
+    let resolveFirst:
+      | ((value: { items: number[]; nextCursor: string | null }) => void)
+      | undefined;
+    const load = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ items: [2], nextCursor: null });
+    const pager = new CursorPager<number>(load);
+    const first = pager.reset("old");
+    await pager.reset("new");
+    resolveFirst?.({ items: [1], nextCursor: "old-next" });
+    await first;
+    expect(pager.items).toEqual([2]);
+    expect(pager.nextCursor).toBeNull();
+  });
+
+  it("loads one page for concurrent next-page requests", async () => {
+    let finish:
+      | ((value: { items: number[]; nextCursor: string | null }) => void)
+      | undefined;
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [1], nextCursor: "next" })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+    const pager = new CursorPager<number>(load);
+    await pager.reset("same");
+    const first = pager.more();
+    const second = pager.more();
+    expect(load).toHaveBeenCalledTimes(2);
+    finish?.({ items: [2], nextCursor: null });
+    await Promise.all([first, second]);
+    expect(pager.items).toEqual([1, 2]);
+  });
+
+  it("ignores an aborted request when filters change", async () => {
+    const load = vi
+      .fn()
+      .mockImplementationOnce(
+        (_cursor: string | null, signal: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      )
+      .mockResolvedValueOnce({ items: [3], nextCursor: null });
+    const pager = new CursorPager<number>(load);
+    const obsolete = pager.reset("old");
+    await pager.reset("new");
+    await expect(obsolete).resolves.toBeUndefined();
+    expect(pager.items).toEqual([3]);
+  });
+
+  it("separates conflicts from rate limits and service outages", () => {
+    expect(requestFeedback(409).refreshRequired).toBe(true);
+    expect(requestFeedback(429, "12").retryAfterSeconds).toBe(12);
+    expect(requestFeedback(503).refreshRequired).toBe(false);
+  });
+});

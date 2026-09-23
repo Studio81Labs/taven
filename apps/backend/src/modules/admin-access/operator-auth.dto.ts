@@ -1,4 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import {
+  OPERATOR_PERMISSIONS,
+  type OperatorPermission,
+} from "./operator-permissions";
 
 export class DevelopmentOperatorLoginDto {
   @ApiProperty({ type: String, format: "email", maxLength: 320 })
@@ -31,6 +35,15 @@ export class OperatorSessionOperatorDto {
 
   @ApiProperty({ type: [String], format: "uuid" })
   nodeIds!: string[];
+
+  @ApiProperty({
+    type: [String],
+    enum: Object.values(OPERATOR_PERMISSIONS),
+    isArray: true,
+    description:
+      "Effective grants after the current role and node scope are applied.",
+  })
+  permissions!: OperatorPermission[];
 
   @ApiProperty({ enum: ["DEVELOPMENT_PASSWORD", "GITHUB"] })
   authenticationMethod!: "DEVELOPMENT_PASSWORD" | "GITHUB";

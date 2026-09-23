@@ -3832,6 +3832,8 @@ export interface components {
             nodeIds: string[];
             /** Format: uuid */
             operatorId: string;
+            /** @description Effective grants after the current role and node scope are applied. */
+            permissions: ("operations:read" | "operations:write" | "quotes:write" | "payments:write" | "financial:exception" | "audit:read" | "metrics:read" | "catalog:write" | "legal:read" | "legal:write")[];
             /** @enum {string} */
             role: "ADMIN" | "OPERATOR" | "VIEWER";
         };

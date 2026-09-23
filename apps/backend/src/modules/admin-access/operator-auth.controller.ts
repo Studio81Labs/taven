@@ -228,6 +228,7 @@ function sessionDto(value: AuthSessionView): OperatorSessionDto {
       operatorId: value.operator.operatorId,
       role: value.operator.role,
       nodeIds: [...value.operator.nodeIds],
+      permissions: [...value.operator.permissions],
       authenticationMethod: value.operator.authenticationMethod,
     },
     csrfToken: value.csrfToken,

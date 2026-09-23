@@ -182,6 +182,11 @@ describe("Legal Documents & Node-Free Admin E2E", () => {
     expect(body.operator.operatorId).toBe(adminOperatorId);
     expect(body.operator.role).toBe("ADMIN");
     expect(body.operator.nodeIds).toEqual([]);
+    expect(body.operator.permissions).toEqual([
+      "legal:read",
+      "legal:write",
+      "audit:read",
+    ]);
   });
 
   it("blocks node-free admin from node-scoped operational audit endpoint", async () => {
