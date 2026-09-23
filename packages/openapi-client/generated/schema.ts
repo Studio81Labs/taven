@@ -4633,12 +4633,16 @@ export interface components {
             preflight: components["schemas"]["PriceBandConversionPreflightDto"];
         };
         PriceBandConversionPreflightDto: {
+            /** @description Automatic bindings with a version 1 clean preflight summary in their immutable price snapshot at issuance. Individual offers never enter this group. */
             clean: components["schemas"]["PriceBandConversionGroupDto"];
+            /** @description Bindings without a supported issuance summary, including legacy automatic bindings and every individual offer. Known gross still contributes to its price band; unavailable gross is counted separately. */
             unknown: components["schemas"]["PriceBandConversionGroupDto"];
+            /** @description Automatic bindings with a version 1 warning preflight summary in their immutable price snapshot at issuance, after required acknowledgements. Individual offers never enter this group. */
             warning: components["schemas"]["PriceBandConversionGroupDto"];
         };
         PriceBandConversionV02Dto: {
             automatic: components["schemas"]["PriceBandConversionOriginDto"];
+            /** @description Additive v0-2 issuance cohort definition. Its preflight classes use binding-scoped immutable snapshot evidence; preserved v0-1 preflight metrics use current order-scoped risk decisions. */
             definition: string;
             individual: components["schemas"]["PriceBandConversionOriginDto"];
             /** @enum {string} */

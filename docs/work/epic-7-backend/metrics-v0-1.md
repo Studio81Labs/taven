@@ -68,6 +68,26 @@ Missing or non-CZK gross evidence is counted as unavailable rather than placed
 in a price band. Existing `acceptedGrossBands` still describes accepted-order
 amounts and is not a conversion denominator.
 
+For every new automatic binding, the server stores
+`PriceSnapshot.inputSnapshot.automaticQuote.preflightAtIssuance` as
+`{ "schemaVersion": 1, "classification": "clean" | "warning" }` before
+hashing and committing the immutable snapshot. The successful current risk
+gate supplies this summary in the same locked transaction: zero WARNING
+findings is clean (including INFO-only findings), while permitted acknowledged
+WARNING findings are warning. Blocking, declined, unacknowledged and excessive
+warnings still prevent binding. The exact binding's snapshot is the sole v0-2
+preflight source; `quote.bound` provides its issuance identity and timestamp.
+
+Older automatic bindings without a supported summary are `unknown` in v0-2.
+Missing, null, malformed and future-version summaries are also unknown. Every
+individual offer remains unknown, including one reached by automatic handoff.
+Unknown preflight still contributes to origin and total denominators and to
+its known gross band; `unavailableGross` is an independent count. No historical
+binding, snapshot hash or event is rewritten or inferred from current findings.
+The preserved v0-1 preflight projection intentionally continues using current
+order-scoped risk decisions, so its classification can differ from v0-2's
+issuance classification after reconfiguration or source cleanup.
+
 ## Evidence and warning reads
 
 `GET /admin/orders/{orderId}/actual-costs` and

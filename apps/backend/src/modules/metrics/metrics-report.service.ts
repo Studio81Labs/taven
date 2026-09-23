@@ -1046,6 +1046,7 @@ type BindingFact = Readonly<{
   accepted: boolean;
   grossMinor: bigint | null;
   preflight: "clean" | "warning" | "unknown";
+  preflightAtIssuance?: "clean" | "warning" | "unknown";
 }>;
 
 type AssistedRequest = Readonly<{
@@ -1218,7 +1219,7 @@ function responseAt(request: AssistedRequest): Date | null {
   );
 }
 
-async function bindingFacts(
+export async function bindingFacts(
   transaction: Transaction,
   events: readonly Readonly<{
     eventType: string;
@@ -1294,6 +1295,9 @@ async function bindingFacts(
             ? binding.priceSnapshot.contractTotalMinor
             : null,
         preflight: automaticPreflight(riskByOrder.get(binding?.orderId ?? "")),
+        preflightAtIssuance: issuancePreflight(
+          binding?.priceSnapshot.inputSnapshot,
+        ),
       };
     }
     const quote = quoteMap.get(jsonString(event.payload, "quoteId") ?? "");
@@ -1307,6 +1311,7 @@ async function bindingFacts(
           ? quote.priceBinding.priceSnapshot.contractTotalMinor
           : null,
       preflight: "unknown",
+      preflightAtIssuance: "unknown",
     };
   });
 }
@@ -1318,6 +1323,23 @@ function automaticPreflight(
   return severities.some((severity) => severity === "BLOCKING")
     ? "unknown"
     : "warning";
+}
+
+export function issuancePreflight(
+  inputSnapshot: Prisma.JsonValue | undefined,
+): BindingFact["preflight"] {
+  const automaticQuote = jsonRecord(jsonRecord(inputSnapshot)?.automaticQuote);
+  const summary = jsonRecord(automaticQuote?.preflightAtIssuance);
+  return summary?.schemaVersion === 1 &&
+    (summary.classification === "clean" || summary.classification === "warning")
+    ? summary.classification
+    : "unknown";
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 export function quoteMetrics(
@@ -1363,13 +1385,19 @@ function priceBandConversion(bindings: readonly BindingFact[]) {
       all: priceBandConversionGroup(selected),
       preflight: {
         clean: priceBandConversionGroup(
-          selected.filter((binding) => binding.preflight === "clean"),
+          selected.filter((binding) => binding.preflightAtIssuance === "clean"),
         ),
         warning: priceBandConversionGroup(
-          selected.filter((binding) => binding.preflight === "warning"),
+          selected.filter(
+            (binding) => binding.preflightAtIssuance === "warning",
+          ),
         ),
         unknown: priceBandConversionGroup(
-          selected.filter((binding) => binding.preflight === "unknown"),
+          selected.filter(
+            (binding) =>
+              binding.preflightAtIssuance === "unknown" ||
+              binding.preflightAtIssuance === undefined,
+          ),
         ),
       },
     };
@@ -1377,7 +1405,7 @@ function priceBandConversion(bindings: readonly BindingFact[]) {
   return {
     metricDefinition: "v0-2" as const,
     definition:
-      "Immutable binding gross at issuance determines the CZK band. Each issued binding is counted once; confirmed-paid means its exact accepted origin has a confirmed order. Expired and reissued offers remain in the denominator, and a deposit does not create another binding.",
+      "Immutable binding gross at issuance determines the CZK band. Each issued binding is counted once; confirmed-paid means its exact accepted origin has a confirmed order. Automatic preflight uses the binding's versioned immutable price-snapshot summary; legacy or unsupported evidence and individual offers are unknown. This differs from preserved v0-1 current-decision preflight. Expired and reissued offers remain in the denominator, and a deposit does not create another binding.",
     total: priceBandConversionGroup(unique),
     automatic: origin("automatic"),
     individual: origin("individual"),

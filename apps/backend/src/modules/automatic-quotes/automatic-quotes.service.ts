@@ -118,6 +118,18 @@ const INFILL_PERCENT = {
 } as const;
 
 type Transaction = Prisma.TransactionClient;
+
+type AutomaticPreflightAtIssuance = Readonly<{
+  schemaVersion: 1;
+  classification: "clean" | "warning";
+}>;
+
+type AutomaticRiskGate =
+  | Readonly<{ allowed: false }>
+  | Readonly<{
+      allowed: true;
+      preflightAtIssuance: AutomaticPreflightAtIssuance;
+    }>;
 type JsonRecord = Record<string, unknown>;
 type FreshBindingValidation = Readonly<{
   priceListId: string;
@@ -2488,7 +2500,8 @@ export class AutomaticQuotesService {
     selectedPolicy: SelectedCommercialPolicy,
     bindingValidation: FreshBindingValidation | null,
   ): Promise<void> {
-    if (!(await this.riskAllowsAutomaticQuote(transaction, orderId))) return;
+    const riskGate = await this.riskAllowsAutomaticQuote(transaction, orderId);
+    if (!riskGate.allowed) return;
     const draftOrder = await transaction.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {
@@ -2662,32 +2675,33 @@ export class AutomaticQuotesService {
       paymentFeeRateBasisPoints: prepared.parameters.paymentFeeRateBasisPoints,
       paymentFeeFixedMinor: prepared.parameters.paymentFeeFixedMinor,
       paymentProviderConfig: prepared.parameters.paymentProviderConfig,
+      preflightAtIssuance: riskGate.preflightAtIssuance,
     });
   }
 
   private async riskAllowsAutomaticQuote(
     transaction: Transaction,
     orderId: string,
-  ): Promise<boolean> {
+  ): Promise<AutomaticRiskGate> {
     const items = await transaction.automaticQuoteItemDraft.findMany({
       where: { orderId },
       include: { riskDecisions: true },
     });
     let warningCount = 0;
     for (const item of items) {
-      if (item.fitSensitive) return false;
+      if (item.fitSensitive) return { allowed: false };
       const findings = await this.currentRiskFindings(transaction, item);
       if (
         findings.some(
           (finding) => finding.severity === PreflightSeverity.BLOCKING,
         )
       ) {
-        return false;
+        return { allowed: false };
       }
       warningCount += findings.filter(
         (finding) => finding.severity === PreflightSeverity.WARNING,
       ).length;
-      if (warningCount > 3) return false;
+      if (warningCount > 3) return { allowed: false };
       const decisionByFinding = new Map(
         item.riskDecisions
           .filter(
@@ -2708,10 +2722,16 @@ export class AutomaticQuotesService {
               AutomaticQuoteRiskDecision.ACKNOWLEDGED,
         )
       ) {
-        return false;
+        return { allowed: false };
       }
     }
-    return true;
+    return {
+      allowed: true,
+      preflightAtIssuance: {
+        schemaVersion: 1,
+        classification: warningCount === 0 ? "clean" : "warning",
+      },
+    };
   }
 
   private async currentRiskFindings(
@@ -3236,6 +3256,7 @@ export class AutomaticQuotesService {
       paymentFeeRateBasisPoints: number;
       paymentFeeFixedMinor: bigint;
       paymentProviderConfig: Prisma.InputJsonObject;
+      preflightAtIssuance: AutomaticPreflightAtIssuance;
     },
   ): Promise<void> {
     const observedAt = await databaseNow(transaction);
@@ -3250,6 +3271,7 @@ export class AutomaticQuotesService {
         legalTermsRevisionId: input.legalTermsRevisionId,
         expressRequested: input.expressRequested,
         priceListRevision: input.priceList.revision,
+        preflightAtIssuance: input.preflightAtIssuance,
         expressEligibilityAtPricing: {
           state: input.expressRequested ? "CANDIDATE_PENDING" : "NOT_REQUESTED",
           preCandidateEvaluation: input.prepared.expressEligibility,
