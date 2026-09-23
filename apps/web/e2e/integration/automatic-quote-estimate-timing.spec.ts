@@ -10,6 +10,8 @@ const FIXTURE_PATH = path.resolve(
 const benchmarkEnabled = process.env.INTEGRATION_BENCHMARK === "true";
 const localReferenceRun = process.env.INTEGRATION_BENCHMARK_LOCAL === "true";
 const sampleCount = Number(process.env.INTEGRATION_BENCHMARK_SAMPLES ?? 4);
+const fixtureSha256 =
+  "25180bbac89a3ad812538e23447b6556c9684b278aec45ca7e015eef21730120";
 
 type BrowserTiming = {
   parserStart: number;
@@ -27,6 +29,13 @@ type TimingSample = BrowserTiming & {
   renderMs: number;
   commitToRenderMs: number;
   postParseVisibleMs: number;
+  identity: EstimateIdentity;
+};
+
+type EstimateIdentity = {
+  priceListRevision: string;
+  printConfigRevisionId: string;
+  referenceProfileId: string;
 };
 
 test.describe("Automatic estimate browser timing", () => {
@@ -37,18 +46,19 @@ test.describe("Automatic estimate browser timing", () => {
 
   test("measures warm browser parse, network, and visible-estimate timing", async ({
     page,
+    browser,
   }) => {
     test.setTimeout(360_000);
     expect(Number.isInteger(sampleCount) && sampleCount >= 1).toBe(true);
+    if (localReferenceRun) expect(sampleCount).toBe(4);
 
     // Warm the browser's parser, bundle, API and database connections first.
     await openHome(page);
-    await measureSample(page);
+    await measureSample(page, false);
 
     const samples: TimingSample[] = [];
     for (let index = 0; index < sampleCount; index += 1) {
-      await openHome(page);
-      samples.push(await measureSample(page));
+      samples.push(await measureSample(page, true));
     }
 
     const median = (values: number[]) => {
@@ -67,16 +77,30 @@ test.describe("Automatic estimate browser timing", () => {
       JSON.stringify(
         {
           browserProfile: "Playwright Chromium Desktop Chrome 1280x800",
-          fixture: "tools/slicing-fixtures/fixtures/single-pla/cube.stl",
-          sampleCount,
-          samples: samples.map((sample) =>
-            Object.fromEntries(
-              Object.entries(sample).map(([key, value]) => [
-                key,
-                Number(value.toFixed(2)),
-              ]),
-            ),
+          browserVersion: await browser.version(),
+          nodeVersion: process.version,
+          userAgent: await page.evaluate(() => navigator.userAgent),
+          platform: await page.evaluate(() => navigator.platform),
+          hardwareConcurrency: await page.evaluate(
+            () => navigator.hardwareConcurrency,
           ),
+          gitCommit:
+            process.env.GIT_COMMIT_SHA ?? process.env.GITHUB_SHA ?? "unknown",
+          fixture: "tools/slicing-fixtures/fixtures/single-pla/cube.stl",
+          fixtureSha256,
+          estimateIdentity: samples[0]?.identity,
+          sampleCount,
+          samples: samples.map((sample) => ({
+            ...Object.fromEntries(
+              Object.entries(sample)
+                .filter(([, value]) => typeof value === "number")
+                .map(([key, value]) => [
+                  key,
+                  Number((value as number).toFixed(2)),
+                ]),
+            ),
+            identity: sample.identity,
+          })),
           medianPostParseVisibleMs: Number(medianPostParseVisibleMs.toFixed(2)),
           maxPostParseVisibleMs: Number(
             Math.max(...visibleDurations).toFixed(2),
@@ -102,13 +126,43 @@ async function openHome(page: Page): Promise<void> {
   ).toBeVisible();
 }
 
-async function measureSample(page: Page): Promise<TimingSample> {
+async function measureSample(
+  page: Page,
+  resetSelection: boolean,
+): Promise<TimingSample> {
   await page.evaluate(() => {
     performance.clearMarks();
   });
+  if (resetSelection) {
+    await page.getByRole("button", { name: "Jiný soubor" }).click();
+  }
   const timing = waitForBrowserTiming(page);
+  const estimateResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/automatic-quote-estimates") &&
+      response.request().method() === "POST",
+  );
   await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
-  const browserTiming = await timing;
+  const [browserTiming, response] = await Promise.all([
+    timing,
+    estimateResponse,
+  ]);
+  expect(response.ok()).toBe(true);
+  const payload = (await response.json()) as {
+    priceListRevision?: unknown;
+    assumptions?: {
+      printConfigRevisionId?: unknown;
+      referenceProfileId?: unknown;
+    };
+  };
+  const identity: EstimateIdentity = {
+    priceListRevision: String(payload.priceListRevision),
+    printConfigRevisionId: String(payload.assumptions?.printConfigRevisionId),
+    referenceProfileId: String(payload.assumptions?.referenceProfileId),
+  };
+  expect(Object.values(identity).every((value) => value !== "undefined")).toBe(
+    true,
+  );
   return {
     ...browserTiming,
     parseMs: browserTiming.parserComplete - browserTiming.parserStart,
@@ -117,6 +171,7 @@ async function measureSample(page: Page): Promise<TimingSample> {
     renderMs: browserTiming.visible - browserTiming.responseComplete,
     commitToRenderMs: browserTiming.visible - browserTiming.committed,
     postParseVisibleMs: browserTiming.visible - browserTiming.parserComplete,
+    identity,
   };
 }
 
