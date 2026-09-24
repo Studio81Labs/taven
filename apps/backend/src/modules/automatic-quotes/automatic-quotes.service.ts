@@ -4155,6 +4155,18 @@ export class AutomaticQuotesService {
     return null;
   }
 
+  async hasPermanentlyFailedCandidateRequirement(
+    bindingId: string,
+    observedAt: Date,
+  ): Promise<boolean> {
+    const frontier = await this.automaticCandidateFrontier(
+      this.prisma,
+      bindingId,
+      observedAt,
+    );
+    return frontier.allFailedRequirement;
+  }
+
   private async automaticCandidateFrontier(
     transaction: Transaction | PrismaService,
     bindingId: string,

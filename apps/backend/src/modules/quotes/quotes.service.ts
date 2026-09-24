@@ -52,7 +52,10 @@ import {
 } from "../admin-access/operator-command";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
-import { MAX_SLICING_JOB_ATTEMPTS } from "../automatic-quotes/automatic-quotes.service";
+import {
+  AutomaticQuotesService,
+  MAX_SLICING_JOB_ATTEMPTS,
+} from "../automatic-quotes/automatic-quotes.service";
 import { AuditService } from "../audit/audit.service";
 import { normalizeAttribution } from "../metrics/attribution";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
@@ -185,6 +188,7 @@ export class QuotesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly automaticQuotes: AutomaticQuotesService,
     private readonly legalApprovals?: LegalApprovalsService,
   ) {}
 
@@ -2306,6 +2310,15 @@ export class QuotesService {
         ) AS available
       `,
     ]);
+    const failedCandidateRequirement =
+      origin.order.status === "DRAFT" &&
+      candidateDispatch[0]?.available &&
+      origin.order.acceptedOrderPriceBindingId
+        ? await this.automaticQuotes.hasPermanentlyFailedCandidateRequirement(
+            origin.order.acceptedOrderPriceBindingId,
+            now,
+          )
+        : false;
     const preparationStatus: AcceptedOfferOrderStatusDto["preparationStatus"] =
       !phase
         ? "UNAVAILABLE"
@@ -2329,7 +2342,9 @@ export class QuotesService {
                 )
               ? "READY"
               : origin.order.status === "DRAFT"
-                ? candidateDispatch[0]?.available
+                ? candidateDispatch[0]?.available &&
+                  origin.order.acceptedOrderPriceBindingId &&
+                  !failedCandidateRequirement
                   ? "PREPARING"
                   : candidateDispatch[0]?.seen
                     ? "UNAVAILABLE"

@@ -89,7 +89,11 @@ describe("quote capability expiry clock", () => {
       },
       photoAsset: { findMany: vi.fn().mockResolvedValue([]) },
     };
-    const service = new QuotesService(prisma as never, {} as never);
+    const service = new QuotesService(
+      prisma as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(
       service.getRequest(
@@ -169,7 +173,11 @@ describe("quote capability expiry clock", () => {
         }),
       },
     };
-    const service = new QuotesService(prisma as never, {} as never);
+    const service = new QuotesService(
+      prisma as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(
       service.previewOffer(
@@ -273,7 +281,11 @@ describe("operator quote-request page", () => {
       quoteRequestModel: { findMany: vi.fn() },
       individualOrderOrigin: { findMany: vi.fn() },
     };
-    const service = new QuotesService(prisma as never, {} as never);
+    const service = new QuotesService(
+      prisma as never,
+      {} as never,
+      {} as never,
+    );
 
     const page = await service.listRequestsPage(
       {

@@ -26,6 +26,7 @@ import type {
   CandidateEstimateResult,
 } from "@taven/slicer-contracts" with { "resolution-mode": "import" };
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
+import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceConflictError } from "../src/modules/resources/resource-errors";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
@@ -1641,6 +1642,28 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect([...bySelection.keys()].sort()).toEqual(
       [firstSelection.selectionSha256, secondSelection.selectionSha256].sort(),
     );
+    const acceptedBinding = await prisma.order.findUniqueOrThrow({
+      where: { id: accepted.body.orderId },
+      select: { acceptedOrderPriceBindingId: true },
+    });
+    const candidateFrontier = vi.spyOn(
+      app.get(AutomaticQuotesService),
+      "hasPermanentlyFailedCandidateRequirement",
+    );
+    candidateFrontier.mockResolvedValueOnce(true);
+    try {
+      const status = await apiJson<{ preparationStatus: string }>(
+        `offers/${issued.body.quoteId}/order-status`,
+        { headers: bearer(issued.body.offerToken) },
+      );
+      expect(status.body.preparationStatus).toBe("UNAVAILABLE");
+      expect(candidateFrontier).toHaveBeenCalledWith(
+        acceptedBinding.acceptedOrderPriceBindingId,
+        expect.any(Date),
+      );
+    } finally {
+      candidateFrontier.mockRestore();
+    }
     let offsetMinutes = 20;
     for (const job of bySelection.values()) {
       const availability =
