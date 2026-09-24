@@ -428,6 +428,46 @@ describe("assisted request model preparation", () => {
       },
     });
     expect(canonical.aggregateType).toBe("ModelInspectionDispatch");
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `assisted-canonical-dead-letter:${canonical.id}`,
+        aggregateType: "SlicingDispatchDeadLetter",
+        aggregateId: canonical.id,
+        messageType: "slicing.model_inspection.dead-lettered",
+        schemaVersion: 2,
+        payload: { dispatchId: canonical.id },
+      },
+    });
+    const retriedSelection = await api<{
+      selectionId: string;
+      modelGeometryId: string;
+    }>(`admin/quote-requests/${requestId}/models/select`, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": `select-retry-${randomUUID()}`,
+      },
+      body: JSON.stringify({
+        modelFileId: upload.assetId,
+        bodyIds: ["body-a"],
+      }),
+    });
+    expect(retriedSelection.response.status).toBe(201);
+    expect(retriedSelection.body).toEqual(selected.body);
+    const canonicalDispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateId: canonical.aggregateId,
+        messageType: "slicing.model-inspection.requested",
+      },
+    });
+    expect(canonicalDispatches).toHaveLength(2);
+    expect(
+      canonicalDispatches.map(
+        (dispatch) =>
+          (dispatch.payload as { job: { attempt: number } }).job.attempt,
+      ),
+    ).toEqual(expect.arrayContaining([1, 2]));
     await expect(prisma.$executeRaw`
       UPDATE quote_request_model_selections SET body_ids = ARRAY['other']::text[]
       WHERE id = ${selection.id}::uuid
@@ -520,6 +560,100 @@ describe("assisted request model preparation", () => {
       prepared.body.pendingJobIds,
     );
     expect(failedReference.body.pendingJobIds).toEqual([]);
+
+    const deadLetterRetry = await api<{
+      pendingJobIds: string[];
+      failedJobIds: string[];
+    }>(`admin/quote-requests/${requestId}/references/prepare`, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": `reference-dead-letter-retry-${randomUUID()}`,
+      },
+      body: JSON.stringify(preparation),
+    });
+    expect(deadLetterRetry.response.status).toBe(201);
+    expect(deadLetterRetry.body.pendingJobIds).toEqual(
+      prepared.body.pendingJobIds,
+    );
+    expect(deadLetterRetry.body.failedJobIds).toEqual([]);
+    const referenceAttemptTwo = await prisma.outboxMessage.findFirstOrThrow({
+      where: {
+        aggregateId: prepared.body.pendingJobIds[0]!,
+        messageType: "slicing.reference-slice.requested",
+        payload: { path: ["job", "attempt"], equals: 2 },
+      },
+    });
+    const attemptTwoJob = (
+      referenceAttemptTwo.payload as { job: Record<string, unknown> }
+    ).job;
+    const { ReferenceSliceResultSchema } =
+      await import("@taven/slicer-contracts");
+    const retryableResult = ReferenceSliceResultSchema.parse({
+      ...attemptTwoJob,
+      engine: {
+        name: profile.slicerEngine,
+        version: profile.slicerVersion,
+        imageSha256: "2".repeat(64),
+      },
+      outcome: {
+        status: "failed",
+        failureClass: "retryable_infrastructure",
+        code: "ENGINE_TIMEOUT",
+        retryable: true,
+        message: "temporary engine timeout",
+        retryAfterMilliseconds: 1,
+      },
+    });
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `assisted-reference-retryable:${referenceAttemptTwo.id}`,
+        aggregateType: "SlicingDispatchResult",
+        aggregateId: referenceAttemptTwo.id,
+        messageType: "slicing.reference_slice.result-received",
+        schemaVersion: 2,
+        payload: { result: retryableResult } as Prisma.InputJsonObject,
+      },
+    });
+    const retryableFailure = await api<{
+      failedJobIds: string[];
+    }>(`admin/quote-requests/${requestId}/references/status?${failureParams}`, {
+      headers: operatorHeaders(),
+    });
+    expect(retryableFailure.body.failedJobIds).toEqual(
+      prepared.body.pendingJobIds,
+    );
+    const retryableRetry = await api<{
+      pendingJobIds: string[];
+      failedJobIds: string[];
+    }>(`admin/quote-requests/${requestId}/references/prepare`, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": `reference-retryable-retry-${randomUUID()}`,
+      },
+      body: JSON.stringify(preparation),
+    });
+    expect(retryableRetry.response.status).toBe(201);
+    expect(retryableRetry.body.pendingJobIds).toEqual(
+      prepared.body.pendingJobIds,
+    );
+    expect(retryableRetry.body.failedJobIds).toEqual([]);
+    const referenceAttempts = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateId: prepared.body.pendingJobIds[0]!,
+        messageType: "slicing.reference-slice.requested",
+      },
+    });
+    expect(referenceAttempts).toHaveLength(3);
+    expect(
+      referenceAttempts.map(
+        (dispatch) =>
+          (dispatch.payload as { job: { attempt: number } }).job.attempt,
+      ),
+    ).toEqual(expect.arrayContaining([1, 2, 3]));
 
     const { buildReferenceSliceCacheKey, RevisionRef, Sha256Digest } =
       await import("@taven/core");
@@ -922,7 +1056,7 @@ describe("assisted request model preparation", () => {
         where: { id: pendingPhoto.body.assetId },
       }),
     ).toBeNull();
-  }, 20_000);
+  }, 35_000);
 });
 
 function sha256(value: string | Uint8Array): string {

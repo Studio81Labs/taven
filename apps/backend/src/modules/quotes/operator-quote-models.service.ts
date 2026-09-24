@@ -52,6 +52,7 @@ type Database = PrismaService | Transaction;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDEMPOTENCY_DAYS = 7;
+const MAX_SLICING_JOB_ATTEMPTS = 100;
 
 @Injectable()
 export class OperatorQuoteModelsService {
@@ -314,29 +315,27 @@ export class OperatorQuoteModelsService {
               },
             },
           });
-        if (existing) {
-          return {
-            selectionId: existing.id,
-            modelGeometryId: existing.modelGeometryId,
-          };
+        const selectionId = existing?.id ?? randomUUID();
+        const modelGeometryId =
+          existing?.modelGeometryId ??
+          deterministicUuid(
+            `automatic-geometry:${modelFileId}:${selectionSha256}`,
+          );
+        if (!existing) {
+          await transaction.quoteRequestModelSelection.create({
+            data: {
+              id: selectionId,
+              requestId,
+              modelFileId,
+              modelGeometryId,
+              inspectionJobId: attached.inspectionJobId,
+              sourceContentSha256: source.contentHash,
+              bodyIds,
+              selectionSha256,
+              createdAt: now,
+            },
+          });
         }
-        const selectionId = randomUUID();
-        const modelGeometryId = deterministicUuid(
-          `automatic-geometry:${modelFileId}:${selectionSha256}`,
-        );
-        await transaction.quoteRequestModelSelection.create({
-          data: {
-            id: selectionId,
-            requestId,
-            modelFileId,
-            modelGeometryId,
-            inspectionJobId: attached.inspectionJobId,
-            sourceContentSha256: source.contentHash,
-            bodyIds,
-            selectionSha256,
-            createdAt: now,
-          },
-        });
         const geometry = await transaction.modelGeometry.findUnique({
           where: { id: modelGeometryId },
         });
@@ -354,29 +353,56 @@ export class OperatorQuoteModelsService {
             "model_inspection",
             modelInspectionInput(source, { mode: "inspect_source" }),
           );
-          await enqueueModelInspection(transaction, {
-            jobId: deterministicUuid(
-              `canonicalization:${selectionId}:${selectionSha256}`,
+          const jobId = deterministicUuid(
+            `canonicalization:${selectionId}:${selectionSha256}`,
+          );
+          const next = nextPreprocessingAttempt(
+            await latestPreprocessingDispatch(
+              transaction,
+              jobId,
+              "slicing.model-inspection.requested",
             ),
-            correlationId: requestId,
-            source,
-            operation: {
-              mode: "canonicalize_selection",
-              sourceInspectionFingerprintSha256,
-              bodyIds,
-              selectionSha256,
-              confirmedUnitConversion: {
-                sourceUnit: "millimeter",
-                targetUnit: "millimeter",
-                scaleFactorPpm: 1_000_000,
+          );
+          if (next) {
+            await enqueueModelInspection(transaction, {
+              jobId,
+              correlationId: requestId,
+              source,
+              ...next,
+              operation: {
+                mode: "canonicalize_selection",
+                sourceInspectionFingerprintSha256,
+                bodyIds,
+                selectionSha256,
+                confirmedUnitConversion: {
+                  sourceUnit: "millimeter",
+                  targetUnit: "millimeter",
+                  scaleFactorPpm: 1_000_000,
+                },
+                targetGeometry: {
+                  modelGeometryId,
+                  canonicalObjectKey: `geometries/${modelGeometryId}/canonical`,
+                },
               },
-              targetGeometry: {
-                modelGeometryId,
-                canonicalObjectKey: `geometries/${modelGeometryId}/canonical`,
-              },
-            },
-          });
+            });
+            if (existing) {
+              await this.audit.recordOperator(transaction, operator, {
+                quoteRequestId: requestId,
+                nodeId,
+                eventType: "quote_request.model_canonicalization_retried",
+                idempotencyKey: key,
+                correlationId: selectionId,
+                payload: {
+                  operation: "retry_canonicalization",
+                  modelFileId,
+                  modelGeometryId,
+                  attempt: next.attempt,
+                },
+              });
+            }
+          }
         }
+        if (existing) return { selectionId, modelGeometryId };
         await this.audit.recordOperator(transaction, operator, {
           quoteRequestId: requestId,
           nodeId,
@@ -666,34 +692,19 @@ async function prepareReferenceInTransaction(
     const jobId = deterministicUuid(
       `assisted-reference:${selection.id}:${config.id}:${profile.id}:${occupancy}`,
     );
-    const dispatch = await database.outboxMessage.findFirst({
-      where: {
-        aggregateId: jobId,
-        messageType: "slicing.reference-slice.requested",
-      },
-      select: { id: true },
-    });
-    const terminal = dispatch
-      ? await database.outboxMessage.findFirst({
-          where: {
-            aggregateId: dispatch.id,
-            OR: [
-              { messageType: "slicing.reference_slice.result-received" },
-              { messageType: "slicing.reference_slice.dead-lettered" },
-            ],
-          },
-          select: { messageType: true, payload: true },
-        })
-      : null;
-    const terminalResult = asRecord(asRecord(terminal?.payload)?.result);
-    const terminalOutcome = asRecord(terminalResult?.outcome);
-    if (
-      terminal?.messageType === "slicing.reference_slice.dead-lettered" ||
-      terminalOutcome?.status === "failed"
-    )
-      failedJobIds.push(jobId);
-    else pendingJobIds.push(jobId);
-    if (!enqueueTransaction) continue;
+    const latest = await latestPreprocessingDispatch(
+      database,
+      jobId,
+      "slicing.reference-slice.requested",
+    );
+    const next = enqueueTransaction ? nextPreprocessingAttempt(latest) : null;
+    if (!next || !enqueueTransaction) {
+      if (latest?.deadLettered || latest?.status === "failed")
+        failedJobIds.push(jobId);
+      else pendingJobIds.push(jobId);
+      continue;
+    }
+    pendingJobIds.push(jobId);
     const inputFingerprintSha256 = slicingInputFingerprint(
       "reference_slice",
       jobInput,
@@ -705,10 +716,13 @@ async function prepareReferenceInTransaction(
       correlationId: requestId,
       inputFingerprintSha256,
       idempotencyKey: `slicer:v2:reference_slice:${jobId}:${inputFingerprintSha256}`,
-      attempt: 1,
+      attempt: next.attempt,
       input: jobInput,
     });
-    const deduplicationKey = slicingDispatchAttemptKey(job.idempotencyKey, 1);
+    const deduplicationKey = slicingDispatchAttemptKey(
+      job.idempotencyKey,
+      next.attempt,
+    );
     await enqueueTransaction.outboxMessage.upsert({
       where: { deduplicationKey },
       create: {
@@ -718,6 +732,7 @@ async function prepareReferenceInTransaction(
         messageType: "slicing.reference-slice.requested",
         schemaVersion: 2,
         payload: { job } as unknown as Prisma.InputJsonObject,
+        ...(next.availableAt ? { availableAt: next.availableAt } : {}),
       },
       update: {},
     });
@@ -728,6 +743,97 @@ async function prepareReferenceInTransaction(
     tailReferenceSliceResultId: results[1] ?? null,
     pendingJobIds,
     failedJobIds,
+  };
+}
+
+type PreprocessingMessageType =
+  "slicing.model-inspection.requested" | "slicing.reference-slice.requested";
+
+type PreprocessingDispatchState = Readonly<{
+  id: string;
+  attempt: number;
+  status: "succeeded" | "failed" | null;
+  failureClass: string | null;
+  retryAfterMilliseconds: number | null;
+  receiptCreatedAt: Date | null;
+  deadLettered: boolean;
+}>;
+
+async function latestPreprocessingDispatch(
+  database: Database,
+  jobId: string,
+  messageType: PreprocessingMessageType,
+): Promise<PreprocessingDispatchState | undefined> {
+  const inspection = messageType === "slicing.model-inspection.requested";
+  const aggregateType = inspection
+    ? "ModelInspectionDispatch"
+    : "ReferenceSliceDispatch";
+  const resultMessageType = inspection
+    ? "slicing.model_inspection.result-received"
+    : "slicing.reference_slice.result-received";
+  const deadLetterMessageType = inspection
+    ? "slicing.model_inspection.dead-lettered"
+    : "slicing.reference_slice.dead-lettered";
+  const rows = await database.$queryRaw<PreprocessingDispatchState[]>`
+    SELECT
+      dispatch.id,
+      (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
+      terminal.status,
+      terminal.failure_class AS "failureClass",
+      terminal.retry_after_milliseconds AS "retryAfterMilliseconds",
+      terminal.created_at AS "receiptCreatedAt",
+      EXISTS (
+        SELECT 1
+        FROM outbox_messages dead_letter
+        WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+          AND dead_letter.aggregate_id = dispatch.id
+          AND dead_letter.message_type = ${deadLetterMessageType}
+      ) AS "deadLettered"
+    FROM outbox_messages dispatch
+    LEFT JOIN LATERAL (
+      SELECT
+        receipt.payload #>> '{result,outcome,status}' AS status,
+        receipt.payload #>> '{result,outcome,failureClass}' AS failure_class,
+        (receipt.payload #>> '{result,outcome,retryAfterMilliseconds}')::integer
+          AS retry_after_milliseconds,
+        receipt.created_at
+      FROM outbox_messages receipt
+      WHERE receipt.aggregate_type = 'SlicingDispatchResult'
+        AND receipt.aggregate_id = dispatch.id
+        AND receipt.message_type = ${resultMessageType}
+      ORDER BY receipt.created_at DESC, receipt.id DESC
+      LIMIT 1
+    ) terminal ON TRUE
+    WHERE dispatch.aggregate_type = ${aggregateType}
+      AND dispatch.aggregate_id = ${jobId}::uuid
+      AND dispatch.message_type = ${messageType}
+    ORDER BY (dispatch.payload #>> '{job,attempt}')::integer DESC
+    LIMIT 1
+  `;
+  return rows[0];
+}
+
+function nextPreprocessingAttempt(
+  latest: PreprocessingDispatchState | undefined,
+): { attempt: number; availableAt?: Date } | null {
+  if (!latest) return { attempt: 1 };
+  if (latest.attempt >= MAX_SLICING_JOB_ATTEMPTS) return null;
+  if (latest.deadLettered) return { attempt: latest.attempt + 1 };
+  if (
+    latest.status !== "failed" ||
+    latest.failureClass !== "retryable_infrastructure"
+  ) {
+    return null;
+  }
+  return {
+    attempt: latest.attempt + 1,
+    ...(latest.receiptCreatedAt && latest.retryAfterMilliseconds
+      ? {
+          availableAt: new Date(
+            latest.receiptCreatedAt.getTime() + latest.retryAfterMilliseconds,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -764,13 +870,11 @@ async function inspectionForJob(
   database: Database,
   jobId: string,
 ): Promise<InspectionEvidence> {
-  const dispatch = await database.outboxMessage.findFirst({
-    where: {
-      aggregateId: jobId,
-      messageType: "slicing.model-inspection.requested",
-    },
-    orderBy: { createdAt: "desc" },
-  });
+  const dispatch = await latestPreprocessingDispatch(
+    database,
+    jobId,
+    "slicing.model-inspection.requested",
+  );
   if (!dispatch) {
     return {
       status: "PENDING",

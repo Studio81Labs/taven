@@ -4228,9 +4228,9 @@ export interface components {
             /** Format: uuid */
             modelGeometryId: string;
             /** Format: uuid */
-            modelSelectionId?: string;
+            modelSelectionId: string;
             /** Format: uuid */
-            primaryReferenceSliceResultId?: string;
+            primaryReferenceSliceResultId: string;
             /** Format: uuid */
             printConfigRevisionId: string;
             quantity?: number;
@@ -9050,6 +9050,8 @@ export interface operations {
             header: {
                 /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
                 "x-csrf-token": string;
+                /** @description Bearer token returned by request-scoped upload initiation */
+                Authorization: string;
             };
             path: {
                 uploadId: string;

@@ -6686,9 +6686,11 @@
         },
         "required": [
           "kind",
+          "modelSelectionId",
           "sourceModelFileId",
           "modelGeometryId",
           "printConfigRevisionId",
+          "primaryReferenceSliceResultId",
           "material"
         ],
         "type": "object"
@@ -18882,6 +18884,15 @@
             "schema": {
               "maxLength": 256,
               "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bearer token returned by request-scoped upload initiation",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
               "type": "string"
             }
           },

@@ -233,7 +233,8 @@ export class ModelOfferItemDto {
   @ApiProperty({ type: String, enum: ["MODEL"] })
   kind!: "MODEL";
 
-  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @ApiProperty({ type: String, format: "uuid" })
+  // Fresh commands require this; completed legacy replays retain old input.
   modelSelectionId?: string;
 
   @ApiProperty({ type: String, format: "uuid" })
@@ -245,7 +246,7 @@ export class ModelOfferItemDto {
   @ApiProperty({ type: String, format: "uuid" })
   printConfigRevisionId!: string;
 
-  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @ApiProperty({ type: String, format: "uuid" })
   primaryReferenceSliceResultId?: string;
 
   @ApiPropertyOptional({ type: String, format: "uuid" })

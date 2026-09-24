@@ -59,6 +59,18 @@ describe("OpenAPI artifact", () => {
     const contract = JSON.parse(
       await readFile(new URL("../openapi.json", import.meta.url), "utf8"),
     ) as {
+      paths: Record<
+        string,
+        {
+          post?: {
+            parameters?: Array<{
+              name: string;
+              in: string;
+              required?: boolean;
+            }>;
+          };
+        }
+      >;
       components: {
         schemas: Record<
           string,
@@ -82,15 +94,28 @@ describe("OpenAPI artifact", () => {
     ).toMatchObject({
       enum: ["STL", "3MF"],
     });
+    expect(
+      contract.paths[
+        "/admin/quote-requests/{requestId}/model-uploads/{uploadId}/confirm"
+      ]?.post?.parameters,
+    ).toContainEqual(
+      expect.objectContaining({
+        name: "Authorization",
+        in: "header",
+        required: true,
+      }),
+    );
     expect(issueOffer.items).toMatchObject({
       type: "array",
       items: { $ref: "#/components/schemas/ModelOfferItemDto" },
     });
     expect(schemas.ModelOfferItemDto?.required).toEqual([
       "kind",
+      "modelSelectionId",
       "sourceModelFileId",
       "modelGeometryId",
       "printConfigRevisionId",
+      "primaryReferenceSliceResultId",
       "material",
     ]);
     expect(schemas.ModelOfferItemDto?.properties?.quantity).toMatchObject({

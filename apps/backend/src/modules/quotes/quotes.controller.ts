@@ -346,6 +346,11 @@ export class OperatorQuoteRequestsController {
   @ApiOperation({ summary: "Confirm and attach a verified operator model" })
   @ApiParam({ name: "requestId", type: String, format: "uuid" })
   @ApiParam({ name: "uploadId", type: String, format: "uuid" })
+  @ApiHeader({
+    name: "Authorization",
+    description: "Bearer token returned by request-scoped upload initiation",
+    required: true,
+  })
   @ApiOkResponse({ type: ConfirmedUploadResponseDto })
   confirmModelUpload(
     @CurrentOperator() operator: OperatorContext,
