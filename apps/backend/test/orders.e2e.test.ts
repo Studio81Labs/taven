@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { OrdersService } from "../src/modules/orders/orders.service";
+import { OperatorReadsService } from "../src/modules/operator-reads/operator-reads.service";
 import type { OperatorContext } from "../src/modules/admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import { AuditService } from "../src/modules/audit/audit.service";
@@ -5668,14 +5669,15 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       where: { id: refundId },
       include: { payment: true },
     });
-    const claim = await prisma.$queryRaw<Array<{ claimed_at: Date | null }>>`
-      SELECT taven_claim_refund_dispatch(${refundId}::uuid) AS claimed_at
-    `;
-    expect(claim[0]?.claimed_at).toBeInstanceOf(Date);
-    const manualOrders = new OrdersService(prisma, new AuditService(prisma), {
+    const manualProvider = {
       providerName: () => "test",
       refundRetrySafety: () => "MANUAL_RECONCILIATION",
-    } as PaymentProviderPort);
+    } as PaymentProviderPort;
+    const manualOrders = new OrdersService(
+      prisma,
+      new AuditService(prisma),
+      manualProvider,
+    );
     const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
     const failureBody = {
       outcome: "FAILED" as const,
@@ -5692,6 +5694,49 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       reason: "support confirmed final non-execution",
       finalOutcomeConfirmed: true as const,
     };
+    await expect(
+      manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        failureBody,
+        "operator-refund-recovery-unclaimed",
+      ),
+    ).rejects.toThrow("Refund has no immutable provider dispatch claim");
+    await expect(
+      manualOrders.retryRefund(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        { expectedFailureProviderEventId: randomUUID(), reason: "not final" },
+        "operator-refund-recovery-pending",
+      ),
+    ).rejects.toThrow("Refund has no exact retryable final failure evidence");
+    const claim = await prisma.$queryRaw<Array<{ claimed_at: Date | null }>>`
+      SELECT taven_claim_refund_dispatch(${refundId}::uuid) AS claimed_at
+    `;
+    expect(claim[0]?.claimed_at).toBeInstanceOf(Date);
+    for (const [field, value] of [
+      ["providerIntentId", "wrong-intent"],
+      ["requestReference", "wrong-request"],
+      ["amountMinor", "2"],
+      ["currency", refund.payment.currency === "EUR" ? "CZK" : "EUR"],
+    ] as const) {
+      await expect(
+        manualOrders.recordRefundProviderResult(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          { ...failureBody, [field]: value },
+          `operator-refund-recovery-wrong-${field}`,
+        ),
+      ).rejects.toThrow("Provider evidence does not match the refund attempt");
+    }
+    expect(
+      await prisma.paymentProviderEvent.count({
+        where: { refundTransactionId: refundId },
+      }),
+    ).toBe(0);
     const failure = await manualOrders.recordRefundProviderResult(
       operator,
       fixture.foundation.orderId,
@@ -5727,6 +5772,21 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         where: { refundTransactionId: refundId, kind: "REFUND_FAILED" },
       }),
     ).toBe(1);
+    const reads = new OperatorReadsService(
+      prisma,
+      manualOrders,
+      manualProvider,
+    );
+    const eligibleDetail = await reads.orderDetail(
+      operator,
+      fixture.foundation.orderId,
+    );
+    expect(
+      eligibleDetail.actions.find(
+        (action) =>
+          action.action === "RETRY_REFUND" && action.targetId === refundId,
+      ),
+    ).toMatchObject({ enabled: true, blockingCodes: [] });
     await expect(
       manualOrders.recordRefundProviderResult(
         operator,
@@ -5788,6 +5848,31 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       messageType: "refund_payment",
       status: "PENDING",
     });
+    const refundPage = await reads.orderRefunds(
+      operator,
+      fixture.foundation.orderId,
+      { limit: 10 },
+    );
+    expect(refundPage.items.find((item) => item.id === refundId)).toMatchObject(
+      {
+        selectedResultKind: "REFUND_FAILED",
+        selectedResultSource: "operator-provider-reconciliation",
+        dispatchStatus: "PENDING",
+        replacementRefundIds: [retryId],
+        providerIntentId: refund.payment.providerIntentId,
+        currency: refund.payment.currency,
+      },
+    );
+    const detail = await reads.orderDetail(
+      operator,
+      fixture.foundation.orderId,
+    );
+    const retryAction = detail.actions.find(
+      (action) =>
+        action.action === "RETRY_REFUND" && action.targetId === refundId,
+    );
+    expect(retryAction?.enabled).toBe(false);
+    expect(retryAction?.blockingCodes).toContain("REFUND_REPLACEMENT_EXISTS");
     await expect(
       manualOrders.retryRefund(
         operator,

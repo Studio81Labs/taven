@@ -86,7 +86,9 @@ const ACTIVE_SHIPMENT_STATUSES = [
 @Injectable()
 export class OrdersService {
   constructor(
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(AuditService)
     private readonly audit: AuditService,
     @Inject(PAYMENT_PROVIDER)
     private readonly paymentProvider: PaymentProviderPort,

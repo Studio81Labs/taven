@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -21,6 +22,10 @@ import {
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { OrdersService } from "../orders/orders.service";
+import {
+  PAYMENT_PROVIDER,
+  type PaymentProviderPort,
+} from "../payments/payment-provider.port";
 import type { FulfilmentProjectionDto } from "../orders/orders.dto";
 import type {
   FulfilmentClaimDto,
@@ -71,6 +76,14 @@ const UUID_PATTERN =
 const INSTANT_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 const MAX_RANGE_MILLISECONDS = 366 * 24 * 60 * 60 * 1_000;
+const refundReadInclude = {
+  providerResultEvent: true,
+  replacementRefundTransactions: { select: { id: true } },
+  dispatchClaim: true,
+} as const;
+type RefundReadRow = Prisma.RefundTransactionGetPayload<{
+  include: typeof refundReadInclude;
+}>;
 
 export type PageInput = Readonly<{
   cursor?: string;
@@ -143,8 +156,12 @@ type OrderedItemPreflightScope = Readonly<{
 @Injectable()
 export class OperatorReadsService {
   constructor(
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(OrdersService)
     private readonly orders: OrdersService,
+    @Inject(PAYMENT_PROVIDER)
+    private readonly paymentProvider: PaymentProviderPort,
   ) {}
 
   async ordersPage(
@@ -390,6 +407,7 @@ export class OperatorReadsService {
                 include: {
                   refunds: {
                     orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+                    include: refundReadInclude,
                   },
                 },
               },
@@ -460,6 +478,21 @@ export class OperatorReadsService {
       );
       const payments = order.priceBindings.flatMap(
         (binding) => binding.payments,
+      );
+      const refundDispatch = new Map(
+        (
+          await transaction.outboxMessage.findMany({
+            where: {
+              messageType: "refund_payment",
+              aggregateId: {
+                in: payments.flatMap((payment) =>
+                  payment.refunds.map((refund) => refund.id),
+                ),
+              },
+            },
+            select: { aggregateId: true, status: true },
+          })
+        ).map((message) => [message.aggregateId, message.status]),
       );
       const orderedPayments = [...payments].sort(
         (left, right) =>
@@ -592,7 +625,9 @@ export class OperatorReadsService {
           ...(orderedSettlements.length > 25
             ? { settlementsNextCursor: orderedSettlements[24]!.id }
             : {}),
-          payments: orderedPayments.slice(0, 25).map(operatorPayment),
+          payments: orderedPayments
+            .slice(0, 25)
+            .map((payment) => operatorPayment(payment, refundDispatch)),
           ...(orderedPayments.length > 25
             ? { paymentsNextCursor: orderedPayments[24]!.id }
             : {}),
@@ -639,6 +674,8 @@ export class OperatorReadsService {
           order.shipmentPlans,
           payments,
           blockers,
+          this.paymentProvider.providerName(),
+          this.paymentProvider.refundRetrySafety(),
         ),
       };
     });
@@ -727,12 +764,28 @@ export class OperatorReadsService {
           refunds: {
             orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
             take: 26,
+            include: refundReadInclude,
           },
         },
       });
       const page = rows.slice(0, limit);
+      const dispatch = new Map(
+        (
+          await tx.outboxMessage.findMany({
+            where: {
+              messageType: "refund_payment",
+              aggregateId: {
+                in: page.flatMap((payment) =>
+                  payment.refunds.map((refund) => refund.id),
+                ),
+              },
+            },
+            select: { aggregateId: true, status: true },
+          })
+        ).map((message) => [message.aggregateId, message.status]),
+      );
       return {
-        items: page.map(operatorPayment),
+        items: page.map((payment) => operatorPayment(payment, dispatch)),
         ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
       };
     });
@@ -764,12 +817,26 @@ export class OperatorReadsService {
         orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
         take: limit + 1,
         ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        include: { ...refundReadInclude, payment: true },
       });
       const page = rows.slice(0, limit);
+      const dispatch = new Map(
+        (
+          await tx.outboxMessage.findMany({
+            where: {
+              messageType: "refund_payment",
+              aggregateId: { in: page.map((refund) => refund.id) },
+            },
+            select: { aggregateId: true, status: true },
+          })
+        ).map((message) => [message.aggregateId, message.status]),
+      );
       return {
         items: page.map((refund) => ({
-          ...operatorRefund(refund),
+          ...operatorRefund(refund, dispatch),
           paymentId: refund.paymentId,
+          providerIntentId: refund.payment.providerIntentId,
+          currency: refund.payment.currency,
         })),
         ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
       };
@@ -1903,8 +1970,14 @@ function orderTimelineEvent(event: {
 }
 
 function operatorRefund(
-  refund: Prisma.RefundTransactionGetPayload<object>,
+  refund: RefundReadRow,
+  dispatch: ReadonlyMap<string, string>,
 ): OperatorRefundTransactionDto {
+  const evidence = refund.providerResultEvent?.payload;
+  const source =
+    evidence && typeof evidence === "object" && !Array.isArray(evidence)
+      ? (evidence.evidence as { source?: unknown } | undefined)?.source
+      : undefined;
   return {
     id: refund.id,
     claimId: refund.claimId,
@@ -1920,6 +1993,21 @@ function operatorRefund(
     sourceSuccessProviderEventId: refund.sourceSuccessProviderEventId,
     provider: refund.provider,
     providerRefundId: refund.providerRefundId,
+    requestReference: refund.idempotencyKey,
+    dispatchClaimedAt: iso(refund.dispatchClaimedAt),
+    dispatchStatus: dispatch.get(refund.id) ?? null,
+    replacementRefundIds: refund.replacementRefundTransactions.map(
+      (replacement) => replacement.id,
+    ),
+    selectedResultKind: refund.providerResultEvent?.kind ?? null,
+    selectedResultSource: refund.providerResultEvent
+      ? typeof source === "string"
+        ? source
+        : "provider-api"
+      : null,
+    selectedResultOccurredAt: iso(
+      refund.providerResultEvent?.occurredAt ?? null,
+    ),
   };
 }
 
@@ -2105,7 +2193,10 @@ function boundedFulfilment(
 }
 
 function operatorPayment(
-  payment: Prisma.PaymentGetPayload<{ include: { refunds: true } }>,
+  payment: Prisma.PaymentGetPayload<{
+    include: { refunds: { include: typeof refundReadInclude } };
+  }>,
+  dispatch: ReadonlyMap<string, string>,
 ): OperatorPaymentDto {
   return {
     id: payment.id,
@@ -2113,6 +2204,7 @@ function operatorPayment(
     priceSnapshotId: payment.priceSnapshotId,
     role: payment.role,
     provider: payment.provider,
+    providerIntentId: payment.providerIntentId,
     checkoutMethod: payment.checkoutMethod,
     merchantReference: payment.merchantReference,
     requestedAmountMinor: payment.requestedAmountMinor.toString(),
@@ -2126,7 +2218,9 @@ function operatorPayment(
     capturedAt: iso(payment.capturedAt),
     createdAt: payment.createdAt.toISOString(),
     updatedAt: payment.updatedAt.toISOString(),
-    refunds: payment.refunds.slice(0, 25).map(operatorRefund),
+    refunds: payment.refunds
+      .slice(0, 25)
+      .map((refund) => operatorRefund(refund, dispatch)),
     ...(payment.refunds.length > 25
       ? { refundsNextCursor: payment.refunds[24]!.id }
       : {}),
@@ -2233,9 +2327,24 @@ export function orderActions(
   payments: ReadonlyArray<{
     role: string;
     status: string;
-    refunds: ReadonlyArray<{ priceAdjustmentId: string | null }>;
+    provider?: string;
+    capturedAmountMinor?: bigint | null;
+    refunds: ReadonlyArray<{
+      id?: string;
+      provider?: string;
+      status?: string;
+      amountMinor?: bigint;
+      dispatchClaimedAt?: Date | null;
+      providerResultEventId?: string | null;
+      providerResultEvent?: { kind: string } | null;
+      replacesRefundTransactionId?: string | null;
+      replacementRefundTransactions?: ReadonlyArray<{ id: string }>;
+      priceAdjustmentId: string | null;
+    }>;
   }>,
   barriers: readonly string[],
+  providerName?: string,
+  retrySafety?: string,
 ): OperatorActionDto[] {
   const actions: OperatorActionDto[] = [];
   const canOperate = operator.permissions.includes(
@@ -2510,6 +2619,106 @@ export function orderActions(
       true,
       true,
     );
+  }
+  for (const payment of payments) {
+    for (const refund of payment.refunds) {
+      if (!refund.id || !refund.status) continue;
+      const providerBlocked =
+        payment.provider !== providerName || refund.provider !== providerName;
+      if (["PENDING", "FAILED", "SUSPENDED"].includes(refund.status)) {
+        add(
+          canFinance,
+          "RECORD_REFUND_PROVIDER_RESULT",
+          "REFUND",
+          refund.id,
+          [
+            ...(providerBlocked || retrySafety !== "MANUAL_RECONCILIATION"
+              ? ["PROVIDER_RECONCILIATION_UNAVAILABLE"]
+              : []),
+            ...(!refund.dispatchClaimedAt ? ["REFUND_DISPATCH_UNCLAIMED"] : []),
+          ],
+          true,
+          true,
+        );
+      }
+      if (["PENDING", "FAILED", "SUSPENDED"].includes(refund.status)) {
+        const siblings = payment.refunds.filter(
+          (candidate) => candidate.replacesRefundTransactionId === refund.id,
+        );
+        const activeAmount = payment.refunds.reduce(
+          (total, candidate) =>
+            ["PENDING", "SUSPENDED", "SUCCEEDED"].includes(
+              candidate.status ?? "",
+            )
+              ? total + (candidate.amountMinor ?? 0n)
+              : total,
+          0n,
+        );
+        const required = fulfilment.priceAdjustments.find(
+          (adjustment) => adjustment.id === refund.priceAdjustmentId,
+        )?.refundRequiredMinor;
+        const activeAdjustmentAmount = payments.reduce(
+          (total, candidatePayment) =>
+            total +
+            candidatePayment.refunds.reduce(
+              (subtotal, candidateRefund) =>
+                candidateRefund.priceAdjustmentId ===
+                  refund.priceAdjustmentId &&
+                ["PENDING", "SUSPENDED", "SUCCEEDED"].includes(
+                  candidateRefund.status ?? "",
+                )
+                  ? subtotal + (candidateRefund.amountMinor ?? 0n)
+                  : subtotal,
+              0n,
+            ),
+          0n,
+        );
+        add(
+          canFinance,
+          "RETRY_REFUND",
+          "REFUND",
+          refund.id,
+          [
+            ...(refund.replacesRefundTransactionId
+              ? ["REFUND_RETRY_LIMIT_REACHED"]
+              : []),
+            ...(siblings.length > 0 ||
+            (refund.replacementRefundTransactions?.length ?? 0) > 0
+              ? ["REFUND_REPLACEMENT_EXISTS"]
+              : []),
+            ...(refund.status !== "FAILED" ||
+            refund.providerResultEvent?.kind !== "REFUND_FAILED" ||
+            !refund.providerResultEventId
+              ? ["FINAL_REFUND_FAILURE_REQUIRED"]
+              : []),
+            ...(providerBlocked ? ["PROVIDER_MISMATCH"] : []),
+            ...(payment.refunds.some(
+              (candidate) =>
+                candidate.status === "SUSPENDED" ||
+                (candidate.status === "PENDING" &&
+                  candidate.dispatchClaimedAt &&
+                  retrySafety === "MANUAL_RECONCILIATION"),
+            )
+              ? ["REFUND_PROVIDER_INCIDENT_UNRESOLVED"]
+              : []),
+            ...(payment.capturedAmountMinor === null ||
+            payment.capturedAmountMinor === undefined ||
+            payment.capturedAmountMinor - activeAmount <
+              (refund.amountMinor ?? 0n)
+              ? ["REFUND_INSUFFICIENT_BALANCE"]
+              : []),
+            ...(refund.priceAdjustmentId &&
+            (required === undefined ||
+              BigInt(required) - activeAdjustmentAmount <
+                (refund.amountMinor ?? 0n))
+              ? ["REFUND_OBLIGATION_NOT_OUTSTANDING"]
+              : []),
+          ],
+          true,
+          true,
+        );
+      }
+    }
   }
   return actions;
 }

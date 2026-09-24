@@ -51,6 +51,7 @@ describe("OperatorReadsService capacity reservations", () => {
     const service = new OperatorReadsService(
       { capacityReservation: { findMany } } as never,
       {} as never,
+      {} as never,
     );
 
     await expect(
@@ -122,6 +123,7 @@ describe("OperatorReadsService reference-profile activation notices", () => {
     ]);
     const service = new OperatorReadsService(
       { referenceProfile: { findMany } } as never,
+      {} as never,
       {} as never,
     );
     const operator = {
@@ -206,6 +208,7 @@ describe("OperatorReadsService claim child history", () => {
         $transaction: (callback: (tx: typeof transaction) => unknown) =>
           callback(transaction),
       } as never,
+      {} as never,
       {} as never,
     );
     const operator = {
