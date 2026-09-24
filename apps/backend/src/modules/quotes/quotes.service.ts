@@ -2265,16 +2265,26 @@ export class QuotesService {
     const preparationStatus: AcceptedOfferOrderStatusDto["preparationStatus"] =
       !phase
         ? "UNAVAILABLE"
-        : phase.status !== "QUOTED"
+        : [
+              "ACTIVE",
+              "IN_PRODUCTION",
+              "QC_PASSED",
+              "SHIPPED",
+              "DELIVERED",
+              "COMPLETED",
+              "PARTIALLY_FULFILLED",
+            ].includes(phase.status)
           ? "ACTIVATED"
-          : origin.order.status === "QUOTED" &&
-              plans.some((plan) => plan.expiresAt > now)
-            ? "READY"
-            : origin.order.status === "DRAFT"
-              ? candidateDispatch
-                ? "PREPARING"
-                : "UNPREPARED"
-              : "UNAVAILABLE";
+          : phase.status !== "QUOTED"
+            ? "UNAVAILABLE"
+            : origin.order.status === "QUOTED" &&
+                plans.some((plan) => plan.expiresAt > now)
+              ? "READY"
+              : origin.order.status === "DRAFT"
+                ? candidateDispatch
+                  ? "PREPARING"
+                  : "UNPREPARED"
+                : "UNAVAILABLE";
     let initialPayment: AcceptedOfferOrderStatusDto["initialPayment"] = null;
     if (payment) {
       if (

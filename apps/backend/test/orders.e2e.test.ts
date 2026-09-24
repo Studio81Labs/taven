@@ -181,7 +181,12 @@ async function preparePaidOrder(
   const client = await pool.connect();
   await client.query("BEGIN");
   try {
-    const fixtures = new PersistenceFactory(client, `${testScope}:${name}`);
+    const fixtures = new PersistenceFactory(
+      client,
+      `${testScope}:${name}`,
+      undefined,
+      testOperatorId,
+    );
     const foundation = await fixtures.createFoundation(
       name,
       {},

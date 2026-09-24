@@ -50,6 +50,8 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Keep the established QUOTED checkout path for automatic orders; only
+  -- individual orders may also freeze their contact while still DRAFT.
   IF OLD."checkout_contact_snapshot" IS NULL
      AND OLD."accepted_order_price_binding_id" IS NULL
      AND OLD."accepted_terms_revision" IS NULL
@@ -86,11 +88,13 @@ BEGIN
      AND NEW."accepted_claim_policy_revision" = OLD."accepted_claim_policy_revision"
      AND NEW."accepted_claim_window_days" = OLD."accepted_claim_window_days"
      AND NEW."withdrawal_exception_acknowledged_at" = OLD."withdrawal_exception_acknowledged_at"
-     AND OLD."status" IN ('DRAFT', 'QUOTED')
-     AND NEW."status" = OLD."status"
-     AND EXISTS (
-       SELECT 1 FROM "individual_order_origins" origin
-       WHERE origin."order_id" = OLD."id"
+     AND (
+       (OLD."status" = 'QUOTED' AND NEW."status" = 'QUOTED')
+       OR (OLD."status" = 'DRAFT' AND NEW."status" = 'DRAFT'
+           AND EXISTS (
+             SELECT 1 FROM "individual_order_origins" origin
+             WHERE origin."order_id" = OLD."id"
+           ))
      )
      AND NOT EXISTS (
        SELECT 1 FROM "payments" payment WHERE payment."order_id" = OLD."id"
@@ -112,11 +116,13 @@ BEGIN
      AND NEW."accepted_claim_policy_revision" IS NOT NULL
      AND NEW."accepted_claim_window_days" IS NOT NULL
      AND NEW."withdrawal_exception_acknowledged_at" IS NOT NULL
-     AND OLD."status" IN ('DRAFT', 'QUOTED')
-     AND NEW."status" = OLD."status"
-     AND EXISTS (
-       SELECT 1 FROM "individual_order_origins" origin
-       WHERE origin."order_id" = OLD."id"
+     AND (
+       (OLD."status" = 'QUOTED' AND NEW."status" = 'QUOTED')
+       OR (OLD."status" = 'DRAFT' AND NEW."status" = 'DRAFT'
+           AND EXISTS (
+             SELECT 1 FROM "individual_order_origins" origin
+             WHERE origin."order_id" = OLD."id"
+           ))
      )
      AND NOT EXISTS (
        SELECT 1 FROM "payments" payment WHERE payment."order_id" = OLD."id"

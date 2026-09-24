@@ -741,7 +741,18 @@ export class PaymentsService {
         ) {
           throw new ConflictException("Initial payment intent already exists");
         }
-        return { replay: paymentDto(active) } as const;
+        const record = await tx.idempotencyRecord.create({
+          data: {
+            namespace,
+            idempotencyKey: key,
+            generation: idempotency.nextGeneration,
+            requestFingerprint: fingerprint,
+            expiresAt: addDays(now, IDEMPOTENCY_DAYS),
+          },
+        });
+        const response = paymentDto(active);
+        await completeIdempotency(tx, record.id, response);
+        return { replay: response } as const;
       }
       const plan = await tx.phaseResourcePlan.findFirst({
         where: {

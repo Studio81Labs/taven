@@ -1172,16 +1172,33 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect((await createInitialPayment("CARD", initialKey)).body).toEqual(
       initialPayment.body,
     );
-    const concurrentInitialAttempts = await Promise.all([
-      createInitialPayment("CARD", key("accepted-initial-concurrent-a")),
-      createInitialPayment("CARD", key("accepted-initial-concurrent-b")),
-    ]);
+    const concurrentKeys = [
+      key("accepted-initial-concurrent-a"),
+      key("accepted-initial-concurrent-b"),
+    ];
+    const concurrentInitialAttempts = await Promise.all(
+      concurrentKeys.map((commandKey) =>
+        createInitialPayment("CARD", commandKey),
+      ),
+    );
     expect(
       concurrentInitialAttempts.map((attempt) => attempt.response.status),
     ).toEqual([200, 200]);
     expect(
       concurrentInitialAttempts.map((attempt) => attempt.body.paymentId),
     ).toEqual([initialPayment.body.paymentId, initialPayment.body.paymentId]);
+    for (const commandKey of concurrentKeys) {
+      const replayRecord = await prisma.idempotencyRecord.findFirstOrThrow({
+        where: {
+          namespace: `individual-initial-payment:${accepted.body.orderId}`,
+          idempotencyKey: commandKey,
+        },
+      });
+      expect(replayRecord.status).toBe("COMPLETED");
+      expect(replayRecord.responseBody).toMatchObject({
+        paymentId: initialPayment.body.paymentId,
+      });
+    }
     expect(
       (
         await createInitialPayment(
@@ -1224,6 +1241,9 @@ describe("QuoteRequest and tokenized individual offers", () => {
       where: { id: initialPayment.body.paymentId },
     });
     expect(capturedPayment.status).toBe("CAPTURED");
+    expect(
+      (await createInitialPayment("CARD", concurrentKeys[0]!)).body,
+    ).toEqual(concurrentInitialAttempts[0]!.body);
     const productionJob = await prisma.job.findFirstOrThrow({
       where: { orderId: accepted.body.orderId },
       select: { id: true, status: true },
@@ -1265,6 +1285,19 @@ describe("QuoteRequest and tokenized individual offers", () => {
       { headers: bearer(issued.body.offerToken) },
     );
     expect(preparationStatus.body.preparationStatus).toBe("ACTIVATED");
+    const phaseStatusSpy = vi.spyOn(prisma.orderPhase, "findUnique");
+    try {
+      for (const status of ["CANCELLED", "RECOVERY_PENDING"] as const) {
+        phaseStatusSpy.mockResolvedValueOnce({ status } as never);
+        const terminalStatus = await apiJson<{ preparationStatus: string }>(
+          `offers/${issued.body.quoteId}/order-status`,
+          { headers: bearer(issued.body.offerToken) },
+        );
+        expect(terminalStatus.body.preparationStatus).toBe("UNAVAILABLE");
+      }
+    } finally {
+      phaseStatusSpy.mockRestore();
+    }
 
     const persisted = await prisma.quote.findUniqueOrThrow({
       where: { id: issued.body.quoteId },

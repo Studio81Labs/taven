@@ -182,6 +182,7 @@ export class PersistenceFactory {
     private readonly sql: Sql,
     private readonly scope: string,
     private readonly automaticCheckout?: AutomaticCheckoutFixtureOptions,
+    private readonly individualSelectionOperatorId?: string,
   ) {}
 
   id(name: string): string {
@@ -926,9 +927,55 @@ export class PersistenceFactory {
         "UPDATE quote_requests SET current_quote_id = $2 WHERE id = $1",
         [input.quoteRequestId, input.quoteId],
       );
-      for (const [index, item] of input.resolvedItems.entries()) {
+      if (
+        input.orderOrigin === "INDIVIDUAL" &&
+        this.individualSelectionOperatorId
+      ) {
+        // Fulfilment fixtures opt into a current offer with pinned source
+        // selection; legacy offer fixtures keep their nullable selection.
         await this.sql.query(
-          "INSERT INTO quote_items (id, quote_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, material, color, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6,'PLA',$7,$8,$9)",
+          `INSERT INTO quote_request_models
+             (request_id, model_file_id, attached_by_operator_id, inspection_job_id)
+           VALUES ($1, $2, $3, $4)`,
+          [
+            input.quoteRequestId,
+            input.modelFileId,
+            this.individualSelectionOperatorId,
+            this.id(`${input.name}:inspection-job`),
+          ],
+        );
+      }
+      for (const [index, item] of input.resolvedItems.entries()) {
+        const selectionId =
+          input.orderOrigin === "INDIVIDUAL" &&
+          this.individualSelectionOperatorId
+            ? this.id(`${input.name}:model-selection:${index}`)
+            : null;
+        if (selectionId) {
+          const { geometrySelectionSha256 } =
+            await import("@taven/slicer-contracts");
+          await this.sql.query(
+            `INSERT INTO quote_request_model_selections
+               (id, request_id, model_file_id, model_geometry_id,
+                inspection_job_id, source_content_sha256, body_ids,
+                selection_sha256)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+              selectionId,
+              input.quoteRequestId,
+              input.modelFileId,
+              input.modelGeometryIds[index],
+              this.id(`${input.name}:inspection-job`),
+              digest,
+              [`body-${String(index + 1).padStart(4, "0")}`],
+              geometrySelectionSha256([
+                `body-${String(index + 1).padStart(4, "0")}`,
+              ]),
+            ],
+          );
+        }
+        await this.sql.query(
+          "INSERT INTO quote_items (id, quote_id, ordinal, source_model_file_id, model_geometry_id, print_config_revision_id, material, color, quantity, created_at, model_selection_id) VALUES ($1,$2,$3,$4,$5,$6,'PLA',$7,$8,$9,$10)",
           [
             input.quoteItemIds[index],
             input.quoteId,
@@ -939,6 +986,7 @@ export class PersistenceFactory {
             item.color,
             item.quantity,
             t,
+            selectionId,
           ],
         );
       }

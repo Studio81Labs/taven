@@ -145,6 +145,11 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
   });
 
   it("returns an ephemeral local-geometry estimate without creating quote work", async () => {
+    const selectedPolicy =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+        include: { priceList: { select: { revision: true } } },
+      });
     const before = await Promise.all([
       prisma.quoteSession.count(),
       prisma.order.count(),
@@ -171,7 +176,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
         currency: "CZK",
         totalMinor: expect.any(Number),
       },
-      priceListRevision: "automatic-v0-czk",
+      priceListRevision: selectedPolicy.priceList.revision,
       assumptions: {
         material: "PLA",
         quality: "STANDARD",
@@ -2820,7 +2825,7 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
       });
     }
     type AutomaticQuoteDispatchHarness = {
-      dispatchAutomaticCandidates(
+      dispatchOrderCandidates(
         orderId: string,
         bindingId: string,
       ): Promise<void>;
@@ -2828,10 +2833,10 @@ describe.skipIf(!databaseUrl)("automatic quote lifecycle", () => {
     const dispatchHarness =
       automaticQuotes as unknown as AutomaticQuoteDispatchHarness;
     const originalDispatch =
-      dispatchHarness.dispatchAutomaticCandidates.bind(dispatchHarness);
+      dispatchHarness.dispatchOrderCandidates.bind(dispatchHarness);
     let gapBgcodeProfileId: string | undefined;
     const dispatchGap = vi
-      .spyOn(dispatchHarness, "dispatchAutomaticCandidates")
+      .spyOn(dispatchHarness, "dispatchOrderCandidates")
       .mockImplementationOnce(async (candidateOrderId, bindingId) => {
         gapBgcodeProfileId = await replaceCompatibleProfileFormat(
           gcodeProfileId,

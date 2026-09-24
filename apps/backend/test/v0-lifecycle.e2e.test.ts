@@ -88,6 +88,7 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
   let fixtureWorkers: FixtureWorker[];
   let queue: Queue;
   let slicingQueueName: string;
+  let deferredDispatches: Array<{ id: string; availableAt: Date }> = [];
   let fixtureRuntime: typeof import("@taven/slicer-worker/fixture-runtime", {
     with: { "resolution-mode": "import" },
   });
@@ -118,10 +119,30 @@ describe.skipIf(!databaseUrl)("v0 integrated lifecycle", () => {
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
     publisher = app.get(SlicingQueuePublisher);
+    // The publisher claims every due slicing request in the shared E2E
+    // database. Keep earlier suites' retryable fixtures out of this isolated
+    // queue run, then restore their original schedule during teardown.
+    deferredDispatches = await prisma.outboxMessage.findMany({
+      where: {
+        messageType: { startsWith: "slicing.", endsWith: ".requested" },
+        status: { in: ["PENDING", "FAILED"] },
+      },
+      select: { id: true, availableAt: true },
+    });
+    await prisma.outboxMessage.updateMany({
+      where: { id: { in: deferredDispatches.map(({ id }) => id) } },
+      data: { availableAt: new Date(Date.now() + 24 * 60 * 60 * 1_000) },
+    });
   }, 30_000);
 
   afterAll(async () => {
     await fixtureRuntime?.closeFixtureWorkers(fixtureWorkers ?? []);
+    for (const dispatch of deferredDispatches) {
+      await prisma.outboxMessage.update({
+        where: { id: dispatch.id },
+        data: { availableAt: dispatch.availableAt },
+      });
+    }
     await app?.close();
     restoreEnvironment("TAVEN_REDIS_URL", environment.redisUrl);
     restoreEnvironment(
