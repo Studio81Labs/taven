@@ -38,6 +38,12 @@ const formMachineId = ref("");
 const from = ref(new Date().toISOString());
 const to = ref(new Date(Date.now() + 30 * 86_400_000).toISOString());
 const windows = ref<{ startsAt: string; endsAt: string }[]>([]);
+const availabilityRange = ref<{ from: string; to: string } | null>(null);
+const availabilityRangeCurrent = computed(
+  () =>
+    availabilityRange.value?.from === from.value &&
+    availabilityRange.value?.to === to.value,
+);
 const availabilityDirty = computed(() => {
   const saved = availability.value?.windows ?? [];
   return (
@@ -249,14 +255,16 @@ function openReceipt(): void {
 
 async function inspectAvailability(
   mode: "replace" | "skip-dirty" | "keep-windows" = "replace",
-): Promise<void> {
-  if (!availabilityMachineId.value) return;
+): Promise<boolean> {
+  if (!availabilityMachineId.value) return false;
   const machineId = availabilityMachineId.value;
+  const requestedFrom = from.value;
+  const requestedTo = to.value;
   const generation = ++availabilityReadGeneration;
   try {
     const range = {
-      from: isoFromZonedInput(from.value),
-      to: isoFromZonedInput(to.value),
+      from: isoFromZonedInput(requestedFrom),
+      to: isoFromZonedInput(requestedTo),
     };
     const detail = requireData(
       await apiClient.GET(
@@ -272,10 +280,13 @@ async function inspectAvailability(
     if (
       generation !== availabilityReadGeneration ||
       machineId !== availabilityMachineId.value ||
+      requestedFrom !== from.value ||
+      requestedTo !== to.value ||
       (mode === "skip-dirty" && availabilityDirty.value)
     )
-      return;
+      return false;
     availability.value = detail;
+    availabilityRange.value = { from: requestedFrom, to: requestedTo };
     if (mode !== "keep-windows")
       windows.value = availability.value.windows.map((item) => ({
         startsAt: item.startsAt,
@@ -283,12 +294,16 @@ async function inspectAvailability(
       }));
     if (availabilityRefreshRequired.value) error.value = "";
     availabilityRefreshRequired.value = false;
+    return true;
   } catch (cause) {
     if (
       generation === availabilityReadGeneration &&
-      machineId === availabilityMachineId.value
+      machineId === availabilityMachineId.value &&
+      requestedFrom === from.value &&
+      requestedTo === to.value
     )
       error.value = errorMessage(cause);
+    return false;
   }
 }
 
@@ -631,7 +646,8 @@ async function publishAvailability(): Promise<void> {
     !reason.value.trim() ||
     busy.value ||
     loading.value ||
-    availabilityRefreshRequired.value
+    availabilityRefreshRequired.value ||
+    !availabilityRangeCurrent.value
   )
     return;
   const machineId = availabilityMachineId.value;
@@ -678,8 +694,13 @@ async function publishAvailability(): Promise<void> {
     error.value = errorMessage(cause);
     if (cause instanceof OperatorRequestError && cause.status === 409) {
       const conflict = errorMessage(cause);
-      await inspectAvailability("keep-windows");
-      error.value = `Publikace koliduje s aktuální verzí nebo živou rezervací. ${conflict} Zkontrolujte intervaly a potvrďte změnu znovu.`;
+      const refreshed = await inspectAvailability("keep-windows");
+      if (refreshed) {
+        error.value = `Publikace koliduje s aktuální verzí nebo živou rezervací. ${conflict} Zkontrolujte intervaly a potvrďte změnu znovu.`;
+      } else {
+        availabilityRefreshRequired.value = true;
+        error.value = `Publikace koliduje s aktuální verzí nebo živou rezervací. ${conflict} Obnovení dostupnosti selhalo; před dalším pokusem znovu načtěte detail. ${error.value}`;
+      }
     }
   } finally {
     busy.value = false;
@@ -725,6 +746,7 @@ onMounted(() => void refresh());
             @click="
               availabilityMachineId = machine.id;
               availability = null;
+              availabilityRange = null;
               windows = [];
               inspectAvailability();
             "
@@ -792,9 +814,14 @@ onMounted(() => void refresh());
         revize {{ availability.revisionId ?? "žádná" }}
       </p>
       <h3>Obsazené intervaly</h3>
+      <p v-if="!availabilityRangeCurrent">
+        Načtěte dostupnost pro zvolený rozsah.
+      </p>
       <ul class="operator-list">
         <li
-          v-for="item in availability?.occupiedIntervals ?? []"
+          v-for="item in availabilityRangeCurrent
+            ? (availability?.occupiedIntervals ?? [])
+            : []"
           :key="item.id"
         >
           {{ formatPragueInstant(item.startsAt) }} –
@@ -802,7 +829,11 @@ onMounted(() => void refresh());
           {{ item.id }}
         </li>
       </ul>
-      <p v-if="!availability?.occupiedIntervals.length">
+      <p
+        v-if="
+          availabilityRangeCurrent && !availability?.occupiedIntervals.length
+        "
+      >
         V zobrazeném rozsahu žádné.
       </p>
       <form
@@ -840,7 +871,11 @@ onMounted(() => void refresh());
           ><button
             type="submit"
             :disabled="
-              busy || loading || availabilityRefreshRequired || !reason.trim()
+              busy ||
+              loading ||
+              availabilityRefreshRequired ||
+              !reason.trim() ||
+              !availabilityRangeCurrent
             "
           >
             Publikovat dostupnost

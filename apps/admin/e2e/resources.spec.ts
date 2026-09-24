@@ -17,6 +17,8 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   let releaseStaleAvailability: (() => void) | undefined;
   let failNextAvailabilityRead = false;
   let availabilityVersion = 1;
+  let holdRangeRead = false;
+  let releaseRangeRead: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
     route.fulfill({
       json: {
@@ -139,6 +141,12 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
           json: { message: "availability read failed" },
         });
       }
+      if (holdRangeRead) {
+        holdRangeRead = false;
+        await new Promise<void>((resolve) => {
+          releaseRangeRead = resolve;
+        });
+      }
       await route.fulfill({
         json: {
           machineId,
@@ -190,10 +198,16 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
           status: 409,
           json: { message: "reservation conflict" },
         });
-      } else {
+      } else if (availabilityPosts === 2) {
         availabilityVersion = 2;
         failNextAvailabilityRead = true;
         await route.fulfill({ json: { machineId, selectionVersion: 2 } });
+      } else {
+        failNextAvailabilityRead = true;
+        await route.fulfill({
+          status: 409,
+          json: { message: "stale publication" },
+        });
       }
     } else {
       await route.fulfill({ status: 404, body: "" });
@@ -287,6 +301,45 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   await expect(
     page.getByRole("button", { name: "Publikovat dostupnost" }),
   ).toBeEnabled();
+  await page
+    .getByRole("textbox", { name: "Začátek" })
+    .fill("2026-09-23T09:00:00+02:00");
+  await page.getByRole("button", { name: "Publikovat dostupnost" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Obnovení dostupnosti selhalo",
+  );
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeDisabled();
+  expect(availabilityPosts).toBe(3);
+  await page.getByRole("button", { name: "Načíst" }).click();
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeEnabled();
+  holdRangeRead = true;
+  await page.getByRole("button", { name: "Načíst" }).click();
+  await expect.poll(() => Boolean(releaseRangeRead)).toBe(true);
+  await page
+    .getByRole("textbox", { name: "Od", exact: true })
+    .fill("2026-09-24T00:00:00+02:00");
+  const staleRangeResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/machines/${machineId}/availability`) &&
+      response.status() === 200,
+  );
+  releaseRangeRead?.();
+  await staleRangeResponse;
+  await expect(
+    page.getByText("Načtěte dostupnost pro zvolený rozsah."),
+  ).toBeVisible();
+  await expect(page.getByText("reservation-1", { exact: false })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "Načíst" }).click();
+  await expect(page.getByText("reservation-1", { exact: false })).toBeVisible();
 });
 
 test("a confirmed receipt closes its form when the following read fails", async ({
