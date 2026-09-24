@@ -4169,6 +4169,138 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       client.release();
     }
 
+    const sourceSuccessAt = new Date(
+      Math.max(Date.now(), failedAt.getTime() + 1),
+    );
+    const unclaimedProbe = await pool.connect();
+    await unclaimedProbe.query("BEGIN");
+    try {
+      const applied = await unclaimedProbe.query<{
+        success_refund_id: string;
+      }>(
+        `SELECT success_refund_id
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          failedRefundId,
+          failureProviderRefundId,
+          `late-source-unclaimed-${failedRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(applied.rows[0]?.success_refund_id).toBe(failedRefundId);
+      const states = await unclaimedProbe.query<{ status: string }>(
+        `SELECT status::text FROM refund_transactions WHERE id = $1`,
+        [retryRefundId],
+      );
+      expect(states.rows[0]?.status).toBe("SUPERSEDED");
+    } finally {
+      await unclaimedProbe.query("ROLLBACK");
+      unclaimedProbe.release();
+    }
+
+    const claimedProbe = await pool.connect();
+    await claimedProbe.query("BEGIN");
+    try {
+      const claim = await claimedProbe.query<{ claimed_at: Date | null }>(
+        `SELECT taven_claim_refund_dispatch($1) AS claimed_at`,
+        [retryRefundId],
+      );
+      expect(claim.rows[0]?.claimed_at).toBeInstanceOf(Date);
+      const suspended = await claimedProbe.query<{ incident_code: string }>(
+        `SELECT incident_code
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          failedRefundId,
+          failureProviderRefundId,
+          `late-source-claimed-${failedRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(suspended.rows[0]?.incident_code).toBe("REFUND_SUSPENDED");
+      const failedRetry = await claimedProbe.query<{
+        success_refund_id: string;
+      }>(
+        `SELECT success_refund_id
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_FAILED', $4, $5::jsonb
+         )`,
+        [
+          retryRefundId,
+          `provider-retry-failed-${retryRefundId}`,
+          `retry-failed-${retryRefundId}`,
+          new Date(sourceSuccessAt.getTime() + 1_000),
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(failedRetry.rows[0]?.success_refund_id).toBe(failedRefundId);
+    } finally {
+      await claimedProbe.query("ROLLBACK");
+      claimedProbe.release();
+    }
+
+    const retryFirstProbe = await pool.connect();
+    await retryFirstProbe.query("BEGIN");
+    try {
+      await retryFirstProbe.query(`SELECT taven_claim_refund_dispatch($1)`, [
+        retryRefundId,
+      ]);
+      await retryFirstProbe.query(
+        `SELECT * FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          retryRefundId,
+          `provider-retry-success-${retryRefundId}`,
+          `retry-first-success-${retryRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      const incident = await retryFirstProbe.query<{
+        incident_code: string;
+      }>(
+        `SELECT incident_code FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          failedRefundId,
+          failureProviderRefundId,
+          `late-source-retry-first-${failedRefundId}`,
+          new Date(sourceSuccessAt.getTime() + 1),
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(incident.rows[0]?.incident_code).toBe("REFUND_SUSPENDED");
+      const states = await retryFirstProbe.query<{
+        payment_status: string;
+        retry_status: string;
+        source_status: string;
+      }>(
+        `SELECT payment.status::text AS payment_status,
+                retry.status::text AS retry_status,
+                source.status::text AS source_status
+         FROM refund_transactions source
+         JOIN refund_transactions retry ON retry.id = $2
+         JOIN payments payment ON payment.id = source.payment_id
+         WHERE source.id = $1`,
+        [failedRefundId, retryRefundId],
+      );
+      expect(states.rows[0]).toMatchObject({
+        payment_status: "REFUND_PENDING",
+        retry_status: "SUSPENDED",
+        source_status: "FAILED",
+      });
+    } finally {
+      await retryFirstProbe.query("ROLLBACK");
+      retryFirstProbe.release();
+    }
+
     const warnings = new OperatorWarningsService(prisma);
     const warningOperator = operatorForTest(
       testOperatorId,
