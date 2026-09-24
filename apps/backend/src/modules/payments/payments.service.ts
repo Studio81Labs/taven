@@ -763,6 +763,9 @@ export class PaymentsService {
               now.getTime() + REACQUISITION_RESERVATION_MILLISECONDS,
             ),
           },
+          // A plan's initial reservation key is immutable. A plan already
+          // used by a failed/expired attempt cannot be revived.
+          reservationSets: { none: {} },
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       });

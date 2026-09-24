@@ -1123,6 +1123,35 @@ describe("QuoteRequest and tokenized individual offers", () => {
         where: { orderPhaseId: acceptedPhase.id, nodeId: otherNode.id },
       }),
     ).toBe(0);
+    const originalPlanId = completedPreparation.body.phaseResourcePlanId!;
+    const originalPlan = await prisma.phaseResourcePlan.findUniqueOrThrow({
+      where: { id: originalPlanId },
+    });
+    const terminalPlan = await eligibilityPlans.createCompletePlan({
+      nodeId: originalPlan.nodeId,
+      orderPhaseId: acceptedPhase.id,
+      planKey: `individual-terminal-reservation:${randomUUID()}`,
+      exclusiveOrderNode: true,
+    });
+    const reservationService = app.get(ResourceReservationService);
+    const terminalReservation = await reservationService.reserve({
+      nodeId: originalPlan.nodeId,
+      phaseResourcePlanId: terminalPlan.phaseResourcePlanId,
+      reservationKey: `individual-initial:${accepted.body.orderId}:${terminalPlan.phaseResourcePlanId}`,
+    });
+    expect(terminalReservation.status).toBe("RESERVED");
+    expect(
+      await reservationService.releaseBeforePrint(
+        terminalReservation.phaseReservationSetId,
+      ),
+    ).toBe(true);
+    expect(
+      await prisma.phaseResourcePlan.findFirst({
+        where: { orderPhaseId: acceptedPhase.id },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: { id: true },
+      }),
+    ).toEqual({ id: terminalPlan.phaseResourcePlanId });
     const initialKey = key("accepted-individual-initial-payment");
     const createInitialPayment = (
       method: "CARD" | "BANK_TRANSFER",
@@ -1142,7 +1171,6 @@ describe("QuoteRequest and tokenized individual offers", () => {
         },
         body: JSON.stringify({ method }),
       });
-    const reservationService = app.get(ResourceReservationService);
     const reserveSpy = vi.spyOn(reservationService, "reserveInTransaction");
     reserveSpy.mockRejectedValueOnce(
       new ResourceConflictError(
@@ -1169,6 +1197,14 @@ describe("QuoteRequest and tokenized individual offers", () => {
       amountMinor: 33_000,
     });
     expect(initialPayment.body.checkoutUrl).toBeTruthy();
+    expect(
+      await prisma.phaseReservationSet.findFirst({
+        where: { phaseResourcePlanId: originalPlanId, status: "RESERVED" },
+        select: { reservationKey: true },
+      }),
+    ).toEqual({
+      reservationKey: `individual-initial:${accepted.body.orderId}:${originalPlanId}`,
+    });
     expect((await createInitialPayment("CARD", initialKey)).body).toEqual(
       initialPayment.body,
     );
