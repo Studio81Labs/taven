@@ -3705,7 +3705,12 @@ describe("QuoteRequest and tokenized individual offers", () => {
       );
       releaseDocument();
       await holdingDocument;
-      await expect(cancellation).resolves.toMatchObject({ status: 409 });
+      await expect(cancellation).resolves.toMatchObject({
+        status: 409,
+        response: {
+          message: "Cannot cancel a publication that has already started",
+        },
+      });
       await expect(staleRequest).resolves.toMatchObject({
         status: 503,
         response: { code: "LAUNCH_APPROVAL_REQUIRED" },
