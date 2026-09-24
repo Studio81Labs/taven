@@ -150,8 +150,10 @@ function harness() {
       expiresAt,
     }),
   );
+  const printingReadiness = vi.fn().mockResolvedValue([]);
   const prisma = {
     job: { findFirst },
+    $queryRaw: printingReadiness,
     $transaction: async (callback: (tx: object) => Promise<unknown>) =>
       callback({}),
   } as unknown as PrismaService;
@@ -168,11 +170,73 @@ function harness() {
     recordOperator,
     headObject,
     createDownloadUrl,
+    printingReadiness,
     sourceDeleteAfter,
   };
 }
 
 describe("operator job artifact downloads", () => {
+  it("requires current reservation, machine, and mount facts before enabling printing", async () => {
+    const test = harness();
+    test.job.status = JobStatus.GCODE_READY;
+    test.job.gcodeReadyAt = new Date();
+    test.job.productionArtifactHash = productionHash;
+    test.job.productionSliceResult = {
+      id: resultId,
+      kind: SliceKind.PRODUCTION,
+      modelGeometryId: geometryId,
+      printConfigRevisionId: configId,
+      machineProfileId: profileId,
+      machineCalibrationId: calibrationId,
+      arrangementRevisionId: arrangementId,
+      packageQuantity: 1,
+      partsPerPlate: 1,
+      artifactObjectKey: "production/exact-job.gcode",
+      artifactHash: productionHash,
+    };
+    test.job.productionReservations = [{ productionSliceResultId: resultId }];
+    const writer: OperatorContext = {
+      ...operator,
+      role: "OPERATOR",
+      permissions: [
+        OPERATOR_PERMISSIONS.OPERATIONS_READ,
+        OPERATOR_PERMISSIONS.OPERATIONS_WRITE,
+      ],
+    };
+    const unavailable = await test.service.detail(writer, jobId);
+    expect(unavailable.actions).toContainEqual(
+      expect.objectContaining({
+        action: "START_PRINTING",
+        enabled: false,
+        blockingCodes: expect.arrayContaining([
+          "HELD_RESERVATION_REQUIRED",
+          "MACHINE_UNAVAILABLE",
+        ]),
+      }),
+    );
+    test.printingReadiness.mockResolvedValue([
+      { machineReady: true, mounted: false },
+    ]);
+    const unmounted = await test.service.detail(writer, jobId);
+    expect(unmounted.actions).toContainEqual(
+      expect.objectContaining({
+        action: "START_PRINTING",
+        enabled: false,
+        blockingCodes: ["MATERIAL_NOT_MOUNTED"],
+      }),
+    );
+    test.printingReadiness.mockResolvedValue([
+      { machineReady: true, mounted: true },
+    ]);
+    const ready = await test.service.detail(writer, jobId);
+    expect(ready.actions).toContainEqual(
+      expect.objectContaining({
+        action: "START_PRINTING",
+        enabled: true,
+        blockingCodes: [],
+      }),
+    );
+  });
   it("reports plate count from the frozen estimate for a multi-plate job", async () => {
     const test = harness();
     const planned = test.job.phaseResourcePlanJob;

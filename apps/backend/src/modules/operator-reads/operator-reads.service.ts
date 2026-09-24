@@ -1915,7 +1915,11 @@ function orderActions(
   operator: OperatorContext,
   fulfilment: FulfilmentProjectionDto,
   shipmentPlans: ReadonlyArray<{ id: string }>,
-  payments: ReadonlyArray<{ role: string; status: string }>,
+  payments: ReadonlyArray<{
+    role: string;
+    status: string;
+    refunds: ReadonlyArray<{ priceAdjustmentId: string | null }>;
+  }>,
   barriers: readonly string[],
 ): OperatorActionDto[] {
   const actions: OperatorActionDto[] = [];
@@ -2080,7 +2084,12 @@ function orderActions(
     "CANCEL_ORDER",
     "ORDER",
     fulfilment.orderId,
-    barriers,
+    [
+      ...barriers,
+      ...(fulfilment.jobs.some((job) => job.status === "PRINTING")
+        ? ["PRINTING_CONSUMPTION_REQUIRED"]
+        : []),
+    ],
     true,
     true,
   );
@@ -2097,7 +2106,7 @@ function orderActions(
         ),
     )
       ? ["BALANCE_PAYMENT_EXISTS"]
-      : [],
+      : ["CHECKOUT_METHOD_REQUIRED"],
   );
   add(
     canOperate && fulfilment.orderStatus === "DELIVERED",
@@ -2141,7 +2150,13 @@ function orderActions(
       "REFUND_ADJUSTMENT",
       "PRICE_ADJUSTMENT",
       adjustment.id,
-      barriers.includes("REFUND_UNRESOLVED") ? ["REFUND_UNRESOLVED"] : [],
+      payments.some((payment) =>
+        payment.refunds.some(
+          (refund) => refund.priceAdjustmentId === adjustment.id,
+        ),
+      )
+        ? ["REFUND_WORK_EXISTS"]
+        : ["REFUND_REASON_REQUIRED"],
       true,
       true,
     );
