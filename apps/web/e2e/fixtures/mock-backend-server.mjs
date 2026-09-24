@@ -22,6 +22,7 @@ let testState = {
   paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED"
   prepareCommercialConflictOnce: false,
   expressFailureOnce: false,
+  packetaSelector: false,
   riskScenario: null, // null | "warning"
   recordedObservations: [],
   lastAssistedQuote: null,
@@ -61,6 +62,7 @@ function resetState() {
     paymentOutcome: "CAPTURED",
     prepareCommercialConflictOnce: false,
     expressFailureOnce: false,
+    packetaSelector: false,
     riskScenario: null,
     recordedObservations: [],
     lastAssistedQuote: null,
@@ -203,9 +205,12 @@ function createDefaultSession(
       },
     ],
     deliverySelector: {
-      mode: "CONFIGURED",
+      mode: testState.packetaSelector ? "PACKETA" : "CONFIGURED",
       available: true,
       allowedEndpointTypes: ["pickup_point"],
+      ...(testState.packetaSelector
+        ? { widget: { accountId: "test-widget", options: { language: "cs" } } }
+        : {}),
     },
     selectedDeliveryDestination: null,
     express: {
