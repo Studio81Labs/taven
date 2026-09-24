@@ -38,6 +38,9 @@ the complete #144/#152/Epic acceptance audit. In particular, #152's retained
 historical-payment wording must be reconciled with the owner's pre-production
 no-new-legacy-work decision and Epic #10/#184's individual-origin payment
 bridge; do not infer that a schedule assertion proves that bridge.
+The real-API upload traverses signed PUT and confirmation; the
+[backend payment E2E](../../apps/backend/test/checkout-payments.e2e.test.ts)
+is the late-capture compensation evidence, not a browser/live-provider claim.
 
 ## Observed results and manual accessibility notes
 
