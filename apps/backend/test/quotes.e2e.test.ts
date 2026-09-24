@@ -1455,18 +1455,20 @@ describe("QuoteRequest and tokenized individual offers", () => {
       }),
     ).resolves.toEqual([{ role: "DEPOSIT" }, { role: "BALANCE" }]);
 
-    await expect(
-      prisma.auditEvent.findMany({
-        where: {
-          quoteRequestId: created.requestId,
-          eventType: "quote_offer.issued",
-        },
-        select: { quoteId: true, payload: true },
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({ quoteId: initial.body.quoteId }),
-      expect.objectContaining({ quoteId: reissued.body.quoteId }),
-    ]);
+    const issuedEvents = await prisma.auditEvent.findMany({
+      where: {
+        quoteRequestId: created.requestId,
+        eventType: "quote_offer.issued",
+      },
+      select: { quoteId: true, payload: true },
+    });
+    expect(issuedEvents).toHaveLength(2);
+    expect(issuedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ quoteId: initial.body.quoteId }),
+        expect.objectContaining({ quoteId: reissued.body.quoteId }),
+      ]),
+    );
     await expect(
       prisma.outboxMessage.findMany({
         where: {
