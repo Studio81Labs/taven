@@ -9,6 +9,7 @@ import {
 } from "@playwright/test";
 import {
   archiveE2eCheckoutDocumentsForBrowser,
+  pauseE2eBrowserDatabase,
   readE2eAcceptedLegalVersionsForBrowser,
   readE2eCheckoutEffectsForBrowser,
   readE2eFunnelEvidenceForBrowser,
@@ -1198,5 +1199,89 @@ test.describe("Real API Integration Journey", () => {
     } finally {
       await freshContext.close();
     }
+  });
+
+  test("fails closed during a real isolated database outage without accepting legal evidence or payment", async ({
+    page,
+  }) => {
+    test.skip(
+      !completePayment ||
+        process.env.INTEGRATION_MUTABLE_FIXTURES !== "true" ||
+        process.env.INTEGRATION_DATABASE_OUTAGE !== "true",
+      "Requires the isolated real-API browser database outage gate",
+    );
+    test.setTimeout(360_000);
+    const databaseUrl = process.env.DATABASE_URL!;
+    const { checkoutSession } = await prepareSandboxCheckout(page, "CARD");
+    const effectsBefore = await readE2eCheckoutEffectsForBrowser(
+      databaseUrl,
+      checkoutSession.sessionId,
+    );
+    expect(effectsBefore).toEqual({
+      acceptedOrderPriceBindingId: null,
+      paymentCount: 0,
+      acceptanceCount: 0,
+      decisionCount: 0,
+      idempotencyCount: 0,
+    });
+    const submit = page.getByRole("button", { name: /Objednat a zaplatit/i });
+    await expect(submit).toBeEnabled();
+    let paymentPosts = 0;
+    let availabilityGets = 0;
+    page.on("request", (outgoing) => {
+      if (
+        outgoing.method() === "GET" &&
+        outgoing.url() === `${INTEGRATION_API_URL}/legal-documents/availability`
+      ) {
+        availabilityGets += 1;
+      }
+      if (
+        outgoing.method() === "POST" &&
+        outgoing
+          .url()
+          .endsWith(
+            `/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payments`,
+          )
+      ) {
+        paymentPosts += 1;
+      }
+    });
+
+    const restoreDatabase = await pauseE2eBrowserDatabase(databaseUrl);
+    try {
+      const legalTab = await page.context().newPage();
+      try {
+        await legalTab.goto("/vop");
+        await expect(
+          legalTab.getByText("NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI"),
+        ).toBeVisible({ timeout: 60_000 });
+        await expect(
+          legalTab.getByRole("heading", {
+            name: "Tato stránka není právní dokument",
+          }),
+        ).toBeVisible();
+      } finally {
+        await legalTab.close();
+      }
+
+      await submit.click();
+      await expect(
+        page.getByRole("heading", { name: "Objednávku zatím nelze zaplatit." }),
+      ).toBeVisible({ timeout: 60_000 });
+      await expect(
+        page.locator('section[aria-labelledby="checkout-title"]'),
+      ).toHaveAttribute("aria-busy", "false");
+      await expect(submit).toHaveCount(0);
+      expect(availabilityGets).toBe(1);
+      expect(paymentPosts).toBe(0);
+    } finally {
+      await restoreDatabase();
+    }
+    expect(
+      await readE2eCheckoutEffectsForBrowser(
+        databaseUrl,
+        checkoutSession.sessionId,
+      ),
+    ).toEqual(effectsBefore);
   });
 });
