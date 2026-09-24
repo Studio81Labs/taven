@@ -30,11 +30,22 @@ export function observeBrowserDiagnostics(page: Page) {
       allowedOrigins: readonly string[],
     ) {
       const needles = markers.filter(Boolean);
-      const surfaces = [...urls, ...messages];
       expect(urls.length).toBeGreaterThan(0);
+      const decodedUrls = urls.map((url) => {
+        try {
+          // Browser URL serialization percent-encodes text and may use + for
+          // spaces in query values. Inspect both representations.
+          return decodeURIComponent(url.replace(/\+/g, "%20"));
+        } catch {
+          return null;
+        }
+      });
+      expect(decodedUrls.every((url) => url !== null)).toBe(true);
+      const surfaces = [...urls, ...decodedUrls, ...messages];
       expect(
-        surfaces.some((value) =>
-          needles.some((needle) => value.includes(needle)),
+        surfaces.some(
+          (value) =>
+            value !== null && needles.some((needle) => value.includes(needle)),
         ),
       ).toBe(false);
       const origins = new Set(allowedOrigins);

@@ -517,10 +517,6 @@ test.describe("Real API Integration Journey", () => {
               sensitiveEventRows: 0,
             });
           const observations = diagnostics.observationBodies();
-          expect(observations).toContainEqual({ eventType: "quote.viewed" });
-          expect(observations).toContainEqual({
-            eventType: "checkout.started",
-          });
           expect(
             observations.every(
               (body) =>
@@ -532,6 +528,24 @@ test.describe("Real API Integration Journey", () => {
                 ["quote.viewed", "checkout.started"].includes(
                   String(body.eventType),
                 ),
+            ),
+          ).toBe(true);
+          expect(
+            observations.some(
+              (body) =>
+                typeof body === "object" &&
+                body !== null &&
+                "eventType" in body &&
+                body.eventType === "quote.viewed",
+            ),
+          ).toBe(true);
+          expect(
+            observations.some(
+              (body) =>
+                typeof body === "object" &&
+                body !== null &&
+                "eventType" in body &&
+                body.eventType === "checkout.started",
             ),
           ).toBe(true);
           diagnostics.assertSanitized(
