@@ -13,6 +13,67 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     await request.post("http://127.0.0.1:4175/__test/reset");
   });
 
+  test("resumes an uploaded session when the browser allows session storage again", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const storage = window.sessionStorage;
+      let denied = true;
+      Object.defineProperty(window, "sessionStorage", {
+        configurable: true,
+        get: () => {
+          if (denied)
+            throw new DOMException("Storage blocked", "SecurityError");
+          return storage;
+        },
+      });
+      Object.defineProperty(window, "__allowSessionStorage", {
+        value: () => {
+          denied = false;
+        },
+      });
+    });
+
+    let createdSessions = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/automatic-quote-sessions"
+      ) {
+        createdSessions += 1;
+      }
+    });
+
+    await page.goto("/");
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.getByText("Přetáhni soubor sem").click();
+    await (await fileChooserPromise).setFiles(FIXTURE_PATH);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: "Nahrání je uložené, ale prohlížeč zablokoval dočasnou relaci.",
+      }),
+    ).toBeVisible();
+    await expect(page).toHaveURL("/");
+    expect(createdSessions).toBe(1);
+
+    await page.evaluate(() => {
+      (
+        window as Window & { __allowSessionStorage?: () => void }
+      ).__allowSessionStorage?.();
+    });
+    await page.getByRole("button", { name: "Zkusit pokračovat" }).click();
+
+    await expect(page).toHaveURL(/\/objednavka/);
+    await expect(
+      page.getByRole("heading", { name: "Nastavte výrobu.", level: 2 }),
+    ).toBeVisible();
+    expect(createdSessions).toBe(1);
+  });
+
   test("keeps destination reselection available after a commercial conflict", async ({
     page,
     request,
