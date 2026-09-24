@@ -971,10 +971,15 @@ onMounted(() => void refresh());
           <input v-model="amountMinor" inputmode="numeric" required
         /></label>
         <template v-if="entry === 'cost'">
-          <label>ID objednávky <input v-model="draftOrderId" required /></label
+          <label
+            >ID objednávky
+            <input
+              v-model="draftOrderId"
+              :readonly="!!supersedesId"
+              required /></label
           ><label
             >Kategorie
-            <select v-model="category">
+            <select v-model="category" :disabled="!!supersedesId">
               <option>MATERIAL</option>
               <option>VARIABLE_MACHINE</option>
               <option>CARRIER</option>
@@ -995,7 +1000,7 @@ onMounted(() => void refresh());
         <template v-else>
           <label
             >Kanál
-            <select v-model="evidenceChannel">
+            <select v-model="evidenceChannel" :disabled="!!supersedesId">
               <option>DIRECT</option>
               <option>ORGANIC</option>
               <option>PAID</option>

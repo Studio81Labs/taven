@@ -315,6 +315,12 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   await expect(
     evidence.getByRole("combobox", { name: "Kategorie" }),
   ).toHaveValue("CARRIER");
+  await expect(
+    evidence.getByRole("textbox", { name: "ID objednávky" }),
+  ).toHaveJSProperty("readOnly", true);
+  await expect(
+    evidence.getByRole("combobox", { name: "Kategorie" }),
+  ).toBeDisabled();
   await expect(evidence.getByRole("combobox", { name: "Zdroj" })).toHaveValue(
     "MEASURED",
   );
@@ -344,6 +350,9 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   await expect(
     spendEvidence.getByRole("combobox", { name: "Kanál" }),
   ).toHaveValue("DIRECT");
+  await expect(
+    spendEvidence.getByRole("combobox", { name: "Kanál" }),
+  ).toBeDisabled();
   await expect(
     spendEvidence.getByRole("textbox", { name: /Začátek období/ }),
   ).toHaveValue("2025-01-01T00:00:00Z");

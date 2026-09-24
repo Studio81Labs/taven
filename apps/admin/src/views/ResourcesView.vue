@@ -45,28 +45,34 @@ const availabilityRangeCurrent = computed(
     availabilityRange.value?.from === from.value &&
     availabilityRange.value?.to === to.value,
 );
-function sameAvailabilityInstant(
-  left: string,
-  right: string | undefined,
-): boolean {
-  if (!right) return false;
-  try {
-    return isoFromZonedInput(left) === isoFromZonedInput(right);
-  } catch {
-    // Incomplete input is dirty; the command reports the validation error.
-    return false;
-  }
-}
 const availabilityDirty = computed(() => {
   const saved = availability.value?.windows ?? [];
-  return (
-    windows.value.length !== saved.length ||
-    windows.value.some(
+  if (windows.value.length !== saved.length) return true;
+  try {
+    const normalized = (
+      items: readonly { startsAt: string; endsAt: string }[],
+    ) =>
+      items
+        .map((item) => ({
+          startsAt: isoFromZonedInput(item.startsAt),
+          endsAt: isoFromZonedInput(item.endsAt),
+        }))
+        .sort(
+          (left, right) =>
+            left.startsAt.localeCompare(right.startsAt) ||
+            left.endsAt.localeCompare(right.endsAt),
+        );
+    const draft = normalized(windows.value);
+    const current = normalized(saved);
+    return draft.some(
       (window, index) =>
-        !sameAvailabilityInstant(window.startsAt, saved[index]?.startsAt) ||
-        !sameAvailabilityInstant(window.endsAt, saved[index]?.endsAt),
-    )
-  );
+        window.startsAt !== current[index]?.startsAt ||
+        window.endsAt !== current[index]?.endsAt,
+    );
+  } catch {
+    // Incomplete input is dirty; the command reports the validation error.
+    return true;
+  }
 });
 const error = ref("");
 const success = ref("");
@@ -590,7 +596,12 @@ async function correctReceipt(): Promise<void> {
 }
 
 async function mount(status: "MOUNTED" | "UNMOUNTED"): Promise<void> {
-  if (!inventory.value || !reason.value.trim()) return;
+  if (
+    !inventory.value ||
+    inventory.value.mountStatus === status ||
+    !reason.value.trim()
+  )
+    return;
   const id = inventory.value.id;
   const body: S["InventoryMountDto"] = {
     mountStatus: status,
@@ -619,7 +630,12 @@ async function mount(status: "MOUNTED" | "UNMOUNTED"): Promise<void> {
 async function changeInventoryStatus(
   status: S["InventoryStatusDto"]["status"],
 ): Promise<void> {
-  if (!inventory.value || !reason.value.trim()) return;
+  if (
+    !inventory.value ||
+    inventory.value.status === status ||
+    !reason.value.trim()
+  )
+    return;
   const id = inventory.value.id;
   const body: S["InventoryStatusDto"] = { status, reason: reason.value.trim() };
   await run(
@@ -1039,31 +1055,51 @@ onMounted(() => void refresh());
         <div class="operator-actions">
           <button
             type="button"
-            :disabled="resourceWriteBlocked || !reason.trim()"
+            :disabled="
+              resourceWriteBlocked ||
+              inventory.mountStatus === 'MOUNTED' ||
+              !reason.trim()
+            "
             @click="mount('MOUNTED')"
           >
             Nasadit</button
           ><button
             type="button"
-            :disabled="resourceWriteBlocked || !reason.trim()"
+            :disabled="
+              resourceWriteBlocked ||
+              inventory.mountStatus === 'UNMOUNTED' ||
+              !reason.trim()
+            "
             @click="mount('UNMOUNTED')"
           >
             Sundat</button
           ><button
             type="button"
-            :disabled="resourceWriteBlocked || !reason.trim()"
+            :disabled="
+              resourceWriteBlocked ||
+              inventory.status === 'AVAILABLE' ||
+              !reason.trim()
+            "
             @click="changeInventoryStatus('AVAILABLE')"
           >
             Dostupné</button
           ><button
             type="button"
-            :disabled="resourceWriteBlocked || !reason.trim()"
+            :disabled="
+              resourceWriteBlocked ||
+              inventory.status === 'DEPLETED' ||
+              !reason.trim()
+            "
             @click="changeInventoryStatus('DEPLETED')"
           >
             Vyčerpané</button
           ><button
             type="button"
-            :disabled="resourceWriteBlocked || !reason.trim()"
+            :disabled="
+              resourceWriteBlocked ||
+              inventory.status === 'RETIRED' ||
+              !reason.trim()
+            "
             @click="changeInventoryStatus('RETIRED')"
           >
             Vyřadit

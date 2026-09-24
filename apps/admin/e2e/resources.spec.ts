@@ -17,6 +17,7 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   let releaseStaleAvailability: (() => void) | undefined;
   let failNextAvailabilityRead = false;
   let availabilityVersion = 1;
+  let twoWindowAvailability = false;
   let holdRangeRead = false;
   let releaseRangeRead: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
@@ -158,6 +159,15 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
               endsAt: "2026-09-23T18:00:00Z",
               ordinal: 0,
             },
+            ...(twoWindowAvailability
+              ? [
+                  {
+                    startsAt: "2026-09-24T08:00:00Z",
+                    endsAt: "2026-09-24T18:00:00Z",
+                    ordinal: 1,
+                  },
+                ]
+              : []),
           ],
           occupiedIntervals: [
             {
@@ -221,6 +231,9 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   ).toBeVisible();
   await page.getByRole("button", { name: "Detail a rychlé změny" }).click();
   await page.getByLabel("Důvod změny").fill("Nasazeno pro tisk");
+  await expect(page.getByRole("button", { name: "Sundat" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Dostupné" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Vyčerpané" })).toBeEnabled();
   await page.getByRole("button", { name: "Dostupnost" }).first().click();
   await expect(
     page.getByRole("button", { name: "Publikovat dostupnost" }),
@@ -245,6 +258,8 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   });
   expect(mountHeaders["x-csrf-token"]).toBe("csrf-test");
   expect(mountHeaders["idempotency-key"]).toBeTruthy();
+  await expect(page.getByRole("button", { name: "Nasadit" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Sundat" })).toBeEnabled();
   await expect(
     page.getByText(
       "Dostupné 400000 mg · rezervované 200000 mg · zbývající 600000 mg",
@@ -359,6 +374,23 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   ).toBeDisabled();
   await page.getByRole("button", { name: "Načíst" }).click();
   await expect(page.getByText("reservation-1", { exact: false })).toBeVisible();
+  twoWindowAvailability = true;
+  await page.getByRole("button", { name: "Dostupnost" }).first().click();
+  await expect(page.getByRole("button", { name: "Odebrat" })).toHaveCount(2);
+  await page.getByRole("button", { name: "Odebrat" }).first().click();
+  await page.getByRole("button", { name: "Přidat okno" }).click();
+  await page
+    .getByRole("textbox", { name: "Začátek" })
+    .nth(1)
+    .fill("2026-09-23T10:00:00+02:00");
+  await page
+    .getByRole("textbox", { name: "Konec" })
+    .nth(1)
+    .fill("2026-09-23T20:00:00+02:00");
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeDisabled();
+  expect(availabilityPosts).toBe(3);
 });
 
 test("a confirmed receipt closes its form when the following read fails", async ({
