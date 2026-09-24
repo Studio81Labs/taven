@@ -1227,7 +1227,14 @@ test.describe("Real API Integration Journey", () => {
     const submit = page.getByRole("button", { name: /Objednat a zaplatit/i });
     await expect(submit).toBeEnabled();
     let paymentPosts = 0;
+    let availabilityGets = 0;
     page.on("request", (outgoing) => {
+      if (
+        outgoing.method() === "GET" &&
+        outgoing.url() === `${INTEGRATION_API_URL}/legal-documents/availability`
+      ) {
+        availabilityGets += 1;
+      }
       if (
         outgoing.method() === "POST" &&
         outgoing
@@ -1261,7 +1268,11 @@ test.describe("Real API Integration Journey", () => {
       await expect(
         page.getByRole("heading", { name: "Objednávku zatím nelze zaplatit." }),
       ).toBeVisible({ timeout: 60_000 });
+      await expect(
+        page.locator('section[aria-labelledby="checkout-title"]'),
+      ).toHaveAttribute("aria-busy", "false");
       await expect(submit).toHaveCount(0);
+      expect(availabilityGets).toBe(1);
       expect(paymentPosts).toBe(0);
     } finally {
       await restoreDatabase();

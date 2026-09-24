@@ -639,6 +639,7 @@ function compactBilling(
   <section
     class="mt-8 border border-[#d9d9d2] bg-white p-5 sm:p-8"
     aria-labelledby="checkout-title"
+    :aria-busy="loading || submitting"
   >
     <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
       04 — objednání a platba
