@@ -226,6 +226,10 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
     page.getByRole("button", { name: "Publikovat dostupnost" }),
   ).toBeDisabled();
   const draftStart = page.getByRole("textbox", { name: "Začátek" });
+  await draftStart.fill("2026-09-23T10:00:00+02:00");
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeDisabled();
   await draftStart.fill("2026-09-23T09:00:00+02:00");
   await expect(
     page.getByRole("button", { name: "Publikovat dostupnost" }),
@@ -477,6 +481,7 @@ test("a confirmed receipt closes its form when the following read fails", async 
   failReads = false;
   await page.getByRole("button", { name: "Obnovit zdroje" }).click();
   await page.getByRole("textbox", { name: "Důvod změny" }).fill("Servis");
+  await expect(page.getByRole("button", { name: "Aktivní" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Aktivovat" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Vyřadit" })).toBeDisabled();
   const maintenance = page.getByRole("button", { name: "Údržba" });
@@ -489,7 +494,9 @@ test("a confirmed receipt closes its form when the following read fails", async 
   failReads = false;
   calibrationState = "ACTIVE";
   await page.getByRole("button", { name: "Obnovit zdroje" }).click();
-  await expect(maintenance).toBeEnabled();
+  await expect(maintenance).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Aktivní" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Vypnout" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Aktivovat" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Vyřadit" })).toBeEnabled();
 });

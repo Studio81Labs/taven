@@ -45,14 +45,26 @@ const availabilityRangeCurrent = computed(
     availabilityRange.value?.from === from.value &&
     availabilityRange.value?.to === to.value,
 );
+function sameAvailabilityInstant(
+  left: string,
+  right: string | undefined,
+): boolean {
+  if (!right) return false;
+  try {
+    return isoFromZonedInput(left) === isoFromZonedInput(right);
+  } catch {
+    // Incomplete input is dirty; the command reports the validation error.
+    return false;
+  }
+}
 const availabilityDirty = computed(() => {
   const saved = availability.value?.windows ?? [];
   return (
     windows.value.length !== saved.length ||
     windows.value.some(
       (window, index) =>
-        window.startsAt !== saved[index]?.startsAt ||
-        window.endsAt !== saved[index]?.endsAt,
+        !sameAvailabilityInstant(window.startsAt, saved[index]?.startsAt) ||
+        !sameAvailabilityInstant(window.endsAt, saved[index]?.endsAt),
     )
   );
 });
@@ -446,7 +458,8 @@ async function machineStatus(
   id: string,
   status: S["MachineStatusDto"]["status"],
 ): Promise<void> {
-  if (!reason.value.trim()) return;
+  const machine = machines.value.find((item) => item.id === id);
+  if (!machine || machine.status === status || !reason.value.trim()) return;
   const body: S["MachineStatusDto"] = { status, reason: reason.value.trim() };
   await run(
     `machine:${id}:status`,
@@ -773,19 +786,31 @@ onMounted(() => void refresh());
           <template v-if="canWrite">
             <button
               type="button"
-              :disabled="resourceWriteBlocked || !reason.trim()"
+              :disabled="
+                resourceWriteBlocked ||
+                machine.status === 'ACTIVE' ||
+                !reason.trim()
+              "
               @click="machineStatus(machine.id, 'ACTIVE')"
             >
               Aktivní</button
             ><button
               type="button"
-              :disabled="resourceWriteBlocked || !reason.trim()"
+              :disabled="
+                resourceWriteBlocked ||
+                machine.status === 'MAINTENANCE' ||
+                !reason.trim()
+              "
               @click="machineStatus(machine.id, 'MAINTENANCE')"
             >
               Údržba</button
             ><button
               type="button"
-              :disabled="resourceWriteBlocked || !reason.trim()"
+              :disabled="
+                resourceWriteBlocked ||
+                machine.status === 'DISABLED' ||
+                !reason.trim()
+              "
               @click="machineStatus(machine.id, 'DISABLED')"
             >
               Vypnout
