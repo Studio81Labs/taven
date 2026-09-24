@@ -46,6 +46,7 @@ type CatalogState = {
   version: number;
   selectedPriceId: string;
   feed: (typeof notice)[];
+  referenceState?: "DRAFT" | "ACTIVE" | "RETIRED";
   activationFails?: boolean;
   postedVersions: number[];
   createdPriceRevisions?: string[];
@@ -136,7 +137,7 @@ async function mockCatalog(page: Page, state: CatalogState): Promise<void> {
               quality: "STANDARD",
               slicerEngine: "Orca",
               slicerVersion: "1",
-              state: "DRAFT",
+              state: state.referenceState ?? "DRAFT",
               digest: "a",
               createdAt: "2026-09-23T12:00:00Z",
             },
@@ -188,6 +189,7 @@ async function mockCatalog(page: Page, state: CatalogState): Promise<void> {
         csrf: request.headers()["x-csrf-token"],
         key: request.headers()["idempotency-key"],
       });
+      if (!state.activationFails) state.referenceState = "ACTIVE";
       await route.fulfill(
         state.activationFails
           ? { status: 409, json: { message: "conflict" } }
@@ -243,7 +245,11 @@ test("shows immediate profile notice, recovers it from the feed, and deduplicate
   await page.goto("/katalog");
   await expect(page.getByText("Žádná zaznamenaná aktivace.")).toBeVisible();
   await page.getByLabel("Důvod publikace").fill("Ověřeno");
+  await expect(page.getByRole("button", { name: "Aktivovat" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Vyřadit" })).toBeDisabled();
   await page.getByRole("button", { name: "Aktivovat" }).click();
+  await expect(page.getByRole("button", { name: "Aktivovat" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Vyřadit" })).toBeEnabled();
   await expect(
     page.getByRole("button", { name: `Profil ${profileId}` }),
   ).toHaveCount(1);

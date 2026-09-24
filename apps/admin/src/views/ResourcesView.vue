@@ -908,13 +908,19 @@ onMounted(() => void refresh());
           <template v-if="canWrite">
             <button
               type="button"
-              :disabled="resourceWriteBlocked || !reason.trim()"
+              :disabled="
+                resourceWriteBlocked || item.state !== 'DRAFT' || !reason.trim()
+              "
               @click="calibrationAction(item.id, 'activate')"
             >
               Aktivovat</button
             ><button
               type="button"
-              :disabled="resourceWriteBlocked || !reason.trim()"
+              :disabled="
+                resourceWriteBlocked ||
+                item.state !== 'ACTIVE' ||
+                !reason.trim()
+              "
               @click="calibrationAction(item.id, 'retire')"
             >
               Vyřadit

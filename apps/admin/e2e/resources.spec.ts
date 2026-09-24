@@ -351,6 +351,7 @@ test("a confirmed receipt closes its form when the following read fails", async 
   let receiptPosts = 0;
   let machineStatusPosts = 0;
   let machineStatus = "ACTIVE";
+  let calibrationState = "DRAFT";
   let releaseReceipt: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
     route.fulfill({
@@ -407,6 +408,19 @@ test("a confirmed receipt closes its form when the following read fails", async 
           ],
         },
       });
+    } else if (path.endsWith("/calibrations")) {
+      await route.fulfill({
+        json: {
+          items: [
+            {
+              id: "calibration-1",
+              machineId,
+              state: calibrationState,
+              flowRatioPartsPerMillion: 1_000_000,
+            },
+          ],
+        },
+      });
     } else {
       await route.fulfill({ json: { items: [] } });
     }
@@ -448,6 +462,8 @@ test("a confirmed receipt closes its form when the following read fails", async 
   failReads = false;
   await page.getByRole("button", { name: "Obnovit zdroje" }).click();
   await page.getByRole("textbox", { name: "Důvod změny" }).fill("Servis");
+  await expect(page.getByRole("button", { name: "Aktivovat" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Vyřadit" })).toBeDisabled();
   const maintenance = page.getByRole("button", { name: "Údržba" });
   await maintenance.click();
   await expect(page.getByRole("alert")).toContainText(
@@ -456,8 +472,11 @@ test("a confirmed receipt closes its form when the following read fails", async 
   await expect(maintenance).toBeDisabled();
   expect(machineStatusPosts).toBe(1);
   failReads = false;
+  calibrationState = "ACTIVE";
   await page.getByRole("button", { name: "Obnovit zdroje" }).click();
   await expect(maintenance).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Aktivovat" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Vyřadit" })).toBeEnabled();
 });
 
 test("a confirmed adjustment cannot be repeated until inventory detail refreshes", async ({

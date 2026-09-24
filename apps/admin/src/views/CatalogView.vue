@@ -867,7 +867,9 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || loading || !actionReason.trim()"
+            :disabled="
+              busy || loading || item.state !== 'DRAFT' || !actionReason.trim()
+            "
             @click="profileAction('reference', item.id, 'activate')"
           >
             Aktivovat
@@ -875,7 +877,9 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || loading || !actionReason.trim()"
+            :disabled="
+              busy || loading || item.state !== 'ACTIVE' || !actionReason.trim()
+            "
             @click="profileAction('reference', item.id, 'retire')"
           >
             Vyřadit
@@ -927,7 +931,9 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || loading || !actionReason.trim()"
+            :disabled="
+              busy || loading || item.state !== 'DRAFT' || !actionReason.trim()
+            "
             @click="profileAction('profile', item.id, 'activate')"
           >
             Aktivovat
@@ -935,7 +941,9 @@ onUnmounted(() => noticePager.dispose());
           <button
             v-if="canWrite"
             type="button"
-            :disabled="busy || loading || !actionReason.trim()"
+            :disabled="
+              busy || loading || item.state !== 'ACTIVE' || !actionReason.trim()
+            "
             @click="profileAction('profile', item.id, 'retire')"
           >
             Vyřadit
