@@ -209,6 +209,220 @@ describe("operator read contracts", () => {
     }
   });
 
+  it("recovers an open handling timer and pages its completed allocations within node scope", async () => {
+    const start = await fetch(
+      new URL("/admin/handling-sessions/start", baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": adminCsrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ component: "HANDLING_ORDER_FIX" }),
+      },
+    );
+    expect(start.status).toBe(200);
+    const started = (await start.json()) as { id: string; status: string };
+    expect(started.status).toBe("OPEN");
+
+    const open = await read(
+      "/admin/handling-sessions?lifecycle=OPEN&limit=100",
+    );
+    expect(open.status).toBe(200);
+    await expect(open.json()).resolves.toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: started.id, lifecycle: "OPEN" }),
+      ]),
+    });
+    const detail = await read(`/admin/handling-sessions/${started.id}`);
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      id: started.id,
+      lifecycle: "OPEN",
+      allocations: [],
+      laborRatePolicyVersion: expect.any(String),
+    });
+    expect(
+      (
+        await fetch(
+          new URL(`/admin/handling-sessions/${started.id}`, baseUrl),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
+
+    const stop = await fetch(
+      new URL(`/admin/handling-sessions/${started.id}/stop`, baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": adminCsrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          allocations: [{ orderId: fixture.orderId, servedUnitCount: "1" }],
+        }),
+      },
+    );
+    expect(stop.status).toBe(200);
+    const page = await read(
+      `/admin/handling-sessions?lifecycle=COMPLETED&orderId=${fixture.orderId}&limit=1`,
+    );
+    expect(page.status).toBe(200);
+    await expect(page.json()).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({
+          id: started.id,
+          lifecycle: "COMPLETED",
+          allocations: [
+            expect.objectContaining({
+              orderId: fixture.orderId,
+              allocatedDurationMilliseconds: expect.any(String),
+              allocatedCostMinor: expect.any(String),
+            }),
+          ],
+        }),
+      ],
+    });
+    const completed = (await (
+      await read(`/admin/handling-sessions/${started.id}`)
+    ).json()) as {
+      durationMilliseconds: string;
+      totalCostMinor: string;
+      allocations: Array<{
+        allocatedDurationMilliseconds: string;
+        allocatedCostMinor: string;
+      }>;
+    };
+    expect(completed.allocations).toHaveLength(1);
+    expect(completed.allocations[0]?.allocatedDurationMilliseconds).toBe(
+      completed.durationMilliseconds,
+    );
+    expect(completed.allocations[0]?.allocatedCostMinor).toBe(
+      completed.totalCostMinor,
+    );
+    const allocationPage = await read(
+      `/admin/handling-sessions/${started.id}/allocations?limit=1`,
+    );
+    expect(allocationPage.status).toBe(200);
+    await expect(allocationPage.json()).resolves.toMatchObject({
+      items: [expect.objectContaining({ orderId: fixture.orderId })],
+    });
+    expect(
+      (
+        await fetch(
+          new URL(
+            `/admin/handling-sessions?orderId=${fixture.orderId}`,
+            baseUrl,
+          ),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (await read("/admin/handling-sessions?lifecycle=INVALID")).status,
+    ).toBe(400);
+  });
+
+  it("keeps an open-session cursor valid when that timer completes", async () => {
+    const secondAdmin = await sessionCookie("ADMIN", nodeId);
+    const start = async (auth: { cookie: string; csrfToken: string }) => {
+      const response = await fetch(
+        new URL("/admin/handling-sessions/start", baseUrl),
+        {
+          method: "POST",
+          headers: {
+            cookie: auth.cookie,
+            origin: "http://localhost:3002",
+            "x-csrf-token": auth.csrfToken,
+            "idempotency-key": randomUUID(),
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ component: "HANDLING_ORDER_FIX" }),
+        },
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as { id: string };
+    };
+    const first = await start({
+      cookie: adminCookie,
+      csrfToken: adminCsrfToken,
+    });
+    const second = await start(secondAdmin);
+    const response = await read(
+      "/admin/handling-sessions?lifecycle=OPEN&limit=1",
+    );
+    expect(response.status).toBe(200);
+    const page = (await response.json()) as {
+      items: Array<{ id: string }>;
+      nextCursor: string;
+    };
+    expect(page.items).toHaveLength(1);
+    expect(page.nextCursor).toBe(page.items[0]?.id);
+    const cursor = page.nextCursor;
+    const cursorAuth =
+      cursor === first.id
+        ? { cookie: adminCookie, csrfToken: adminCsrfToken }
+        : secondAdmin;
+    const stop = await fetch(
+      new URL(`/admin/handling-sessions/${cursor}/stop`, baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: cursorAuth.cookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": cursorAuth.csrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          allocations: [{ orderId: fixture.orderId, servedUnitCount: "1" }],
+        }),
+      },
+    );
+    expect(stop.status).toBe(200);
+    const continuation = await read(
+      `/admin/handling-sessions?lifecycle=OPEN&limit=1&cursor=${cursor}`,
+    );
+    expect(continuation.status).toBe(200);
+    await expect(continuation.json()).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({
+          id: cursor === first.id ? second.id : first.id,
+          lifecycle: "OPEN",
+        }),
+      ],
+    });
+    const remainingId = cursor === first.id ? second.id : first.id;
+    const remainingAuth =
+      cursor === first.id
+        ? secondAdmin
+        : { cookie: adminCookie, csrfToken: adminCsrfToken };
+    const cleanup = await fetch(
+      new URL(`/admin/handling-sessions/${remainingId}/stop`, baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: remainingAuth.cookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": remainingAuth.csrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          allocations: [{ orderId: fixture.orderId, servedUnitCount: "1" }],
+        }),
+      },
+    );
+    expect(cleanup.status).toBe(200);
+  });
+
   it("returns exact catalog settings and scoped inventory purchase evidence", async () => {
     const machine = await prisma.machine.findUniqueOrThrow({
       where: { id: fixture.machineId },
@@ -711,6 +925,23 @@ describe("operator read contracts", () => {
         preview: { available: false, reason: "NOT_GENERATED" },
         production: { available: false, reason: "NOT_READY" },
       },
+      actions: [
+        expect.objectContaining({
+          action: "DOWNLOAD_SOURCE_MODEL",
+          targetId: fixtureJob.jobId,
+          enabled: true,
+        }),
+      ],
+    });
+    const adminResponse = await fetch(
+      new URL(`/admin/jobs/${fixtureJob.jobId}`, baseUrl),
+      { headers: { cookie: adminCookie } },
+    );
+    expect(adminResponse.status).toBe(200);
+    await expect(adminResponse.json()).resolves.toMatchObject({
+      actions: expect.arrayContaining([
+        expect.objectContaining({ action: "ACCEPT_JOB", enabled: true }),
+      ]),
     });
   });
 
@@ -857,6 +1088,26 @@ describe("operator read contracts", () => {
         ],
       },
       fulfilment: { jobs: expect.any(Array), shipments: expect.any(Array) },
+      shipmentPlans: [
+        expect.objectContaining({
+          id: fixture.shipmentPlanId,
+          slots: [
+            expect.objectContaining({
+              fulfilmentSlotId: fixture.fulfilmentSlotId,
+            }),
+          ],
+        }),
+      ],
+      slotLineage: [
+        expect.objectContaining({
+          fulfilmentSlotId: fixture.fulfilmentSlotId,
+          jobIds: expect.arrayContaining([fixtureJob.jobId]),
+        }),
+      ],
+      fulfilmentNextCursors: {},
+      legalAcceptances: expect.any(Array),
+      blockingCodes: expect.arrayContaining(["REFUND_UNRESOLVED"]),
+      actions: [],
     });
     expect(orderDetail.timeline).toEqual(
       expect.arrayContaining([
@@ -867,6 +1118,112 @@ describe("operator read contracts", () => {
         }),
       ]),
     );
+    expect(orderDetail).toHaveProperty("acceptedClaimPolicyRevision");
+    const adminOrder = await fetch(
+      new URL(`/admin/orders/${fixture.orderId}`, baseUrl),
+      { headers: { cookie: adminCookie } },
+    );
+    expect(adminOrder.status).toBe(200);
+    const adminDetail = (await adminOrder.json()) as {
+      actions: Array<{ action: string }>;
+      blockingCodes: string[];
+    };
+    expect(adminDetail.blockingCodes).toContain("REFUND_UNRESOLVED");
+    expect(adminDetail.actions.map((action) => action.action)).not.toContain(
+      "CANCEL_ORDER",
+    );
+    const paymentPage = await read(
+      `/admin/orders/${fixture.orderId}/payments?limit=1`,
+    );
+    expect(paymentPage.status).toBe(200);
+    await expect(paymentPage.json()).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: fixture.paymentId })],
+    });
+    const refundPage = await read(
+      `/admin/orders/${fixture.orderId}/refunds?limit=1`,
+    );
+    expect(refundPage.status).toBe(200);
+    await expect(refundPage.json()).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({
+          id: cancellationRefundId,
+          paymentId: fixture.paymentId,
+        }),
+      ],
+    });
+    const settlementPage = await read(
+      `/admin/orders/${fixture.orderId}/settlements?limit=1`,
+    );
+    expect(settlementPage.status).toBe(200);
+    await expect(settlementPage.json()).resolves.toMatchObject({
+      items: expect.any(Array),
+    });
+    const jobHistory = await read(
+      `/admin/orders/${fixture.orderId}/fulfilment-history/jobs?limit=1`,
+    );
+    expect(jobHistory.status).toBe(200);
+    await expect(jobHistory.json()).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: fixtureJob.jobId })],
+    });
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/fulfilment-history/jobs?cursor=${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    const absentClaimId = randomUUID();
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/fulfilment-history/claims/${absentClaimId}/refunds`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/fulfilment-history/claims/${absentClaimId}/invalid`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(
+          new URL(
+            `/admin/orders/${fixture.orderId}/fulfilment-history/claims/${absentClaimId}/refunds`,
+            baseUrl,
+          ),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await fetch(
+          new URL(
+            `/admin/orders/${fixture.orderId}/fulfilment-history/jobs`,
+            baseUrl,
+          ),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await fetch(
+          new URL(`/admin/orders/${fixture.orderId}/refunds`, baseUrl),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/payments?cursor=${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
     expect(
       orderDetail.items.find((item) => item.id === fixture.orderItemId)
         ?.preflightFindings,
@@ -901,6 +1258,63 @@ describe("operator read contracts", () => {
     const legacy = await read("/admin/quote-requests");
     expect(legacy.status).toBe(200);
     await expect(legacy.json()).resolves.toEqual(expect.any(Array));
+  });
+
+  it("bounds order history and rejects foreign or unrelated timeline cursors", async () => {
+    await prisma.auditEvent.createMany({
+      data: Array.from({ length: 27 }, (_, index) => ({
+        orderId: fixture.orderId,
+        nodeId,
+        eventType: "operator_reads.pagination_test",
+        payload: { index },
+        createdAt: new Date(Date.now() - 1000),
+      })),
+    });
+    const detail = await read(`/admin/orders/${fixture.orderId}`);
+    expect(detail.status).toBe(200);
+    const order = (await detail.json()) as {
+      timeline: Array<{ id: string }>;
+      timelineNextCursor: string;
+    };
+    expect(order.timeline).toHaveLength(25);
+    expect(order.timelineNextCursor).toBe(order.timeline[24]?.id);
+
+    const first = await read(
+      `/admin/orders/${fixture.orderId}/timeline?limit=20`,
+    );
+    expect(first.status).toBe(200);
+    const firstPage = (await first.json()) as {
+      items: Array<{ id: string }>;
+      nextCursor: string;
+    };
+    expect(firstPage.items).toHaveLength(20);
+    const second = await read(
+      `/admin/orders/${fixture.orderId}/timeline?limit=20&cursor=${firstPage.nextCursor}`,
+    );
+    expect(second.status).toBe(200);
+    const secondPage = (await second.json()) as {
+      items: Array<{ id: string }>;
+    };
+    expect(secondPage.items.length).toBeGreaterThan(0);
+    expect(
+      new Set([...firstPage.items, ...secondPage.items].map((item) => item.id))
+        .size,
+    ).toBe(firstPage.items.length + secondPage.items.length);
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/timeline?cursor=${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(
+          new URL(`/admin/orders/${fixture.orderId}/timeline`, baseUrl),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
   });
 
   async function read(path: string): Promise<Response> {

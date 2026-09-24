@@ -419,6 +419,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/handling-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List scoped handling sessions and allocations */
+        get: operations["HandlingSessionReadController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/handling-sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one scoped handling session and allocations */
+        get: operations["HandlingSessionReadController_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/handling-sessions/{sessionId}/allocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped handling allocations */
+        get: operations["HandlingSessionReadController_allocations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/handling-sessions/{sessionId}/stop": {
         parameters: {
             query?: never;
@@ -1093,6 +1144,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment-history/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped fulfilment lineage */
+        get: operations["OperatorReadsController_fulfilmentHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment-history/claims/{claimId}/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped claim child history */
+        get: operations["OperatorReadsController_claimChildHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/adjustments": {
         parameters: {
             query?: never;
@@ -1535,6 +1620,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped order payments */
+        get: operations["OperatorReadsController_orderPayments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped order refund attempts */
+        get: operations["OperatorReadsController_orderRefunds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/resource-preparation": {
         parameters: {
             query?: never;
@@ -1546,6 +1665,40 @@ export interface paths {
         put?: never;
         /** Prepare exact resources for an accepted individual order */
         post: operations["IndividualOrderPreparationController_prepare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/settlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped order settlements */
+        get: operations["OperatorReadsController_orderSettlements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded, scoped order audit history */
+        get: operations["OperatorReadsController_orderTimeline"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3400,6 +3553,7 @@ export interface components {
         FulfilmentClaimDto: {
             /** Format: date-time */
             createdAt: string;
+            historyNextCursors?: components["schemas"]["FulfilmentClaimHistoryCursorsDto"];
             /** Format: uuid */
             id: string;
             /** Format: uuid */
@@ -3420,6 +3574,14 @@ export interface components {
             status: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        FulfilmentClaimHistoryCursorsDto: {
+            /** Format: uuid */
+            refunds?: string;
+            /** Format: uuid */
+            reshipmentAuthorizations?: string;
+            /** Format: uuid */
+            resolutions?: string;
         };
         FulfilmentClaimSlotResolutionDto: {
             /** Format: uuid */
@@ -3753,11 +3915,70 @@ export interface components {
             /** Format: uuid */
             shipmentId?: string;
         };
+        HandlingAllocationPageDto: {
+            items: components["schemas"]["HandlingAllocationReadDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+        };
+        HandlingAllocationReadDto: {
+            allocatedCostMinor: string;
+            allocatedDurationMilliseconds: string;
+            currency: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            jobId?: string | null;
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            orderItemId?: string | null;
+            /** Format: uuid */
+            orderPhaseId?: string | null;
+            servedUnitCount: number;
+            /** Format: uuid */
+            shipmentId?: string | null;
+            targetKey: string;
+        };
         HandlingAndMarginMetricsDto: {
             actualCosts: components["schemas"]["ActualCostBreakdownDto"];
             definition: string;
             finalContributionMargin: components["schemas"]["ContributionMarginMetricsDto"];
             handlingCost: components["schemas"]["MetricMoneyDto"];
+        };
+        HandlingSessionPageDto: {
+            items: components["schemas"]["HandlingSessionReadDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+        };
+        HandlingSessionReadDto: {
+            allocations: components["schemas"]["HandlingAllocationReadDto"][];
+            /** Format: uuid */
+            allocationsNextCursor?: string;
+            /** Format: date-time */
+            completedAt?: string | null;
+            component: string;
+            currency: string;
+            durationMilliseconds?: string | null;
+            /** Format: date-time */
+            endedAt?: string | null;
+            /** Format: uuid */
+            id: string;
+            laborRateDenominator: string;
+            laborRateNumerator: string;
+            laborRatePolicyVersion: string;
+            lifecycle: string;
+            /** Format: uuid */
+            nodeId: string;
+            /** Format: uuid */
+            operatorIdentityId: string;
+            reason?: string | null;
+            source: string;
+            /** Format: date-time */
+            startedAt: string;
+            totalCostMinor?: string | null;
+            /** Format: date-time */
+            voidedAt?: string | null;
+            voidReason?: string | null;
         };
         HandoffReshipmentDto: {
             carrier: string;
@@ -4550,29 +4771,82 @@ export interface components {
             /** @enum {string} */
             scope: "OPERATIONAL_NODE";
         };
+        OperatorAcceptedFindingDto: {
+            acknowledgementKey: string;
+            code: string;
+            /** Format: uuid */
+            findingId: string;
+            message: string;
+            severity: string;
+        };
         OperatorAcceptedPriceDto: {
             /** Format: uuid */
             bindingId: string;
+            components: components["schemas"]["OperatorPriceComponentDto"][];
             contractTotalMinor: string;
             currency: string;
             netAmountMinor: string;
             priceListRevision: string;
+            pricingRevision: string;
+            snapshotHash: string;
             /** Format: uuid */
             snapshotId: string;
+            taxRegime: string;
             termsRevision: string;
             vatAmountMinor: string;
+            vatRateBasisPoints: number;
+        };
+        OperatorActionDto: {
+            action: string;
+            blockingCodes: string[];
+            enabled: boolean;
+            requiresConfirmation: boolean;
+            requiresReason: boolean;
+            /** Format: uuid */
+            targetId: string;
+            targetType: string;
         };
         OperatorAuthMethodsDto: {
             methods: ("EMAIL_PASSWORD" | "GITHUB")[];
+        };
+        OperatorClaimChildHistoryPageDto: {
+            items: (components["schemas"]["FulfilmentClaimSlotResolutionDto"] | components["schemas"]["FulfilmentRefundDto"] | components["schemas"]["FulfilmentReshipmentAuthorizationDto"])[];
+            /** Format: uuid */
+            nextCursor?: string;
         };
         OperatorFinancialProjectionDto: {
             activeContractNetMinor?: string | null;
             /** Format: uuid */
             activeContractRevisionId?: string | null;
             activeContractTotalMinor?: string | null;
+            blockingCodes: string[];
             currency?: string | null;
+            outstandingCompensationMinor: string;
             payments: components["schemas"]["OperatorPaymentDto"][];
+            /** Format: uuid */
+            paymentsNextCursor?: string;
             settlements: components["schemas"]["OperatorSettlementDto"][];
+            /** Format: uuid */
+            settlementsNextCursor?: string;
+        };
+        OperatorFulfilmentHistoryCursorsDto: {
+            /** Format: uuid */
+            claims?: string;
+            /** Format: uuid */
+            jobs?: string;
+            /** Format: uuid */
+            priceAdjustments?: string;
+            /** Format: uuid */
+            replacementRequests?: string;
+            /** Format: uuid */
+            shipments?: string;
+            /** Format: uuid */
+            slots?: string;
+        };
+        OperatorFulfilmentHistoryPageDto: {
+            items: (components["schemas"]["FulfilmentJobDto"] | components["schemas"]["FulfilmentShipmentDto"] | components["schemas"]["FulfilmentSlotDto"] | components["schemas"]["FulfilmentReplacementRequestDto"] | components["schemas"]["FulfilmentClaimDto"] | components["schemas"]["FulfilmentPriceAdjustmentDto"])[];
+            /** Format: uuid */
+            nextCursor?: string;
         };
         OperatorJobAcceptedRiskDto: {
             acknowledgementKey: string;
@@ -4609,6 +4883,7 @@ export interface components {
             provenance: "ACCEPTED_INDIVIDUAL_QUOTE" | "NO_PROMISED_DATE" | null;
         };
         OperatorJobDetailDto: {
+            actions: components["schemas"]["OperatorActionDto"][];
             artifacts: components["schemas"]["OperatorJobArtifactsDto"];
             deadline: components["schemas"]["OperatorJobDeadlineDto"];
             estimate: components["schemas"]["OperatorJobEstimateDto"];
@@ -4708,6 +4983,15 @@ export interface components {
             /** @description Canonical volume in cubic micrometers */
             volumeCubicMicrometers: string;
         };
+        OperatorLegalAcceptanceDto: {
+            /** Format: date-time */
+            acceptedAt: string;
+            contentHash: string;
+            purpose: string;
+            revisionCode: string | null;
+            /** Format: uuid */
+            revisionId: string;
+        };
         OperatorOfferDetailDto: {
             /** Format: uuid */
             acceptedOrderId?: string | null;
@@ -4754,21 +5038,35 @@ export interface components {
             version: number;
         };
         OperatorOrderDetailDto: {
+            acceptedClaimPolicyRevision?: string | null;
+            acceptedClaimWindowDays?: number | null;
             acceptedPrice?: components["schemas"]["OperatorAcceptedPriceDto"] | null;
             acceptedTermsRevision?: string | null;
+            actions: components["schemas"]["OperatorActionDto"][];
+            blockingCodes: string[];
             /** Format: date-time */
             confirmedAt?: string | null;
             financial: components["schemas"]["OperatorFinancialProjectionDto"];
             fulfilment: components["schemas"]["FulfilmentProjectionDto"];
+            fulfilmentNextCursors: components["schemas"]["OperatorFulfilmentHistoryCursorsDto"];
             /** Format: uuid */
             id: string;
             items: components["schemas"]["OperatorOrderItemDto"][];
+            legalAcceptances: components["schemas"]["OperatorLegalAcceptanceDto"][];
             publicReference: string;
+            shipmentPlans: components["schemas"]["OperatorShipmentPlanDto"][];
+            slotLineage: components["schemas"]["OperatorSlotLineageDto"][];
             status: string;
             timeline: components["schemas"]["OperatorOrderTimelineEventDto"][];
+            /** Format: uuid */
+            timelineNextCursor?: string;
+            /** Format: date-time */
+            withdrawalExceptionAcknowledgedAt?: string | null;
         };
         OperatorOrderItemDto: {
+            acceptedFindings: components["schemas"]["OperatorAcceptedFindingDto"][];
             color?: string | null;
+            geometry: components["schemas"]["OperatorOrderItemGeometryDto"];
             /** Format: uuid */
             id: string;
             material: string;
@@ -4777,6 +5075,7 @@ export interface components {
             ordinal: number;
             preflightFindings: string[];
             primaryReferenceSlice: components["schemas"]["OperatorReferenceSliceDto"] | null;
+            printConfig: components["schemas"]["PrintConfigRevisionReadDto"];
             /** Format: uuid */
             printConfigRevisionId: string;
             quantity: number;
@@ -4784,6 +5083,13 @@ export interface components {
             /** Format: uuid */
             sourceModelFileId: string;
             tailReferenceSlice: components["schemas"]["OperatorReferenceSliceDto"] | null;
+        };
+        OperatorOrderItemGeometryDto: {
+            boundsXMicrometers: string;
+            boundsYMicrometers: string;
+            boundsZMicrometers: string;
+            geometrySha256: string;
+            volumeCubicMicrometers: string;
         };
         OperatorOrderListItemDto: {
             /** Format: date-time */
@@ -4809,6 +5115,11 @@ export interface components {
             reason?: string | null;
             reasonCode?: string | null;
         };
+        OperatorOrderTimelinePageDto: {
+            items: components["schemas"]["OperatorOrderTimelineEventDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+        };
         OperatorPaymentDto: {
             /** Format: date-time */
             balanceDueAt?: string | null;
@@ -4833,11 +5144,38 @@ export interface components {
             priceSnapshotId: string;
             provider: string;
             refunds: components["schemas"]["OperatorRefundTransactionDto"][];
+            /** Format: uuid */
+            refundsNextCursor?: string;
             requestedAmountMinor: string;
             role: string;
             status: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        OperatorPaymentPageDto: {
+            items: components["schemas"]["OperatorPaymentDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+        };
+        OperatorPriceAllocationDto: {
+            amountMinor: string;
+            /** Format: uuid */
+            fulfilmentSlotId: string;
+        };
+        OperatorPriceComponentDto: {
+            allocation?: {
+                [key: string]: unknown;
+            } | null;
+            amountMinor: string;
+            fulfilmentAllocations: components["schemas"]["OperatorPriceAllocationDto"][];
+            /** Format: uuid */
+            id: string;
+            kind: string;
+            /** Format: uuid */
+            orderItemId?: string | null;
+            scope: string;
+            /** Format: uuid */
+            shipmentPlanId?: string | null;
         };
         OperatorQuoteRequestDetailDto: {
             /** Format: uuid */
@@ -4895,6 +5233,38 @@ export interface components {
             slicerEngine: string;
             slicerVersion: string;
         };
+        OperatorRefundPageDto: {
+            items: components["schemas"]["OperatorRefundPageItemDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+        };
+        OperatorRefundPageItemDto: {
+            amountMinor: string;
+            /** Format: uuid */
+            claimId?: string | null;
+            /** Format: date-time */
+            completedAt?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            paymentId: string;
+            /** Format: uuid */
+            priceAdjustmentId?: string | null;
+            provider: string;
+            providerRefundId?: string | null;
+            /** Format: uuid */
+            providerResultEventId?: string | null;
+            reason: string;
+            /** Format: uuid */
+            replacesFailureProviderEventId?: string | null;
+            /** Format: uuid */
+            replacesRefundTransactionId?: string | null;
+            /** Format: date-time */
+            requestedAt: string;
+            /** Format: uuid */
+            sourceSuccessProviderEventId?: string | null;
+            status: string;
+        };
         OperatorRefundTransactionDto: {
             amountMinor: string;
             /** Format: uuid */
@@ -4905,9 +5275,19 @@ export interface components {
             id: string;
             /** Format: uuid */
             priceAdjustmentId?: string | null;
+            provider: string;
+            providerRefundId?: string | null;
+            /** Format: uuid */
+            providerResultEventId?: string | null;
             reason: string;
+            /** Format: uuid */
+            replacesFailureProviderEventId?: string | null;
+            /** Format: uuid */
+            replacesRefundTransactionId?: string | null;
             /** Format: date-time */
             requestedAt: string;
+            /** Format: uuid */
+            sourceSuccessProviderEventId?: string | null;
             status: string;
         };
         OperatorSessionDto: {
@@ -4937,6 +5317,38 @@ export interface components {
             refundAmountMinor: string;
             /** Format: date-time */
             settledAt: string;
+        };
+        OperatorSettlementPageDto: {
+            items: components["schemas"]["OperatorSettlementDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+        };
+        OperatorShipmentPlanDto: {
+            category: string;
+            handlingAmountMinor: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orderPhaseId: string;
+            ordinal: number;
+            packagingAmountMinor: string;
+            plannedVolumeCubicMm: string;
+            plannedWeightMilligrams: string;
+            shippingAmountMinor: string;
+            slots: components["schemas"]["OperatorShipmentPlanSlotDto"][];
+        };
+        OperatorShipmentPlanSlotDto: {
+            /** Format: uuid */
+            fulfilmentSlotId: string;
+            /** Format: uuid */
+            orderItemId: string;
+        };
+        OperatorSlotLineageDto: {
+            /** Format: uuid */
+            currentJobId?: string | null;
+            /** Format: uuid */
+            fulfilmentSlotId: string;
+            jobIds: string[];
         };
         OperatorWarningDto: {
             /** @enum {string} */
@@ -6579,6 +6991,84 @@ export interface operations {
             };
         };
     };
+    HandlingSessionReadController_list: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+                orderId?: string;
+                lifecycle?: "OPEN" | "COMPLETED" | "VOIDED";
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandlingSessionPageDto"];
+                };
+            };
+        };
+    };
+    HandlingSessionReadController_detail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandlingSessionReadDto"];
+                };
+            };
+        };
+    };
+    HandlingSessionReadController_allocations: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HandlingAllocationPageDto"];
+                };
+            };
+        };
+    };
     MeasurementController_stop: {
         parameters: {
             query?: never;
@@ -8201,6 +8691,63 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_fulfilmentHistory: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                kind: "jobs" | "shipments" | "slots" | "replacementRequests" | "claims" | "priceAdjustments";
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorFulfilmentHistoryPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_claimChildHistory: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                kind: "resolutions" | "refunds" | "reshipmentAuthorizations";
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorClaimChildHistoryPageDto"];
+                };
+            };
+        };
+    };
     OrdersController_adjustment: {
         parameters: {
             query?: never;
@@ -9040,6 +9587,60 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_orderPayments: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorPaymentPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_orderRefunds: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRefundPageDto"];
+                };
+            };
+        };
+    };
     IndividualOrderPreparationController_prepare: {
         parameters: {
             query?: never;
@@ -9074,6 +9675,60 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    OperatorReadsController_orderSettlements: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorSettlementPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_orderTimeline: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorOrderTimelinePageDto"];
+                };
             };
         };
     };

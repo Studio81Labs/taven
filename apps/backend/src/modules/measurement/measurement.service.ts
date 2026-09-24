@@ -41,6 +41,12 @@ import type {
   AcquisitionSpendEvidencePageDto,
   ActualCostEvidencePageDto,
 } from "./measurement-read.dto";
+import type {
+  HandlingAllocationPageDto,
+  HandlingAllocationReadDto,
+  HandlingSessionPageDto,
+  HandlingSessionReadDto,
+} from "./handling-read.dto";
 
 type Transaction = Prisma.TransactionClient;
 type AllocationInput = Readonly<{
@@ -51,6 +57,57 @@ type AllocationInput = Readonly<{
   shipmentId?: string;
   servedUnits: bigint;
 }>;
+type SessionWithAllocations = Prisma.HandlingSessionGetPayload<{
+  include: { allocations: true };
+}>;
+
+function handlingSessionRead(
+  session: SessionWithAllocations,
+): HandlingSessionReadDto {
+  return {
+    id: session.id,
+    nodeId: session.nodeId,
+    operatorIdentityId: session.operatorIdentityId,
+    component: session.component,
+    source: session.source,
+    lifecycle: session.lifecycle,
+    startedAt: session.startedAt.toISOString(),
+    endedAt: session.endedAt?.toISOString() ?? null,
+    durationMilliseconds: session.durationMilliseconds?.toString() ?? null,
+    totalCostMinor: session.totalCostMinor?.toString() ?? null,
+    laborRateNumerator: session.laborRateNumerator.toString(),
+    laborRateDenominator: session.laborRateDenominator.toString(),
+    laborRatePolicyVersion: session.laborRatePolicyVersion,
+    currency: session.currency,
+    reason: session.reason,
+    completedAt: session.completedAt?.toISOString() ?? null,
+    voidedAt: session.voidedAt?.toISOString() ?? null,
+    voidReason: session.voidReason,
+    allocations: session.allocations.slice(0, 100).map(handlingAllocationRead),
+    ...(session.allocations.length > 100
+      ? { allocationsNextCursor: session.allocations[99]!.id }
+      : {}),
+  };
+}
+
+function handlingAllocationRead(
+  allocation: Prisma.HandlingAllocationGetPayload<object>,
+): HandlingAllocationReadDto {
+  return {
+    id: allocation.id,
+    orderId: allocation.orderId,
+    orderItemId: allocation.orderItemId,
+    orderPhaseId: allocation.orderPhaseId,
+    jobId: allocation.jobId,
+    shipmentId: allocation.shipmentId,
+    targetKey: allocation.targetKey,
+    servedUnitCount: allocation.servedUnitCount,
+    allocatedDurationMilliseconds:
+      allocation.allocatedDurationMilliseconds.toString(),
+    allocatedCostMinor: allocation.allocatedCostMinor.toString(),
+    currency: allocation.currency,
+  };
+}
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -64,6 +121,129 @@ export class MeasurementService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
   ) {}
+
+  async handlingSessions(
+    operator: OperatorContext,
+    lifecycle?: string,
+    orderId?: string,
+    cursor?: string,
+    limit = 25,
+  ): Promise<HandlingSessionPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    const nodeId = operatorNode(operator);
+    if (
+      lifecycle !== undefined &&
+      !Object.values(HandlingSessionLifecycle).includes(
+        lifecycle as HandlingSessionLifecycle,
+      )
+    ) {
+      throw new BadRequestException("lifecycle is invalid");
+    }
+    if (orderId !== undefined) orderId = uuid(orderId, "orderId");
+    if (cursor !== undefined) cursor = uuid(cursor, "cursor");
+    evidencePageLimit(limit);
+    const where = {
+      nodeId,
+      ...(lifecycle
+        ? { lifecycle: lifecycle as HandlingSessionLifecycle }
+        : {}),
+      ...(orderId ? { allocations: { some: { orderId } } } : {}),
+    };
+    return this.prisma.$transaction(async (tx) => {
+      if (orderId) await assertOperationalOrderScope(tx, orderId, nodeId);
+      const anchor = cursor
+        ? await tx.handlingSession.findFirst({
+            where: {
+              id: cursor,
+              nodeId,
+              ...(orderId ? { allocations: { some: { orderId } } } : {}),
+            },
+            select: { id: true, createdAt: true },
+          })
+        : null;
+      if (cursor && !anchor) {
+        throw new BadRequestException("cursor is invalid");
+      }
+      const rows = await tx.handlingSession.findMany({
+        where: {
+          ...where,
+          ...(anchor
+            ? {
+                OR: [
+                  { createdAt: { lt: anchor.createdAt } },
+                  { createdAt: anchor.createdAt, id: { lt: anchor.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
+        include: {
+          allocations: { orderBy: { id: "asc" }, take: 101 },
+        },
+      });
+      const page = rows.slice(0, limit);
+      return {
+        items: page.map(handlingSessionRead),
+        ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+      };
+    });
+  }
+
+  async handlingSession(
+    operator: OperatorContext,
+    sessionId: string,
+  ): Promise<HandlingSessionReadDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    const nodeId = operatorNode(operator);
+    sessionId = uuid(sessionId, "sessionId");
+    const session = await this.prisma.handlingSession.findFirst({
+      where: { id: sessionId, nodeId },
+      include: { allocations: { orderBy: { id: "asc" }, take: 101 } },
+    });
+    if (!session) throw new NotFoundException("Handling session was not found");
+    return handlingSessionRead(session);
+  }
+
+  async handlingAllocations(
+    operator: OperatorContext,
+    sessionId: string,
+    cursor?: string,
+    limit = 25,
+  ): Promise<HandlingAllocationPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    const nodeId = operatorNode(operator);
+    sessionId = uuid(sessionId, "sessionId");
+    if (cursor !== undefined) cursor = uuid(cursor, "cursor");
+    evidencePageLimit(limit);
+    return this.prisma.$transaction(async (tx) => {
+      const session = await tx.handlingSession.findFirst({
+        where: { id: sessionId, nodeId },
+        select: { id: true },
+      });
+      if (!session)
+        throw new NotFoundException("Handling session was not found");
+      if (
+        cursor &&
+        !(await tx.handlingAllocation.findFirst({
+          where: { id: cursor, handlingSessionId: sessionId },
+          select: { id: true },
+        }))
+      )
+        throw new BadRequestException("cursor is invalid");
+      const rows = await tx.handlingAllocation.findMany({
+        where: { handlingSessionId: sessionId },
+        orderBy: { id: "asc" },
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      const page = rows.slice(0, limit);
+      return {
+        items: page.map(handlingAllocationRead),
+        ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+      };
+    });
+  }
 
   async actualCostEvidence(
     operator: OperatorContext,

@@ -39,6 +39,12 @@ import {
   OperatorJobArtifactDownloadDto,
   OperatorOrderDetailDto,
   OperatorOrderPageDto,
+  OperatorOrderTimelinePageDto,
+  OperatorPaymentPageDto,
+  OperatorRefundPageDto,
+  OperatorSettlementPageDto,
+  OperatorFulfilmentHistoryPageDto,
+  OperatorClaimChildHistoryPageDto,
   PriceListPageDto,
   PriceListDetailDto,
   ReferenceProfileActivationNoticePageDto,
@@ -109,6 +115,172 @@ export class OperatorReadsController {
     @Param("orderId") orderId: string,
   ): Promise<OperatorOrderDetailDto> {
     return this.reads.orderDetail(operator, orderId);
+  }
+
+  @Get("admin/orders/:orderId/timeline")
+  @ApiOperation({ summary: "Read bounded, scoped order audit history" })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiOkResponse({ type: OperatorOrderTimelinePageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  orderTimeline(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorOrderTimelinePageDto> {
+    return this.reads.orderTimeline(
+      operator,
+      orderId,
+      pageQuery(query, PAGE_FIELDS),
+    );
+  }
+
+  @Get("admin/orders/:orderId/payments")
+  @ApiOperation({ summary: "Page through scoped order payments" })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiOkResponse({ type: OperatorPaymentPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  orderPayments(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorPaymentPageDto> {
+    return this.reads.orderPayments(
+      operator,
+      orderId,
+      pageQuery(query, PAGE_FIELDS),
+    );
+  }
+
+  @Get("admin/orders/:orderId/refunds")
+  @ApiOperation({ summary: "Page through scoped order refund attempts" })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiOkResponse({ type: OperatorRefundPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  orderRefunds(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorRefundPageDto> {
+    return this.reads.orderRefunds(
+      operator,
+      orderId,
+      pageQuery(query, PAGE_FIELDS),
+    );
+  }
+
+  @Get("admin/orders/:orderId/settlements")
+  @ApiOperation({ summary: "Page through scoped order settlements" })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiOkResponse({ type: OperatorSettlementPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  orderSettlements(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorSettlementPageDto> {
+    return this.reads.orderSettlements(
+      operator,
+      orderId,
+      pageQuery(query, PAGE_FIELDS),
+    );
+  }
+
+  @Get("admin/orders/:orderId/fulfilment-history/:kind")
+  @ApiOperation({ summary: "Page through scoped fulfilment lineage" })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiParam({
+    name: "kind",
+    enum: [
+      "jobs",
+      "shipments",
+      "slots",
+      "replacementRequests",
+      "claims",
+      "priceAdjustments",
+    ],
+  })
+  @ApiOkResponse({ type: OperatorFulfilmentHistoryPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  fulfilmentHistory(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Param("kind") kind: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorFulfilmentHistoryPageDto> {
+    return this.reads.fulfilmentHistory(
+      operator,
+      orderId,
+      kind,
+      pageQuery(query, PAGE_FIELDS),
+    );
+  }
+
+  @Get("admin/orders/:orderId/fulfilment-history/claims/:claimId/:kind")
+  @ApiOperation({ summary: "Page through scoped claim child history" })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiParam({ name: "claimId", type: String, format: "uuid" })
+  @ApiParam({
+    name: "kind",
+    enum: ["resolutions", "refunds", "reshipmentAuthorizations"],
+  })
+  @ApiOkResponse({ type: OperatorClaimChildHistoryPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  claimChildHistory(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Param("claimId") claimId: string,
+    @Param("kind") kind: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorClaimChildHistoryPageDto> {
+    return this.reads.claimChildHistory(
+      operator,
+      orderId,
+      claimId,
+      kind,
+      pageQuery(query, PAGE_FIELDS),
+    );
   }
 
   @Get("admin/jobs")

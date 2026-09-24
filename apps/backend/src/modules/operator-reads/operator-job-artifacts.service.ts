@@ -12,6 +12,7 @@ import {
   JobStatus,
   Prisma,
   RetentionHold,
+  ShipmentStatus,
   SliceKind,
 } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -38,6 +39,7 @@ import type {
   OperatorJobArtifactAvailabilityDto,
   OperatorJobArtifactDownloadDto,
   OperatorJobDetailDto,
+  OperatorActionDto,
 } from "./operator-reads.dto";
 
 const UUID =
@@ -57,6 +59,95 @@ const TERMINAL_STATES = new Set<JobStatus>([
   JobStatus.FAILED,
   JobStatus.QC_REJECTED,
 ]);
+
+function jobActions(
+  operator: OperatorContext,
+  job: OperatorJobDetailDto,
+  readiness: { held: boolean; machineReady: boolean; mounted: boolean },
+  matchingShipment: boolean,
+): OperatorActionDto[] {
+  const actions: OperatorActionDto[] = [];
+  const canOperate = operator.permissions.includes(
+    OPERATOR_PERMISSIONS.OPERATIONS_WRITE,
+  );
+  const add = (
+    action: string,
+    blockingCodes: string[] = [],
+    requiresReason = false,
+    requiresConfirmation = false,
+  ) => {
+    if (canOperate)
+      actions.push({
+        action,
+        targetType: "JOB",
+        targetId: job.id,
+        enabled: blockingCodes.length === 0,
+        blockingCodes,
+        requiresReason,
+        requiresConfirmation,
+      });
+  };
+  for (const [action, available] of [
+    ["DOWNLOAD_SOURCE_MODEL", job.artifacts.sourceModel.available],
+    ["DOWNLOAD_PREVIEW", job.artifacts.preview.available],
+    ["DOWNLOAD_PRODUCTION", job.artifacts.production.available],
+  ] as const) {
+    if (available)
+      actions.push({
+        action,
+        targetType: "JOB",
+        targetId: job.id,
+        enabled: true,
+        blockingCodes: [],
+        requiresReason: false,
+        requiresConfirmation: false,
+      });
+  }
+  switch (job.status) {
+    case JobStatus.CREATED:
+      add("ACCEPT_JOB");
+      break;
+    case JobStatus.GCODE_READY:
+      add("START_PRINTING", [
+        ...(readiness.held ? [] : ["HELD_RESERVATION_REQUIRED"]),
+        ...(readiness.machineReady ? [] : ["MACHINE_UNAVAILABLE"]),
+        ...(readiness.mounted ? [] : ["MATERIAL_NOT_MOUNTED"]),
+        ...(job.artifacts.production.available
+          ? []
+          : ["PRODUCTION_ARTIFACT_UNAVAILABLE"]),
+      ]);
+      break;
+    case JobStatus.PRINTING:
+      add("FINISH_PRINTING", ["ACTUAL_MATERIAL_REQUIRED"]);
+      break;
+    case JobStatus.PRINTED:
+      add("SUBMIT_QC", ["QC_EVIDENCE_REQUIRED"]);
+      break;
+    case JobStatus.PHOTO_SUBMITTED:
+      add("APPROVE_QC");
+      break;
+    case JobStatus.QC_APPROVED:
+      add("PACK_JOB", matchingShipment ? [] : ["MATCHING_SHIPMENT_REQUIRED"]);
+      break;
+    case JobStatus.FAILED:
+    case JobStatus.QC_REJECTED:
+      add("PREPARE_REPLACEMENT", ["FRESH_RESERVATION_REQUIRED"], true);
+      break;
+  }
+  if (
+    new Set<JobStatus>([
+      JobStatus.ACCEPTED,
+      JobStatus.GCODE_READY,
+      JobStatus.PRINTING,
+      JobStatus.PRINTED,
+      JobStatus.PHOTO_SUBMITTED,
+      JobStatus.QC_APPROVED,
+      JobStatus.PACKED,
+    ]).has(job.status as JobStatus)
+  )
+    add("FAIL_JOB", ["FAILURE_DETAILS_REQUIRED"], true, true);
+  return actions;
+}
 
 export type JobArtifactKind = "SOURCE_MODEL" | "PREVIEW" | "PRODUCTION";
 
@@ -195,6 +286,23 @@ export class OperatorJobArtifactsService {
     const slots = this.exactSlots(job);
     const source = await this.assess(job, "SOURCE_MODEL", slots);
     const production = await this.assess(job, "PRODUCTION", slots);
+    const readiness =
+      job.status === JobStatus.GCODE_READY
+        ? await this.printingReadiness(job)
+        : { held: false, machineReady: false, mounted: false };
+    const matchingShipment =
+      job.status === JobStatus.QC_APPROVED
+        ? await this.prisma.shipment.findFirst({
+            where: {
+              orderId: job.orderId,
+              shipmentPlanId: job.shipmentPlanId,
+              status: {
+                in: [ShipmentStatus.PLANNED, ShipmentStatus.LABEL_CREATED],
+              },
+            },
+            select: { id: true },
+          })
+        : null;
     const promisedDate = job.order.individualOrigin?.quote.promisedDate;
     const acceptedItems = new Map(
       (job.order.automaticQuoteDraft?.items ?? []).map((item) => [
@@ -216,7 +324,7 @@ export class OperatorJobArtifactsService {
       }
     }
 
-    return {
+    const detail: OperatorJobDetailDto = {
       id: job.id,
       nodeId: job.nodeId,
       orderId: job.orderId,
@@ -278,6 +386,58 @@ export class OperatorJobArtifactsService {
         preview: unavailable("NOT_GENERATED"),
         production: production.availability,
       },
+      actions: [],
+    };
+    detail.actions = jobActions(
+      operator,
+      detail,
+      readiness,
+      !!matchingShipment,
+    );
+    return detail;
+  }
+
+  private async printingReadiness(job: ScopedJob): Promise<{
+    held: boolean;
+    machineReady: boolean;
+    mounted: boolean;
+  }> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{ machineReady: boolean; mounted: boolean }>
+    >`
+      SELECT machine.status = 'ACTIVE'
+           AND selection.revision_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM capacity_reservations interval
+             WHERE interval.production_reservation_id = reservation.id
+               AND NOT EXISTS (
+                 SELECT 1 FROM machine_availability_windows available
+                 WHERE available.revision_id = selection.revision_id
+                   AND available.starts_at <= interval.starts_at
+                   AND available.ends_at >= interval.ends_at
+               )
+           ) AS "machineReady",
+           inventory.mount_status = 'MOUNTED' AS mounted
+      FROM production_reservations reservation
+      JOIN machines machine
+        ON machine.id = reservation.machine_id
+       AND machine.node_id = reservation.node_id
+      JOIN inventories inventory
+        ON inventory.id = reservation.inventory_id
+       AND inventory.node_id = reservation.node_id
+      LEFT JOIN machine_availability_selections selection
+        ON selection.machine_id = machine.id
+       AND selection.node_id = machine.node_id
+      WHERE reservation.job_id = ${job.id}::uuid
+        AND reservation.node_id = ${job.nodeId}::uuid
+        AND reservation.status = 'HELD'
+      LIMIT 1
+    `;
+    const row = rows[0];
+    return {
+      held: row !== undefined,
+      machineReady: row?.machineReady === true,
+      mounted: row?.mounted === true,
     };
   }
 

@@ -6,7 +6,11 @@ import {
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
-import { OperatorReadsService } from "./operator-reads.service";
+import {
+  OperatorReadsService,
+  orderActions,
+  orderBarriers,
+} from "./operator-reads.service";
 
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const cursorId = "22222222-2222-4222-8222-222222222222";
@@ -162,5 +166,191 @@ describe("OperatorReadsService reference-profile activation notices", () => {
       orderBy: [{ activatedAt: "desc" }, { id: "desc" }],
       take: 2,
     });
+  });
+});
+
+describe("OperatorReadsService claim child history", () => {
+  it("pages a scoped claim and omits internal refund dispatch fields", async () => {
+    const orderId = "77777777-7777-4777-8777-777777777777";
+    const claimId = "88888888-8888-4888-8888-888888888888";
+    const now = new Date("2026-01-02T03:04:05.678Z");
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: cursorId,
+        paymentId: "99999999-9999-4999-8999-999999999999",
+        claimId,
+        priceAdjustmentId: null,
+        provider: "SANDBOX",
+        providerRefundId: null,
+        amountMinor: 100n,
+        reason: "CUSTOMER_CANCELLATION",
+        status: "FAILED",
+        requestedAt: now,
+        completedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        idempotencyKey: "internal-command-key",
+      },
+      { id: secondReservationId },
+    ]);
+    const transaction = {
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ node_id: nodeId }]),
+      claim: { findFirst: vi.fn().mockResolvedValue({ id: claimId }) },
+      refundTransaction: { findMany },
+    };
+    const service = new OperatorReadsService(
+      {
+        $transaction: (callback: (tx: typeof transaction) => unknown) =>
+          callback(transaction),
+      } as never,
+      {} as never,
+    );
+    const operator = {
+      operatorId: "55555555-5555-4555-8555-555555555555",
+      role: "VIEWER" as const,
+      permissions: [OPERATOR_PERMISSIONS.OPERATIONS_READ],
+      nodeIds: [nodeId],
+      authenticationMethod: "DEVELOPMENT_PASSWORD" as const,
+      sessionId: "66666666-6666-4666-8666-666666666666",
+    };
+
+    await expect(
+      service.claimChildHistory(operator, orderId, claimId, "refunds", {
+        limit: 1,
+      }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: cursorId,
+          paymentId: "99999999-9999-4999-8999-999999999999",
+          claimId,
+          priceAdjustmentId: null,
+          provider: "SANDBOX",
+          providerRefundId: null,
+          amountMinor: "100",
+          reason: "CUSTOMER_CANCELLATION",
+          status: "FAILED",
+          requestedAt: now.toISOString(),
+          completedAt: null,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        },
+      ],
+      nextCursor: cursorId,
+    });
+    expect(findMany).toHaveBeenCalledWith({
+      where: { claimId },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 2,
+    });
+  });
+});
+
+describe("operator order barriers", () => {
+  const orderId = "77777777-7777-4777-8777-777777777777";
+  const originalId = "88888888-8888-4888-8888-888888888888";
+  const replacementId = "99999999-9999-4999-8999-999999999999";
+
+  it("clears a failed source refund only after its replacement succeeds", () => {
+    const fulfilment = {
+      shipments: [],
+      replacementRequests: [],
+      claims: [],
+      priceAdjustments: [],
+    };
+    const root = {
+      id: originalId,
+      replacesRefundTransactionId: null,
+      status: "FAILED",
+      amountMinor: 100n,
+      priceAdjustmentId: null,
+    };
+    const child = {
+      ...root,
+      id: replacementId,
+      replacesRefundTransactionId: originalId,
+      status: "SUCCEEDED",
+    };
+    const payment = {
+      role: "FULL",
+      status: "REFUNDED",
+      refunds: [root, child],
+    };
+    expect(orderBarriers(fulfilment as never, [payment], [], 0n)).not.toContain(
+      "REFUND_UNRESOLVED",
+    );
+    expect(
+      orderBarriers(
+        fulfilment as never,
+        [{ ...payment, refunds: [root, { ...child, status: "PENDING" }] }],
+        [],
+        0n,
+      ),
+    ).toContain("REFUND_UNRESOLVED");
+  });
+
+  it("uses the current shipment leaf after a lost shipment is replaced", () => {
+    const fulfilment = {
+      orderId,
+      shipments: [
+        { id: originalId, replacesShipmentId: null, status: "LOST" },
+        {
+          id: replacementId,
+          replacesShipmentId: originalId,
+          status: "DELIVERED",
+        },
+      ],
+      replacementRequests: [],
+      claims: [],
+      priceAdjustments: [],
+    };
+    expect(orderBarriers(fulfilment as never, [], [], 0n)).not.toContain(
+      "SHIPMENT_UNRESOLVED",
+    );
+    fulfilment.shipments[1]!.status = "IN_TRANSIT";
+    expect(orderBarriers(fulfilment as never, [], [], 0n)).toContain(
+      "SHIPMENT_UNRESOLVED",
+    );
+  });
+});
+
+describe("operator order actions", () => {
+  it("does not advertise cancellation after shipment handoff", () => {
+    const operator = {
+      operatorId: "55555555-5555-4555-8555-555555555555",
+      role: "ADMIN" as const,
+      permissions: [
+        OPERATOR_PERMISSIONS.OPERATIONS_WRITE,
+        OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+      ],
+      nodeIds: [nodeId],
+      authenticationMethod: "DEVELOPMENT_PASSWORD" as const,
+      sessionId: "66666666-6666-4666-8666-666666666666",
+    };
+    const fulfilment = {
+      orderId: "77777777-7777-4777-8777-777777777777",
+      orderStatus: "IN_PRODUCTION",
+      jobs: [],
+      shipments: [],
+      replacementRequests: [],
+      priceAdjustments: [],
+      claims: [],
+    };
+    expect(
+      orderActions(operator, fulfilment as never, [], [], []).some(
+        (action) => action.action === "CANCEL_ORDER" && action.enabled,
+      ),
+    ).toBe(true);
+    for (const status of ["SHIPPED", "DELIVERED", "PARTIALLY_FULFILLED"]) {
+      fulfilment.orderStatus = status;
+      expect(
+        orderActions(operator, fulfilment as never, [], [], []).some(
+          (action) => action.action === "CANCEL_ORDER",
+        ),
+      ).toBe(false);
+    }
   });
 });

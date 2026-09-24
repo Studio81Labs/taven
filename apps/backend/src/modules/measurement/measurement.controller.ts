@@ -40,6 +40,11 @@ import {
   AcquisitionSpendEvidencePageDto,
   ActualCostEvidencePageDto,
 } from "./measurement-read.dto";
+import {
+  HandlingAllocationPageDto,
+  HandlingSessionPageDto,
+  HandlingSessionReadDto,
+} from "./handling-read.dto";
 
 const IDEMPOTENCY_HEADER = {
   name: "Idempotency-Key",
@@ -163,6 +168,84 @@ export class MeasurementController {
 @ApiSecurity("operatorSession")
 @ApiHeader(OPERATOR_CSRF_HEADER)
 @UseGuards(OperatorAccessGuard)
+@RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_READ)
+@Controller("admin/handling-sessions")
+export class HandlingSessionReadController {
+  constructor(private readonly measurement: MeasurementService) {}
+
+  @Get()
+  @ApiOperation({ summary: "List scoped handling sessions and allocations" })
+  @ApiOkResponse({ type: HandlingSessionPageDto })
+  @ApiQuery({
+    name: "lifecycle",
+    required: false,
+    enum: ["OPEN", "COMPLETED", "VOIDED"],
+  })
+  @ApiQuery({ name: "orderId", required: false, type: String, format: "uuid" })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  list(
+    @CurrentOperator() operator: OperatorContext,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<HandlingSessionPageDto> {
+    const page = handlingQuery(query);
+    return this.measurement.handlingSessions(
+      operator,
+      page.lifecycle,
+      page.orderId,
+      page.cursor,
+      page.limit,
+    );
+  }
+
+  @Get(":sessionId")
+  @ApiOperation({ summary: "Read one scoped handling session and allocations" })
+  @ApiParam(SESSION_ID)
+  @ApiOkResponse({ type: HandlingSessionReadDto })
+  detail(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("sessionId") sessionId: string,
+  ): Promise<HandlingSessionReadDto> {
+    return this.measurement.handlingSession(operator, sessionId);
+  }
+
+  @Get(":sessionId/allocations")
+  @ApiOperation({ summary: "Page through scoped handling allocations" })
+  @ApiParam(SESSION_ID)
+  @ApiOkResponse({ type: HandlingAllocationPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  allocations(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("sessionId") sessionId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<HandlingAllocationPageDto> {
+    const page = evidenceQuery(query, new Set(["cursor", "limit"]));
+    return this.measurement.handlingAllocations(
+      operator,
+      sessionId,
+      page.cursor,
+      page.limit,
+    );
+  }
+}
+
+@ApiTags("operator measurement")
+@ApiSecurity("operatorSession")
+@ApiHeader(OPERATOR_CSRF_HEADER)
+@UseGuards(OperatorAccessGuard)
 @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
 @Controller("admin")
 export class MeasurementReadController {
@@ -237,6 +320,29 @@ function evidenceQuery(
   return {
     ...(query.channel !== undefined
       ? { channel: query.channel as string }
+      : {}),
+    ...(query.cursor !== undefined ? { cursor: query.cursor as string } : {}),
+    ...(query.limit !== undefined ? { limit: Number(query.limit) } : {}),
+  };
+}
+
+function handlingQuery(query: Record<string, string | string[] | undefined>): {
+  lifecycle?: string;
+  orderId?: string;
+  cursor?: string;
+  limit?: number;
+} {
+  const allowed = new Set(["lifecycle", "orderId", "cursor", "limit"]);
+  for (const [key, value] of Object.entries(query)) {
+    if (!allowed.has(key) || typeof value !== "string")
+      throw new BadRequestException(`${key} is invalid`);
+  }
+  return {
+    ...(query.lifecycle !== undefined
+      ? { lifecycle: query.lifecycle as string }
+      : {}),
+    ...(query.orderId !== undefined
+      ? { orderId: query.orderId as string }
       : {}),
     ...(query.cursor !== undefined ? { cursor: query.cursor as string } : {}),
     ...(query.limit !== undefined ? { limit: Number(query.limit) } : {}),

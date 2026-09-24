@@ -4,7 +4,18 @@ import {
   ApiPropertyOptional,
   getSchemaPath,
 } from "@nestjs/swagger";
-import { FulfilmentProjectionDto } from "../orders/orders.dto";
+import {
+  FulfilmentClaimDto,
+  FulfilmentClaimSlotResolutionDto,
+  FulfilmentRefundDto,
+  FulfilmentReshipmentAuthorizationDto,
+  FulfilmentJobDto,
+  FulfilmentPriceAdjustmentDto,
+  FulfilmentProjectionDto,
+  FulfilmentReplacementRequestDto,
+  FulfilmentShipmentDto,
+  FulfilmentSlotDto,
+} from "../orders/orders.dto";
 import { ReferenceProfileActivationNoticeDto } from "../resources/reference-profile-activation-notice.dto";
 import {
   AutomaticQuoteParametersDto,
@@ -284,6 +295,9 @@ export class OperatorJobDetailDto {
 
   @ApiProperty({ type: OperatorJobArtifactsDto })
   artifacts!: OperatorJobArtifactsDto;
+
+  @ApiProperty({ type: () => [OperatorActionDto] })
+  actions!: OperatorActionDto[];
 }
 
 export class OperatorJobArtifactDownloadDto {
@@ -301,6 +315,40 @@ export class OperatorJobArtifactDownloadDto {
 
   @ApiProperty({ type: String, pattern: "^[0-9a-f]{64}$" })
   sha256!: string;
+}
+
+export class OperatorAcceptedFindingDto {
+  @ApiProperty(UUID)
+  findingId!: string;
+
+  @ApiProperty({ type: String })
+  code!: string;
+
+  @ApiProperty({ type: String })
+  severity!: string;
+
+  @ApiProperty({ type: String })
+  message!: string;
+
+  @ApiProperty({ type: String })
+  acknowledgementKey!: string;
+}
+
+export class OperatorOrderItemGeometryDto {
+  @ApiProperty(DECIMAL)
+  boundsXMicrometers!: string;
+
+  @ApiProperty(DECIMAL)
+  boundsYMicrometers!: string;
+
+  @ApiProperty(DECIMAL)
+  boundsZMicrometers!: string;
+
+  @ApiProperty(DECIMAL)
+  volumeCubicMicrometers!: string;
+
+  @ApiProperty({ type: String })
+  geometrySha256!: string;
 }
 
 export class OperatorOrderItemDto {
@@ -339,6 +387,73 @@ export class OperatorOrderItemDto {
 
   @ApiProperty({ type: [String] })
   preflightFindings!: string[];
+
+  @ApiProperty({ type: () => [OperatorAcceptedFindingDto] })
+  acceptedFindings!: OperatorAcceptedFindingDto[];
+
+  @ApiProperty({ type: () => OperatorOrderItemGeometryDto })
+  geometry!: OperatorOrderItemGeometryDto;
+
+  @ApiProperty({ type: () => PrintConfigRevisionReadDto })
+  printConfig!: Pick<
+    PrintConfigRevisionReadDto,
+    keyof PrintConfigRevisionReadDto
+  >;
+}
+
+export class OperatorPriceAllocationDto {
+  @ApiProperty(UUID)
+  fulfilmentSlotId!: string;
+
+  @ApiProperty(DECIMAL)
+  amountMinor!: string;
+}
+
+export class OperatorPriceComponentDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty({ type: String })
+  kind!: string;
+
+  @ApiProperty({ type: String })
+  scope!: string;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  orderItemId!: string | null;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  shipmentPlanId!: string | null;
+
+  @ApiProperty(DECIMAL)
+  amountMinor!: string;
+
+  @ApiPropertyOptional({
+    type: Object,
+    nullable: true,
+    additionalProperties: true,
+  })
+  allocation!: Record<string, unknown> | null;
+
+  @ApiProperty({ type: [OperatorPriceAllocationDto] })
+  fulfilmentAllocations!: OperatorPriceAllocationDto[];
+}
+
+export class OperatorLegalAcceptanceDto {
+  @ApiProperty(UUID)
+  revisionId!: string;
+
+  @ApiProperty({ type: String })
+  purpose!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  revisionCode!: string | null;
+
+  @ApiProperty({ type: String })
+  contentHash!: string;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  acceptedAt!: string;
 }
 
 export class OperatorReferenceSliceDto {
@@ -389,6 +504,18 @@ export class OperatorAcceptedPriceDto {
   @ApiProperty(UUID)
   snapshotId!: string;
 
+  @ApiProperty({ type: String })
+  snapshotHash!: string;
+
+  @ApiProperty({ type: String })
+  pricingRevision!: string;
+
+  @ApiProperty({ type: String })
+  taxRegime!: string;
+
+  @ApiProperty({ type: Number })
+  vatRateBasisPoints!: number;
+
   @ApiProperty(DECIMAL)
   contractTotalMinor!: string;
 
@@ -406,6 +533,9 @@ export class OperatorAcceptedPriceDto {
 
   @ApiProperty({ type: String })
   termsRevision!: string;
+
+  @ApiProperty({ type: [OperatorPriceComponentDto] })
+  components!: OperatorPriceComponentDto[];
 }
 
 export class OperatorSettlementDto {
@@ -437,6 +567,14 @@ export class OperatorSettlementDto {
   settledAt!: string;
 }
 
+export class OperatorSettlementPageDto {
+  @ApiProperty({ type: [OperatorSettlementDto] })
+  items!: OperatorSettlementDto[];
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
+}
+
 export class OperatorRefundTransactionDto {
   @ApiProperty(UUID)
   id!: string;
@@ -461,6 +599,37 @@ export class OperatorRefundTransactionDto {
 
   @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
   completedAt!: string | null;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  replacesRefundTransactionId!: string | null;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  replacesFailureProviderEventId!: string | null;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  providerResultEventId!: string | null;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  sourceSuccessProviderEventId!: string | null;
+
+  @ApiProperty({ type: String })
+  provider!: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  providerRefundId!: string | null;
+}
+
+export class OperatorRefundPageItemDto extends OperatorRefundTransactionDto {
+  @ApiProperty(UUID)
+  paymentId!: string;
+}
+
+export class OperatorRefundPageDto {
+  @ApiProperty({ type: [OperatorRefundPageItemDto] })
+  items!: OperatorRefundPageItemDto[];
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
 }
 
 export class OperatorPaymentDto {
@@ -520,6 +689,17 @@ export class OperatorPaymentDto {
 
   @ApiProperty({ type: [OperatorRefundTransactionDto] })
   refunds!: OperatorRefundTransactionDto[];
+
+  @ApiPropertyOptional(UUID)
+  refundsNextCursor?: string;
+}
+
+export class OperatorPaymentPageDto {
+  @ApiProperty({ type: [OperatorPaymentDto] })
+  items!: OperatorPaymentDto[];
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
 }
 
 export class OperatorOrderTimelineEventDto {
@@ -542,6 +722,14 @@ export class OperatorOrderTimelineEventDto {
   occurredAt!: string;
 }
 
+export class OperatorOrderTimelinePageDto {
+  @ApiProperty({ type: [OperatorOrderTimelineEventDto] })
+  items!: OperatorOrderTimelineEventDto[];
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
+}
+
 export class OperatorFinancialProjectionDto {
   @ApiPropertyOptional({ ...UUID, nullable: true })
   activeContractRevisionId!: string | null;
@@ -558,8 +746,175 @@ export class OperatorFinancialProjectionDto {
   @ApiProperty({ type: [OperatorSettlementDto] })
   settlements!: OperatorSettlementDto[];
 
+  @ApiPropertyOptional(UUID)
+  settlementsNextCursor?: string;
+
   @ApiProperty({ type: [OperatorPaymentDto] })
   payments!: OperatorPaymentDto[];
+
+  @ApiPropertyOptional(UUID)
+  paymentsNextCursor?: string;
+
+  @ApiProperty(DECIMAL)
+  outstandingCompensationMinor!: string;
+
+  @ApiProperty({ type: [String] })
+  blockingCodes!: string[];
+}
+
+export class OperatorShipmentPlanSlotDto {
+  @ApiProperty(UUID)
+  fulfilmentSlotId!: string;
+
+  @ApiProperty(UUID)
+  orderItemId!: string;
+}
+
+export class OperatorShipmentPlanDto {
+  @ApiProperty(UUID)
+  id!: string;
+
+  @ApiProperty(UUID)
+  orderPhaseId!: string;
+
+  @ApiProperty({ type: Number })
+  ordinal!: number;
+
+  @ApiProperty({ type: String })
+  category!: string;
+
+  @ApiProperty(DECIMAL)
+  plannedVolumeCubicMm!: string;
+
+  @ApiProperty(DECIMAL)
+  plannedWeightMilligrams!: string;
+
+  @ApiProperty(DECIMAL)
+  shippingAmountMinor!: string;
+
+  @ApiProperty(DECIMAL)
+  packagingAmountMinor!: string;
+
+  @ApiProperty(DECIMAL)
+  handlingAmountMinor!: string;
+
+  @ApiProperty({ type: [OperatorShipmentPlanSlotDto] })
+  slots!: OperatorShipmentPlanSlotDto[];
+}
+
+export class OperatorSlotLineageDto {
+  @ApiProperty(UUID)
+  fulfilmentSlotId!: string;
+
+  @ApiPropertyOptional({ ...UUID, nullable: true })
+  currentJobId!: string | null;
+
+  @ApiProperty({ type: [String], format: "uuid" })
+  jobIds!: string[];
+}
+
+export class OperatorFulfilmentHistoryCursorsDto {
+  @ApiPropertyOptional(UUID)
+  jobs?: string;
+
+  @ApiPropertyOptional(UUID)
+  shipments?: string;
+
+  @ApiPropertyOptional(UUID)
+  slots?: string;
+
+  @ApiPropertyOptional(UUID)
+  replacementRequests?: string;
+
+  @ApiPropertyOptional(UUID)
+  claims?: string;
+
+  @ApiPropertyOptional(UUID)
+  priceAdjustments?: string;
+}
+
+@ApiExtraModels(
+  FulfilmentJobDto,
+  FulfilmentShipmentDto,
+  FulfilmentSlotDto,
+  FulfilmentReplacementRequestDto,
+  FulfilmentClaimDto,
+  FulfilmentPriceAdjustmentDto,
+)
+export class OperatorFulfilmentHistoryPageDto {
+  @ApiProperty({
+    type: "array",
+    items: {
+      oneOf: [
+        FulfilmentJobDto,
+        FulfilmentShipmentDto,
+        FulfilmentSlotDto,
+        FulfilmentReplacementRequestDto,
+        FulfilmentClaimDto,
+        FulfilmentPriceAdjustmentDto,
+      ].map((model) => ({ $ref: getSchemaPath(model) })),
+    },
+  })
+  items!: Array<
+    | FulfilmentJobDto
+    | FulfilmentShipmentDto
+    | FulfilmentSlotDto
+    | FulfilmentReplacementRequestDto
+    | FulfilmentClaimDto
+    | FulfilmentPriceAdjustmentDto
+  >;
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
+}
+
+@ApiExtraModels(
+  FulfilmentClaimSlotResolutionDto,
+  FulfilmentRefundDto,
+  FulfilmentReshipmentAuthorizationDto,
+)
+export class OperatorClaimChildHistoryPageDto {
+  @ApiProperty({
+    type: "array",
+    items: {
+      oneOf: [
+        FulfilmentClaimSlotResolutionDto,
+        FulfilmentRefundDto,
+        FulfilmentReshipmentAuthorizationDto,
+      ].map((model) => ({ $ref: getSchemaPath(model) })),
+    },
+  })
+  items!: Array<
+    | FulfilmentClaimSlotResolutionDto
+    | FulfilmentRefundDto
+    | FulfilmentReshipmentAuthorizationDto
+  >;
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
+}
+
+export class OperatorActionDto {
+  @ApiProperty({ type: String })
+  action!: string;
+
+  @ApiProperty({ type: String })
+  targetType!: string;
+
+  @ApiProperty(UUID)
+  targetId!: string;
+
+  @ApiProperty({ type: Boolean })
+  enabled!: boolean;
+
+  @ApiProperty({ type: [String] })
+  blockingCodes!: string[];
+
+  @ApiProperty({ type: Boolean })
+  requiresReason!: boolean;
+
+  @ApiProperty({ type: Boolean })
+  requiresConfirmation!: boolean;
 }
 
 export class OperatorOrderDetailDto {
@@ -578,6 +933,18 @@ export class OperatorOrderDetailDto {
   @ApiPropertyOptional({ type: String, nullable: true })
   acceptedTermsRevision!: string | null;
 
+  @ApiPropertyOptional({ type: String, nullable: true })
+  acceptedClaimPolicyRevision!: string | null;
+
+  @ApiPropertyOptional({ type: Number, nullable: true })
+  acceptedClaimWindowDays!: number | null;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  withdrawalExceptionAcknowledgedAt!: string | null;
+
+  @ApiProperty({ type: [OperatorLegalAcceptanceDto] })
+  legalAcceptances!: OperatorLegalAcceptanceDto[];
+
   @ApiPropertyOptional({ type: OperatorAcceptedPriceDto, nullable: true })
   acceptedPrice!: OperatorAcceptedPriceDto | null;
 
@@ -590,8 +957,26 @@ export class OperatorOrderDetailDto {
   @ApiProperty({ type: FulfilmentProjectionDto })
   fulfilment!: FulfilmentProjectionDto;
 
+  @ApiProperty({ type: OperatorFulfilmentHistoryCursorsDto })
+  fulfilmentNextCursors!: OperatorFulfilmentHistoryCursorsDto;
+
+  @ApiProperty({ type: [OperatorShipmentPlanDto] })
+  shipmentPlans!: OperatorShipmentPlanDto[];
+
+  @ApiProperty({ type: [OperatorSlotLineageDto] })
+  slotLineage!: OperatorSlotLineageDto[];
+
   @ApiProperty({ type: [OperatorOrderTimelineEventDto] })
   timeline!: OperatorOrderTimelineEventDto[];
+
+  @ApiPropertyOptional({ type: String, format: "uuid" })
+  timelineNextCursor?: string;
+
+  @ApiProperty({ type: [String] })
+  blockingCodes!: string[];
+
+  @ApiProperty({ type: [OperatorActionDto] })
+  actions!: OperatorActionDto[];
 }
 
 export class ReferenceProfileReadDto {

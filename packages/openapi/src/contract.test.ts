@@ -386,7 +386,26 @@ describe("OpenAPI artifact", () => {
                 in: "path",
                 name,
                 required: true,
-                schema: { type: "string", format: "uuid" },
+                schema:
+                  name === "kind"
+                    ? {
+                        type: "string",
+                        enum: path.includes("/claims/{claimId}/")
+                          ? [
+                              "resolutions",
+                              "refunds",
+                              "reshipmentAuthorizations",
+                            ]
+                          : [
+                              "jobs",
+                              "shipments",
+                              "slots",
+                              "replacementRequests",
+                              "claims",
+                              "priceAdjustments",
+                            ],
+                      }
+                    : { type: "string", format: "uuid" },
               }),
             ]),
           );
