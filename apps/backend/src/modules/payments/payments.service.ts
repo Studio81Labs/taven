@@ -68,7 +68,7 @@ import { reservePaymentWebhookVerification } from "./payment-webhook-limit";
 import { normalizeCheckoutContact } from "./checkout-contact";
 
 const CHECKOUT_CAPTURE_MILLISECONDS = 60 * 60 * 1_000;
-const REACQUISITION_RESERVATION_MILLISECONDS = 15 * 60 * 1_000;
+export const REACQUISITION_RESERVATION_MILLISECONDS = 15 * 60 * 1_000;
 const MAX_REACQUISITION_PLAN_GENERATIONS = 8;
 const INTENT_RECONCILIATION_ATTEMPTS = 3;
 const IDEMPOTENCY_DAYS = 7;

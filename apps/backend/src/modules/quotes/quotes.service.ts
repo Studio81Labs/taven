@@ -57,7 +57,10 @@ import { normalizeAttribution } from "../metrics/attribution";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
 import { normalizeCheckoutContact } from "../payments/checkout-contact";
-import { checkoutContactSnapshotMatches } from "../payments/payments.service";
+import {
+  checkoutContactSnapshotMatches,
+  REACQUISITION_RESERVATION_MILLISECONDS,
+} from "../payments/payments.service";
 import { lockCommercialPolicy } from "../resources/commercial-policy-selection";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
@@ -2246,6 +2249,7 @@ export class QuotesService {
       this.prisma.phaseResourcePlan.findMany({
         where: {
           eligibilitySnapshot: { orderPhase: { orderId: origin.orderId } },
+          reservationSets: { none: {} },
         },
         select: { expiresAt: true },
       }),
@@ -2278,7 +2282,11 @@ export class QuotesService {
           : phase.status !== "QUOTED"
             ? "UNAVAILABLE"
             : origin.order.status === "QUOTED" &&
-                plans.some((plan) => plan.expiresAt > now)
+                plans.some(
+                  (plan) =>
+                    plan.expiresAt.getTime() >
+                    now.getTime() + REACQUISITION_RESERVATION_MILLISECONDS,
+                )
               ? "READY"
               : origin.order.status === "DRAFT"
                 ? candidateDispatch

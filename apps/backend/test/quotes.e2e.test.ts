@@ -1097,6 +1097,14 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toBe(200);
     expect(completedPreparation.body.status).toBe("READY");
     expect(completedPreparation.body.phaseResourcePlanId).toBeTruthy();
+    const readPreparationStatus = () =>
+      apiJson<{ preparationStatus: string }>(
+        `offers/${issued.body.quoteId}/order-status`,
+        { headers: bearer(issued.body.offerToken) },
+      );
+    expect((await readPreparationStatus()).body.preparationStatus).toBe(
+      "READY",
+    );
     const otherNode = await prisma.node.create({
       data: {
         code: `foreign-${randomUUID()}`.slice(0, 50),
@@ -1152,6 +1160,29 @@ describe("QuoteRequest and tokenized individual offers", () => {
         select: { id: true },
       }),
     ).toEqual({ id: terminalPlan.phaseResourcePlanId });
+    const statusPlans = vi.spyOn(prisma.phaseResourcePlan, "findMany");
+    try {
+      expect((await readPreparationStatus()).body.preparationStatus).toBe(
+        "READY",
+      );
+      expect(statusPlans).toHaveBeenCalledWith({
+        where: {
+          eligibilitySnapshot: {
+            orderPhase: { orderId: accepted.body.orderId },
+          },
+          reservationSets: { none: {} },
+        },
+        select: { expiresAt: true },
+      });
+      statusPlans.mockResolvedValueOnce([
+        { expiresAt: new Date(Date.now() + 10 * 60_000) },
+      ] as never);
+      expect((await readPreparationStatus()).body.preparationStatus).toBe(
+        "UNAVAILABLE",
+      );
+    } finally {
+      statusPlans.mockRestore();
+    }
     const initialKey = key("accepted-individual-initial-payment");
     const createInitialPayment = (
       method: "CARD" | "BANK_TRANSFER",
