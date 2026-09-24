@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { zipSync } from "fflate";
 import { resetE2eAnonymousAdmissionLimitsForBrowser } from "../../../backend/test/support/publish-e2e-legal-fixtures";
+import { observeBrowserDiagnostics } from "./browser-diagnostics";
 
 const apiUrl =
   process.env.INTEGRATION_API_URL ?? "https://api-staging.taven.cz";
@@ -43,6 +44,7 @@ test.describe("Real API assisted request", () => {
     // A browser screenshot is a valid PNG and contains no customer material.
     await page.setContent("<html><body>Assisted fixture photo</body></html>");
     const photo = await page.screenshot({ type: "png" });
+    const diagnostics = observeBrowserDiagnostics(page);
     let createCalls = 0;
     let failedFirstPut = false;
     page.on("request", (outgoing) => {
@@ -154,6 +156,23 @@ test.describe("Real API assisted request", () => {
     expect(Date.parse(detail.attachments[0]!.deleteAfter)).toBeGreaterThan(
       Date.parse(detail.attachments[0]!.uploadedAt),
     );
+    if (process.env.INTEGRATION_MUTABLE_FIXTURES === "true") {
+      diagnostics.assertSanitized(
+        [
+          created.requestToken,
+          "assisted-browser@example.test",
+          "Testovací poptávka na individuální díl",
+          photo.toString("base64").slice(0, 48),
+          process.env.TAVEN_S3_SECRET_ACCESS_KEY ?? "",
+          "Bearer ",
+        ],
+        [
+          new URL(process.env.INTEGRATION_WEB_URL!).origin,
+          new URL(apiUrl).origin,
+          new URL(storageUrl).origin,
+        ],
+      );
+    }
   });
 
   test("carries a fit-sensitive quote into one assisted request", async ({

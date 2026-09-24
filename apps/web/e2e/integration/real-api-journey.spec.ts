@@ -17,6 +17,7 @@ import {
   replaceE2eCheckoutDocumentsForBrowser,
   resetE2eAnonymousAdmissionLimitsForBrowser,
 } from "../../../backend/test/support/publish-e2e-legal-fixtures";
+import { observeBrowserDiagnostics } from "./browser-diagnostics";
 
 const INTEGRATION_API_URL =
   process.env.INTEGRATION_API_URL || "https://api-staging.taven.cz";
@@ -259,6 +260,8 @@ test.describe("Real API Integration Journey", () => {
       `${INTEGRATION_API_URL}/legal-documents/availability`,
     );
     expect(legal.status()).toBe(200);
+
+    const diagnostics = observeBrowserDiagnostics(page);
 
     await page.goto("/");
     await expect(
@@ -513,6 +516,38 @@ test.describe("Real API Integration Journey", () => {
               unexpectedSources: 0,
               sensitiveEventRows: 0,
             });
+          const observations = diagnostics.observationBodies();
+          expect(observations).toContainEqual({ eventType: "quote.viewed" });
+          expect(observations).toContainEqual({
+            eventType: "checkout.started",
+          });
+          expect(
+            observations.every(
+              (body) =>
+                typeof body === "object" &&
+                body !== null &&
+                !Array.isArray(body) &&
+                Object.keys(body).length === 1 &&
+                "eventType" in body &&
+                ["quote.viewed", "checkout.started"].includes(
+                  String(body.eventType),
+                ),
+            ),
+          ).toBe(true);
+          diagnostics.assertSanitized(
+            [
+              checkoutSession.sessionToken,
+              "browser-144@example.test",
+              "solid taven_cube_20mm",
+              process.env.TAVEN_S3_SECRET_ACCESS_KEY ?? "",
+              "Bearer ",
+            ],
+            [
+              new URL(process.env.INTEGRATION_WEB_URL!).origin,
+              new URL(INTEGRATION_API_URL).origin,
+              new URL(process.env.INTEGRATION_STORAGE_URL!).origin,
+            ],
+          );
         }
       }
     }
