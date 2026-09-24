@@ -436,10 +436,17 @@ test("catalog writes wait for a manual refresh to finish", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: "Potvrdit pro nové vazby" }).nth(1),
   ).toBeDisabled();
+  const otherPriceDetail = page
+    .getByRole("heading", { name: "Ceníky a obchodní pravidla" })
+    .locator("..")
+    .getByRole("button", { name: "Detail" })
+    .nth(1);
+  await expect(otherPriceDetail).toBeDisabled();
   releaseRead?.();
   await expect(
     page.getByRole("button", { name: "Potvrdit pro nové vazby" }).nth(1),
   ).toBeEnabled();
+  await expect(otherPriceDetail).toBeEnabled();
   expect(state.postedVersions).toEqual([]);
 });
 

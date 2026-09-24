@@ -758,6 +758,7 @@ onUnmounted(() => noticePager.dispose());
           <button
             class="text-action"
             type="button"
+            :disabled="loading || busy"
             @click="inspectPrice(price.id)"
           >
             Detail
