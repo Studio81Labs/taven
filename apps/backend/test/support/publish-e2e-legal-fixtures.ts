@@ -411,7 +411,7 @@ export async function pauseE2eBrowserDatabase(
     );
     paused = true;
     await client.query(
-      `SELECT pg_terminate_backend(pid)
+      `SELECT pg_terminate_backend(pid, 5000)
        FROM pg_stat_activity
        WHERE datname = 'taven_web_browser' AND pid <> pg_backend_pid()`,
     );
