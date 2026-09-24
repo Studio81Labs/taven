@@ -2868,6 +2868,30 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     const refundId = (pending.result.refundIds as string[])[0];
     if (!refundId) throw new Error("claim refund was not created");
+    const refund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { payment: true },
+    });
+    const dispatch = await prisma.outboxMessage.findUniqueOrThrow({
+      where: { deduplicationKey: `refund_payment:v1:${refundId}` },
+    });
+    expect(dispatch).toMatchObject({
+      aggregateType: "RefundTransaction",
+      aggregateId: refundId,
+      messageType: "refund_payment",
+      schemaVersion: 1,
+      status: "PENDING",
+      payload: {
+        refundTransactionId: refundId,
+        paymentId: refund.paymentId,
+        provider: refund.provider,
+        providerIntentId: refund.payment.providerIntentId,
+        amountMinor: refund.amountMinor.toString(),
+        currency: refund.payment.currency,
+        idempotencyKey: refund.idempotencyKey,
+        action: "refund_payment",
+      },
+    });
     await succeedRefund(refundId);
 
     const projection = await orders.getFulfilment(fixture.foundation.orderId);

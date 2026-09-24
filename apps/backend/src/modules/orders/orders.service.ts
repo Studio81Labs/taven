@@ -4226,6 +4226,7 @@ export class OrdersService {
               requestedAt,
             },
           });
+          await this.enqueueRefundPayment(tx, payment, refund, requestedAt);
           refundIds.push(refund.id);
           remaining -= amountMinor;
           await tx.payment.update({
@@ -4548,6 +4549,7 @@ export class OrdersService {
               requestedAt: at,
             },
           });
+          await this.enqueueRefundPayment(tx, payment, refund, at);
           refundIds.push(refund.id);
           remaining -= refundAmount;
           await tx.payment.update({
@@ -5773,6 +5775,7 @@ export class OrdersService {
           requestedAt: at,
         },
       });
+      await this.enqueueRefundPayment(tx, payment, refund, at);
       refundIds.push(refund.id);
       remaining -= refundAmount;
       await tx.payment.update({
@@ -5994,6 +5997,7 @@ export class OrdersService {
           requestedAt: at,
         },
       });
+      await this.enqueueRefundPayment(tx, payment, refund, at);
       refundIds.push(refund.id);
       remaining -= refundAmount;
       await tx.payment.update({
@@ -6137,6 +6141,7 @@ export class OrdersService {
           requestedAt: at,
         },
       });
+      await this.enqueueRefundPayment(tx, payment, refund, at);
       refundIds.push(refund.id);
       await tx.payment.update({
         where: { id: payment.id },
@@ -6144,6 +6149,45 @@ export class OrdersService {
       });
     }
     return refundIds;
+  }
+
+  private async enqueueRefundPayment(
+    tx: Transaction,
+    payment: {
+      id: string;
+      provider: string;
+      providerIntentId: string | null;
+      currency: string;
+    },
+    refund: { id: string; amountMinor: bigint; idempotencyKey: string },
+    at: Date,
+  ): Promise<void> {
+    if (!payment.providerIntentId) {
+      throw new ConflictException("Captured Payment has no provider intent");
+    }
+    await tx.outboxMessage.createMany({
+      data: [
+        {
+          deduplicationKey: `refund_payment:v1:${refund.id}`,
+          aggregateType: "RefundTransaction",
+          aggregateId: refund.id,
+          messageType: "refund_payment",
+          schemaVersion: 1,
+          payload: jsonSafe({
+            refundTransactionId: refund.id,
+            paymentId: payment.id,
+            provider: payment.provider,
+            providerIntentId: payment.providerIntentId,
+            amountMinor: refund.amountMinor.toString(),
+            currency: payment.currency,
+            idempotencyKey: refund.idempotencyKey,
+            action: "refund_payment",
+          }) as Prisma.InputJsonObject,
+          availableAt: at,
+        },
+      ],
+      skipDuplicates: true,
+    });
   }
 
   private async voidOpenBalancePayments(
