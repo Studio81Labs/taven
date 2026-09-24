@@ -2001,17 +2001,34 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.status).toBe("DRAFT");
-    const dispatch = await prisma.outboxMessage.create({
-      data: {
-        deduplicationKey: `individual-status-candidate:${randomUUID()}`,
-        aggregateType: "CandidateEstimateDispatch",
-        aggregateId: randomUUID(),
-        messageType: "slicing.candidate-estimate.requested",
-        schemaVersion: 1,
-        payload: { job: { correlationId: accepted.body.orderId, attempt: 1 } },
-        status: "DELIVERED",
-        deliveredAt: new Date(),
+    const preparation = await apiJson<{ status: string }>(
+      `admin/orders/${accepted.body.orderId}/resource-preparation`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": key("reissue-provenance-preparation"),
+        },
+        body: JSON.stringify({ reason: "Prepare reissued accepted offer" }),
       },
+    );
+    expect(preparation.response.status).toBe(200);
+    expect(preparation.body.status).toBe("PENDING");
+    const dispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateType: "CandidateEstimateDispatch",
+        payload: {
+          path: ["job", "correlationId"],
+          equals: accepted.body.orderId,
+        },
+      },
+      select: { id: true },
+    });
+    expect(dispatches.length).toBeGreaterThan(0);
+    await prisma.outboxMessage.updateMany({
+      where: { id: { in: dispatches.map((dispatch) => dispatch.id) } },
+      data: { status: "DELIVERED", deliveredAt: new Date() },
     });
     const acceptedStatus = () =>
       apiJson<{ preparationStatus: string }>(
@@ -2019,18 +2036,20 @@ describe("QuoteRequest and tokenized individual offers", () => {
         { headers: bearer(reissued.body.offerToken) },
       );
     expect((await acceptedStatus()).body.preparationStatus).toBe("PREPARING");
-    await prisma.outboxMessage.create({
-      data: {
-        deduplicationKey: `individual-status-dead-letter:${dispatch.id}`,
-        aggregateType: "SlicingDispatchDeadLetter",
-        aggregateId: dispatch.id,
-        messageType: "slicing.candidate_estimate.dead-lettered",
-        schemaVersion: 1,
-        payload: { dispatchId: dispatch.id },
-        status: "DELIVERED",
-        deliveredAt: new Date(),
-      },
-    });
+    for (const dispatch of dispatches) {
+      await prisma.outboxMessage.create({
+        data: {
+          deduplicationKey: `individual-status-dead-letter:${dispatch.id}`,
+          aggregateType: "SlicingDispatchDeadLetter",
+          aggregateId: dispatch.id,
+          messageType: "slicing.candidate_estimate.dead-lettered",
+          schemaVersion: 1,
+          payload: { dispatchId: dispatch.id },
+          status: "DELIVERED",
+          deliveredAt: new Date(),
+        },
+      });
+    }
     expect((await acceptedStatus()).body.preparationStatus).toBe("UNAVAILABLE");
     await expect(
       prisma.individualOrderOrigin.findMany({
@@ -2038,7 +2057,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         select: { quoteId: true },
       }),
     ).resolves.toEqual([{ quoteId: reissued.body.quoteId }]);
-  });
+  }, 30_000);
 
   it("serializes concurrent reissues against one current offer", async () => {
     const created = await quotes.createRequest(
