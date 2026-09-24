@@ -79,6 +79,8 @@ export type CreateEligibilityPlanInput = {
   capacityWindowSeconds?: bigint;
   /** Optional whole-plan production plate limit. */
   maximumPlateCount?: bigint;
+  /** Prevent another node from attaching plans to the same individual order. */
+  exclusiveOrderNode?: boolean;
 };
 
 export type EligibilityPlanResult = {
@@ -287,6 +289,21 @@ export class EligibilityPlanService {
               "initial eligibility requires a quoted order phase",
               "order_phase_resource_planning_state_check",
             );
+          }
+          if (input.exclusiveOrderNode) {
+            const foreignPlan = await transaction.phaseResourcePlan.findFirst({
+              where: {
+                orderPhaseId: input.orderPhaseId,
+                nodeId: { not: input.nodeId },
+              },
+              select: { id: true },
+            });
+            if (foreignPlan) {
+              throw new ResourceConflictError(
+                "individual order is already scoped to another node",
+                "individual_order_node_scope",
+              );
+            }
           }
 
           const slots = await transaction.$queryRaw<SlotRow[]>`

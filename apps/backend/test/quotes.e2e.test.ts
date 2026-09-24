@@ -21,6 +21,15 @@ import {
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
+import type {
+  CandidateEstimateJob,
+  CandidateEstimateResult,
+} from "@taven/slicer-contracts" with { "resolution-mode": "import" };
+import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
+import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automatic-quotes.service";
+import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
+import { ResourceConflictError } from "../src/modules/resources/resource-errors";
+import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 const quoteCapabilityKey =
@@ -37,6 +46,8 @@ process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
 process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??= uploadClientHashKey;
 process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED ??= "true";
 process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED ??= "true";
+process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED ??= "true";
+process.env.TAVEN_PAYMENT_PROVIDER ??= "sandbox";
 const initialTermsRevision = process.env.TAVEN_TERMS_REVISION;
 
 describe("QuoteRequest and tokenized individual offers", () => {
@@ -44,6 +55,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let baseUrl: URL;
   let prisma: PrismaService;
   let quotes: QuotesService;
+  let candidates: CandidateEstimateService;
+  let eligibilityPlans: EligibilityPlanService;
   let legalDocuments: LegalDocumentsService;
   let priceListId: string;
   let selectionVersion: number;
@@ -66,6 +79,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
     quotes = app.get(QuotesService);
+    candidates = app.get(CandidateEstimateService);
+    eligibilityPlans = app.get(EligibilityPlanService);
     legalDocuments = app.get(LegalDocumentsService);
     const node = await prisma.node.findFirstOrThrow({
       where: { active: true },
@@ -249,7 +264,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       key("launch-gate-enabled-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
     );
-    expect(issued.response.status).toBe(201);
+    expect(issued.response.status, JSON.stringify(issued.body)).toBe(201);
 
     for (const acknowledgeWithdrawalException of [undefined, false]) {
       const rejected = await apiJson(`offers/${issued.body.quoteId}/accept`, {
@@ -940,6 +955,480 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(unauthorizedReplay.response.status).toBe(401);
 
+    const statusBeforeContact = await apiJson<{
+      orderId: string;
+      preparationStatus: string;
+      initialPayment: unknown;
+    }>(`offers/${issued.body.quoteId}/order-status`, {
+      headers: bearer(issued.body.offerToken),
+    });
+    expect(statusBeforeContact.response.status).toBe(200);
+    expect(statusBeforeContact.body).toMatchObject({
+      orderId: accepted.body.orderId,
+      preparationStatus: "UNPREPARED",
+      initialPayment: null,
+    });
+    expect(statusBeforeContact.body).not.toHaveProperty("contact");
+    const foreignStatus = await apiJson(
+      `offers/${issued.body.quoteId}/order-status`,
+      { headers: bearer(randomBytes(32).toString("base64url")) },
+    );
+    expect(foreignStatus.response.status).toBe(401);
+
+    const contact = {
+      email: requestBody.contact.email,
+      fullName: "Accepted Customer",
+      billing: {
+        name: "Accepted Customer",
+        addressLine1: "Masarykova 12",
+        city: "Brno",
+        postalCode: "60200",
+        countryCode: "CZ",
+      },
+    };
+    const contactKey = key("accepted-checkout-contact");
+    const recordContact = (body: typeof contact, commandKey: string) =>
+      apiJson(`offers/${issued.body.quoteId}/checkout-contact`, {
+        method: "POST",
+        headers: {
+          ...bearer(issued.body.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": commandKey,
+        },
+        body: JSON.stringify(body),
+      });
+    const wrongEmail = await recordContact(
+      { ...contact, email: "foreign@example.test" },
+      key("foreign-checkout-contact"),
+    );
+    expect(wrongEmail.response.status).toBe(409);
+    const recordedContact = await recordContact(contact, contactKey);
+    expect(recordedContact.response.status).toBe(200);
+    expect(recordedContact.body).toEqual({
+      orderId: accepted.body.orderId,
+      contactRecorded: true,
+    });
+    expect((await recordContact(contact, contactKey)).body).toEqual(
+      recordedContact.body,
+    );
+    const changedContact = await recordContact(
+      { ...contact, billing: { ...contact.billing, city: "Praha" } },
+      key("changed-checkout-contact"),
+    );
+    expect(changedContact.response.status).toBe(409);
+    const frozenContact = await prisma.order.findUniqueOrThrow({
+      where: { id: accepted.body.orderId },
+      select: { checkoutContactSnapshot: true },
+    });
+    expect(frozenContact.checkoutContactSnapshot).toEqual({
+      version: 2,
+      ...contact,
+    });
+    const dispatchCandidates = vi.spyOn(
+      app.get(AutomaticQuotesService),
+      "dispatchOrderCandidates",
+    );
+    dispatchCandidates.mockResolvedValueOnce(undefined);
+    try {
+      const noCandidatePreparation = await apiJson<{ status: string }>(
+        `admin/orders/${accepted.body.orderId}/resource-preparation`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+            "idempotency-key": key(
+              "accepted-resource-preparation-no-candidate",
+            ),
+          },
+          body: JSON.stringify({ reason: "Check candidate availability" }),
+        },
+      );
+      expect(noCandidatePreparation.response.status).toBe(200);
+      expect(noCandidatePreparation.body.status).toBe("PENDING");
+      const unavailableStatus = await apiJson<{ preparationStatus: string }>(
+        `offers/${issued.body.quoteId}/order-status`,
+        { headers: bearer(issued.body.offerToken) },
+      );
+      expect(unavailableStatus.body.preparationStatus).toBe("UNAVAILABLE");
+    } finally {
+      dispatchCandidates.mockRestore();
+    }
+    const prepareResources = await apiJson<{
+      status: string;
+      phaseResourcePlanId: string | null;
+    }>(`admin/orders/${accepted.body.orderId}/resource-preparation`, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": "p".repeat(255),
+      },
+      body: JSON.stringify({ reason: "Prepare accepted offer resources" }),
+    });
+    expect(
+      prepareResources.response.status,
+      JSON.stringify(prepareResources.body),
+    ).toBe(200);
+    expect(prepareResources.body.status).toBe("PENDING");
+    expect(prepareResources.body.phaseResourcePlanId).toBeNull();
+    const dispatch = await prisma.outboxMessage.findFirstOrThrow({
+      where: {
+        aggregateType: "CandidateEstimateDispatch",
+        payload: {
+          path: ["job", "correlationId"],
+          equals: accepted.body.orderId,
+        },
+      },
+    });
+    const candidateJob = (dispatch.payload as { job: CandidateEstimateJob })
+      .job;
+    expect(candidateJob.input.geometry).toMatchObject({
+      sourceModelFileId: defaultOfferItem.sourceModelFileId,
+      modelGeometryId: defaultOfferItem.modelGeometryId,
+      bodyIds: ["quote-test-body"],
+      selectionSha256: (
+        await import("@taven/slicer-contracts")
+      ).geometrySelectionSha256(["quote-test-body"]),
+    });
+    const availability =
+      await prisma.machineAvailabilitySelection.findFirstOrThrow({
+        where: { machineId: candidateJob.input.machineId },
+        include: { revision: { include: { windows: true } } },
+      });
+    const available = availability.revision.windows.find(
+      (window) => window.endsAt.getTime() > Date.now() + 15 * 60_000,
+    );
+    expect(available).toBeDefined();
+    const startsAt = new Date(
+      Math.max(Date.now() + 5 * 60_000, available!.startsAt.getTime() + 60_000),
+    );
+    await candidates.ingest({
+      result: successfulIndividualCandidateResult(candidateJob),
+      capacityWindows: [
+        { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
+      ],
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const shortPlanSpy = vi.spyOn(eligibilityPlans, "createCompletePlan");
+    shortPlanSpy.mockResolvedValueOnce({
+      eligibilitySnapshotId: randomUUID(),
+      phaseResourcePlanId: randomUUID(),
+      planKey: "short-lived-test-plan",
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+      candidateResourceEstimateIds: [],
+    });
+    try {
+      const shortPreparation = await apiJson<{ status: string }>(
+        `admin/orders/${accepted.body.orderId}/resource-preparation`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+            "idempotency-key": key("accepted-resource-preparation-short"),
+          },
+          body: JSON.stringify({ reason: "Check short resource plan" }),
+        },
+      );
+      expect(shortPreparation.response.status).toBe(200);
+      expect(shortPreparation.body.status).toBe("PENDING");
+      expect(
+        await prisma.order.findUniqueOrThrow({
+          where: { id: accepted.body.orderId },
+          select: { status: true },
+        }),
+      ).toEqual({ status: "DRAFT" });
+    } finally {
+      shortPlanSpy.mockRestore();
+    }
+    const completedPreparation = await apiJson<{
+      status: string;
+      phaseResourcePlanId: string | null;
+    }>(`admin/orders/${accepted.body.orderId}/resource-preparation`, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": key("accepted-resource-preparation-complete"),
+      },
+      body: JSON.stringify({ reason: "Complete accepted resource plan" }),
+    });
+    expect(
+      completedPreparation.response.status,
+      JSON.stringify(completedPreparation.body),
+    ).toBe(200);
+    expect(completedPreparation.body.status).toBe("READY");
+    expect(completedPreparation.body.phaseResourcePlanId).toBeTruthy();
+    const readPreparationStatus = () =>
+      apiJson<{ preparationStatus: string }>(
+        `offers/${issued.body.quoteId}/order-status`,
+        { headers: bearer(issued.body.offerToken) },
+      );
+    expect((await readPreparationStatus()).body.preparationStatus).toBe(
+      "READY",
+    );
+    const otherNode = await prisma.node.create({
+      data: {
+        code: `foreign-${randomUUID()}`.slice(0, 50),
+        name: "Foreign preparation node",
+        timeZone: "Europe/Prague",
+      },
+    });
+    const acceptedPhase = await prisma.orderPhase.findFirstOrThrow({
+      where: { orderId: accepted.body.orderId },
+      select: { id: true },
+    });
+    await expect(
+      eligibilityPlans.createCompletePlan({
+        nodeId: otherNode.id,
+        orderPhaseId: acceptedPhase.id,
+        planKey: `foreign-individual:${randomUUID()}`,
+        exclusiveOrderNode: true,
+      }),
+    ).rejects.toMatchObject({
+      constraint: "individual_order_node_scope",
+    });
+    expect(
+      await prisma.phaseResourcePlan.count({
+        where: { orderPhaseId: acceptedPhase.id, nodeId: otherNode.id },
+      }),
+    ).toBe(0);
+    const originalPlanId = completedPreparation.body.phaseResourcePlanId!;
+    const originalPlan = await prisma.phaseResourcePlan.findUniqueOrThrow({
+      where: { id: originalPlanId },
+    });
+    const terminalPlan = await eligibilityPlans.createCompletePlan({
+      nodeId: originalPlan.nodeId,
+      orderPhaseId: acceptedPhase.id,
+      planKey: `individual-terminal-reservation:${randomUUID()}`,
+      exclusiveOrderNode: true,
+    });
+    const reservationService = app.get(ResourceReservationService);
+    const terminalReservation = await reservationService.reserve({
+      nodeId: originalPlan.nodeId,
+      phaseResourcePlanId: terminalPlan.phaseResourcePlanId,
+      reservationKey: `individual-initial:${accepted.body.orderId}:${terminalPlan.phaseResourcePlanId}`,
+    });
+    expect(terminalReservation.status).toBe("RESERVED");
+    expect(
+      await reservationService.releaseBeforePrint(
+        terminalReservation.phaseReservationSetId,
+      ),
+    ).toBe(true);
+    expect(
+      await prisma.phaseResourcePlan.findFirst({
+        where: { orderPhaseId: acceptedPhase.id },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: { id: true },
+      }),
+    ).toEqual({ id: terminalPlan.phaseResourcePlanId });
+    const statusPlans = vi.spyOn(prisma.phaseResourcePlan, "findMany");
+    try {
+      expect((await readPreparationStatus()).body.preparationStatus).toBe(
+        "READY",
+      );
+      expect(statusPlans).toHaveBeenCalledWith({
+        where: {
+          eligibilitySnapshot: {
+            orderPhase: { orderId: accepted.body.orderId },
+          },
+          reservationSets: { none: {} },
+        },
+        select: { expiresAt: true },
+      });
+      statusPlans.mockResolvedValueOnce([
+        { expiresAt: new Date(Date.now() + 10 * 60_000) },
+      ] as never);
+      expect((await readPreparationStatus()).body.preparationStatus).toBe(
+        "UNAVAILABLE",
+      );
+    } finally {
+      statusPlans.mockRestore();
+    }
+    const initialKey = key("accepted-individual-initial-payment");
+    const createInitialPayment = (
+      method: "CARD" | "BANK_TRANSFER",
+      commandKey: string,
+    ) =>
+      apiJson<{
+        paymentId: string;
+        status: string;
+        amountMinor: number;
+        checkoutUrl: string | null;
+      }>(`admin/orders/${accepted.body.orderId}/initial-payment`, {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": commandKey,
+        },
+        body: JSON.stringify({ method }),
+      });
+    const reserveSpy = vi.spyOn(reservationService, "reserveInTransaction");
+    reserveSpy.mockRejectedValueOnce(
+      new ResourceConflictError(
+        "reservation conflicts with the current resource state",
+        "capacity_reservations_no_active_overlap",
+      ),
+    );
+    const staleResource = await createInitialPayment(
+      "CARD",
+      key("accepted-initial-stale-reservation"),
+    );
+    reserveSpy.mockRestore();
+    expect(staleResource.response.status).toBe(409);
+    expect(
+      await prisma.payment.count({ where: { orderId: accepted.body.orderId } }),
+    ).toBe(0);
+    const initialPayment = await createInitialPayment("CARD", initialKey);
+    expect(
+      initialPayment.response.status,
+      JSON.stringify(initialPayment.body),
+    ).toBe(200);
+    expect(initialPayment.body).toMatchObject({
+      status: "PENDING",
+      amountMinor: 33_000,
+    });
+    expect(initialPayment.body.checkoutUrl).toBeTruthy();
+    expect(
+      await prisma.phaseReservationSet.findFirst({
+        where: { phaseResourcePlanId: originalPlanId, status: "RESERVED" },
+        select: { reservationKey: true },
+      }),
+    ).toEqual({
+      reservationKey: `individual-initial:${accepted.body.orderId}:${originalPlanId}`,
+    });
+    expect((await createInitialPayment("CARD", initialKey)).body).toEqual(
+      initialPayment.body,
+    );
+    const concurrentKeys = [
+      key("accepted-initial-concurrent-a"),
+      key("accepted-initial-concurrent-b"),
+    ];
+    const concurrentInitialAttempts = await Promise.all(
+      concurrentKeys.map((commandKey) =>
+        createInitialPayment("CARD", commandKey),
+      ),
+    );
+    expect(
+      concurrentInitialAttempts.map((attempt) => attempt.response.status),
+    ).toEqual([200, 200]);
+    expect(
+      concurrentInitialAttempts.map((attempt) => attempt.body.paymentId),
+    ).toEqual([initialPayment.body.paymentId, initialPayment.body.paymentId]);
+    for (const commandKey of concurrentKeys) {
+      const replayRecord = await prisma.idempotencyRecord.findFirstOrThrow({
+        where: {
+          namespace: `individual-initial-payment:${accepted.body.orderId}`,
+          idempotencyKey: commandKey,
+        },
+      });
+      expect(replayRecord.status).toBe("COMPLETED");
+      expect(replayRecord.responseBody).toMatchObject({
+        paymentId: initialPayment.body.paymentId,
+      });
+    }
+    expect(
+      (
+        await createInitialPayment(
+          "BANK_TRANSFER",
+          key("changed-initial-method"),
+        )
+      ).response.status,
+    ).toBe(409);
+    const scopedPaymentStatus = await apiJson<{
+      initialPayment: {
+        paymentId: string;
+        status: string;
+        checkoutUrl: string | null;
+      };
+    }>(`offers/${issued.body.quoteId}/order-status`, {
+      headers: bearer(issued.body.offerToken),
+    });
+    expect(scopedPaymentStatus.body.initialPayment).toMatchObject({
+      paymentId: initialPayment.body.paymentId,
+      status: "PENDING",
+      checkoutUrl: initialPayment.body.checkoutUrl,
+    });
+    expect(
+      (
+        await apiJson(`offers/${issued.body.quoteId}/order-status`, {
+          headers: bearer("unrelated-offer-capability"),
+        })
+      ).response.status,
+    ).toBe(401);
+    const sandboxUrl = new URL(initialPayment.body.checkoutUrl!);
+    const sandboxCapture = await fetch(
+      new URL(`${sandboxUrl.pathname}/capture`, baseUrl),
+      {
+        method: "POST",
+        redirect: "manual",
+      },
+    );
+    expect(sandboxCapture.status, await sandboxCapture.text()).toBe(200);
+    const capturedPayment = await prisma.payment.findUniqueOrThrow({
+      where: { id: initialPayment.body.paymentId },
+    });
+    expect(capturedPayment.status).toBe("CAPTURED");
+    expect(
+      (await createInitialPayment("CARD", concurrentKeys[0]!)).body,
+    ).toEqual(concurrentInitialAttempts[0]!.body);
+    const productionJob = await prisma.job.findFirstOrThrow({
+      where: { orderId: accepted.body.orderId },
+      select: { id: true, status: true },
+    });
+    expect(productionJob.status).toBe("CREATED");
+    const jobAccepted = await apiJson<{ code: string }>(
+      `admin/orders/${accepted.body.orderId}/fulfilment/jobs/${productionJob.id}/accept`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "idempotency-key": key("accepted-individual-job"),
+        },
+      },
+    );
+    expect(jobAccepted.response.status, JSON.stringify(jobAccepted.body)).toBe(
+      200,
+    );
+    const productionDispatch = await prisma.outboxMessage.findFirstOrThrow({
+      where: {
+        aggregateType: "ProductionSliceDispatch",
+        aggregateId: productionJob.id,
+      },
+    });
+    const { ProductionSliceJobSchema } =
+      await import("@taven/slicer-contracts");
+    const productionInput = ProductionSliceJobSchema.parse(
+      (productionDispatch.payload as { job: unknown }).job,
+    );
+    expect(productionInput.input.geometry.bodyIds).toEqual(
+      candidateJob.input.geometry.bodyIds,
+    );
+    expect(productionInput.input.geometry.selectionSha256).toBe(
+      candidateJob.input.geometry.selectionSha256,
+    );
+    expect(productionInput.input.productionReservationId).toBeTruthy();
+    const preparationStatus = await apiJson<{ preparationStatus: string }>(
+      `offers/${issued.body.quoteId}/order-status`,
+      { headers: bearer(issued.body.offerToken) },
+    );
+    expect(preparationStatus.body.preparationStatus).toBe("ACTIVATED");
+    const phaseStatusSpy = vi.spyOn(prisma.orderPhase, "findUnique");
+    try {
+      for (const status of ["CANCELLED", "RECOVERY_PENDING"] as const) {
+        phaseStatusSpy.mockResolvedValueOnce({ status } as never);
+        const terminalStatus = await apiJson<{ preparationStatus: string }>(
+          `offers/${issued.body.quoteId}/order-status`,
+          { headers: bearer(issued.body.offerToken) },
+        );
+        expect(terminalStatus.body.preparationStatus).toBe("UNAVAILABLE");
+      }
+    } finally {
+      phaseStatusSpy.mockRestore();
+    }
+
     const persisted = await prisma.quote.findUniqueOrThrow({
       where: { id: issued.body.quoteId },
       include: {
@@ -1003,7 +1492,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       await prisma.payment.count({
         where: { orderId: accepted.body.orderId },
       }),
-    ).toBe(0);
+    ).toBe(1);
     expect(
       await prisma.individualOrderOrigin.count({
         where: { quoteId: issued.body.quoteId },
@@ -1066,7 +1555,231 @@ describe("QuoteRequest and tokenized individual offers", () => {
         acceptedOrderId: accepted.body.orderId,
       }),
     );
-  }, 20_000);
+  }, 30_000);
+
+  it("dispatches each reserved individual job with its assigned body selection", async () => {
+    const requestBody = requestInput("two-selections");
+    const created = await createRequest(
+      key("two-selections-create"),
+      requestBody,
+    );
+    expect(created.response.status).toBe(201);
+    expect(
+      (
+        await operatorCommand(
+          `admin/quote-requests/${created.body.requestId}/review`,
+          key("two-selections-review"),
+        )
+      ).response.status,
+    ).toBe(200);
+    const [firstItem] = await prepareOfferItems(created.body.requestId, [
+      defaultOfferItem,
+    ]);
+    const firstSelectionId = firstItem!.modelSelectionId as string;
+    const firstSelection =
+      await prisma.quoteRequestModelSelection.findUniqueOrThrow({
+        where: { id: firstSelectionId },
+      });
+    const secondBodyIds = ["quote-other-body"];
+    const { geometrySelectionSha256, ProductionSliceJobSchema } =
+      await import("@taven/slicer-contracts");
+    const secondSelection = await prisma.quoteRequestModelSelection.create({
+      data: {
+        requestId: firstSelection.requestId,
+        modelFileId: firstSelection.modelFileId,
+        modelGeometryId: firstSelection.modelGeometryId,
+        inspectionJobId: firstSelection.inspectionJobId,
+        sourceContentSha256: firstSelection.sourceContentSha256,
+        bodyIds: secondBodyIds,
+        selectionSha256: geometrySelectionSha256(secondBodyIds),
+      },
+    });
+    const items = [
+      { ...defaultOfferItem, modelSelectionId: firstSelection.id },
+      { ...defaultOfferItem, modelSelectionId: secondSelection.id },
+    ];
+    const components = [0, 1].flatMap((quoteItemOrdinal) => [
+      { kind: "ITEM_PRODUCTION", quoteItemOrdinal, amountMinor: 40_000 },
+      { kind: "ITEM_QUANTITY", quoteItemOrdinal, amountMinor: 10_000 },
+      { kind: "ITEM_POSTPROCESSING", quoteItemOrdinal, amountMinor: 5_000 },
+    ]);
+    const issued = await issueOffer(
+      created.body.requestId,
+      key("two-selections-issue"),
+      new Date(Date.now() + 60 * 60_000),
+      components,
+      items,
+    );
+    expect(issued.response.status, JSON.stringify(issued.body)).toBe(201);
+    const accepted = await acceptOffer(
+      issued.body,
+      key("two-selections-accept"),
+    );
+    expect(accepted.response.status, JSON.stringify(accepted.body)).toBe(200);
+    const contact = await apiJson(
+      `offers/${issued.body.quoteId}/checkout-contact`,
+      {
+        method: "POST",
+        headers: {
+          ...bearer(issued.body.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": key("two-selections-contact"),
+        },
+        body: JSON.stringify({
+          email: requestBody.contact.email,
+          fullName: "Two Selection Customer",
+          billing: {
+            name: "Two Selection Customer",
+            addressLine1: "Masarykova 12",
+            city: "Brno",
+            postalCode: "60200",
+            countryCode: "CZ",
+          },
+        }),
+      },
+    );
+    expect(contact.response.status, JSON.stringify(contact.body)).toBe(200);
+    const prepare = (commandKey: string) =>
+      apiJson<{ status: string }>(
+        `admin/orders/${accepted.body.orderId}/resource-preparation`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+            "idempotency-key": commandKey,
+          },
+          body: JSON.stringify({ reason: "Prepare both selected items" }),
+        },
+      );
+    expect((await prepare(key("two-selections-dispatch"))).body.status).toBe(
+      "PENDING",
+    );
+    const dispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateType: "CandidateEstimateDispatch",
+        payload: {
+          path: ["job", "correlationId"],
+          equals: accepted.body.orderId,
+        },
+      },
+    });
+    const bySelection = new Map<string, CandidateEstimateJob>();
+    for (const dispatch of dispatches) {
+      const job = (dispatch.payload as { job: CandidateEstimateJob }).job;
+      bySelection.set(job.input.geometry.selectionSha256, job);
+    }
+    expect([...bySelection.keys()].sort()).toEqual(
+      [firstSelection.selectionSha256, secondSelection.selectionSha256].sort(),
+    );
+    const acceptedBinding = await prisma.order.findUniqueOrThrow({
+      where: { id: accepted.body.orderId },
+      select: { acceptedOrderPriceBindingId: true },
+    });
+    const candidateFrontier = vi.spyOn(
+      app.get(AutomaticQuotesService),
+      "hasUnavailableCandidateRequirement",
+    );
+    candidateFrontier.mockResolvedValueOnce(true);
+    try {
+      const status = await apiJson<{ preparationStatus: string }>(
+        `offers/${issued.body.quoteId}/order-status`,
+        { headers: bearer(issued.body.offerToken) },
+      );
+      expect(status.body.preparationStatus).toBe("UNAVAILABLE");
+      expect(candidateFrontier).toHaveBeenCalledWith(
+        acceptedBinding.acceptedOrderPriceBindingId,
+        expect.any(Date),
+      );
+    } finally {
+      candidateFrontier.mockRestore();
+    }
+    let offsetMinutes = 20;
+    for (const job of bySelection.values()) {
+      const availability =
+        await prisma.machineAvailabilitySelection.findFirstOrThrow({
+          where: { machineId: job.input.machineId },
+          include: { revision: { include: { windows: true } } },
+        });
+      const available = availability.revision.windows.find(
+        (window) => window.endsAt.getTime() > Date.now() + 40 * 60_000,
+      );
+      expect(available).toBeDefined();
+      const startsAt = new Date(
+        Math.max(
+          Date.now() + offsetMinutes * 60_000,
+          available!.startsAt.getTime() + offsetMinutes * 60_000,
+        ),
+      );
+      offsetMinutes += 5;
+      await candidates.ingest({
+        result: successfulIndividualCandidateResult(job),
+        capacityWindows: [
+          { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
+        ],
+        expiresAt: new Date(Date.now() + 60 * 60_000),
+      });
+    }
+    const completed = await prepare(key("two-selections-plan"));
+    expect(completed.response.status, JSON.stringify(completed.body)).toBe(200);
+    expect(completed.body.status).toBe("READY");
+    const payment = await apiJson<{ checkoutUrl: string; status: string }>(
+      `admin/orders/${accepted.body.orderId}/initial-payment`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": key("two-selections-payment"),
+        },
+        body: JSON.stringify({ method: "CARD" }),
+      },
+    );
+    expect(payment.response.status, JSON.stringify(payment.body)).toBe(200);
+    const sandboxPath = new URL(payment.body.checkoutUrl).pathname;
+    expect(
+      (
+        await fetch(new URL(`${sandboxPath}/capture`, baseUrl), {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(200);
+    const jobs = await prisma.job.findMany({
+      where: { orderId: accepted.body.orderId },
+      orderBy: { id: "asc" },
+    });
+    expect(jobs).toHaveLength(2);
+    const productionSelections: string[] = [];
+    for (const job of jobs) {
+      const acceptedJob = await apiJson(
+        `admin/orders/${accepted.body.orderId}/fulfilment/jobs/${job.id}/accept`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "idempotency-key": key(`two-selections-job-${job.id}`),
+          },
+        },
+      );
+      expect(
+        acceptedJob.response.status,
+        JSON.stringify(acceptedJob.body),
+      ).toBe(200);
+      const dispatch = await prisma.outboxMessage.findFirstOrThrow({
+        where: {
+          aggregateType: "ProductionSliceDispatch",
+          aggregateId: job.id,
+        },
+      });
+      const queued = ProductionSliceJobSchema.parse(
+        (dispatch.payload as { job: unknown }).job,
+      );
+      productionSelections.push(queued.input.geometry.selectionSha256);
+    }
+    expect(productionSelections.sort()).toEqual(
+      [firstSelection.selectionSha256, secondSelection.selectionSha256].sort(),
+    );
+  }, 30_000);
 
   it("issues and previews an immutable VAT-payer price split", async () => {
     const created = await quotes.createRequest(
@@ -1288,13 +2001,63 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.status).toBe("DRAFT");
+    const preparation = await apiJson<{ status: string }>(
+      `admin/orders/${accepted.body.orderId}/resource-preparation`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": key("reissue-provenance-preparation"),
+        },
+        body: JSON.stringify({ reason: "Prepare reissued accepted offer" }),
+      },
+    );
+    expect(preparation.response.status).toBe(200);
+    expect(preparation.body.status).toBe("PENDING");
+    const dispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateType: "CandidateEstimateDispatch",
+        payload: {
+          path: ["job", "correlationId"],
+          equals: accepted.body.orderId,
+        },
+      },
+      select: { id: true },
+    });
+    expect(dispatches.length).toBeGreaterThan(0);
+    await prisma.outboxMessage.updateMany({
+      where: { id: { in: dispatches.map((dispatch) => dispatch.id) } },
+      data: { status: "DELIVERED", deliveredAt: new Date() },
+    });
+    const acceptedStatus = () =>
+      apiJson<{ preparationStatus: string }>(
+        `offers/${reissued.body.quoteId}/order-status`,
+        { headers: bearer(reissued.body.offerToken) },
+      );
+    expect((await acceptedStatus()).body.preparationStatus).toBe("PREPARING");
+    for (const dispatch of dispatches) {
+      await prisma.outboxMessage.create({
+        data: {
+          deduplicationKey: `individual-status-dead-letter:${dispatch.id}`,
+          aggregateType: "SlicingDispatchDeadLetter",
+          aggregateId: dispatch.id,
+          messageType: "slicing.candidate_estimate.dead-lettered",
+          schemaVersion: 1,
+          payload: { dispatchId: dispatch.id },
+          status: "DELIVERED",
+          deliveredAt: new Date(),
+        },
+      });
+    }
+    expect((await acceptedStatus()).body.preparationStatus).toBe("UNAVAILABLE");
     await expect(
       prisma.individualOrderOrigin.findMany({
         where: { quote: { quoteRequestId: created.requestId } },
         select: { quoteId: true },
       }),
     ).resolves.toEqual([{ quoteId: reissued.body.quoteId }]);
-  });
+  }, 30_000);
 
   it("serializes concurrent reissues against one current offer", async () => {
     const created = await quotes.createRequest(
@@ -1841,7 +2604,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         where: { shipmentPlan: { orderId: accepted.body.orderId } },
       }),
     ).resolves.toBe(quantity);
-  });
+  }, 60_000);
 
   it("issues a many-item offer with bounded reference lookup batches", async () => {
     const itemCount = 501;
@@ -2566,16 +3329,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
   });
 
   it("rejects unplannable custom-service items before offer persistence", async () => {
-    const created = await createRequest(
-      key("custom-service-create"),
+    const created = await quotes.createRequest(
       requestInput("custom-service-create"),
+      "198.51.100.220",
+      key("custom-service-create"),
     );
     await operatorCommand(
-      `admin/quote-requests/${created.body.requestId}/review`,
+      `admin/quote-requests/${created.requestId}/review`,
       key("custom-service-review"),
     );
     const response = await issueOffer(
-      created.body.requestId,
+      created.requestId,
       key("custom-service-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
       defaultComponents(),
@@ -2590,7 +3354,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(response.response.status).toBe(400);
     expect(
       await prisma.quote.count({
-        where: { quoteRequestId: created.body.requestId },
+        where: { quoteRequestId: created.requestId },
       }),
     ).toBe(0);
   });
@@ -4083,7 +4847,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         data: {
           id: modelGeometryId,
           sourceModelFileId: id,
-          canonicalObjectKey: `quote-tests/geometries/${modelGeometryId}`,
+          canonicalObjectKey: `geometries/${modelGeometryId}/canonical`,
           geometryHash: createHash("sha256")
             .update(`${scope}:geometry`)
             .digest("hex"),
@@ -4110,7 +4874,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
           quality: "STANDARD",
           infillPercent: 20,
           layerHeightMicrometers: 200,
-          settings: {},
+          settings: {
+            bundleVersion: 1,
+            presets: [
+              {
+                brim_width: "0",
+                layer_height: "0.2",
+                enable_support: "0",
+                sparse_infill_density: "20%",
+              },
+            ],
+          },
         },
       });
       await transaction.sliceResult.create({
@@ -4355,6 +5129,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
               attachedModels.set(attachedKey, attached);
             }
             const inspectionJobId = await attached;
+            const { geometrySelectionSha256 } =
+              await import("@taven/slicer-contracts");
             const selected = await prisma.quoteRequestModelSelection.create({
               data: {
                 requestId: canonicalRequestId,
@@ -4363,9 +5139,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
                 inspectionJobId,
                 sourceContentSha256: source.contentHash,
                 bodyIds: ["quote-test-body"],
-                selectionSha256: createHash("sha256")
-                  .update(cacheKey)
-                  .digest("hex"),
+                selectionSha256: geometrySelectionSha256(["quote-test-body"]),
               },
             });
             return selected.id;
@@ -4402,7 +5176,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
       providerEndpointId: "test-delivery-endpoint",
       endpointType: "DELIVERY",
       addressSnapshot: { country: "CZ", postalCode: "11000" },
-      capabilitySnapshot: { carrier: "test", service: "standard" },
+      capabilitySnapshot: {
+        carrier: "test",
+        service: "standard",
+        supportedCategoryIds: ["STANDARD"],
+      },
     };
   }
 
@@ -4625,4 +5403,61 @@ function nestedJson(depth: number): Record<string, unknown> {
     result = { nested: result };
   }
   return result;
+}
+
+function successfulIndividualCandidateResult(
+  job: CandidateEstimateJob,
+): CandidateEstimateResult {
+  const plateCount = Math.ceil(job.input.quantity / job.input.partsPerPlate);
+  const occupancies = Array.from({ length: plateCount }, (_, index) =>
+    index < plateCount - 1
+      ? job.input.partsPerPlate
+      : job.input.quantity - job.input.partsPerPlate * (plateCount - 1),
+  );
+  return {
+    ...job,
+    engine: {
+      name: job.input.machineProfile.slicerEngine,
+      version: job.input.machineProfile.slicerVersion,
+      imageSha256: "b".repeat(64),
+    },
+    outcome: {
+      status: "succeeded",
+      metrics: {
+        boundingBox: {
+          xMicrometers: "20000",
+          yMicrometers: "20000",
+          zMicrometers: "20000",
+        },
+        objectCount: 1,
+        bodyCount: job.input.geometry.bodyIds.length,
+        topology: { watertight: true, manifold: true, normals: "consistent" },
+        thinWallFeatureCount: 0,
+        supportVolumeRatioPpm: 0,
+        hasPaintAssignments: false,
+        materialAssignmentCount: 0,
+        estimatedPrintSeconds: String(60 * plateCount),
+        estimatedMaterialMilligrams: String(60 * plateCount),
+        plateCount,
+      },
+      plates: occupancies.map((partsOnPlate, index) => ({
+        plateOrdinal: index + 1,
+        partsOnPlate,
+        estimatedPrintSeconds: "60",
+        estimatedMaterialMilligrams: "60",
+      })),
+      occupancySlices: job.input.occupancySliceTargets.map((target) => ({
+        partsPerPlate: target.partsPerPlate,
+        cacheIdentitySha256: target.cacheIdentitySha256,
+        estimatedPrintSeconds: "60",
+        estimatedMaterialMilligrams: "60",
+        artifact: {
+          objectKey: target.analysisObjectKey,
+          sha256: createHash("sha256")
+            .update(target.analysisObjectKey)
+            .digest("hex"),
+        },
+      })),
+    },
+  };
 }

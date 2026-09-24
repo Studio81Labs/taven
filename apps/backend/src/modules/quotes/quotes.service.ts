@@ -52,21 +52,33 @@ import {
 } from "../admin-access/operator-command";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import {
+  AutomaticQuotesService,
+  MAX_SLICING_JOB_ATTEMPTS,
+} from "../automatic-quotes/automatic-quotes.service";
 import { AuditService } from "../audit/audit.service";
 import { normalizeAttribution } from "../metrics/attribution";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
+import { normalizeCheckoutContact } from "../payments/checkout-contact";
+import {
+  checkoutContactSnapshotMatches,
+  REACQUISITION_RESERVATION_MILLISECONDS,
+} from "../payments/payments.service";
 import { lockCommercialPolicy } from "../resources/commercial-policy-selection";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
   AcceptOfferDto,
   AcceptedOfferDto,
+  AcceptedOfferOrderStatusDto,
   AutomaticQuoteRequestHandoffItemDto,
   CreateQuoteRequestDto,
   IssueOfferDto,
   ModelOfferItemDto,
   OfferDeliveryDestinationDto,
   OfferIssuedDto,
+  OfferCheckoutContactDto,
+  OfferCheckoutContactRecordedDto,
   OfferPaymentCapturePolicyDto,
   OfferPaymentScheduleDto,
   OfferPreviewDto,
@@ -154,6 +166,7 @@ type IdempotencyOptions<T> = Readonly<{
   responseCodec?: IdempotencyResponseCodec<T>;
   responseStatusCode?: number | ((response: T) => number);
   beforeReplay?: (transaction: Transaction) => Promise<void>;
+  transactionTimeoutMs?: number;
 }>;
 type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
 type LockedAutomaticQuoteHandoff =
@@ -175,6 +188,7 @@ export class QuotesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly automaticQuotes: AutomaticQuotesService,
     private readonly legalApprovals?: LegalApprovalsService,
   ) {}
 
@@ -1901,6 +1915,104 @@ export class QuotesService {
             data: batch,
           });
         }
+        const { allocateMoney, Money } = await coreModule();
+        const priceComponents =
+          await transaction.priceSnapshotComponent.findMany({
+            where: { priceSnapshotId: quote.priceBinding.priceSnapshot.id },
+            orderBy: { id: "asc" },
+          });
+        const orderItemIdByQuoteItemId = new Map(
+          quote.items.map((item) => [
+            item.id,
+            orderItemsByQuoteOrdinal.get(item.ordinal)!.id,
+          ]),
+        );
+        const shipmentPlanIdByQuoteId = new Map(
+          quote.shipmentPlans.map((plan, index) => [
+            plan.id,
+            shipmentPlans[index]!.id!,
+          ]),
+        );
+        const slotIdsByShipmentPlanId = new Map<string, string[]>();
+        for (const allocated of shipmentPlanSlots) {
+          const slots =
+            slotIdsByShipmentPlanId.get(allocated.shipmentPlanId) ?? [];
+          slots.push(allocated.fulfilmentSlotId!);
+          slotIdsByShipmentPlanId.set(allocated.shipmentPlanId, slots);
+        }
+        const componentAllocations: Prisma.PriceComponentFulfilmentAllocationCreateManyInput[] =
+          [];
+        for (const component of priceComponents) {
+          let slotIds: string[];
+          if (
+            component.scope === PriceComponentScope.QUOTE_ITEM &&
+            component.quoteItemId
+          ) {
+            const orderItemId = orderItemIdByQuoteItemId.get(
+              component.quoteItemId,
+            );
+            slotIds = fulfilmentSlots
+              .filter((slot) => slot.orderItemId === orderItemId)
+              .map((slot) => slot.id!);
+          } else if (
+            component.scope === PriceComponentScope.QUOTE_SHIPMENT_PLAN &&
+            component.quoteShipmentPlanId
+          ) {
+            const shipmentPlanId = shipmentPlanIdByQuoteId.get(
+              component.quoteShipmentPlanId,
+            );
+            slotIds = shipmentPlanId
+              ? (slotIdsByShipmentPlanId.get(shipmentPlanId) ?? [])
+              : [];
+          } else if (component.scope === PriceComponentScope.ORDER) {
+            slotIds = fulfilmentSlots.map((slot) => slot.id!);
+          } else {
+            throw new ConflictException(
+              "Accepted price component scope is unavailable",
+            );
+          }
+          if (slotIds.length === 0) {
+            throw new ConflictException(
+              "Accepted price component has no fulfilment slots",
+            );
+          }
+          const allocated = allocateMoney(
+            Money.of(
+              component.amountMinor,
+              quote.priceBinding.priceSnapshot.currency,
+            ),
+            slotIds.sort().map((id) => ({ id, basis: 0n })),
+          );
+          componentAllocations.push(
+            ...allocated.map((allocation) => ({
+              priceSnapshotComponentId: component.id,
+              fulfilmentSlotId: allocation.targetId,
+              amountMinor: allocation.amount.minorUnits,
+            })),
+          );
+        }
+        for (const batch of batchesOf(componentAllocations)) {
+          await transaction.priceComponentFulfilmentAllocation.createMany({
+            data: batch,
+          });
+        }
+        await transaction.$executeRaw`
+          WITH amounts AS (
+            SELECT allocation.fulfilment_slot_id,
+                   sum(allocation.amount_minor) AS amount_minor
+            FROM price_component_fulfilment_allocations allocation
+            JOIN price_snapshot_components component
+              ON component.id = allocation.price_snapshot_component_id
+            WHERE component.price_snapshot_id = ${quote.priceBinding.priceSnapshot.id}::uuid
+            GROUP BY allocation.fulfilment_slot_id
+          )
+          UPDATE fulfilment_slots slot
+          SET settlement_amount_minor = amounts.amount_minor,
+              updated_at = ${observedAt}
+          FROM amounts
+          WHERE slot.id = amounts.fulfilment_slot_id
+            AND slot.order_id = ${orderId}::uuid
+        `;
         await transaction.orderActivePriceBinding.create({
           data: { orderId, orderPriceBindingId },
         });
@@ -2008,12 +2120,288 @@ export class QuotesService {
       {
         responseStatusCode: (response) =>
           response.kind === "expired" ? HttpStatus.GONE : HttpStatus.OK,
+        transactionTimeoutMs: 60_000,
       },
     );
     if (result.kind === "expired") {
       throw new GoneException("Offer is no longer available");
     }
     return result.value;
+  }
+
+  async recordOfferCheckoutContact(
+    quoteId: string,
+    input: OfferCheckoutContactDto,
+    authorization?: string,
+    idempotencyKey?: string,
+  ): Promise<OfferCheckoutContactRecordedDto> {
+    quoteId = normalizedUuid(quoteId, "quoteId");
+    const token = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const contact = normalizeCheckoutContact(input);
+    await this.offerForToken(quoteId, token);
+    return this.idempotent(
+      "quote-offer.checkout-contact",
+      commandKey,
+      fingerprintOf({ quoteId, contact }),
+      async (transaction) => {
+        const quote = await lockedOffer(transaction, quoteId);
+        assertOfferCapability(quote, token);
+        assertCurrentOffer(quote);
+        if (quote.quoteRequest.status !== QuoteRequestStatus.ACCEPTED) {
+          throw new ConflictException("Offer has not been accepted");
+        }
+        const origin = await transaction.individualOrderOrigin.findUnique({
+          where: { quoteId },
+          select: { orderId: true },
+        });
+        if (!origin)
+          throw new ConflictException("Accepted order is unavailable");
+        await transaction.$queryRaw`
+          SELECT "id" FROM "orders" WHERE "id" = ${origin.orderId}::uuid FOR UPDATE
+        `;
+        const order = await transaction.order.findUniqueOrThrow({
+          where: { id: origin.orderId },
+          include: {
+            customer: {
+              select: { email: true, displayName: true, phone: true },
+            },
+          },
+        });
+        const payment = await transaction.payment.findFirst({
+          where: { orderId: order.id },
+          select: { id: true },
+        });
+        const requestEmail = contactFrom(
+          quote.quoteRequest.contactSnapshot,
+          order.customer,
+        ).email.toLowerCase();
+        if (
+          !order.customer ||
+          order.customerId !== quote.customerId ||
+          contact.email !== requestEmail ||
+          contact.email !== order.customer.email.toLowerCase()
+        ) {
+          throw new ConflictException(
+            "Checkout email differs from the accepted request",
+          );
+        }
+        if (
+          payment ||
+          (order.status !== "DRAFT" && order.status !== "QUOTED")
+        ) {
+          throw new ConflictException(
+            "Checkout contact can no longer be changed",
+          );
+        }
+        if (
+          !checkoutContactSnapshotMatches(
+            order.checkoutContactSnapshot,
+            contact,
+          )
+        ) {
+          throw new ConflictException(
+            "Checkout contact differs from accepted order contact",
+          );
+        }
+        if (!order.checkoutContactSnapshot) {
+          const observedAt = await databaseNow(transaction);
+          await transaction.order.update({
+            where: { id: order.id },
+            data: {
+              checkoutContactSnapshot: jsonInput({ version: 2, ...contact })!,
+            },
+          });
+          await transaction.auditEvent.create({
+            data: {
+              orderId: order.id,
+              quoteId,
+              eventType: "quote_offer.checkout_contact_recorded",
+              actorKind: AuditActorKind.CUSTOMER,
+              actorId: order.customerId,
+              idempotencyKey: commandKey,
+              correlationId: randomUUID(),
+              payload: jsonInput({ quoteId, orderId: order.id })!,
+              createdAt: observedAt,
+            },
+          });
+        }
+        return { orderId: order.id, contactRecorded: true as const };
+      },
+    );
+  }
+
+  async acceptedOfferOrderStatus(
+    quoteId: string,
+    authorization?: string,
+  ): Promise<AcceptedOfferOrderStatusDto> {
+    quoteId = normalizedUuid(quoteId, "quoteId");
+    const token = bearerCapability(authorization);
+    const quote = await this.offerForToken(quoteId, token);
+    if (quote.quoteRequest.status !== QuoteRequestStatus.ACCEPTED) {
+      throw new ConflictException("Offer has no accepted order");
+    }
+    const origin = await this.prisma.individualOrderOrigin.findUnique({
+      where: { quoteId },
+      include: { order: true },
+    });
+    if (!origin) throw new ConflictException("Accepted order is unavailable");
+    const phase = await this.prisma.orderPhase.findUnique({
+      where: { orderId: origin.orderId },
+      select: { status: true },
+    });
+    const now = await databaseNow(this.prisma);
+    const [plans, payment, candidateDispatch, preparationAttempt] =
+      await Promise.all([
+        this.prisma.phaseResourcePlan.findMany({
+          where: {
+            eligibilitySnapshot: { orderPhase: { orderId: origin.orderId } },
+            reservationSets: { none: {} },
+          },
+          select: { expiresAt: true },
+        }),
+        this.prisma.payment.findFirst({
+          where: { orderId: origin.orderId, role: { in: ["DEPOSIT", "FULL"] } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        }),
+        this.prisma.$queryRaw<Array<{ seen: boolean; available: boolean }>>`
+        WITH latest_dispatch AS (
+          SELECT
+            dispatch.id,
+            (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
+            terminal.outcome::text AS outcome,
+            terminal.failure_class AS failure_class,
+            candidate.expires_at AS candidate_expires_at,
+            EXISTS (
+              SELECT 1
+              FROM outbox_messages dead_letter
+              WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+                AND dead_letter.aggregate_id = dispatch.id
+                AND dead_letter.message_type = 'slicing.candidate_estimate.dead-lettered'
+            ) AS dead_lettered,
+            row_number() OVER (
+              PARTITION BY dispatch.aggregate_id
+              ORDER BY (dispatch.payload #>> '{job,attempt}')::integer DESC,
+                dispatch.created_at DESC, dispatch.id DESC
+            ) AS dispatch_rank
+          FROM outbox_messages dispatch
+          LEFT JOIN candidate_estimate_terminal_results terminal
+            ON terminal.outbox_message_id = dispatch.id
+          LEFT JOIN candidate_resource_estimates candidate
+            ON candidate.id = terminal.candidate_resource_estimate_id
+          WHERE dispatch.aggregate_type = 'CandidateEstimateDispatch'
+            AND dispatch.message_type = 'slicing.candidate-estimate.requested'
+            AND dispatch.payload #>> '{job,correlationId}' = ${origin.orderId}
+        )
+        SELECT EXISTS (SELECT 1 FROM latest_dispatch) AS seen,
+        EXISTS (
+          SELECT 1
+          FROM latest_dispatch
+          WHERE dispatch_rank = 1
+            AND NOT dead_lettered
+            AND (
+              outcome IS NULL
+              OR (
+                outcome = 'FAILED'
+                AND failure_class = 'retryable_infrastructure'
+                AND attempt < ${MAX_SLICING_JOB_ATTEMPTS}
+              )
+              OR (outcome = 'SUCCEEDED' AND candidate_expires_at > ${now})
+            )
+        ) AS available
+      `,
+        this.prisma.auditEvent.findFirst({
+          where: {
+            orderId: origin.orderId,
+            eventType: "individual_order.resource_preparation",
+          },
+          select: { id: true },
+        }),
+      ]);
+    const preparationAttempted =
+      Boolean(preparationAttempt) || candidateDispatch[0]?.seen === true;
+    const unavailableCandidateRequirement =
+      origin.order.status === "DRAFT" &&
+      preparationAttempted &&
+      origin.order.acceptedOrderPriceBindingId
+        ? await this.automaticQuotes.hasUnavailableCandidateRequirement(
+            origin.order.acceptedOrderPriceBindingId,
+            now,
+          )
+        : false;
+    const preparationStatus: AcceptedOfferOrderStatusDto["preparationStatus"] =
+      !phase
+        ? "UNAVAILABLE"
+        : [
+              "ACTIVE",
+              "IN_PRODUCTION",
+              "QC_PASSED",
+              "SHIPPED",
+              "DELIVERED",
+              "COMPLETED",
+              "PARTIALLY_FULFILLED",
+            ].includes(phase.status)
+          ? "ACTIVATED"
+          : phase.status !== "QUOTED"
+            ? "UNAVAILABLE"
+            : origin.order.status === "QUOTED" &&
+                plans.some(
+                  (plan) =>
+                    plan.expiresAt.getTime() >
+                    now.getTime() + REACQUISITION_RESERVATION_MILLISECONDS,
+                )
+              ? "READY"
+              : origin.order.status === "DRAFT"
+                ? unavailableCandidateRequirement
+                  ? "UNAVAILABLE"
+                  : candidateDispatch[0]?.available &&
+                      origin.order.acceptedOrderPriceBindingId
+                    ? "PREPARING"
+                    : preparationAttempted
+                      ? "UNAVAILABLE"
+                      : "UNPREPARED"
+                : "UNAVAILABLE";
+    let initialPayment: AcceptedOfferOrderStatusDto["initialPayment"] = null;
+    if (payment) {
+      if (
+        payment.checkoutMethod !== "CARD" &&
+        payment.checkoutMethod !== "BANK_TRANSFER"
+      ) {
+        throw new ConflictException("Initial payment method is unavailable");
+      }
+      const amountMinor = Number(payment.requestedAmountMinor);
+      if (
+        !Number.isSafeInteger(amountMinor) ||
+        amountMinor < 1 ||
+        !payment.checkoutCaptureExpiresAt
+      ) {
+        throw new ConflictException(
+          "Initial payment projection is unavailable",
+        );
+      }
+      initialPayment = {
+        paymentId: payment.id,
+        provider: payment.provider,
+        method: payment.checkoutMethod,
+        status: payment.status,
+        amountMinor,
+        currency: payment.currency,
+        checkoutUrl:
+          payment.status === "PENDING" &&
+          payment.checkoutCaptureExpiresAt > now &&
+          payment.captureAuthorized
+            ? payment.providerCheckoutUrl
+            : null,
+        expiresAt: payment.checkoutCaptureExpiresAt.toISOString(),
+      };
+    }
+    return {
+      orderId: origin.orderId,
+      orderReference: origin.order.publicReference,
+      orderStatus: origin.order.status,
+      preparationStatus,
+      initialPayment,
+    };
   }
 
   async rejectOffer(
@@ -2354,77 +2742,83 @@ export class QuotesService {
     if (!primaryFingerprint) {
       throw new Error("At least one idempotency fingerprint is required");
     }
-    return this.prisma.$transaction(async (transaction) => {
-      const lockKey = `${namespace}:${idempotencyKey}`;
-      await transaction.$queryRaw`
+    return this.prisma.$transaction(
+      async (transaction) => {
+        const lockKey = `${namespace}:${idempotencyKey}`;
+        await transaction.$queryRaw`
         SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text
       `;
-      await options?.beforeReplay?.(transaction);
-      const observedAt = await databaseNow(transaction);
-      const existing = await transaction.idempotencyRecord.findFirst({
-        where: { namespace, idempotencyKey },
-        orderBy: { generation: "desc" },
-      });
-      if (existing && existing.expiresAt.getTime() > observedAt.getTime()) {
-        if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
-          throw new ConflictException(
-            "Idempotency key was already used with different input",
-          );
+        await options?.beforeReplay?.(transaction);
+        const observedAt = await databaseNow(transaction);
+        const existing = await transaction.idempotencyRecord.findFirst({
+          where: { namespace, idempotencyKey },
+          orderBy: { generation: "desc" },
+        });
+        if (existing && existing.expiresAt.getTime() > observedAt.getTime()) {
+          if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
+            throw new ConflictException(
+              "Idempotency key was already used with different input",
+            );
+          }
+          if (
+            existing.status !== IdempotencyStatus.COMPLETED ||
+            existing.responseBody === null
+          ) {
+            throw new ConflictException("Idempotent command is incomplete");
+          }
+          return options?.responseCodec
+            ? options.responseCodec.fromStoredResponse(
+                existing.responseBody,
+                existing.requestFingerprint,
+                existing.generation,
+              )
+            : (existing.responseBody as T);
         }
-        if (
-          existing.status !== IdempotencyStatus.COMPLETED ||
-          existing.responseBody === null
-        ) {
-          throw new ConflictException("Idempotent command is incomplete");
-        }
-        return options?.responseCodec
-          ? options.responseCodec.fromStoredResponse(
-              existing.responseBody,
-              existing.requestFingerprint,
-              existing.generation,
-            )
-          : (existing.responseBody as T);
-      }
 
-      const record = await transaction.idempotencyRecord.create({
-        data: {
-          namespace,
-          idempotencyKey,
-          generation: (existing?.generation ?? 0) + 1,
-          requestFingerprint: primaryFingerprint,
-          expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
-        },
-      });
-      const response = await operation(transaction, record.generation);
-      const storedResponse = jsonInput(
-        options?.responseCodec
-          ? options.responseCodec.toStoredResponse(response, record.generation)
-          : response,
-      );
-      if (storedResponse === undefined) {
-        throw new Error("Idempotent response is not JSON serializable");
-      }
-      const responseStatusCode =
-        typeof options?.responseStatusCode === "function"
-          ? options.responseStatusCode(response)
-          : (options?.responseStatusCode ?? HttpStatus.OK);
-      if (
-        !Number.isInteger(responseStatusCode) ||
-        responseStatusCode < 100 ||
-        responseStatusCode > 599
-      ) {
-        throw new Error("Idempotent response status code is invalid");
-      }
-      await transaction.idempotencyRecord.update({
-        where: { id: record.id },
-        data: {
-          status: IdempotencyStatus.COMPLETED,
-          responseStatusCode,
-          responseBody: storedResponse,
-        },
-      });
-      return response;
-    });
+        const record = await transaction.idempotencyRecord.create({
+          data: {
+            namespace,
+            idempotencyKey,
+            generation: (existing?.generation ?? 0) + 1,
+            requestFingerprint: primaryFingerprint,
+            expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
+          },
+        });
+        const response = await operation(transaction, record.generation);
+        const storedResponse = jsonInput(
+          options?.responseCodec
+            ? options.responseCodec.toStoredResponse(
+                response,
+                record.generation,
+              )
+            : response,
+        );
+        if (storedResponse === undefined) {
+          throw new Error("Idempotent response is not JSON serializable");
+        }
+        const responseStatusCode =
+          typeof options?.responseStatusCode === "function"
+            ? options.responseStatusCode(response)
+            : (options?.responseStatusCode ?? HttpStatus.OK);
+        if (
+          !Number.isInteger(responseStatusCode) ||
+          responseStatusCode < 100 ||
+          responseStatusCode > 599
+        ) {
+          throw new Error("Idempotent response status code is invalid");
+        }
+        await transaction.idempotencyRecord.update({
+          where: { id: record.id },
+          data: {
+            status: IdempotencyStatus.COMPLETED,
+            responseStatusCode,
+            responseBody: storedResponse,
+          },
+        });
+        return response;
+      },
+      { timeout: options?.transactionTimeoutMs ?? 5_000 },
+    );
   }
 }
 

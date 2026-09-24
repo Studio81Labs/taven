@@ -81,6 +81,11 @@ export class CheckoutBillingDto {
   vatId?: string;
 }
 
+export class CreateIndividualInitialPaymentDto {
+  @ApiProperty({ type: String, enum: ["CARD", "BANK_TRANSFER"] })
+  method!: "CARD" | "BANK_TRANSFER";
+}
+
 export class CreateCheckoutPaymentDto {
   @ApiProperty({ type: String, format: "email", maxLength: 320 })
   email!: string;

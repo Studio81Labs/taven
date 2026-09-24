@@ -84,6 +84,46 @@
         ],
         "type": "object"
       },
+      "AcceptedOfferOrderStatusDto": {
+        "properties": {
+          "initialPayment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CheckoutPaymentDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderReference": {
+            "type": "string"
+          },
+          "orderStatus": {
+            "type": "string"
+          },
+          "preparationStatus": {
+            "enum": [
+              "UNPREPARED",
+              "PREPARING",
+              "READY",
+              "ACTIVATED",
+              "UNAVAILABLE"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "orderReference",
+          "orderStatus",
+          "preparationStatus"
+        ],
+        "type": "object"
+      },
       "AcceptOfferDto": {
         "properties": {
           "acknowledgeWithdrawalException": {
@@ -2824,6 +2864,21 @@
         ],
         "type": "object"
       },
+      "CreateIndividualInitialPaymentDto": {
+        "properties": {
+          "method": {
+            "enum": [
+              "CARD",
+              "BANK_TRANSFER"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
       "CreateInventoryDto": {
         "properties": {
           "color": {
@@ -4702,6 +4757,36 @@
         },
         "required": [
           "modelFileId"
+        ],
+        "type": "object"
+      },
+      "IndividualResourcePreparationDto": {
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "phaseResourcePlanId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "planExpiresAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "READY"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "status"
         ],
         "type": "object"
       },
@@ -6730,6 +6815,46 @@
           "succeededRefunds",
           "netReceipts",
           "month"
+        ],
+        "type": "object"
+      },
+      "OfferCheckoutContactDto": {
+        "properties": {
+          "billing": {
+            "$ref": "#/components/schemas/CheckoutBillingDto"
+          },
+          "email": {
+            "format": "email",
+            "maxLength": 320,
+            "type": "string"
+          },
+          "fullName": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "fullName",
+          "billing"
+        ],
+        "type": "object"
+      },
+      "OfferCheckoutContactRecordedDto": {
+        "properties": {
+          "contactRecorded": {
+            "type": "boolean"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "contactRecorded"
         ],
         "type": "object"
       },
@@ -9075,6 +9200,20 @@
           "clean",
           "warning",
           "unknown"
+        ],
+        "type": "object"
+      },
+      "PrepareIndividualOrderResourcesDto": {
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 3,
+            "pattern": "\\S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
         ],
         "type": "object"
       },
@@ -18546,6 +18685,150 @@
         ]
       }
     },
+    "/admin/orders/{orderId}/initial-payment": {
+      "post": {
+        "operationId": "PaymentsController_createIndividualInitial",
+        "parameters": [
+          {
+            "description": "Stable client command identity (8-255 characters)",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIndividualInitialPaymentDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckoutPaymentDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Order, resources or command changed"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Create the accepted individual order initial payment",
+        "tags": [
+          "payments"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/resource-preparation": {
+      "post": {
+        "operationId": "IndividualOrderPreparationController_prepare",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareIndividualOrderResourcesDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndividualResourcePreparationDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Accepted resources or command changed"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Prepare exact resources for an accepted individual order",
+        "tags": [
+          "individual order resources"
+        ]
+      }
+    },
     "/admin/quote-requests": {
       "get": {
         "operationId": "OperatorQuoteRequestsController_list",
@@ -20942,6 +21225,113 @@
           }
         ],
         "summary": "Accept an offer and create its draft order",
+        "tags": [
+          "individual offers"
+        ]
+      }
+    },
+    "/offers/{quoteId}/checkout-contact": {
+      "post": {
+        "operationId": "OffersController_checkoutContact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quoteId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfferCheckoutContactDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferCheckoutContactRecordedDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Offer capability is invalid"
+          },
+          "409": {
+            "description": "Offer or checkout contact is not eligible"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Record customer checkout contact for an accepted offer",
+        "tags": [
+          "individual offers"
+        ]
+      }
+    },
+    "/offers/{quoteId}/order-status": {
+      "get": {
+        "operationId": "OffersController_orderStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quoteId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptedOfferOrderStatusDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "401": {
+            "description": "Offer capability is invalid"
+          },
+          "409": {
+            "description": "Offer has no accepted order"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Read the accepted offer's order and initial payment status",
         "tags": [
           "individual offers"
         ]

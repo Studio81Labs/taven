@@ -33,6 +33,7 @@ import { CurrentOperator } from "../admin-access/current-operator.decorator";
 import type { OperatorContext } from "../admin-access/operator-context";
 import {
   CreateBalancePaymentDto,
+  CreateIndividualInitialPaymentDto,
   CheckoutPaymentDto,
   CreateCheckoutPaymentDto,
   CheckoutRetryContextDto,
@@ -60,6 +61,34 @@ const IDEMPOTENCY_HEADER = {
 @Controller()
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
+
+  @Post("admin/orders/:orderId/initial-payment")
+  @HttpCode(200)
+  @ApiSecurity("operatorSession")
+  @UseGuards(OperatorAccessGuard)
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.PAYMENTS_WRITE)
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiHeader({ ...OPERATOR_CSRF_HEADER, required: true })
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: CreateIndividualInitialPaymentDto })
+  @ApiOperation({
+    summary: "Create the accepted individual order initial payment",
+  })
+  @ApiOkResponse({ type: CheckoutPaymentDto })
+  @ApiConflictResponse({ description: "Order, resources or command changed" })
+  createIndividualInitial(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Body() body: CreateIndividualInitialPaymentDto,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<CheckoutPaymentDto> {
+    return this.payments.createIndividualInitialPayment(
+      operator,
+      orderId,
+      body,
+      idempotencyKey,
+    );
+  }
 
   @Get("payments/capabilities")
   @ApiOperation({

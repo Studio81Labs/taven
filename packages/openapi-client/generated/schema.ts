@@ -1518,6 +1518,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/initial-payment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create the accepted individual order initial payment */
+        post: operations["PaymentsController_createIndividualInitial"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/resource-preparation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare exact resources for an accepted individual order */
+        post: operations["IndividualOrderPreparationController_prepare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/quote-requests": {
         parameters: {
             query?: never;
@@ -2203,6 +2237,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/offers/{quoteId}/checkout-contact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record customer checkout contact for an accepted offer */
+        post: operations["OffersController_checkoutContact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/offers/{quoteId}/order-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the accepted offer's order and initial payment status */
+        get: operations["OffersController_orderStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/offers/{quoteId}/reject": {
         parameters: {
             query?: never;
@@ -2414,6 +2482,15 @@ export interface components {
             publicReference: string;
             /** @enum {string} */
             status: "DRAFT";
+        };
+        AcceptedOfferOrderStatusDto: {
+            initialPayment?: components["schemas"]["CheckoutPaymentDto"] | null;
+            /** Format: uuid */
+            orderId: string;
+            orderReference: string;
+            orderStatus: string;
+            /** @enum {string} */
+            preparationStatus: "UNPREPARED" | "PREPARING" | "READY" | "ACTIVATED" | "UNAVAILABLE";
         };
         AcceptOfferDto: {
             /** @description Required as true for a fresh acceptance; omitted only for completed legacy replay. */
@@ -3123,6 +3200,10 @@ export interface components {
             reason: string;
             replacements: components["schemas"]["ClaimReprintJobDto"][];
         };
+        CreateIndividualInitialPaymentDto: {
+            /** @enum {string} */
+            method: "CARD" | "BANK_TRANSFER";
+        };
         CreateInventoryDto: {
             color?: string | null;
             currency: string;
@@ -3683,6 +3764,16 @@ export interface components {
         ImportQuoteRequestModelDto: {
             /** Format: uuid */
             modelFileId: string;
+        };
+        IndividualResourcePreparationDto: {
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            phaseResourcePlanId?: string | null;
+            /** Format: date-time */
+            planExpiresAt?: string | null;
+            /** @enum {string} */
+            status: "PENDING" | "READY";
         };
         InitiateModelUploadDto: {
             /** @example model/stl */
@@ -4249,6 +4340,17 @@ export interface components {
             /** @enum {string} */
             scope?: "PLATFORM";
             succeededRefunds: components["schemas"]["MetricMoneyDto"];
+        };
+        OfferCheckoutContactDto: {
+            billing: components["schemas"]["CheckoutBillingDto"];
+            /** Format: email */
+            email: string;
+            fullName: string;
+        };
+        OfferCheckoutContactRecordedDto: {
+            contactRecorded: boolean;
+            /** Format: uuid */
+            orderId: string;
         };
         OfferDeliveryDestinationDto: {
             addressSnapshot: {
@@ -4884,6 +4986,9 @@ export interface components {
             clean: number;
             unknown: number;
             warning: number;
+        };
+        PrepareIndividualOrderResourcesDto: {
+            reason: string;
         };
         PrepareQuoteRequestReferenceDto: {
             partsPerPlate: number;
@@ -8872,6 +8977,80 @@ export interface operations {
             };
         };
     };
+    PaymentsController_createIndividualInitial: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable client command identity (8-255 characters) */
+                "Idempotency-Key": string;
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateIndividualInitialPaymentDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckoutPaymentDto"];
+                };
+            };
+            /** @description Order, resources or command changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    IndividualOrderPreparationController_prepare: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareIndividualOrderResourcesDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndividualResourcePreparationDto"];
+                };
+            };
+            /** @description Accepted resources or command changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     OperatorQuoteRequestsController_list: {
         parameters: {
             query?: {
@@ -10224,6 +10403,83 @@ export interface operations {
             };
             /** @description Binding offer flows await launch approval */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OffersController_checkoutContact: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                quoteId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OfferCheckoutContactDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfferCheckoutContactRecordedDto"];
+                };
+            };
+            /** @description Offer capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Offer or checkout contact is not eligible */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OffersController_orderStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                quoteId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptedOfferOrderStatusDto"];
+                };
+            };
+            /** @description Offer capability is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Offer has no accepted order */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Headers,
+  Header,
   HttpCode,
   Ip,
   Param,
@@ -45,9 +46,12 @@ import { UploadService } from "../storage/upload.service";
 import {
   AcceptOfferDto,
   AcceptedOfferDto,
+  AcceptedOfferOrderStatusDto,
   CreateQuoteRequestDto,
   IssueOfferDto,
   OfferIssuedDto,
+  OfferCheckoutContactDto,
+  OfferCheckoutContactRecordedDto,
   OfferPreviewDto,
   OfferDraftPreviewDto,
   OperatorOfferDetailDto,
@@ -71,6 +75,11 @@ import {
   QuoteComposerChoicesDto,
 } from "./operator-quote-models.dto";
 import { OperatorQuoteModelsService } from "./operator-quote-models.service";
+import { IndividualResourcePreparationService } from "./individual-resource-preparation.service";
+import {
+  IndividualResourcePreparationDto,
+  PrepareIndividualOrderResourcesDto,
+} from "./individual-resource-preparation.dto";
 
 const TRIMMED_IDEMPOTENCY_KEY_PATTERN = "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$";
 const IDEMPOTENCY_HEADER = {
@@ -138,6 +147,23 @@ export class QuoteRequestsController {
 export class OffersController {
   constructor(private readonly quotes: QuotesService) {}
 
+  @Get(":quoteId/order-status")
+  @Header("Cache-Control", "no-store")
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Read the accepted offer's order and initial payment status",
+  })
+  @ApiParam({ name: "quoteId", type: String, format: "uuid" })
+  @ApiOkResponse({ type: AcceptedOfferOrderStatusDto })
+  @ApiUnauthorizedResponse({ description: "Offer capability is invalid" })
+  @ApiConflictResponse({ description: "Offer has no accepted order" })
+  orderStatus(
+    @Param("quoteId") quoteId: string,
+    @Headers("authorization") authorization?: string,
+  ): Promise<AcceptedOfferOrderStatusDto> {
+    return this.quotes.acceptedOfferOrderStatus(quoteId, authorization);
+  }
+
   @Get(":quoteId")
   @ApiBearerAuth()
   @ApiOperation({ summary: "Preview one immutable individual offer" })
@@ -180,6 +206,34 @@ export class OffersController {
     );
   }
 
+  @Post(":quoteId/checkout-contact")
+  @HttpCode(200)
+  @ApiBearerAuth()
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({
+    summary: "Record customer checkout contact for an accepted offer",
+  })
+  @ApiParam({ name: "quoteId", type: String, format: "uuid" })
+  @ApiBody({ type: OfferCheckoutContactDto })
+  @ApiOkResponse({ type: OfferCheckoutContactRecordedDto })
+  @ApiUnauthorizedResponse({ description: "Offer capability is invalid" })
+  @ApiConflictResponse({
+    description: "Offer or checkout contact is not eligible",
+  })
+  checkoutContact(
+    @Param("quoteId") quoteId: string,
+    @Body() body: OfferCheckoutContactDto,
+    @Headers("authorization") authorization?: string,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<OfferCheckoutContactRecordedDto> {
+    return this.quotes.recordOfferCheckoutContact(
+      quoteId,
+      body,
+      authorization,
+      idempotencyKey,
+    );
+  }
+
   @Post(":quoteId/reject")
   @HttpCode(200)
   @ApiBearerAuth()
@@ -202,6 +256,37 @@ export class OffersController {
       authorization,
       idempotencyKey,
     );
+  }
+}
+
+@ApiTags("individual order resources")
+@ApiSecurity("operatorSession")
+@ApiHeader(OPERATOR_CSRF_HEADER)
+@UseGuards(OperatorAccessGuard)
+@RequireOperatorPermissions(OPERATOR_PERMISSIONS.OPERATIONS_WRITE)
+@Controller("admin/orders")
+export class IndividualOrderPreparationController {
+  constructor(
+    private readonly resources: IndividualResourcePreparationService,
+  ) {}
+
+  @Post(":orderId/resource-preparation")
+  @HttpCode(200)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiBody({ type: PrepareIndividualOrderResourcesDto })
+  @ApiOperation({
+    summary: "Prepare exact resources for an accepted individual order",
+  })
+  @ApiOkResponse({ type: IndividualResourcePreparationDto })
+  @ApiConflictResponse({ description: "Accepted resources or command changed" })
+  prepare(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Body() body: PrepareIndividualOrderResourcesDto,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<IndividualResourcePreparationDto> {
+    return this.resources.prepare(operator, orderId, body, idempotencyKey);
   }
 }
 

@@ -52,6 +52,7 @@ import type {
   AcceptedCheckoutEvidenceDto,
   CheckoutRetryContextDto,
   CreateBalancePaymentDto,
+  CreateIndividualInitialPaymentDto,
   CreateCheckoutPaymentDto,
   CheckoutPaymentDto,
 } from "./payments.dto";
@@ -64,9 +65,10 @@ import {
   type VerifiedPaymentEvent,
 } from "./payment-provider.port";
 import { reservePaymentWebhookVerification } from "./payment-webhook-limit";
+import { normalizeCheckoutContact } from "./checkout-contact";
 
 const CHECKOUT_CAPTURE_MILLISECONDS = 60 * 60 * 1_000;
-const REACQUISITION_RESERVATION_MILLISECONDS = 15 * 60 * 1_000;
+export const REACQUISITION_RESERVATION_MILLISECONDS = 15 * 60 * 1_000;
 const MAX_REACQUISITION_PLAN_GENERATIONS = 8;
 const INTENT_RECONCILIATION_ATTEMPTS = 3;
 const IDEMPOTENCY_DAYS = 7;
@@ -575,6 +577,407 @@ export class PaymentsService {
         intent.providerIntentId,
       );
       if (closed) return closed;
+      throw error;
+    }
+  }
+
+  async createIndividualInitialPayment(
+    operator: OperatorContext,
+    orderIdInput: string,
+    bodyInput: CreateIndividualInitialPaymentDto,
+    idempotencyKeyInput?: string,
+  ): Promise<CheckoutPaymentDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.PAYMENTS_WRITE);
+    const nodeId = operatorNode(operator);
+    const orderId = normalizedUuid(orderIdInput, "orderId");
+    const method = paymentMethod(bodyInput?.method);
+    const key = requireIdempotencyKey(idempotencyKeyInput);
+    const namespace = `individual-initial-payment:${orderId}`;
+    const fingerprint = fingerprintOf({ orderId, method });
+    const first = await this.prisma.$transaction(async (tx) => {
+      await lockNamedIdempotencyKey(tx, namespace, key);
+      await assertOperationalOrderScope(tx, orderId, nodeId);
+      return checkoutIdempotencyAfterLock(
+        tx,
+        orderId,
+        key,
+        fingerprint,
+        namespace,
+      );
+    });
+    if (first.replay) return first.replay;
+    assertCheckoutPaymentFlowEnabled();
+    const capabilities = await this.provider.capabilities();
+    assertCheckoutPaymentMethodsAvailable(capabilities.methods);
+    if (
+      capabilities.provider !== this.provider.providerName() ||
+      !capabilities.methods.includes(method)
+    ) {
+      throw new BadRequestException("Payment method is unavailable");
+    }
+    const siteUrl = publicSiteUrl();
+
+    const staged = await this.prisma.$transaction(async (tx) => {
+      await lockNamedIdempotencyKey(tx, namespace, key);
+      await assertOperationalOrderScope(tx, orderId, nodeId);
+      const idempotency = await checkoutIdempotencyAfterLock(
+        tx,
+        orderId,
+        key,
+        fingerprint,
+        namespace,
+      );
+      if (idempotency.replay) return { replay: idempotency.replay } as const;
+      const now = await databaseNow(tx);
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          individualOrigin: {
+            include: {
+              legacyFullPaymentBinding: true,
+              quote: { include: { deliveryDestination: true } },
+            },
+          },
+          activePriceBinding: {
+            include: {
+              orderPriceBinding: {
+                include: {
+                  priceSnapshot: { include: { paymentSchedules: true } },
+                  deliveryDestination: true,
+                  shipmentPlans: true,
+                },
+              },
+            },
+          },
+          phases: true,
+        },
+      });
+      if (
+        !order?.individualOrigin ||
+        order.status !== "QUOTED" ||
+        order.phases.length !== 1 ||
+        order.phases[0]?.kind !== "SINGLE" ||
+        order.phases[0]?.status !== "QUOTED" ||
+        !order.activePriceBinding ||
+        order.acceptedOrderPriceBindingId !==
+          order.activePriceBinding.orderPriceBindingId
+      ) {
+        throw new ConflictException(
+          "Individual order is not ready for initial payment",
+        );
+      }
+      const binding = order.activePriceBinding.orderPriceBinding;
+      if (binding.invalidatedAt) {
+        throw new ConflictException("Accepted price binding is unavailable");
+      }
+      const destination = binding.deliveryDestination;
+      const acceptedDestination =
+        order.individualOrigin.quote.deliveryDestination;
+      if (
+        !destination ||
+        !acceptedDestination ||
+        destination.providerEndpointId !==
+          acceptedDestination.providerEndpointId ||
+        destination.endpointType !== acceptedDestination.endpointType ||
+        canonicalJson(destination.addressSnapshot) !==
+          canonicalJson(acceptedDestination.addressSnapshot) ||
+        canonicalJson(destination.capabilitySnapshot) !==
+          canonicalJson(acceptedDestination.capabilitySnapshot)
+      ) {
+        throw new ConflictException(
+          "Accepted delivery destination is unavailable",
+        );
+      }
+      const resolvedDelivery =
+        this.deliveryCapabilities.readCommittedCapability({
+          providerEndpointId: destination.providerEndpointId,
+          endpointType: destination.endpointType,
+          addressSnapshot: destination.addressSnapshot,
+          capabilitySnapshot: destination.capabilitySnapshot,
+        });
+      const supportedCategories = new Set(
+        resolvedDelivery.supportedCategoryIds,
+      );
+      if (
+        binding.shipmentPlans.some(
+          (shipment) => !supportedCategories.has(shipment.category),
+        )
+      ) {
+        throw new ConflictException(
+          "Accepted delivery category is unavailable",
+        );
+      }
+      const contact = asRecord(order.checkoutContactSnapshot);
+      if (contact?.version !== 2) {
+        throw new ConflictException("Customer checkout contact is incomplete");
+      }
+      const acceptedContact = normalizeCheckoutContact(contact);
+      const schedules = binding.priceSnapshot.paymentSchedules;
+      const schedule =
+        schedules.find((item) => item.role === "DEPOSIT") ??
+        (order.individualOrigin.legacyFullPaymentBinding
+          ? schedules.find((item) => item.role === "FULL")
+          : undefined);
+      if (!schedule || schedule.grossAmountMinor <= 0n) {
+        throw new ConflictException(
+          "Accepted initial payment schedule is unavailable",
+        );
+      }
+      const active = await tx.payment.findFirst({
+        where: {
+          orderId,
+          role: { in: ["DEPOSIT", "FULL"] },
+          status: { in: ["CREATED", "PENDING", "CAPTURED"] },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      if (active) {
+        if (
+          active.status === PaymentStatus.CREATED ||
+          (active.status === PaymentStatus.PENDING &&
+            !active.providerCheckoutUrl) ||
+          active.checkoutMethod !== method ||
+          active.paymentScheduleId !== schedule.id
+        ) {
+          throw new ConflictException("Initial payment intent already exists");
+        }
+        const record = await tx.idempotencyRecord.create({
+          data: {
+            namespace,
+            idempotencyKey: key,
+            generation: idempotency.nextGeneration,
+            requestFingerprint: fingerprint,
+            expiresAt: addDays(now, IDEMPOTENCY_DAYS),
+          },
+        });
+        const response = paymentDto(active);
+        await completeIdempotency(tx, record.id, response);
+        return { replay: response } as const;
+      }
+      const plan = await tx.phaseResourcePlan.findFirst({
+        where: {
+          nodeId,
+          eligibilitySnapshot: { orderPhaseId: order.phases[0]!.id },
+          expiresAt: {
+            gt: new Date(
+              now.getTime() + REACQUISITION_RESERVATION_MILLISECONDS,
+            ),
+          },
+          // A plan's initial reservation key is immutable. A plan already
+          // used by a failed/expired attempt cannot be revived.
+          reservationSets: { none: {} },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      });
+      if (!plan) {
+        throw new ConflictException(
+          "Complete resource plan is unavailable or too short for payment",
+        );
+      }
+      let reserved;
+      try {
+        reserved = await this.reservations.reserveInTransaction(tx, {
+          nodeId,
+          phaseResourcePlanId: plan.id,
+          reservationKey: `individual-initial:${orderId}:${plan.id}`,
+        });
+      } catch (error) {
+        if (
+          error instanceof ResourceConflictError ||
+          error instanceof ResourceNotFoundError
+        ) {
+          throw new ConflictException(
+            "Complete resource reservation is unavailable",
+          );
+        }
+        throw error;
+      }
+      if (reserved.status !== "RESERVED" || reserved.expiresAt <= now) {
+        throw new ConflictException(
+          "Complete resource reservation is unavailable",
+        );
+      }
+      const record = await tx.idempotencyRecord.create({
+        data: {
+          namespace,
+          idempotencyKey: key,
+          generation: idempotency.nextGeneration,
+          requestFingerprint: fingerprint,
+          expiresAt: addDays(now, IDEMPOTENCY_DAYS),
+        },
+      });
+      const paymentId = randomUUID();
+      const payment = await tx.payment.create({
+        data: {
+          id: paymentId,
+          orderId,
+          priceSnapshotId: binding.priceSnapshotId,
+          orderPriceBindingId: binding.id,
+          paymentScheduleId: schedule.id,
+          role: schedule.role,
+          provider: capabilities.provider,
+          checkoutMethod: method,
+          merchantReference: paymentId,
+          checkoutCommandId: record.id,
+          requestedAmountMinor: schedule.grossAmountMinor,
+          currency: binding.priceSnapshot.currency,
+          checkoutCaptureExpiresAt: new Date(
+            now.getTime() + CHECKOUT_CAPTURE_MILLISECONDS,
+          ),
+          createdAt: now,
+        },
+      });
+      await this.audit.recordOperator(tx, operator, {
+        orderId,
+        paymentId,
+        nodeId,
+        eventType: "individual_initial_payment.intent_requested",
+        correlationId: record.id,
+        idempotencyKey: key,
+        payload: {
+          operation: "individual_initial_payment",
+          method,
+          role: schedule.role,
+          phaseResourcePlanId: plan.id,
+          phaseReservationSetId: reserved.phaseReservationSetId,
+        },
+      });
+      return {
+        payment,
+        idempotencyRecordId: record.id,
+        orderReference: order.publicReference,
+        quoteId: order.individualOrigin.quoteId,
+        ...acceptedContact,
+      } as const;
+    });
+    if ("replay" in staged) return staged.replay;
+
+    let intent;
+    try {
+      intent = await this.provider.createIntent({
+        paymentId: staged.payment.id,
+        merchantReference: staged.payment.merchantReference!,
+        orderReference: staged.orderReference,
+        amountMinor: staged.payment.requestedAmountMinor,
+        currency: staged.payment.currency,
+        method,
+        email: staged.email,
+        fullName: staged.fullName,
+        observedAt: staged.payment.createdAt,
+        expiresAt: staged.payment.checkoutCaptureExpiresAt!,
+        returnUrls: individualOfferReturnUrls(
+          siteUrl,
+          staged.quoteId,
+          staged.payment.id,
+        ),
+      });
+    } catch (error) {
+      if (
+        error instanceof PaymentIntentCreationError &&
+        error.providerIntentId
+      ) {
+        const closed = await this.closeReturnedIntent(
+          staged.payment.id,
+          staged.idempotencyRecordId,
+          error.providerIntentId,
+        );
+        if (closed) return closed;
+        await this.provider
+          .cancelIntent(error.providerIntentId)
+          .catch(() => undefined);
+      } else if (
+        error instanceof PaymentIntentCreationError &&
+        error.outcome === "DEFINITIVE_FAILURE"
+      ) {
+        const failed = await this.recordIntentFailure(
+          staged.payment.id,
+          staged.idempotencyRecordId,
+          staged.idempotencyRecordId,
+        );
+        if (failed) return failed;
+      } else {
+        const ambiguous = await this.recordIntentAmbiguity(
+          staged.payment.id,
+          staged.idempotencyRecordId,
+        );
+        if (ambiguous) return ambiguous;
+      }
+      throw new BadGatewayException("Payment provider is unavailable");
+    }
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await lockPaymentEnvelope(tx, staged.payment.id);
+        const current = await tx.payment.findUniqueOrThrow({
+          where: { id: staged.payment.id },
+        });
+        if (
+          current.status !== PaymentStatus.CREATED &&
+          current.providerIntentId !== intent.providerIntentId
+        ) {
+          throw new ConflictException(
+            "Initial payment closed during intent creation",
+          );
+        }
+        const payment =
+          current.status === PaymentStatus.CREATED
+            ? await tx.payment.update({
+                where: { id: current.id },
+                data: {
+                  status: PaymentStatus.PENDING,
+                  providerIntentId: intent.providerIntentId,
+                  providerCheckoutUrl: intent.checkoutUrl,
+                },
+              })
+            : current.status === PaymentStatus.PENDING &&
+                !current.providerCheckoutUrl
+              ? await tx.payment.update({
+                  where: { id: current.id },
+                  data: { providerCheckoutUrl: intent.checkoutUrl },
+                })
+              : current;
+        const response = paymentDto(payment);
+        await completeIdempotency(tx, staged.idempotencyRecordId, response);
+        if (
+          payment.status === PaymentStatus.PENDING &&
+          payment.providerCheckoutUrl
+        ) {
+          await tx.outboxMessage.createMany({
+            data: [
+              {
+                deduplicationKey: `individual-initial-payment-ready:${payment.id}`,
+                aggregateType: "Payment",
+                aggregateId: payment.id,
+                messageType: "email.individual-initial-payment-ready",
+                schemaVersion: 1,
+                payload: jsonInput({
+                  orderId,
+                  quoteId: staged.quoteId,
+                  paymentId: payment.id,
+                })!,
+              },
+            ],
+            skipDuplicates: true,
+          });
+        }
+        return response;
+      });
+    } catch (error) {
+      const finalized = await this.reconcileCommittedIntentFinalization(
+        staged.payment.id,
+        staged.idempotencyRecordId,
+        intent.providerIntentId,
+        intent.checkoutUrl,
+      );
+      if (finalized) return finalized;
+      const closed = await this.closeReturnedIntent(
+        staged.payment.id,
+        staged.idempotencyRecordId,
+        intent.providerIntentId,
+      );
+      if (closed) return closed;
+      await this.provider
+        .cancelIntent(intent.providerIntentId)
+        .catch(() => undefined);
       throw error;
     }
   }
@@ -1304,7 +1707,69 @@ export class PaymentsService {
       where: { orderId: payment.orderId },
       select: { quoteSessionId: true },
     });
-    if (!origin) return false;
+    if (!origin) {
+      const individual = await this.prisma.individualOrderOrigin.findUnique({
+        where: { orderId: payment.orderId },
+        include: {
+          quote: { include: { deliveryDestination: true } },
+          order: {
+            include: {
+              activePriceBinding: {
+                include: {
+                  orderPriceBinding: {
+                    include: { deliveryDestination: true, shipmentPlans: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      const binding = individual?.order.activePriceBinding?.orderPriceBinding;
+      const destination = binding?.deliveryDestination;
+      const accepted = individual?.quote.deliveryDestination;
+      if (
+        !individual ||
+        individual.order.status !== "QUOTED" ||
+        binding?.id !== payment.orderPriceBindingId ||
+        individual.order.acceptedOrderPriceBindingId !== binding.id ||
+        !destination ||
+        !accepted ||
+        destination.providerEndpointId !== accepted.providerEndpointId ||
+        destination.endpointType !== accepted.endpointType ||
+        canonicalJson(destination.addressSnapshot) !==
+          canonicalJson(accepted.addressSnapshot) ||
+        canonicalJson(destination.capabilitySnapshot) !==
+          canonicalJson(accepted.capabilitySnapshot)
+      ) {
+        return false;
+      }
+      try {
+        const resolved = this.deliveryCapabilities.readCommittedCapability({
+          providerEndpointId: destination.providerEndpointId,
+          endpointType: destination.endpointType,
+          addressSnapshot: destination.addressSnapshot,
+          capabilitySnapshot: destination.capabilitySnapshot,
+        });
+        const categories = new Set(resolved.supportedCategoryIds);
+        return (
+          destination.providerEndpointId === resolved.providerEndpointId &&
+          destination.endpointType === resolved.endpointType &&
+          canonicalJson(destination.addressSnapshot) ===
+            canonicalJson(resolved.addressSnapshot) &&
+          canonicalJson(destination.capabilitySnapshot) ===
+            canonicalJson(resolved.capabilitySnapshot) &&
+          binding.shipmentPlans.every((plan) => categories.has(plan.category))
+        );
+      } catch (error) {
+        if (
+          error instanceof BadRequestException ||
+          error instanceof ConflictException
+        )
+          return false;
+        throw error;
+      }
+    }
     let context: CheckoutContext;
     try {
       context = await this.loadContext(origin.quoteSessionId);
@@ -2152,10 +2617,7 @@ function assertSessionCapability(
 }
 
 function checkoutInput(value: CreateCheckoutPaymentDto) {
-  const email = requiredText(value?.email, "email", 320).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new BadRequestException("email is invalid");
-  }
+  const contact = normalizeCheckoutContact(value);
   const method = value?.method;
   if (method !== "CARD" && method !== "BANK_TRANSFER") {
     throw new BadRequestException("method is invalid");
@@ -2169,18 +2631,6 @@ function checkoutInput(value: CreateCheckoutPaymentDto) {
       "Required checkout acknowledgements are missing",
     );
   }
-  const billing = asRecord(value.billing);
-  if (!billing) {
-    throw new BadRequestException("billing is invalid");
-  }
-  const countryCode = requiredText(
-    billing.countryCode,
-    "billing.countryCode",
-    2,
-  ).toUpperCase();
-  if (!/^[A-Z]{2}$/.test(countryCode)) {
-    throw new BadRequestException("billing.countryCode is invalid");
-  }
   const photoPublicationConsent = value.photoPublicationConsent === true;
   if (
     value.photoPublicationConsent !== true &&
@@ -2188,36 +2638,8 @@ function checkoutInput(value: CreateCheckoutPaymentDto) {
   ) {
     throw new BadRequestException("photoPublicationConsent is invalid");
   }
-  const addressLine2 = optionalText(
-    billing.addressLine2,
-    "billing.addressLine2",
-    200,
-  );
-  const companyName = optionalText(
-    billing.companyName,
-    "billing.companyName",
-    200,
-  );
-  const companyId = optionalText(billing.companyId, "billing.companyId", 50);
-  const vatId = optionalText(billing.vatId, "billing.vatId", 50);
   return {
-    email,
-    fullName: requiredText(value.fullName, "fullName", 200),
-    billing: {
-      name: requiredText(billing.name, "billing.name", 200),
-      addressLine1: requiredText(
-        billing.addressLine1,
-        "billing.addressLine1",
-        200,
-      ),
-      ...(addressLine2 ? { addressLine2 } : {}),
-      city: requiredText(billing.city, "billing.city", 100),
-      postalCode: requiredText(billing.postalCode, "billing.postalCode", 20),
-      countryCode,
-      ...(companyName ? { companyName } : {}),
-      ...(companyId ? { companyId } : {}),
-      ...(vatId ? { vatId } : {}),
-    },
+    ...contact,
     method: method as CheckoutPaymentMethod,
     acceptTerms: true,
     acceptClaimPolicy: true,
@@ -2419,6 +2841,7 @@ async function checkoutIdempotencyAfterLock(
   sessionId: string,
   idempotencyKey: string,
   fingerprint: string,
+  namespace = checkoutNamespace(sessionId),
 ): Promise<{
   replay: CheckoutPaymentDto | null;
   nextGeneration: number;
@@ -2426,7 +2849,7 @@ async function checkoutIdempotencyAfterLock(
 }> {
   const observedAt = await databaseNow(transaction);
   const existing = await transaction.idempotencyRecord.findFirst({
-    where: { namespace: checkoutNamespace(sessionId), idempotencyKey },
+    where: { namespace, idempotencyKey },
     orderBy: { generation: "desc" },
   });
   if (!existing || existing.expiresAt.getTime() <= observedAt.getTime()) {
@@ -2742,15 +3165,6 @@ function requiredText(value: unknown, name: string, maximum: number): string {
   return value.trim();
 }
 
-function optionalText(
-  value: unknown,
-  name: string,
-  maximum: number,
-): string | null {
-  if (value === undefined || value === null || value === "") return null;
-  return requiredText(value, name, maximum);
-}
-
 export function publicSiteUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.TAVEN_PUBLIC_SITE_URL?.trim();
   if (env.NODE_ENV === "production" && !configured) {
@@ -2788,6 +3202,24 @@ function checkoutReturnUrls(
     cancelled: target("cancelled"),
     pending: target("pending"),
   } as const;
+}
+
+function individualOfferReturnUrls(
+  siteUrl: string,
+  quoteId: string,
+  paymentId: string,
+) {
+  const target = (result: "success" | "cancelled" | "pending") => {
+    const url = new URL(`/nabidka/${quoteId}`, `${siteUrl}/`);
+    url.searchParams.set("paymentResult", result);
+    url.searchParams.set("paymentId", paymentId);
+    return url.toString();
+  };
+  return {
+    success: target("success"),
+    cancelled: target("cancelled"),
+    pending: target("pending"),
+  };
 }
 
 function balanceReturnUrls(
