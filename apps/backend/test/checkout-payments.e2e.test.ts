@@ -1629,6 +1629,300 @@ describe("checkout payment capture protocol", () => {
     });
   });
 
+  it("rechecks archived terms after a real checkout legal lock wait", async () => {
+    const token = randomBytes(32).toString("base64url");
+    const setupClient = await pool.connect();
+    let foundation: PersistenceFoundation;
+    let customerEmail: string;
+    let destination: ResolvedDeliveryCapability;
+    try {
+      await setupClient.query("BEGIN");
+      const fixtures = new PersistenceFactory(
+        setupClient,
+        `${scope}:checkout-legal-lock-wait`,
+        {
+          publicTokenHash: createHash("sha256").update(token).digest("hex"),
+          preacceptCheckout: false,
+        },
+      );
+      foundation = await prepareReservedFoundation(
+        setupClient,
+        fixtures,
+        "checkout-legal-lock-wait",
+      );
+      customerEmail = (
+        await setupClient.query<{ email: string }>(
+          "SELECT email FROM customers WHERE id = $1",
+          [foundation.customerId],
+        )
+      ).rows[0]!.email;
+      const destinationRow = (
+        await setupClient.query<{
+          provider_endpoint_id: string;
+          endpoint_type: string;
+          address_snapshot: Record<string, unknown>;
+          capability_snapshot: Record<string, unknown>;
+        }>(
+          `SELECT provider_endpoint_id, endpoint_type, address_snapshot,
+                  capability_snapshot
+           FROM delivery_destinations WHERE id = $1`,
+          [foundation.deliveryDestinationId],
+        )
+      ).rows[0]!;
+      destination = {
+        providerEndpointId: destinationRow.provider_endpoint_id,
+        endpointType: destinationRow.endpoint_type,
+        addressSnapshot:
+          destinationRow.address_snapshot as Prisma.InputJsonObject,
+        capabilitySnapshot:
+          destinationRow.capability_snapshot as Prisma.InputJsonObject,
+        supportedCategoryIds: ["standard"],
+      };
+      await publishE2eLegalFixtures(setupClient);
+      const termsRevisionId = (
+        await setupClient.query<{ id: string }>(
+          `SELECT revision.id
+           FROM legal_document_revisions revision
+           JOIN legal_documents document ON document.id = revision.document_id
+           WHERE document.key = 'terms'
+             AND revision.revision_code = 'terms-v1'
+             AND revision.status = 'APPROVED'`,
+        )
+      ).rows[0]?.id;
+      if (!termsRevisionId)
+        throw new Error("Checkout terms fixture is missing");
+      await setupClient.query(
+        `UPDATE order_price_bindings SET legal_terms_revision_id = $1 WHERE id = $2`,
+        [termsRevisionId, foundation.orderPriceBindingId],
+      );
+      await setupClient.query("SET CONSTRAINTS ALL IMMEDIATE");
+      await setupClient.query("COMMIT");
+    } catch (error) {
+      await setupClient.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      setupClient.release();
+    }
+
+    const previousEnvironment = {
+      gate: process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED,
+      claimWindowDays: process.env.TAVEN_CLAIM_WINDOW_DAYS,
+      provider: process.env.TAVEN_PAYMENT_PROVIDER,
+      siteUrl: process.env.TAVEN_PUBLIC_SITE_URL,
+    };
+    process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED = "true";
+    process.env.TAVEN_CLAIM_WINDOW_DAYS = "30";
+    process.env.TAVEN_PAYMENT_PROVIDER = "sandbox";
+    process.env.TAVEN_PUBLIC_SITE_URL = "https://taven.cz";
+    let app: INestApplication | undefined;
+    try {
+      const moduleRef = await Test.createTestingModule({
+        imports: [PaymentsModule, LegalDocumentsModule],
+      })
+        .overrideProvider(DELIVERY_CAPABILITY)
+        .useValue({
+          selectionPolicy: () => ({
+            mode: "CONFIGURED",
+            available: true,
+            allowedEndpointTypes: ["pickup_point"],
+          }),
+          configuredOptions: () => [],
+          validateSelection: async () => destination,
+          readCommittedCapability: () => destination,
+        })
+        .overrideProvider(PAYMENT_PROVIDER)
+        .useValue(
+          new SandboxPaymentProviderAdapter({
+            provider: "sandbox",
+            publicBaseUrl: "http://sandbox.local",
+            webhookSigningSecret: "checkout-lock-wait-secret-32-bytes",
+          }),
+        )
+        .compile();
+      app = moduleRef.createNestApplication();
+      await app.init();
+      const prisma = app.get(PrismaService);
+      const document = await prisma.legalDocument.findUniqueOrThrow({
+        where: { key: "terms" },
+        include: {
+          publications: {
+            where: { endsAt: null, cancelledAt: null },
+            take: 1,
+          },
+        },
+      });
+      const publication = document.publications[0];
+      if (!publication) throw new Error("Active terms publication is missing");
+      let releaseDocument!: () => void;
+      const documentMayUnlock = new Promise<void>((resolve) => {
+        releaseDocument = resolve;
+      });
+      let documentLocked!: () => void;
+      const documentIsLocked = new Promise<void>((resolve) => {
+        documentLocked = resolve;
+      });
+      const holdingDocument = prisma.$transaction(
+        async (transaction) => {
+          await transaction.$queryRaw`
+            SELECT key FROM "legal_documents" WHERE key = 'terms' FOR UPDATE
+          `;
+          documentLocked();
+          await documentMayUnlock;
+        },
+        { timeout: 20_000 },
+      );
+      let archivingPublication: Promise<{ error?: unknown }> | undefined;
+      let checkout: Promise<unknown> | undefined;
+      try {
+        await Promise.race([documentIsLocked, holdingDocument]);
+        archivingPublication = app
+          .get(LegalDocumentsService)
+          .archivePublication(
+            {
+              operatorId: "f0000000-0000-4000-8000-000000000001",
+              role: "ADMIN",
+              permissions: [OPERATOR_PERMISSIONS.LEGAL_WRITE],
+              nodeIds: [],
+              authenticationMethod: "DEVELOPMENT_PASSWORD",
+              sessionId: randomUUID(),
+            },
+            "terms",
+            publication.id,
+            {
+              expectedGeneration: document.generation,
+              reason: "Checkout PostgreSQL lock-wait fixture",
+              reasonCode: "E2E_CHECKOUT_LEGAL_LOCK_WAIT",
+            },
+            `checkout-lock-archive-${randomUUID()}`,
+          )
+          .then(
+            () => ({}),
+            (error: unknown) => ({ error }),
+          );
+        await vi.waitFor(
+          async () => {
+            const rows = await prisma.$queryRaw<Array<{ blocked: bigint }>>`
+              SELECT count(*)::bigint AS blocked FROM pg_stat_activity
+              WHERE datname = current_database()
+                AND wait_event_type = 'Lock'
+                AND query LIKE '%FROM "legal_documents"%'
+                AND query LIKE '%FOR UPDATE%'
+            `;
+            expect(rows[0]?.blocked).toBeGreaterThan(0n);
+          },
+          { timeout: 2_000, interval: 25 },
+        );
+        const commandKey = `checkout-lock-wait-${randomUUID()}`;
+        checkout = app
+          .get(PaymentsService)
+          .createCheckoutPayment(
+            foundation.quoteSessionId,
+            {
+              email: customerEmail,
+              fullName: "Checkout Lock Customer",
+              billing: checkoutBilling("Checkout Lock Customer"),
+              method: "CARD",
+              acceptTerms: true,
+              acceptClaimPolicy: true,
+              termsRevision: "terms-v1",
+              claimPolicyRevision: "claim-policy-v1",
+              acknowledgeWithdrawalException: true,
+              photoPublicationConsent: false,
+            },
+            `Bearer ${token}`,
+            commandKey,
+          )
+          .then(
+            () => null,
+            (error: unknown) => error,
+          );
+        await vi.waitFor(
+          async () => {
+            const rows = await prisma.$queryRaw<Array<{ blocked: bigint }>>`
+              SELECT count(*)::bigint AS blocked FROM pg_stat_activity
+              WHERE datname = current_database()
+                AND wait_event_type = 'Lock'
+                AND query LIKE '%FROM "legal_documents"%'
+                AND query LIKE '%FOR SHARE%'
+            `;
+            expect(rows[0]?.blocked).toBeGreaterThan(0n);
+          },
+          { timeout: 2_000, interval: 25 },
+        );
+        releaseDocument();
+        await holdingDocument;
+        const archiveResult = await archivingPublication;
+        if (archiveResult.error) throw archiveResult.error;
+        await expect(checkout).resolves.toMatchObject({
+          status: 503,
+          response: { code: "LAUNCH_APPROVAL_REQUIRED" },
+        });
+        await expect(
+          prisma.order.findUniqueOrThrow({
+            where: { id: foundation.orderId },
+            select: { acceptedOrderPriceBindingId: true },
+          }),
+        ).resolves.toEqual({ acceptedOrderPriceBindingId: null });
+        await expect(
+          prisma.legalAcceptanceDecision.count({
+            where: { orderId: foundation.orderId },
+          }),
+        ).resolves.toBe(0);
+        await expect(
+          prisma.legalAcceptance.count({
+            where: { orderId: foundation.orderId },
+          }),
+        ).resolves.toBe(0);
+        await expect(
+          prisma.payment.count({ where: { orderId: foundation.orderId } }),
+        ).resolves.toBe(0);
+        await expect(
+          prisma.idempotencyRecord.count({
+            where: {
+              namespace: `checkout-payment:${foundation.quoteSessionId}`,
+              idempotencyKey: commandKey,
+            },
+          }),
+        ).resolves.toBe(0);
+      } finally {
+        releaseDocument();
+        await holdingDocument.catch(() => undefined);
+        await archivingPublication?.catch(() => undefined);
+        await checkout?.catch(() => undefined);
+        await prisma.$transaction(async (transaction) => {
+          await transaction.$executeRawUnsafe(
+            "SET LOCAL session_replication_role = 'replica'",
+          );
+          await transaction.$executeRaw`
+            UPDATE legal_document_publications
+            SET ends_at = ${publication.endsAt}
+            WHERE id = ${publication.id}::uuid
+          `;
+          await transaction.$executeRaw`
+            UPDATE legal_documents
+            SET generation = ${document.generation}
+            WHERE id = ${document.id}::uuid
+          `;
+        });
+      }
+    } finally {
+      await app?.close();
+      restoreEnvironment(
+        "TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED",
+        previousEnvironment.gate,
+      );
+      restoreEnvironment(
+        "TAVEN_CLAIM_WINDOW_DAYS",
+        previousEnvironment.claimWindowDays,
+      );
+      restoreEnvironment(
+        "TAVEN_PAYMENT_PROVIDER",
+        previousEnvironment.provider,
+      );
+      restoreEnvironment("TAVEN_PUBLIC_SITE_URL", previousEnvironment.siteUrl);
+    }
+  }, 30_000);
+
   it("drives intent creation and authenticated sandbox capture through HTTP", async () => {
     const token = randomBytes(32).toString("base64url");
     const publicTokenHash = createHash("sha256").update(token).digest("hex");
