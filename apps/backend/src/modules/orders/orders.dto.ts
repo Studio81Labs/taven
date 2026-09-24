@@ -260,6 +260,58 @@ export class RefundDto {
   reason!: string;
 }
 
+export class RefundProviderResultDto {
+  @ApiProperty({ type: String, enum: ["SUCCEEDED", "FAILED"] })
+  outcome!: "SUCCEEDED" | "FAILED";
+
+  @ApiProperty({
+    type: String,
+    enum: ["PENDING", "FAILED", "SUSPENDED", "SUCCEEDED", "SUPERSEDED"],
+  })
+  expectedStatus!: string;
+
+  @ApiProperty({ ...UUID, nullable: true })
+  expectedProviderResultEventId!: string | null;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 255 })
+  providerIntentId!: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 255 })
+  requestReference!: string;
+
+  @ApiProperty({ ...INTEGER_STRING, pattern: "^[1-9][0-9]*$" })
+  amountMinor!: string;
+
+  @ApiProperty({ type: String, pattern: "^[A-Z]{3}$" })
+  currency!: string;
+
+  @ApiPropertyOptional({ type: String, minLength: 1, maxLength: 255 })
+  providerRefundReference?: string;
+
+  @ApiProperty({ type: String, enum: ["PROVIDER_PORTAL", "PROVIDER_SUPPORT"] })
+  evidenceKind!: "PROVIDER_PORTAL" | "PROVIDER_SUPPORT";
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 255 })
+  evidenceReference!: string;
+
+  @ApiProperty(DATE_TIME)
+  occurredAt!: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  reason!: string;
+
+  @ApiProperty({ type: Boolean, enum: [true] })
+  finalOutcomeConfirmed!: true;
+}
+
+export class RetryRefundDto {
+  @ApiProperty(UUID)
+  expectedFailureProviderEventId!: string;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 1_000 })
+  reason!: string;
+}
+
 export class HandoffReshipmentDto extends ShipmentProviderEvidenceDto {
   @ApiProperty({ type: String, minLength: 1, maxLength: 100 })
   carrier!: string;

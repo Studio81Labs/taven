@@ -94,10 +94,8 @@ export class PaymentOutboxDispatcherService {
       where: { id: message.aggregate_id },
       include: { payment: true },
     });
-    if (!refund || refund.status === "SUCCEEDED") return;
-    if (refund.status !== "PENDING") {
-      throw new Error("refund command no longer matches its transaction");
-    }
+    if (!refund) throw new Error("refund command has no transaction");
+    if (refund.status !== "PENDING") return;
     const payload = messagePayload(message.payload);
     if (
       payload.refundTransactionId !== refund.id ||
@@ -119,6 +117,13 @@ export class PaymentOutboxDispatcherService {
     const claims = await this.prisma.$queryRaw<RefundDispatchClaim[]>`
       SELECT taven_claim_refund_dispatch(${refund.id}::uuid) AS claimed_at
     `;
+    // The claim and receipt applicator share the canonical SQL envelope. A
+    // final result may have won while this worker waited for that envelope.
+    const afterClaim = await this.prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: refund.id },
+      select: { status: true },
+    });
+    if (afterClaim.status !== "PENDING") return;
     if (
       !claims[0]?.claimed_at &&
       this.provider.refundRetrySafety() === "MANUAL_RECONCILIATION"
@@ -151,19 +156,23 @@ export class PaymentOutboxDispatcherService {
     ) {
       try {
         await this.prisma.$transaction(async (transaction) => {
-          const rows = await transaction.$queryRaw<Array<{ applied: boolean }>>`
-            SELECT taven_apply_checkout_refund_success(
+          const rows = await transaction.$queryRaw<
+            Array<{ recorded: boolean; success_refund_id: string | null }>
+          >`
+            SELECT recorded, success_refund_id FROM taven_apply_refund_provider_result(
               ${refund.id}::uuid,
               ${providerRefundId},
               ${resultEventId},
+              'REFUND_SUCCEEDED'::payment_provider_event_kind,
               ${result.occurredAt},
               ${jsonInput(result.evidence)}::jsonb
-            ) AS applied
+            )
           `;
-          if (!rows[0]?.applied) return;
+          const successRefundId = rows[0]?.success_refund_id;
+          if (!successRefundId) return;
           const persistedRefund =
             await transaction.refundTransaction.findUniqueOrThrow({
-              where: { id: refund.id },
+              where: { id: successRefundId },
               select: {
                 id: true,
                 paymentId: true,

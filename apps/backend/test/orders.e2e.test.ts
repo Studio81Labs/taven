@@ -772,8 +772,6 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       },
     });
     testOperatorId = operator.id;
-    scopedOrders = new OrdersService(prisma, new AuditService(prisma));
-    orders = legacyOrdersClient(scopedOrders, operator.id);
     const provider: PaymentProviderPort = {
       providerName: () => "test",
       capabilities: async () => {
@@ -827,6 +825,12 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         evidence: {},
       }),
     };
+    scopedOrders = new OrdersService(
+      prisma,
+      new AuditService(prisma),
+      provider,
+    );
+    orders = legacyOrdersClient(scopedOrders, operator.id);
     payments = legacyPaymentsClient(
       new PaymentsService(
         prisma,
@@ -5628,6 +5632,179 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     await expect(
       prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
     ).resolves.toMatchObject({ reason: "EXPRESS_BREACH" });
+  });
+
+  it("records final operator evidence before queueing one failed-refund replacement", async () => {
+    const fixture = await preparePaidOrder("operator-refund-recovery");
+    await advanceThroughQc(fixture, 0);
+    await markSlotPriceComponentExpress(
+      fixture.foundation.fulfilmentSlotIds[0]!,
+    );
+    const adjustment = await orders.createPriceAdjustment(
+      fixture.foundation.orderId,
+      {
+        reason: "EXPRESS_BREACH",
+        amountMinor: "1",
+        paymentId: fixture.foundation.paymentId,
+        allocation: {
+          slotCredits: [
+            {
+              fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+              amountMinor: "1",
+            },
+          ],
+        },
+      },
+      "operator-refund-recovery-adjustment",
+    );
+    const pending = await orders.refundAdjustment(
+      fixture.foundation.orderId,
+      adjustment.result.priceAdjustmentId as string,
+      "operator-refund-recovery-initial",
+    );
+    const refundId = (pending.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("initial refund was not created");
+    const refund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { payment: true },
+    });
+    const claim = await prisma.$queryRaw<Array<{ claimed_at: Date | null }>>`
+      SELECT taven_claim_refund_dispatch(${refundId}::uuid) AS claimed_at
+    `;
+    expect(claim[0]?.claimed_at).toBeInstanceOf(Date);
+    const manualOrders = new OrdersService(prisma, new AuditService(prisma), {
+      providerName: () => "test",
+      refundRetrySafety: () => "MANUAL_RECONCILIATION",
+    } as PaymentProviderPort);
+    const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
+    const failureBody = {
+      outcome: "FAILED" as const,
+      expectedStatus: "PENDING",
+      expectedProviderResultEventId: null,
+      providerIntentId: refund.payment.providerIntentId!,
+      requestReference: refund.idempotencyKey,
+      amountMinor: refund.amountMinor.toString(),
+      currency: refund.payment.currency,
+      providerRefundReference: `portal-refund-${refundId}`,
+      evidenceKind: "PROVIDER_SUPPORT" as const,
+      evidenceReference: `definitive-non-execution-${refundId}`,
+      occurredAt: new Date().toISOString(),
+      reason: "support confirmed final non-execution",
+      finalOutcomeConfirmed: true as const,
+    };
+    const failure = await manualOrders.recordRefundProviderResult(
+      operator,
+      fixture.foundation.orderId,
+      refundId,
+      failureBody,
+      "operator-refund-recovery-failure",
+    );
+    expect(failure.status).toBe("REFUND_PROVIDER_RESULT_RECORDED");
+    expect(failure.result.refundStatus).toBe("FAILED");
+    const failureEventId = failure.result.providerResultEventId as string;
+    const replay = await manualOrders.recordRefundProviderResult(
+      operator,
+      fixture.foundation.orderId,
+      refundId,
+      failureBody,
+      "operator-refund-recovery-failure",
+    );
+    expect(replay).toEqual(failure);
+    const duplicateEvidence = await manualOrders.recordRefundProviderResult(
+      operator,
+      fixture.foundation.orderId,
+      refundId,
+      failureBody,
+      "operator-refund-recovery-duplicate-evidence",
+    );
+    expect(duplicateEvidence.result).toMatchObject({
+      providerResultEventId: failureEventId,
+      recorded: false,
+      refundStatus: "FAILED",
+    });
+    expect(
+      await prisma.paymentProviderEvent.count({
+        where: { refundTransactionId: refundId, kind: "REFUND_FAILED" },
+      }),
+    ).toBe(1);
+    await expect(
+      manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        { ...failureBody, reason: "different evidence reason" },
+        "operator-refund-recovery-failure",
+      ),
+    ).rejects.toThrow("Idempotency key was already used with different input");
+    const retryBody = {
+      expectedFailureProviderEventId: failureEventId,
+      reason: "replace the verified failed transfer",
+    };
+    const competing = await Promise.allSettled([
+      manualOrders.retryRefund(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        retryBody,
+        "operator-refund-recovery-retry-a",
+      ),
+      manualOrders.retryRefund(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        retryBody,
+        "operator-refund-recovery-retry-b",
+      ),
+    ]);
+    expect(
+      competing.filter((attempt) => attempt.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      competing.filter((attempt) => attempt.status === "rejected"),
+    ).toHaveLength(1);
+    const winner = competing.find((attempt) => attempt.status === "fulfilled");
+    if (!winner || winner.status !== "fulfilled")
+      throw new Error("retry race had no winner");
+    const retry = winner.value;
+    const winningKey = `operator-refund-recovery-retry-${
+      competing[0]?.status === "fulfilled" ? "a" : "b"
+    }`;
+    expect(
+      await manualOrders.retryRefund(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        retryBody,
+        winningKey,
+      ),
+    ).toEqual(retry);
+    expect(retry.status).toBe("REFUND_RETRY_PENDING");
+    const retryId = retry.result.refundTransactionId as string;
+    const dispatch = await prisma.outboxMessage.findUniqueOrThrow({
+      where: { deduplicationKey: `refund_payment:v1:${retryId}` },
+    });
+    expect(dispatch).toMatchObject({
+      aggregateId: retryId,
+      messageType: "refund_payment",
+      status: "PENDING",
+    });
+    await expect(
+      manualOrders.retryRefund(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        {
+          expectedFailureProviderEventId: failureEventId,
+          reason: "second transfer must be blocked",
+        },
+        "operator-refund-recovery-second-key",
+      ),
+    ).rejects.toThrow("Refund has no exact retryable final failure evidence");
+    expect(
+      await prisma.refundTransaction.count({
+        where: { replacesRefundTransactionId: refundId },
+      }),
+    ).toBe(1);
   });
 
   it("reserves explicit payment balances without stranding split-payment adjustments", async () => {

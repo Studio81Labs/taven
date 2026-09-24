@@ -27,6 +27,7 @@ DECLARE
     existing_event "payment_provider_events"%ROWTYPE;
     target_payment_id uuid;
     result_verified_at timestamptz;
+    effective_occurred_at timestamptz;
     receipt_payload jsonb;
     receipt_hash text;
     succeeded_total bigint;
@@ -36,8 +37,7 @@ BEGIN
        OR refund_provider_id IS NULL
        OR refund_provider_id !~ '[^[:space:]]'
        OR refund_event_id IS NULL
-       OR refund_event_id !~ '[^[:space:]]'
-       OR refund_occurred_at IS NULL THEN
+       OR refund_event_id !~ '[^[:space:]]' THEN
         RAISE EXCEPTION 'refund result evidence is incomplete'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_result_evidence_check';
     END IF;
@@ -65,12 +65,17 @@ BEGIN
     IF target_refund."provider" IS DISTINCT FROM target_payment."provider"
        OR (target_refund."provider_refund_id" IS NOT NULL
            AND target_refund."provider_refund_id" IS DISTINCT FROM refund_provider_id)
-       OR refund_occurred_at < target_refund."requested_at" - interval '5 seconds' THEN
+       OR (refund_occurred_at IS NOT NULL
+           AND refund_occurred_at < target_refund."requested_at" - interval '5 seconds') THEN
         RAISE EXCEPTION 'refund result does not match its exact attempt'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_result_scope_check';
     END IF;
 
     result_verified_at := clock_timestamp();
+    -- Some authenticated provider APIs report success without an occurrence
+    -- instant. In that case use database observation time; operator-attested
+    -- evidence is separately required by the HTTP contract to supply it.
+    effective_occurred_at := coalesce(refund_occurred_at, result_verified_at);
     receipt_payload := jsonb_build_object(
         'paymentId', target_payment."id"::text,
         'refundTransactionId', target_refund."id"::text,
@@ -96,7 +101,8 @@ BEGIN
            OR existing_event."kind" IS DISTINCT FROM refund_kind
            OR existing_event."amount_minor" IS DISTINCT FROM target_refund."amount_minor"
            OR existing_event."currency" IS DISTINCT FROM target_payment."currency"
-           OR existing_event."occurred_at" IS DISTINCT FROM refund_occurred_at
+           OR (refund_occurred_at IS NOT NULL
+               AND existing_event."occurred_at" IS DISTINCT FROM refund_occurred_at)
            OR existing_event."payload_hash" IS DISTINCT FROM receipt_hash THEN
             RAISE EXCEPTION 'refund provider event identity was reused with different evidence'
                 USING ERRCODE = '23514', CONSTRAINT = 'payment_provider_event_scope_check';
@@ -122,7 +128,7 @@ BEGIN
         receipt_id, target_payment."id", target_refund."id",
         target_payment."provider", refund_event_id, refund_provider_id,
         refund_kind, target_refund."amount_minor", target_payment."currency",
-        receipt_payload, receipt_hash, refund_occurred_at,
+        receipt_payload, receipt_hash, effective_occurred_at,
         result_verified_at, result_verified_at, result_verified_at
     );
 
@@ -146,7 +152,7 @@ BEGIN
         SELECT * INTO prior_result FROM "payment_provider_events" event
         WHERE event."id" = target_refund."provider_result_event_id";
         IF prior_result."kind" IS DISTINCT FROM 'REFUND_FAILED'
-           OR refund_occurred_at <= prior_result."occurred_at" THEN
+           OR effective_occurred_at <= prior_result."occurred_at" THEN
             RAISE EXCEPTION 'late refund success must follow its selected failure'
                 USING ERRCODE = '23514', CONSTRAINT = 'refund_result_event_order_check';
         END IF;

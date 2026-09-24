@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -17,6 +18,7 @@ import {
   PriceAdjustmentReason,
   Prisma,
   RefundReason,
+  RefundStatus,
   ReplacementRequestReason,
   ReplacementRequestStatus,
   ShipmentProviderEventKind,
@@ -33,6 +35,10 @@ import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
+import {
+  PAYMENT_PROVIDER,
+  type PaymentProviderPort,
+} from "../payments/payment-provider.port";
 import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import {
@@ -53,6 +59,8 @@ import {
   PackJobDto,
   RejectClaimDto,
   RefundDto,
+  RefundProviderResultDto,
+  RetryRefundDto,
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
@@ -80,6 +88,8 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    @Inject(PAYMENT_PROVIDER)
+    private readonly paymentProvider: PaymentProviderPort,
   ) {}
 
   async getFulfilment(
@@ -4593,6 +4603,479 @@ export class OrdersService {
     );
   }
 
+  recordRefundProviderResult(
+    operator: OperatorContext,
+    orderId: string,
+    refundId: string,
+    body: RefundProviderResultDto,
+    key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
+    assertUuid(refundId, "refundId");
+    if (body.outcome !== "SUCCEEDED" && body.outcome !== "FAILED") {
+      throw new BadRequestException("outcome is invalid");
+    }
+    const expectedStatus = enumValue(
+      RefundStatus,
+      body.expectedStatus,
+      "expectedStatus",
+    );
+    if (body.expectedProviderResultEventId !== null) {
+      assertUuid(
+        body.expectedProviderResultEventId,
+        "expectedProviderResultEventId",
+      );
+    }
+    const providerIntentId = requiredText(
+      body.providerIntentId,
+      "providerIntentId",
+      255,
+    );
+    const requestReference = requiredText(
+      body.requestReference,
+      "requestReference",
+      255,
+    );
+    const amountMinor = positiveBigInt(body.amountMinor, "amountMinor");
+    if (
+      typeof body.currency !== "string" ||
+      !/^[A-Z]{3}$/.test(body.currency)
+    ) {
+      throw new BadRequestException("currency is invalid");
+    }
+    const providerRefundReference = optionalText(
+      body.providerRefundReference,
+      "providerRefundReference",
+      255,
+    );
+    if (
+      body.evidenceKind !== "PROVIDER_PORTAL" &&
+      body.evidenceKind !== "PROVIDER_SUPPORT"
+    ) {
+      throw new BadRequestException("evidenceKind is invalid");
+    }
+    const evidenceReference = requiredText(
+      body.evidenceReference,
+      "evidenceReference",
+      255,
+    );
+    if (/^https?:\/\//i.test(evidenceReference)) {
+      throw new BadRequestException("evidenceReference must not be a URL");
+    }
+    if (
+      typeof body.occurredAt !== "string" ||
+      !/T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+        body.occurredAt,
+      )
+    ) {
+      throw new BadRequestException("occurredAt needs a timezone offset");
+    }
+    const occurredAt = dateEvidence(body.occurredAt, "occurredAt");
+    const reason = requiredText(body.reason, "reason", 1_000);
+    if (body.finalOutcomeConfirmed !== true) {
+      throw new BadRequestException("finalOutcomeConfirmed must be true");
+    }
+    const input = {
+      refundId,
+      outcome: body.outcome,
+      expectedStatus,
+      expectedProviderResultEventId: body.expectedProviderResultEventId,
+      providerIntentId,
+      requestReference,
+      amountMinor: amountMinor.toString(),
+      currency: body.currency,
+      providerRefundReference: providerRefundReference ?? null,
+      evidenceKind: body.evidenceKind,
+      evidenceReference,
+      occurredAt: occurredAt.toISOString(),
+      reason,
+      finalOutcomeConfirmed: true,
+    };
+    return this.command(
+      operator,
+      orderId,
+      `refund:provider-result:${refundId}`,
+      key,
+      input,
+      async (tx) => {
+        const seed = await tx.refundTransaction.findFirst({
+          where: { id: refundId, payment: { orderId } },
+          include: { payment: true },
+        });
+        if (!seed)
+          throw new NotFoundException("Refund was not found for this Order");
+        const canonicalRefundId =
+          seed.providerRefundId ??
+          (seed.provider === "comgate"
+            ? seed.idempotencyKey
+            : providerRefundReference);
+        if (!canonicalRefundId) {
+          throw new ConflictException(
+            "Canonical provider refund identity is unavailable",
+          );
+        }
+        const eventId = `operator-refund:${createHash("sha256")
+          .update(
+            canonicalJson({
+              provider: seed.provider,
+              providerIntentId: seed.payment.providerIntentId,
+              paymentId: seed.paymentId,
+              refundId: seed.id,
+              requestReference: seed.idempotencyKey,
+              canonicalRefundId,
+              providerRefundReference: providerRefundReference ?? null,
+              evidenceKind: body.evidenceKind,
+              evidenceReference,
+              outcome: body.outcome,
+              occurredAt: occurredAt.toISOString(),
+            }),
+          )
+          .digest("hex")}`;
+        await tx.$queryRaw`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(${`refund-receipt:${eventId}`}, 0)
+          )::text
+        `;
+        await tx.$queryRaw`
+          SELECT taven_lock_checkout_payment_envelope(${seed.paymentId}::uuid)::text
+        `;
+        const refund = await tx.refundTransaction.findUniqueOrThrow({
+          where: { id: refundId },
+          include: { payment: true },
+        });
+        const existing = await tx.paymentProviderEvent.findFirst({
+          where: { provider: refund.provider, providerEventId: eventId },
+        });
+        if (
+          !existing &&
+          (refund.status !== expectedStatus ||
+            refund.providerResultEventId !== body.expectedProviderResultEventId)
+        ) {
+          throw new ConflictException("Refund result expectation is stale");
+        }
+        if (
+          refund.provider !== this.paymentProvider.providerName() ||
+          this.paymentProvider.refundRetrySafety() !==
+            "MANUAL_RECONCILIATION" ||
+          refund.payment.provider !== refund.provider ||
+          refund.payment.providerIntentId !== providerIntentId ||
+          refund.idempotencyKey !== requestReference ||
+          refund.amountMinor !== amountMinor ||
+          refund.payment.currency !== body.currency ||
+          (refund.providerRefundId !== null &&
+            refund.providerRefundId !== canonicalRefundId)
+        ) {
+          throw new ConflictException(
+            "Provider evidence does not match the refund attempt",
+          );
+        }
+        const claim = await tx.refundDispatchClaim.findUnique({
+          where: { refundTransactionId: refund.id },
+        });
+        if (!claim || !refund.dispatchClaimedAt) {
+          throw new ConflictException(
+            "Refund has no immutable provider dispatch claim",
+          );
+        }
+        const decisionAt = await databaseNow(tx);
+        if (occurredAt > decisionAt) {
+          throw new ConflictException("Provider outcome time is in the future");
+        }
+        if (
+          !existing &&
+          !(
+            refund.status === RefundStatus.PENDING ||
+            (refund.status === RefundStatus.FAILED &&
+              body.outcome === "SUCCEEDED") ||
+            refund.status === RefundStatus.SUSPENDED
+          )
+        ) {
+          throw new ConflictException(
+            "Refund cannot accept this final outcome",
+          );
+        }
+        const evidence = existing
+          ? (existing.payload as Record<string, unknown>).evidence
+          : {
+              source: "operator-provider-reconciliation",
+              evidenceKind: body.evidenceKind,
+              evidenceReference,
+              providerIntentId,
+              requestReference,
+              providerRefundReference: providerRefundReference ?? null,
+              canonicalRefundId,
+              operatorId: operator.operatorId,
+              sessionId: operator.sessionId,
+              recordedAt: decisionAt.toISOString(),
+            };
+        const applied = await tx.$queryRaw<
+          Array<{
+            receipt_id: string;
+            recorded: boolean;
+            success_refund_id: string | null;
+            incident_code: string | null;
+          }>
+        >`
+          SELECT receipt_id, recorded, success_refund_id, incident_code
+          FROM taven_apply_refund_provider_result(
+            ${refund.id}::uuid, ${canonicalRefundId}, ${eventId},
+            ${`REFUND_${body.outcome}`}::payment_provider_event_kind,
+            ${occurredAt}, ${JSON.stringify(evidence)}::jsonb
+          )
+        `;
+        const outcome = applied[0];
+        if (!outcome)
+          throw new ConflictException("Refund result was not applied");
+        if (outcome.success_refund_id) {
+          await this.writeRefundSuccessMetric(tx, outcome.success_refund_id);
+        }
+        if (outcome.recorded) {
+          await this.audit.recordOperator(tx, operator, {
+            eventType: "fulfilment.refund_provider_result_recorded",
+            orderId,
+            paymentId: refund.paymentId,
+            nodeId: operatorNode(operator),
+            idempotencyKey: requiredIdempotencyKey(key),
+            reasonCode: "REFUND_PROVIDER_RESULT",
+            reason,
+            payload: {
+              source: "operator-provider-reconciliation",
+              refundTransactionId: refund.id,
+              providerResultEventId: outcome.receipt_id,
+              evidenceKind: body.evidenceKind,
+              evidenceReference,
+              outcome: body.outcome,
+            },
+          });
+        }
+        const committed = await tx.refundTransaction.findUniqueOrThrow({
+          where: { id: refund.id },
+          include: { payment: true },
+        });
+        return result(orderId, "REFUND_PROVIDER_RESULT_RECORDED", {
+          refundTransactionId: refund.id,
+          providerResultEventId: outcome.receipt_id,
+          recorded: outcome.recorded,
+          refundStatus: committed.status,
+          paymentStatus: committed.payment.status,
+          blockingCode: outcome.incident_code,
+        });
+      },
+      async (tx) => {
+        await this.scopedRefundPaymentId(tx, orderId, refundId);
+      },
+    );
+  }
+
+  retryRefund(
+    operator: OperatorContext,
+    orderId: string,
+    refundId: string,
+    body: RetryRefundDto,
+    key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    requireOperatorPermission(
+      operator,
+      OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+    );
+    assertUuid(refundId, "refundId");
+    assertUuid(
+      body.expectedFailureProviderEventId,
+      "expectedFailureProviderEventId",
+    );
+    const reason = requiredText(body.reason, "reason", 1_000);
+    return this.command(
+      operator,
+      orderId,
+      `refund:retry:${refundId}`,
+      key,
+      {
+        refundId,
+        expectedFailureProviderEventId: body.expectedFailureProviderEventId,
+        reason,
+      },
+      async (tx) => {
+        const paymentId = await this.scopedRefundPaymentId(
+          tx,
+          orderId,
+          refundId,
+        );
+        await tx.$queryRaw`
+          SELECT taven_lock_checkout_payment_envelope(${paymentId}::uuid)::text
+        `;
+        const source = await tx.refundTransaction.findUniqueOrThrow({
+          where: { id: refundId },
+          include: {
+            payment: true,
+            providerResultEvent: true,
+            replacementRefundTransactions: { select: { id: true } },
+          },
+        });
+        const failure = source.providerResultEvent;
+        if (
+          source.replacesRefundTransactionId ||
+          source.status !== RefundStatus.FAILED ||
+          source.providerResultEventId !==
+            body.expectedFailureProviderEventId ||
+          failure?.kind !== "REFUND_FAILED" ||
+          failure.refundTransactionId !== source.id ||
+          failure.paymentId !== source.paymentId ||
+          failure.provider !== source.provider ||
+          failure.providerTransactionId !== source.providerRefundId ||
+          failure.amountMinor !== source.amountMinor ||
+          failure.currency !== source.payment.currency ||
+          source.replacementRefundTransactions.length !== 0 ||
+          source.sourceSuccessProviderEventId !== null
+        ) {
+          throw new ConflictException(
+            "Refund has no exact retryable final failure evidence",
+          );
+        }
+        if (
+          !source.payment.capturedAmountMinor ||
+          !source.payment.providerIntentId ||
+          source.provider !== source.payment.provider ||
+          source.provider !== this.paymentProvider.providerName()
+        ) {
+          throw new ConflictException(
+            "Refund provider or capture is unavailable",
+          );
+        }
+        const allRefunds = await tx.refundTransaction.findMany({
+          where: { paymentId },
+          select: {
+            id: true,
+            replacesRefundTransactionId: true,
+            status: true,
+            amountMinor: true,
+            dispatchClaimedAt: true,
+            sourceSuccessProviderEventId: true,
+          },
+        });
+        const parentIds = new Set(
+          allRefunds
+            .filter((refund) => refund.replacesRefundTransactionId)
+            .map((refund) => refund.id),
+        );
+        if (
+          allRefunds.some(
+            (refund) =>
+              refund.replacesRefundTransactionId &&
+              parentIds.has(refund.replacesRefundTransactionId),
+          )
+        ) {
+          throw new ConflictException(
+            "Unsupported refund lineage requires financial escalation",
+          );
+        }
+        if (
+          allRefunds.some(
+            (refund) =>
+              refund.status === RefundStatus.SUSPENDED ||
+              (refund.status === RefundStatus.PENDING &&
+                refund.dispatchClaimedAt !== null &&
+                this.paymentProvider.refundRetrySafety() ===
+                  "MANUAL_RECONCILIATION"),
+          )
+        ) {
+          throw new ConflictException(
+            "Payment has an unresolved refund provider incident",
+          );
+        }
+        const laterSuccess = await tx.paymentProviderEvent.findFirst({
+          where: {
+            refundTransactionId: source.id,
+            kind: "REFUND_SUCCEEDED",
+            occurredAt: { gt: failure.occurredAt },
+          },
+          select: { id: true },
+        });
+        if (laterSuccess) {
+          throw new ConflictException("Refund has later success evidence");
+        }
+        const activeAmount = allRefunds.reduce(
+          (total, refund) =>
+            refund.status === RefundStatus.PENDING ||
+            refund.status === RefundStatus.SUSPENDED ||
+            refund.status === RefundStatus.SUCCEEDED
+              ? total + refund.amountMinor
+              : total,
+          0n,
+        );
+        if (
+          source.payment.capturedAmountMinor - activeAmount <
+          source.amountMinor
+        ) {
+          throw new ConflictException(
+            "Original refund obligation is not funded",
+          );
+        }
+        if (source.priceAdjustmentId) {
+          const adjustment = await tx.priceAdjustment.findUnique({
+            where: { id: source.priceAdjustmentId },
+            select: { refundRequiredMinor: true, orderId: true },
+          });
+          if (!adjustment || adjustment.orderId !== orderId) {
+            throw new ConflictException("Refund adjustment scope has changed");
+          }
+          const adjustmentRefunds = await tx.refundTransaction.findMany({
+            where: {
+              priceAdjustmentId: source.priceAdjustmentId,
+              status: { in: ["PENDING", "SUSPENDED", "SUCCEEDED"] },
+            },
+            select: { amountMinor: true },
+          });
+          const committed = adjustmentRefunds.reduce(
+            (total, refund) => total + refund.amountMinor,
+            0n,
+          );
+          if (adjustment.refundRequiredMinor - committed < source.amountMinor) {
+            throw new ConflictException(
+              "Original adjustment refund is no longer due",
+            );
+          }
+        } else if (source.claimId) {
+          throw new ConflictException(
+            "Claim refund has no adjustment obligation",
+          );
+        }
+        const requestedAt = await databaseNow(tx);
+        const retry = await tx.refundTransaction.create({
+          data: {
+            paymentId: source.paymentId,
+            claimId: source.claimId,
+            priceAdjustmentId: source.priceAdjustmentId,
+            replacesRefundTransactionId: source.id,
+            replacesFailureProviderEventId: failure.id,
+            provider: source.provider,
+            idempotencyKey: persistenceKey("refund-retry", source.id, key!),
+            amountMinor: source.amountMinor,
+            reason: source.reason,
+            requestedAt,
+          },
+        });
+        await this.enqueueRefundPayment(tx, source.payment, retry, requestedAt);
+        await tx.payment.update({
+          where: { id: source.paymentId },
+          data: { status: "REFUND_PENDING", updatedAt: requestedAt },
+        });
+        return result(orderId, "REFUND_RETRY_PENDING", {
+          sourceRefundTransactionId: source.id,
+          refundTransactionId: retry.id,
+          failureProviderEventId: failure.id,
+          amountMinor: retry.amountMinor.toString(),
+          currency: source.payment.currency,
+        });
+      },
+      async (tx) => {
+        await this.scopedRefundPaymentId(tx, orderId, refundId);
+      },
+    );
+  }
+
   completeOrder(
     operator: OperatorContext,
     orderId: string,
@@ -6190,6 +6673,35 @@ export class OrdersService {
     });
   }
 
+  private async writeRefundSuccessMetric(
+    tx: Transaction,
+    refundId: string,
+  ): Promise<void> {
+    const refund = await tx.refundTransaction.findUniqueOrThrow({
+      where: { id: refundId },
+      select: {
+        id: true,
+        paymentId: true,
+        providerRefundId: true,
+        completedAt: true,
+        payment: { select: { orderId: true } },
+      },
+    });
+    if (!refund.providerRefundId || !refund.completedAt) {
+      throw new ConflictException(
+        "Successful refund has incomplete metric evidence",
+      );
+    }
+    await writeBusinessEvent(tx, {
+      eventType: "refund.succeeded",
+      refundTransactionId: refund.id,
+      paymentId: refund.paymentId,
+      orderId: refund.payment.orderId,
+      providerRefundId: refund.providerRefundId,
+      observedAt: refund.completedAt,
+    });
+  }
+
   private async voidOpenBalancePayments(
     tx: Transaction,
     orderId: string,
@@ -6388,6 +6900,7 @@ export class OrdersService {
     key: string | undefined,
     input: unknown,
     execute: CommandOperation,
+    assertTargetScope?: (transaction: Transaction) => Promise<void>,
   ): Promise<FulfilmentCommandResultDto> {
     assertUuid(orderId, "orderId");
     const idempotencyKey = requiredIdempotencyKey(key);
@@ -6408,6 +6921,7 @@ export class OrdersService {
           )::text
         `;
         await assertOperationalOrderScope(tx, orderId, nodeId);
+        await assertTargetScope?.(tx);
         const now = await databaseNow(tx);
         const existing = await tx.idempotencyRecord.findFirst({
           where: { namespace, idempotencyKey },
@@ -6470,6 +6984,21 @@ export class OrdersService {
     const order = await tx.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException("Order was not found");
     return order;
+  }
+
+  private async scopedRefundPaymentId(
+    tx: Transaction,
+    orderId: string,
+    refundId: string,
+  ): Promise<string> {
+    const refund = await tx.refundTransaction.findFirst({
+      where: { id: refundId, payment: { orderId } },
+      select: { paymentId: true },
+    });
+    if (!refund) {
+      throw new NotFoundException("Refund was not found for this Order");
+    }
+    return refund.paymentId;
   }
 
   private async lockJob(tx: Transaction, orderId: string, jobId: string) {
@@ -6576,15 +7105,18 @@ const AUDIT_TARGET_IDENTIFIER_FIELDS = new Set([
   "phaseReservationSetId",
   "priceAdjustmentId",
   "predecessorShipmentId",
+  "providerResultEventId",
   "replacementJobId",
   "replacementRequestId",
   "replacementShipmentId",
   "refundIds",
+  "refundTransactionId",
   "reshipmentShipmentId",
   "shipmentId",
   "shipmentIds",
   "shipmentPlanId",
   "sourceJobId",
+  "sourceRefundTransactionId",
 ]);
 const MAX_AUDIT_TARGET_IDENTIFIERS = 100;
 
