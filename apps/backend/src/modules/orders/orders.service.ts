@@ -4696,6 +4696,41 @@ export class OrdersService {
       reason,
       finalOutcomeConfirmed: true,
     };
+    const receiptIdentity = (
+      seed: Prisma.RefundTransactionGetPayload<{
+        include: { payment: true };
+      }>,
+    ) => {
+      const canonicalRefundId =
+        seed.providerRefundId ??
+        (seed.provider === "comgate"
+          ? seed.idempotencyKey
+          : providerRefundReference);
+      if (!canonicalRefundId) {
+        throw new ConflictException(
+          "Canonical provider refund identity is unavailable",
+        );
+      }
+      const eventId = `operator-refund:${createHash("sha256")
+        .update(
+          canonicalJson({
+            provider: seed.provider,
+            providerIntentId: seed.payment.providerIntentId,
+            paymentId: seed.paymentId,
+            refundId: seed.id,
+            requestReference: seed.idempotencyKey,
+            canonicalRefundId,
+            providerRefundReference: providerRefundReference ?? null,
+            evidenceKind: body.evidenceKind,
+            evidenceReference,
+            outcome: body.outcome,
+            occurredAt: occurredAt.toISOString(),
+          }),
+        )
+        .digest("hex")}`;
+      return { canonicalRefundId, eventId };
+    };
+    let fencedEventId: string | null = null;
     return this.command(
       operator,
       orderId,
@@ -4709,38 +4744,10 @@ export class OrdersService {
         });
         if (!seed)
           throw new NotFoundException("Refund was not found for this Order");
-        const canonicalRefundId =
-          seed.providerRefundId ??
-          (seed.provider === "comgate"
-            ? seed.idempotencyKey
-            : providerRefundReference);
-        if (!canonicalRefundId) {
-          throw new ConflictException(
-            "Canonical provider refund identity is unavailable",
-          );
+        const { canonicalRefundId, eventId } = receiptIdentity(seed);
+        if (eventId !== fencedEventId) {
+          throw new ConflictException("Refund receipt identity changed");
         }
-        const eventId = `operator-refund:${createHash("sha256")
-          .update(
-            canonicalJson({
-              provider: seed.provider,
-              providerIntentId: seed.payment.providerIntentId,
-              paymentId: seed.paymentId,
-              refundId: seed.id,
-              requestReference: seed.idempotencyKey,
-              canonicalRefundId,
-              providerRefundReference: providerRefundReference ?? null,
-              evidenceKind: body.evidenceKind,
-              evidenceReference,
-              outcome: body.outcome,
-              occurredAt: occurredAt.toISOString(),
-            }),
-          )
-          .digest("hex")}`;
-        await tx.$queryRaw`
-          SELECT pg_advisory_xact_lock(
-            hashtextextended(${`refund-receipt:${eventId}`}, 0)
-          )::text
-        `;
         await tx.$queryRaw`
           SELECT taven_lock_checkout_payment_envelope(${seed.paymentId}::uuid)::text
         `;
@@ -4868,6 +4875,27 @@ export class OrdersService {
       },
       async (tx) => {
         await this.scopedRefundPaymentId(tx, orderId, refundId);
+      },
+      async (tx) => {
+        const seed = await tx.refundTransaction.findFirst({
+          where: { id: refundId, payment: { orderId } },
+          include: { payment: true },
+        });
+        if (!seed) return;
+        if (
+          !seed.providerRefundId &&
+          seed.provider !== "comgate" &&
+          !providerRefundReference
+        ) {
+          return;
+        }
+        const { eventId } = receiptIdentity(seed);
+        fencedEventId = eventId;
+        await tx.$queryRaw`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(${`refund-receipt:${eventId}`}, 0)
+          )::text
+        `;
       },
     );
   }
@@ -6903,6 +6931,7 @@ export class OrdersService {
     input: unknown,
     execute: CommandOperation,
     assertTargetScope?: (transaction: Transaction) => Promise<void>,
+    beforeScopeFence?: (transaction: Transaction) => Promise<void>,
   ): Promise<FulfilmentCommandResultDto> {
     assertUuid(orderId, "orderId");
     const idempotencyKey = requiredIdempotencyKey(key);
@@ -6922,6 +6951,7 @@ export class OrdersService {
             hashtextextended(${`${namespace}:${idempotencyKey}`}, 0)
           )::text
         `;
+        await beforeScopeFence?.(tx);
         await assertOperationalOrderScope(tx, orderId, nodeId);
         await assertTargetScope?.(tx);
         const now = await databaseNow(tx);

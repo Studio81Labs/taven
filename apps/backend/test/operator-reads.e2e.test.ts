@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../src/app.module";
 import { configureHttpBodyParsers } from "../src/http-body.config";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { PAYMENT_PROVIDER } from "../src/modules/payments/payment-provider.port";
+import { DisabledPaymentProviderAdapter } from "../src/modules/payments/disabled-payment-provider.adapter";
 import {
   OBJECT_STORAGE,
   type StoredObjectMetadata,
@@ -80,6 +82,14 @@ describe("operator read contracts", () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     })
+      .overrideProvider(PAYMENT_PROVIDER)
+      .useValue(
+        new (class extends DisabledPaymentProviderAdapter {
+          override providerName(): string {
+            return "test";
+          }
+        })(),
+      )
       .overrideProvider(OBJECT_STORAGE)
       .useValue({ headObject, putImmutableObject, createDownloadUrl })
       .compile();
@@ -1261,6 +1271,74 @@ describe("operator read contracts", () => {
     const legacy = await read("/admin/quote-requests");
     expect(legacy.status).toBe(200);
     await expect(legacy.json()).resolves.toEqual(expect.any(Array));
+
+    const pendingRefund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: cancellationRefundId },
+      include: { payment: true },
+    });
+    const claim = await prisma.$queryRaw<Array<{ claimed_at: Date | null }>>`
+      SELECT taven_claim_refund_dispatch(${cancellationRefundId}::uuid) AS claimed_at
+    `;
+    expect(claim[0]?.claimed_at).toBeInstanceOf(Date);
+    const refundPath = `/admin/orders/${fixture.orderId}/fulfilment/refunds/${cancellationRefundId}`;
+    const command = (suffix: string, body: unknown, key: string) =>
+      fetch(new URL(`${refundPath}/${suffix}`, baseUrl), {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json",
+          "idempotency-key": key,
+          origin: "http://localhost:3002",
+          "x-csrf-token": adminCsrfToken,
+        },
+        body: JSON.stringify(body),
+      });
+    const evidenceBody = {
+      outcome: "FAILED",
+      expectedStatus: "PENDING",
+      expectedProviderResultEventId: null,
+      providerIntentId: pendingRefund.payment.providerIntentId,
+      requestReference: pendingRefund.idempotencyKey,
+      amountMinor: pendingRefund.amountMinor.toString(),
+      currency: pendingRefund.payment.currency,
+      providerRefundReference: `provider-cancellation-${cancellationRefundId}`,
+      evidenceKind: "PROVIDER_SUPPORT",
+      evidenceReference: `final-cancellation-failure-${cancellationRefundId}`,
+      occurredAt: new Date().toISOString(),
+      reason: "support confirmed this transfer definitively failed",
+      finalOutcomeConfirmed: true,
+    };
+    const recorded = await command(
+      "provider-results",
+      evidenceBody,
+      `operator-http-evidence-${randomUUID()}`,
+    );
+    expect(recorded.status).toBe(200);
+    const evidence = (await recorded.json()) as {
+      result: { providerResultEventId: string; refundStatus: string };
+    };
+    expect(evidence.result.refundStatus).toBe("FAILED");
+    const retried = await command(
+      "retry",
+      {
+        expectedFailureProviderEventId: evidence.result.providerResultEventId,
+        reason: "replace exact failed cancellation transfer",
+      },
+      `operator-http-retry-${randomUUID()}`,
+    );
+    expect(retried.status).toBe(200);
+    const replacement = (await retried.json()) as {
+      status: string;
+      result: { refundTransactionId: string };
+    };
+    expect(replacement.status).toBe("REFUND_RETRY_PENDING");
+    await expect(
+      prisma.outboxMessage.findUniqueOrThrow({
+        where: {
+          deduplicationKey: `refund_payment:v1:${replacement.result.refundTransactionId}`,
+        },
+      }),
+    ).resolves.toMatchObject({ status: "PENDING" });
   });
 
   it("bounds order history and rejects foreign or unrelated timeline cursors", async () => {
