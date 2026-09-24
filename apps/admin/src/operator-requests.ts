@@ -99,7 +99,17 @@ export function isoFromZonedInput(value: string): string {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime()))
     throw new Error("Zadejte platné datum a čas včetně časového pásma.");
-  if (parts[6]?.toUpperCase() !== "Z") {
+  if (parts[6]?.toUpperCase() === "Z") {
+    const utcParts = [
+      String(date.getUTCFullYear()).padStart(4, "0"),
+      String(date.getUTCMonth() + 1).padStart(2, "0"),
+      String(date.getUTCDate()).padStart(2, "0"),
+      String(date.getUTCHours()).padStart(2, "0"),
+      String(date.getUTCMinutes()).padStart(2, "0"),
+    ];
+    if (parts.slice(1, 6).some((part, index) => part !== utcParts[index]))
+      throw new Error("Zadejte platné datum a čas včetně časového pásma.");
+  } else {
     const local = new Intl.DateTimeFormat("en-GB", {
       timeZone: "Europe/Prague",
       year: "numeric",

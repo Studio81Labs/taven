@@ -776,7 +776,9 @@ onMounted(() => void refresh());
       <div class="operator-inline">
         <label>Od <input v-model="from" /></label
         ><label>Do <input v-model="to" /></label
-        ><button type="button" @click="inspectAvailability()">Načíst</button>
+        ><button type="button" :disabled="busy" @click="inspectAvailability()">
+          Načíst
+        </button>
       </div>
       <p v-if="availability">
         Verze výběru {{ availability.selectionVersion ?? "dosud nezaložena" }} ·
@@ -807,15 +809,24 @@ onMounted(() => void refresh());
           :key="index"
           class="operator-inline"
         >
-          <label>Začátek <input v-model="window.startsAt" required /></label
-          ><label>Konec <input v-model="window.endsAt" required /></label>
-          <button type="button" @click="windows.splice(index, 1)">
+          <label
+            >Začátek
+            <input v-model="window.startsAt" :disabled="busy" required /></label
+          ><label
+            >Konec <input v-model="window.endsAt" :disabled="busy" required
+          /></label>
+          <button
+            type="button"
+            :disabled="busy"
+            @click="windows.splice(index, 1)"
+          >
             Odebrat
           </button>
         </div>
         <div class="operator-actions">
           <button
             type="button"
+            :disabled="busy"
             @click="windows.push({ startsAt: from, endsAt: to })"
           >
             Přidat okno</button

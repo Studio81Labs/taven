@@ -12,6 +12,7 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   let mountHeaders: Record<string, string> = {};
   let availabilityPosts = 0;
   const availabilityPostPaths: string[] = [];
+  let releaseAvailabilityPost: (() => void) | undefined;
   let holdNextAvailability = false;
   let releaseStaleAvailability: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
@@ -172,6 +173,9 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
     ) {
       availabilityPosts += 1;
       availabilityPostPaths.push(path);
+      await new Promise<void>((resolve) => {
+        releaseAvailabilityPost = resolve;
+      });
       await route.fulfill({
         status: 409,
         json: { message: "reservation conflict" },
@@ -217,6 +221,14 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   const conflictedStart = page.getByRole("textbox", { name: "Začátek" });
   await conflictedStart.fill("2026-09-23T09:00:00+02:00");
   await page.getByRole("button", { name: "Publikovat dostupnost" }).click();
+  await expect.poll(() => Boolean(releaseAvailabilityPost)).toBe(true);
+  await expect(conflictedStart).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Přidat okno" }),
+  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Odebrat" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Načíst" })).toBeDisabled();
+  releaseAvailabilityPost?.();
   await expect(page.getByRole("alert")).toContainText("živou rezervací");
   await expect(conflictedStart).toHaveValue("2026-09-23T09:00:00+02:00");
   expect(availabilityPosts).toBe(1);

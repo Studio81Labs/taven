@@ -3,9 +3,24 @@ import { CommandIntent } from "./command-intent";
 import { CursorPager } from "./cursor-pager";
 import { formatCzkMinor, formatGrams, formatPragueInstant } from "./format";
 import { requestFeedback } from "./request-feedback";
-import { CommandJournal, requireData } from "./operator-requests";
+import {
+  CommandJournal,
+  isoFromZonedInput,
+  requireData,
+} from "./operator-requests";
 
 describe("operator request helpers", () => {
+  it("rejects calendar-invalid UTC evidence instead of normalizing it", () => {
+    expect(isoFromZonedInput("2024-02-29T10:00:00Z")).toBe(
+      "2024-02-29T10:00:00.000Z",
+    );
+    expect(() => isoFromZonedInput("2026-02-30T10:00:00Z")).toThrow(
+      "platné datum",
+    );
+    expect(() => isoFromZonedInput("2026-02-28T24:00:00Z")).toThrow(
+      "platné datum",
+    );
+  });
   it("formats exact decimal strings without converting large amounts to Number", () => {
     expect(formatCzkMinor("900719925474099300")).toContain(
       "9 007 199 254 740 993,00 Kč",
