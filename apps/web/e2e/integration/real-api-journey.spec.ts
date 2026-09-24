@@ -11,6 +11,7 @@ import {
   archiveE2eCheckoutDocumentsForBrowser,
   readE2eAcceptedLegalVersionsForBrowser,
   readE2eCheckoutEffectsForBrowser,
+  readE2eFunnelEvidenceForBrowser,
   readE2eParcelAllocationsForBrowser,
   replaceE2eCheckoutDocumentsForBrowser,
   resetE2eAnonymousAdmissionLimitsForBrowser,
@@ -339,6 +340,40 @@ test.describe("Real API Integration Journey", () => {
             request,
             checkoutSession,
           );
+          const databaseUrl = process.env.DATABASE_URL!;
+          const readFunnel = () =>
+            readE2eFunnelEvidenceForBrowser(
+              databaseUrl,
+              checkoutSession.sessionId,
+              checkoutSession.sessionToken,
+              "browser-144@example.test",
+            );
+          await expect
+            .poll(async () => (await readFunnel()).quoteViews, {
+              timeout: 15_000,
+            })
+            .toBe(1);
+          for (let replay = 0; replay < 2; replay += 1) {
+            const observed = await request.post(
+              `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/observations`,
+              {
+                headers: {
+                  Authorization: `Bearer ${checkoutSession.sessionToken}`,
+                },
+                data: { eventType: "quote.viewed" },
+              },
+            );
+            expect(observed.status()).toBe(204);
+          }
+          expect(await readFunnel()).toMatchObject({
+            quoteViews: 1,
+            checkoutStarts: 0,
+            capturedPayments: 0,
+            confirmedOrders: 0,
+            capturedPaymentRows: 0,
+            unexpectedSources: 0,
+            sensitiveEventRows: 0,
+          });
         }
         await page
           .getByRole("button", { name: /Objednat a zaplatit/i })
@@ -350,6 +385,42 @@ test.describe("Real API Integration Journey", () => {
         const pendingPaymentId = await page.locator("main code").textContent();
         if (!pendingPaymentId) {
           throw new Error("Sandbox checkout did not identify its payment");
+        }
+        if (process.env.INTEGRATION_MUTABLE_FIXTURES === "true") {
+          const databaseUrl = process.env.DATABASE_URL!;
+          const readFunnel = () =>
+            readE2eFunnelEvidenceForBrowser(
+              databaseUrl,
+              checkoutSession.sessionId,
+              checkoutSession.sessionToken,
+              "browser-144@example.test",
+            );
+          await expect
+            .poll(async () => (await readFunnel()).checkoutStarts, {
+              timeout: 15_000,
+            })
+            .toBe(1);
+          for (let replay = 0; replay < 2; replay += 1) {
+            const observed = await request.post(
+              `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/observations`,
+              {
+                headers: {
+                  Authorization: `Bearer ${checkoutSession.sessionToken}`,
+                },
+                data: { eventType: "checkout.started" },
+              },
+            );
+            expect(observed.status()).toBe(204);
+          }
+          expect(await readFunnel()).toMatchObject({
+            quoteViews: 1,
+            checkoutStarts: 1,
+            capturedPayments: 0,
+            confirmedOrders: 0,
+            capturedPaymentRows: 0,
+            unexpectedSources: 0,
+            sensitiveEventRows: 0,
+          });
         }
         await page.goto(
           `/checkout/payment/success?sessionId=${checkoutSession.sessionId}&paymentId=${pendingPaymentId}`,
@@ -422,6 +493,26 @@ test.describe("Real API Integration Journey", () => {
           status: "CAPTURED",
           provider: "sandbox",
         });
+        if (process.env.INTEGRATION_MUTABLE_FIXTURES === "true") {
+          await expect
+            .poll(() =>
+              readE2eFunnelEvidenceForBrowser(
+                process.env.DATABASE_URL!,
+                checkoutSession.sessionId,
+                checkoutSession.sessionToken,
+                "browser-144@example.test",
+              ),
+            )
+            .toMatchObject({
+              quoteViews: 1,
+              checkoutStarts: 1,
+              capturedPayments: 1,
+              confirmedOrders: 1,
+              capturedPaymentRows: 1,
+              unexpectedSources: 0,
+              sensitiveEventRows: 0,
+            });
+        }
       }
     }
   });
