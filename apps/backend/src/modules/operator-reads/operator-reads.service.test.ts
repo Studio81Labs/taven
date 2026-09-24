@@ -6,7 +6,7 @@ import {
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
-import { OperatorReadsService } from "./operator-reads.service";
+import { OperatorReadsService, orderBarriers } from "./operator-reads.service";
 
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const cursorId = "22222222-2222-4222-8222-222222222222";
@@ -242,5 +242,73 @@ describe("OperatorReadsService claim child history", () => {
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 2,
     });
+  });
+});
+
+describe("operator order barriers", () => {
+  const orderId = "77777777-7777-4777-8777-777777777777";
+  const originalId = "88888888-8888-4888-8888-888888888888";
+  const replacementId = "99999999-9999-4999-8999-999999999999";
+
+  it("clears a failed source refund only after its replacement succeeds", () => {
+    const fulfilment = {
+      shipments: [],
+      replacementRequests: [],
+      claims: [],
+      priceAdjustments: [],
+    };
+    const root = {
+      id: originalId,
+      replacesRefundTransactionId: null,
+      status: "FAILED",
+      amountMinor: 100n,
+      priceAdjustmentId: null,
+    };
+    const child = {
+      ...root,
+      id: replacementId,
+      replacesRefundTransactionId: originalId,
+      status: "SUCCEEDED",
+    };
+    const payment = {
+      role: "FULL",
+      status: "REFUNDED",
+      refunds: [root, child],
+    };
+    expect(orderBarriers(fulfilment as never, [payment], [], 0n)).not.toContain(
+      "REFUND_UNRESOLVED",
+    );
+    expect(
+      orderBarriers(
+        fulfilment as never,
+        [{ ...payment, refunds: [root, { ...child, status: "PENDING" }] }],
+        [],
+        0n,
+      ),
+    ).toContain("REFUND_UNRESOLVED");
+  });
+
+  it("uses the current shipment leaf after a lost shipment is replaced", () => {
+    const fulfilment = {
+      orderId,
+      shipments: [
+        { id: originalId, replacesShipmentId: null, status: "LOST" },
+        {
+          id: replacementId,
+          replacesShipmentId: originalId,
+          status: "DELIVERED",
+        },
+      ],
+      replacementRequests: [],
+      claims: [],
+      priceAdjustments: [],
+    };
+    expect(orderBarriers(fulfilment as never, [], [], 0n)).not.toContain(
+      "SHIPMENT_UNRESOLVED",
+    );
+    fulfilment.shipments[1]!.status = "IN_TRANSIT";
+    expect(orderBarriers(fulfilment as never, [], [], 0n)).toContain(
+      "SHIPMENT_UNRESOLVED",
+    );
   });
 });

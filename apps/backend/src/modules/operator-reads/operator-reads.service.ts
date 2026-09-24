@@ -2133,12 +2133,14 @@ function operatorPayment(
   };
 }
 
-function orderBarriers(
+export function orderBarriers(
   fulfilment: FulfilmentProjectionDto,
   payments: ReadonlyArray<{
     role: string;
     status: string;
     refunds: ReadonlyArray<{
+      id: string;
+      replacesRefundTransactionId: string | null;
       status: string;
       amountMinor: bigint;
       priceAdjustmentId: string | null;
@@ -2148,11 +2150,27 @@ function orderBarriers(
   compensation: bigint,
 ): string[] {
   const codes: string[] = [];
+  const replacedRefundIds = new Set(
+    payments.flatMap((payment) =>
+      payment.refunds.flatMap((refund) =>
+        refund.replacesRefundTransactionId
+          ? [refund.replacesRefundTransactionId]
+          : [],
+      ),
+    ),
+  );
+  const replacedShipmentIds = new Set(
+    fulfilment.shipments.flatMap((shipment) =>
+      shipment.replacesShipmentId ? [shipment.replacesShipmentId] : [],
+    ),
+  );
   if (compensation > 0n) codes.push("COMPENSATION_DUE");
   if (
     payments.some((payment) =>
-      payment.refunds.some((refund) =>
-        ["PENDING", "FAILED", "SUSPENDED"].includes(refund.status),
+      payment.refunds.some(
+        (refund) =>
+          ["PENDING", "FAILED", "SUSPENDED"].includes(refund.status) &&
+          !replacedRefundIds.has(refund.id),
       ),
     )
   )
@@ -2169,10 +2187,11 @@ function orderBarriers(
   )
     codes.push("LIVE_LABEL");
   if (
-    fulfilment.shipments.some((shipment) =>
-      ["HANDED_OVER", "IN_TRANSIT", "LOST", "RETURNED"].includes(
-        shipment.status,
-      ),
+    fulfilment.shipments.some(
+      (shipment) =>
+        ["HANDED_OVER", "IN_TRANSIT", "LOST", "RETURNED"].includes(
+          shipment.status,
+        ) && !replacedShipmentIds.has(shipment.id),
     )
   )
     codes.push("SHIPMENT_UNRESOLVED");
