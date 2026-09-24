@@ -3,8 +3,24 @@ import { CommandIntent } from "./command-intent";
 import { CursorPager } from "./cursor-pager";
 import { formatCzkMinor, formatGrams, formatPragueInstant } from "./format";
 import { requestFeedback } from "./request-feedback";
+import {
+  CommandJournal,
+  isoFromZonedInput,
+  requireData,
+} from "./operator-requests";
 
 describe("operator request helpers", () => {
+  it("rejects calendar-invalid UTC evidence instead of normalizing it", () => {
+    expect(isoFromZonedInput("2024-02-29T10:00:00Z")).toBe(
+      "2024-02-29T10:00:00.000Z",
+    );
+    expect(() => isoFromZonedInput("2026-02-30T10:00:00Z")).toThrow(
+      "platné datum",
+    );
+    expect(() => isoFromZonedInput("2026-02-28T24:00:00Z")).toThrow(
+      "platné datum",
+    );
+  });
   it("formats exact decimal strings without converting large amounts to Number", () => {
     expect(formatCzkMinor("900719925474099300")).toContain(
       "9 007 199 254 740 993,00 Kč",
@@ -34,6 +50,47 @@ describe("operator request helpers", () => {
       2,
       { amountMinor: "100", nested: { reason: "A" } },
       "same-key",
+    );
+  });
+
+  it("reuses the command key for an unchanged retry and changes it with the body", async () => {
+    const journal = new CommandJournal();
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("lost response"))
+      .mockResolvedValue("done");
+    await expect(journal.submit("receive", { sku: "A" }, send)).rejects.toThrow(
+      "lost response",
+    );
+    await expect(journal.submit("receive", { sku: "A" }, send)).resolves.toBe(
+      "done",
+    );
+    expect(send.mock.calls[0]?.[1]).toBe(send.mock.calls[1]?.[1]);
+    await journal.submit("receive", { sku: "B" }, send);
+    expect(send.mock.calls[2]?.[1]).not.toBe(send.mock.calls[1]?.[1]);
+  });
+
+  it("retains an uncertain command across a different failed command", async () => {
+    const journal = new CommandJournal();
+    const adjustment = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("lost response"))
+      .mockResolvedValue("confirmed");
+    await expect(
+      journal.submit("adjust", { delta: "100" }, adjustment),
+    ).rejects.toThrow("lost response");
+    await expect(
+      journal.submit("mount", { state: "MOUNTED" }, async () => {
+        throw new Error("rejected mount");
+      }),
+    ).rejects.toThrow("rejected mount");
+    await expect(
+      journal.submit("adjust", { delta: "100" }, adjustment),
+    ).resolves.toBe("confirmed");
+    expect(adjustment.mock.calls[0]?.[1]).toBe(adjustment.mock.calls[1]?.[1]);
+    await journal.submit("adjust", { delta: "100" }, adjustment);
+    expect(adjustment.mock.calls[2]?.[1]).not.toBe(
+      adjustment.mock.calls[1]?.[1],
     );
   });
 
@@ -105,5 +162,15 @@ describe("operator request helpers", () => {
     expect(requestFeedback(409).refreshRequired).toBe(true);
     expect(requestFeedback(429, "12").retryAfterSeconds).toBe(12);
     expect(requestFeedback(503).refreshRequired).toBe(false);
+  });
+
+  it("reports exact reservation conflicts from a rejected availability publication", () => {
+    const id = "00000000-0000-0000-0000-000000000123";
+    expect(() =>
+      requireData({
+        response: new Response(null, { status: 409 }),
+        error: { conflictReservationIds: [id], moreConflicts: false },
+      }),
+    ).toThrow(id);
   });
 });
