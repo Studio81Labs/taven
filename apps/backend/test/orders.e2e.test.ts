@@ -10,6 +10,7 @@ import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permi
 import { AuditService } from "../src/modules/audit/audit.service";
 import type { DeliveryCapabilityPort } from "../src/modules/automatic-quotes/delivery-capability.port";
 import type { PaymentProviderPort } from "../src/modules/payments/payment-provider.port";
+import { PaymentOutboxDispatcherService } from "../src/modules/payments/payment-outbox-dispatcher.service";
 import { PaymentsService } from "../src/modules/payments/payments.service";
 import type { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import type { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
@@ -5669,9 +5670,18 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       where: { id: refundId },
       include: { payment: true },
     });
+    let transferCalls = 0;
     const manualProvider = {
       providerName: () => "test",
       refundRetrySafety: () => "MANUAL_RECONCILIATION",
+      refund: async () => {
+        transferCalls += 1;
+        return {
+          providerRefundId: `provider-retry-${randomUUID()}`,
+          occurredAt: new Date(),
+          evidence: { source: "isolated-test-provider" },
+        };
+      },
     } as PaymentProviderPort;
     const manualOrders = new OrdersService(
       prisma,
@@ -5890,6 +5900,36 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         where: { replacesRefundTransactionId: refundId },
       }),
     ).toBe(1);
+    // Fence unrelated fixture outbox work so runOnce executes only this real
+    // source/replacement pair, including settlement of the obsolete source.
+    const outboxFence = await pool.connect();
+    await outboxFence.query("BEGIN");
+    try {
+      await outboxFence.query(
+        `SELECT id FROM outbox_messages
+         WHERE message_type IN ('void_payment', 'refund_payment')
+           AND aggregate_id <> ALL($1::uuid[])
+         FOR UPDATE`,
+        [[refundId, retryId]],
+      );
+      const dispatcher = new PaymentOutboxDispatcherService(
+        prisma,
+        manualProvider,
+      );
+      expect(await dispatcher.runOnce(100)).toBe(2);
+    } finally {
+      await outboxFence.query("ROLLBACK");
+      outboxFence.release();
+    }
+    expect(transferCalls).toBe(1);
+    await expect(
+      prisma.refundTransaction.findUniqueOrThrow({ where: { id: retryId } }),
+    ).resolves.toMatchObject({ status: "SUCCEEDED" });
+    await expect(
+      prisma.outboxMessage.findUniqueOrThrow({
+        where: { deduplicationKey: `refund_payment:v1:${refundId}` },
+      }),
+    ).resolves.toMatchObject({ status: "DELIVERED" });
   });
 
   it("reserves explicit payment balances without stranding split-payment adjustments", async () => {
