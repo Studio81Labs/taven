@@ -154,7 +154,7 @@ export class IndividualResourcePreparationService {
       plan = await this.eligibilityPlans.createCompletePlan({
         nodeId,
         orderPhaseId: phase.id,
-        planKey: `individual:${orderId}:${nodeId}:${key}`,
+        planKey: `individual:${orderId}:${nodeId}:${createHash("sha256").update(key).digest("hex")}`,
         exclusiveOrderNode: true,
       });
     } catch (error) {

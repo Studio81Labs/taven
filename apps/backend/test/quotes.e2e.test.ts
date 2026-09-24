@@ -1031,7 +1031,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       headers: {
         ...operatorHeaders(true),
         "content-type": "application/json",
-        "idempotency-key": key("accepted-resource-preparation"),
+        "idempotency-key": "p".repeat(255),
       },
       body: JSON.stringify({ reason: "Prepare accepted offer resources" }),
     });
