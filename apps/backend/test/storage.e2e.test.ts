@@ -11,6 +11,7 @@ import type { OperatorContext } from "../src/modules/admin-access/operator-conte
 import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 import {
+  ImmutableObjectConflictError,
   OBJECT_STORAGE,
   type ObjectStorage,
 } from "../src/modules/storage/object-storage.port";
@@ -164,6 +165,146 @@ describe("secure object storage and retention", () => {
     await expect(
       objects.readObjectRange(objectKey, 0, bytes.byteLength),
     ).resolves.toEqual(bytes);
+  });
+
+  it("rejects a different-byte immutable replay and preserves the original range", async () => {
+    const bytes = new TextEncoder().encode(`{"nonce":"${randomUUID()}"}`);
+    const contentHash = sha256(bytes);
+    const objectKey = `slicer-revisions/${contentHash}/settings.json`;
+    cleanupKeys.add(objectKey);
+
+    await objects.putImmutableObject({
+      objectKey,
+      contentType: "application/json",
+      contentHash,
+      bytes,
+    });
+    const conflictingBytes = new TextEncoder().encode(
+      `{"other":"${randomUUID()}"}`,
+    );
+    await expect(
+      objects.putImmutableObject({
+        objectKey,
+        contentType: "application/json",
+        contentHash: sha256(conflictingBytes),
+        bytes: conflictingBytes,
+      }),
+    ).rejects.toBeInstanceOf(ImmutableObjectConflictError);
+    expect(await objects.readObjectRange(objectKey, 2, 5)).toEqual(
+      bytes.slice(2, 7),
+    );
+  });
+
+  it("copies metadata and verifies bounded listing and batch deletion", async () => {
+    const bytes = new TextEncoder().encode(`{"nonce":"${randomUUID()}"}`);
+    const contentHash = sha256(bytes);
+    const objectKey = `slicer-revisions/${contentHash}/settings.json`;
+    const copiedKeys = [
+      `reproduction-artifacts/${randomUUID()}/canonical`,
+      `reproduction-artifacts/${randomUUID()}/canonical`,
+    ];
+    cleanupKeys.add(objectKey);
+    for (const key of copiedKeys) cleanupKeys.add(key);
+    await objects.putImmutableObject({
+      objectKey,
+      contentType: "application/json",
+      contentHash,
+      bytes,
+    });
+
+    for (const key of copiedKeys) {
+      await objects.copyObject(objectKey, key);
+      expect(await objects.headObject(key)).toEqual({
+        contentType: "application/json",
+        contentLength: bytes.byteLength,
+        contentHash,
+      });
+    }
+    const firstPage = await objects.listObjects({
+      prefix: "reproduction-artifacts/",
+      limit: 1,
+    });
+    expect(firstPage.objects).toHaveLength(1);
+    expect(copiedKeys).toContain(firstPage.objects[0]?.objectKey);
+    expect(firstPage.objects[0]?.lastModified).toBeInstanceOf(Date);
+    expect(firstPage.isTruncated).toBe(true);
+    const secondPage = await objects.listObjects({
+      prefix: "reproduction-artifacts/",
+      startAfter: firstPage.objects[0]!.objectKey,
+      limit: 1,
+    });
+    expect(secondPage.objects).toHaveLength(1);
+    expect(copiedKeys).toContain(secondPage.objects[0]?.objectKey);
+    expect(secondPage.objects[0]?.objectKey).not.toBe(
+      firstPage.objects[0]?.objectKey,
+    );
+
+    await objects.deleteObjects(copiedKeys);
+    for (const key of copiedKeys) {
+      expect(await objects.headObject(key)).toBeNull();
+      cleanupKeys.delete(key);
+    }
+    expect(await objects.headObject(objectKey)).toEqual({
+      contentType: "application/json",
+      contentLength: bytes.byteLength,
+      contentHash,
+    });
+  });
+
+  it("requires the signed SHA-256 header and confines signed URLs to their object", async () => {
+    const bytes = new TextEncoder().encode(`signed-${randomUUID()}`);
+    const objectKey = quarantineObjectKey(randomUUID());
+    cleanupKeys.add(objectKey);
+    const upload = await objects.createUploadUrl({
+      objectKey,
+      contentType: "application/octet-stream",
+      contentHash: sha256(bytes),
+      contentLength: bytes.byteLength,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const withoutChecksum = { ...upload.requiredHeaders };
+    delete withoutChecksum["x-amz-checksum-sha256"];
+    const missing = await fetch(upload.url, {
+      method: "PUT",
+      headers: withoutChecksum,
+      body: Buffer.from(bytes),
+    });
+    expect([400, 403]).toContain(missing.status);
+    expect(await objects.headObject(objectKey)).toBeNull();
+
+    const tampered = await fetch(upload.url, {
+      method: "PUT",
+      headers: {
+        ...upload.requiredHeaders,
+        "x-amz-checksum-sha256": Buffer.alloc(32).toString("base64"),
+      },
+      body: Buffer.from(bytes),
+    });
+    expect([400, 403]).toContain(tampered.status);
+    expect(await objects.headObject(objectKey)).toBeNull();
+
+    await putSigned(
+      { uploadUrl: upload.url, requiredHeaders: upload.requiredHeaders },
+      bytes,
+    );
+    expect(await objects.headObject(objectKey)).toEqual({
+      contentType: "application/octet-stream",
+      contentLength: bytes.byteLength,
+      contentHash: sha256(bytes),
+    });
+    const download = await objects.createDownloadUrl({
+      objectKey,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const otherObjectUrl = new URL(download.url);
+    otherObjectUrl.pathname = otherObjectUrl.pathname.replace(
+      objectKey,
+      quarantineObjectKey(randomUUID()),
+    );
+    expect([400, 403]).toContain((await fetch(otherObjectUrl)).status);
+    const downloaded = await fetch(download.url);
+    expect(downloaded.status).toBe(200);
+    expect(new Uint8Array(await downloaded.arrayBuffer())).toEqual(bytes);
   });
 
   afterAll(async () => {
