@@ -3414,7 +3414,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         approvedAt: new Date(),
       },
     });
-    const startsAt = new Date((await databaseNow(prisma)).getTime() + 3_000);
+    const startsAt = new Date((await databaseNow(prisma)).getTime() + 12_000);
     const scheduled = await legalDocuments.publishRevision(
       operator,
       "privacy",
@@ -3443,13 +3443,23 @@ describe("QuoteRequest and tokenized individual offers", () => {
         documentLocked();
         await documentMayUnlock;
       },
-      { timeout: 10_000 },
+      { timeout: 20_000 },
     );
     const staleBody = requestInput("privacy-lock-boundary-stale");
     const staleKey = key("privacy-lock-boundary-stale-create");
     let staleRequest: Promise<unknown> | undefined;
     try {
       await Promise.race([documentIsLocked, holdingDocument]);
+      // Set up the real lock well before activation, then enter the writer's
+      // default transaction window only shortly before the database boundary.
+      await vi.waitFor(
+        async () => {
+          expect((await databaseNow(prisma)).getTime()).toBeGreaterThanOrEqual(
+            startsAt.getTime() - 3_000,
+          );
+        },
+        { timeout: 15_000, interval: 50 },
+      );
       staleRequest = quotes
         .createRequest(staleBody, "198.51.100.101", staleKey)
         .then(
@@ -3553,7 +3563,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         `;
       });
     }
-  });
+  }, 30_000);
 
   function requestInput(scope: string) {
     return {
