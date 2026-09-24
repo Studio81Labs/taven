@@ -3,6 +3,11 @@
 - **Status:** accepted
 - **Date:** 2026-08-31
 
+**2026-09-24 amendment:** [ADR 0026](0026-pin-silo-for-test-object-storage.md)
+replaces the local/CI MinIO artifact selection with pinned Silo for fresh
+development/test state. Historical MinIO references below describe the original
+decision; Garage/R2 production and S3 contracts remain unchanged.
+
 ## Context
 
 Taven must remain viable as a low-volume hobby service. The product constraint
