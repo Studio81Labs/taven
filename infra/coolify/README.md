@@ -4,8 +4,16 @@ Production and staging are managed by Coolify. The backend API and every
 backend-image worker are maintained together in
 `infra/coolify/docker-compose.yml`; Coolify should deploy that file as the
 backend application resource. The web site, operator admin, PostgreSQL, Redis,
-Garage/object storage, slicer consumer, Orca runner, and slicer exchange
+Silo object storage, slicer consumer, Orca runner, and slicer exchange
 initializer remain separate Coolify resources.
+
+[ADR 0027](../../docs/decisions/0027-require-atomic-object-creation.md)
+selects the exact pinned self-hosted Silo image for v0 live writes. Garage is
+unsupported for writes. This backend Compose file does not provision the
+storage resource. Issue #252 owns its private production-like configuration,
+least-privilege credentials, pre-start capability gate and backup/restore
+qualification before #39 activates a target environment. This README does not
+claim that production Silo has been deployed or qualified.
 
 The backend Compose resource contains:
 
@@ -79,9 +87,9 @@ Future retention or trigger changes must update these grants and the fresh-role
 regression test (`apps/backend/test/retention-role.e2e.test.ts`).
 Provision separate retention and dispatcher S3 keys
 restricted to the environment's bucket, without bucket-owner/admin access.
-Garage's bucket ACLs expose read/write permissions, not full AWS-style
-prefix/action policies: distinct keys provide isolation/revocation but cannot
-fully enforce the narrower application operations within that bucket.
+Verify each actual Silo identity's required operations and cross-scope denials
+under #252 before production use. Do not reuse the bootstrap/root credential
+as an application credential.
 
 The slicing dispatcher, slicer consumer, Orca runner, and volume initializer
 are an opt-in group for real automatic quotes. The slicer consumer and Orca
@@ -201,8 +209,8 @@ in #39.
 
 Use only `infra/docker/docker-compose.yml` for local development and
 integration tests. It contains local PostgreSQL, Redis, Silo (under the
-`minio` compatibility service alias), the Garage contract, backend, web,
-admin, slicer, and all backend-image worker services.
+`minio` compatibility service alias), the unsupported Garage diagnostic
+contract, backend, web, admin, slicer, and all backend-image worker services.
 Its local-only defaults enable the private test flows. `garage.toml` is used
 only by the local Garage contract service; it is not a Coolify deployment
 definition.

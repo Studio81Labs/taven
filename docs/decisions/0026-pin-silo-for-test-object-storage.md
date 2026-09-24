@@ -5,7 +5,14 @@
 - **Authority:** [escalation #248](https://github.com/Studio81Labs/taven/issues/248),
   Epic #10 / #186, coordinated with Epic #9 / #145
 - **Inspected baseline:** main `f92b7e40`, payment bridge PR #247
-- **Amends:** ADR 0006 and ADR 0007's local MinIO selection only
+- **Amends:** ADR 0006 and ADR 0007's local MinIO selection; ADR 0027 subsequently selects this artifact for the v0 live store
+
+**2026-09-24 correction:** [ADR 0027](0027-require-atomic-object-creation.md)
+supersedes this decision's Garage production and two-supported-provider test
+assumptions. The exact pinned Silo artifact remains selected for local/CI and
+is now the v0 live-store target. Garage is retained only as a failing diagnostic
+profile; production security, backup and retained-data qualification belong to
+#252. Historical statements below are not live-provider approval.
 
 ## Context
 
@@ -87,9 +94,11 @@ of vulnerabilities. Reassess it with each reviewed image update.
 
 ## Application, runtime and data boundaries
 
-Production/staging Garage v2.3.0 and R2 choices remain unchanged. No deployment
-or remote volume change is authorized. Silo is a real alternative S3 test server,
-not a response mock; evidence must name the provider actually exercised.
+ADR 0027 subsequently selects this same Silo artifact for the live-store target
+and disqualifies Garage for writes. No deployment or remote volume change is
+authorized by this PR. Silo is a real S3 server, not a response mock; evidence
+must name the provider actually exercised. Issue #252 owns production
+qualification.
 
 Keep `ObjectStorage`, `S3ObjectStorageAdapter`, `TAVEN_S3_*`, object keys, signing,
 checksums, immutable writes, retention and legal holds unchanged. No application
@@ -129,8 +138,9 @@ The adopting implementation PR must prove:
 - Quarantine/confirmation, source/photo/derived retention, legal holds,
   partial/failed deletion and idempotent retry. A health endpoint or bucket
   creation alone cannot close this requirement.
-- The same existing Garage contract profile, with results named separately;
-  Silo results cannot stand in for the production provider.
+- The same existing Garage contract profile, with its immutable-write failure
+  reported separately as unsupported diagnostic evidence. Do not skip it or
+  report Garage green.
 - Required backend PostgreSQL E2E and isolated real-API browser jobs on clean
   runners, followed by PR #247's actual connected payment/resource/worker
   regressions on its final head. Cached MinIO or #246's previous green result

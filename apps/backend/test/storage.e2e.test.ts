@@ -1,6 +1,10 @@
 import "reflect-metadata";
 import type { INestApplication } from "@nestjs/common";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { Test } from "@nestjs/testing";
 import { RetentionDeletionJobStatus, RetentionHold } from "@prisma/client";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -16,6 +20,7 @@ import {
   type ObjectStorage,
 } from "../src/modules/storage/object-storage.port";
 import { RetentionService } from "../src/modules/storage/retention.service";
+import { S3ObjectStorageAdapter } from "../src/modules/storage/s3-object-storage.adapter";
 import { UploadService } from "../src/modules/storage/upload.service";
 import {
   modelSourceObjectKey,
@@ -195,13 +200,164 @@ describe("secure object storage and retention", () => {
     );
   });
 
+  it("keeps one backend winner across simultaneous and delayed immutable writers", async () => {
+    const first = new S3ObjectStorageAdapter({
+      ...s3Config,
+      publicEndpoint: s3Config.endpoint,
+      signedUrlTtlSeconds: 60,
+      uploadClientHashKey,
+    });
+    const second = new S3ObjectStorageAdapter({
+      ...s3Config,
+      publicEndpoint: s3Config.endpoint,
+      signedUrlTtlSeconds: 60,
+      uploadClientHashKey,
+    });
+    const bytesA = new TextEncoder().encode(`winner-a-${randomUUID()}`);
+    const bytesB = new TextEncoder().encode(`winner-b-${randomUUID()}`);
+    const objectKey = `slicer-revisions/${sha256(bytesA)}/settings.json`;
+    cleanupKeys.add(objectKey);
+    const writeA = {
+      objectKey,
+      contentType: "application/json",
+      contentHash: sha256(bytesA),
+      bytes: bytesA,
+    };
+    const writeB = {
+      objectKey,
+      contentType: "application/json",
+      contentHash: sha256(bytesB),
+      bytes: bytesB,
+    };
+
+    const outcomes = await Promise.allSettled([
+      first.putImmutableObject(writeA),
+      second.putImmutableObject(writeB),
+    ]);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "rejected"),
+    ).toHaveLength(1);
+    const winner = outcomes[0]?.status === "fulfilled" ? writeA : writeB;
+    const loser = winner === writeA ? writeB : writeA;
+    await expect(second.putImmutableObject(winner)).resolves.toBeUndefined();
+    await expect(first.putImmutableObject(loser)).rejects.toBeInstanceOf(
+      ImmutableObjectConflictError,
+    );
+    await expect(
+      second.putImmutableObject({ ...winner, contentType: "text/plain" }),
+    ).rejects.toBeInstanceOf(ImmutableObjectConflictError);
+    const longerBytes = new Uint8Array([...winner.bytes, 1]);
+    await expect(
+      first.putImmutableObject({
+        ...winner,
+        bytes: longerBytes,
+        contentHash: sha256(longerBytes),
+      }),
+    ).rejects.toBeInstanceOf(ImmutableObjectConflictError);
+    expect(await objects.headObject(objectKey)).toEqual({
+      contentType: winner.contentType,
+      contentLength: winner.bytes.byteLength,
+      contentHash: winner.contentHash,
+    });
+    expect(
+      await objects.readObjectRange(objectKey, 0, winner.bytes.byteLength),
+    ).toEqual(winner.bytes);
+  });
+
+  it("accepts simultaneous identical backend writes from independent adapters", async () => {
+    const bytes = new TextEncoder().encode(`same-${randomUUID()}`);
+    const contentHash = sha256(bytes);
+    const objectKey = `slicer-revisions/${contentHash}/settings.json`;
+    cleanupKeys.add(objectKey);
+    const config = {
+      ...s3Config,
+      publicEndpoint: s3Config.endpoint,
+      signedUrlTtlSeconds: 60,
+      uploadClientHashKey,
+    };
+    await expect(
+      Promise.all([
+        new S3ObjectStorageAdapter(config).putImmutableObject({
+          objectKey,
+          contentType: "application/json",
+          contentHash,
+          bytes,
+        }),
+        new S3ObjectStorageAdapter(config).putImmutableObject({
+          objectKey,
+          contentType: "application/json",
+          contentHash,
+          bytes,
+        }),
+      ]),
+    ).resolves.toEqual([undefined, undefined]);
+    expect(
+      await objects.readObjectRange(objectKey, 0, bytes.byteLength),
+    ).toEqual(bytes);
+    expect(await objects.headObject(objectKey)).toMatchObject({
+      contentHash,
+      contentLength: bytes.byteLength,
+    });
+  });
+
+  it("allows exactly one raw concurrent conditional creator without changing its bytes", async () => {
+    const objectKey = `slicer-revisions/${randomUUID()}/settings.json`;
+    cleanupKeys.add(objectKey);
+    const bodies = [
+      new TextEncoder().encode(`raw-a-${randomUUID()}`),
+      new TextEncoder().encode(`raw-b-${randomUUID()}`),
+    ];
+    const outcomes = await Promise.allSettled(
+      bodies.map((body) =>
+        s3.send(
+          new PutObjectCommand({
+            Bucket: s3Config.bucket,
+            Key: objectKey,
+            Body: body,
+            ContentType: "application/octet-stream",
+            ContentLength: body.byteLength,
+            ChecksumAlgorithm: "SHA256",
+            ChecksumSHA256: Buffer.from(sha256(body), "hex").toString("base64"),
+            IfNoneMatch: "*",
+          }),
+        ),
+      ),
+    );
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "rejected"),
+    ).toHaveLength(1);
+    const loser = outcomes.find((outcome) => outcome.status === "rejected");
+    expect(
+      (loser as PromiseRejectedResult).reason?.$metadata?.httpStatusCode,
+    ).toBe(412);
+    const winner =
+      outcomes[0]?.status === "fulfilled" ? bodies[0]! : bodies[1]!;
+    const read = await s3.send(
+      new GetObjectCommand({ Bucket: s3Config.bucket, Key: objectKey }),
+    );
+    expect(new Uint8Array(await read.Body!.transformToByteArray())).toEqual(
+      winner,
+    );
+    expect(await objects.headObject(objectKey)).toMatchObject({
+      contentHash: sha256(winner),
+      contentLength: winner.byteLength,
+    });
+  });
+
   it("copies metadata and verifies bounded listing and batch deletion", async () => {
     const bytes = new TextEncoder().encode(`{"nonce":"${randomUUID()}"}`);
     const contentHash = sha256(bytes);
     const objectKey = `slicer-revisions/${contentHash}/settings.json`;
+    const listingPrefix = `reproduction-artifacts/${randomUUID()}/`;
     const copiedKeys = [
-      `reproduction-artifacts/${randomUUID()}/canonical`,
-      `reproduction-artifacts/${randomUUID()}/canonical`,
+      `${listingPrefix}canonical-a`,
+      `${listingPrefix}canonical-b`,
     ];
     cleanupKeys.add(objectKey);
     for (const key of copiedKeys) cleanupKeys.add(key);
@@ -222,6 +378,7 @@ describe("secure object storage and retention", () => {
     }
     const firstPage = await objects.listObjects({
       prefix: "reproduction-artifacts/",
+      startAfter: `${listingPrefix}canonical-0`,
       limit: 1,
     });
     expect(firstPage.objects).toHaveLength(1);

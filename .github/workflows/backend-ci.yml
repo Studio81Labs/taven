@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths: &backend-paths
       - "apps/backend/**"
+      - "apps/slicer-worker/src/object-store*"
       - "infra/coolify/retention-grants.sql"
       - "packages/core/**"
       - "packages/slicer-contracts/**"
@@ -110,3 +111,4 @@ jobs:
       - run: pnpm db:migrate:deploy
       - run: pnpm -C apps/backend db:seed
       - run: pnpm backend:test:e2e
+      - run: pnpm -C apps/slicer-worker test:storage:integration
