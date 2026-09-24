@@ -46,6 +46,7 @@ export async function publishE2eLegalFixtures(
      FROM legal_documents document
      WHERE document.id = revision.document_id
        AND revision.status = 'DRAFT'
+       AND revision.sequence = 1
        AND document.key IN (
          'terms', 'claims', 'privacy', 'prohibitedContent', 'retention', 'photoConsent'
        )`,
@@ -70,13 +71,30 @@ export async function publishE2eLegalFixtures(
        'terms', 'claims', 'privacy', 'prohibitedContent', 'retention', 'photoConsent'
      )
        AND revision.status = 'APPROVED'
+       AND revision.sequence = 1
+       AND revision.revision_code = CASE document.key
+         WHEN 'terms' THEN $2
+         WHEN 'claims' THEN $3
+         WHEN 'privacy' THEN $4
+         WHEN 'prohibitedContent' THEN $5
+         WHEN 'retention' THEN $6
+         WHEN 'photoConsent' THEN $7
+       END
        AND NOT EXISTS (
          SELECT 1
          FROM legal_document_publications publication
          WHERE publication.revision_id = revision.id
            AND publication.cancelled_at IS NULL
        )`,
-    [operatorId],
+    [
+      operatorId,
+      e2eLegalRevisionCodes.terms,
+      e2eLegalRevisionCodes.claims,
+      e2eLegalRevisionCodes.privacy,
+      e2eLegalRevisionCodes.prohibitedContent,
+      e2eLegalRevisionCodes.retention,
+      e2eLegalRevisionCodes.photoConsent,
+    ],
   );
 }
 

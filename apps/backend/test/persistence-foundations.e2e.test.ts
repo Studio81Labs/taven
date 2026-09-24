@@ -8,6 +8,7 @@ import {
   type ProductionReservationFixture,
   type SourceRetention,
 } from "./support/persistence-factory";
+import { publishE2eLegalFixtures } from "./support/publish-e2e-legal-fixtures";
 
 const databaseUrl = process.env.DATABASE_URL;
 const testScope = `persistence-foundations-${randomUUID()}`;
@@ -633,6 +634,74 @@ describe("persistence foundations", () => {
 
   afterAll(async () => {
     await pool.end();
+  });
+
+  it("does not approve or publish non-seed legal revisions during E2E setup", async () => {
+    await inRollbackTransaction(
+      "legal-seed-scope",
+      async (client, fixtures) => {
+        const draftId = fixtures.id("extra-legal-draft");
+        const approvedId = fixtures.id("extra-approved-legal");
+        const extraCode = `terms-extra-${randomUUID()}`;
+        await client.query(
+          `INSERT INTO legal_document_revisions
+           (id, document_id, sequence, edit_version, status, content_version,
+            title, summary, sections, content_hash)
+         SELECT $1::uuid, seed.document_id,
+                (SELECT max(sequence) + 1 FROM legal_document_revisions
+                 WHERE document_id = seed.document_id),
+                1, 'DRAFT', 1, $2::text, $3::text, seed.sections,
+                legal_document_revision_content_hash(1, $2::text, $3::text, seed.sections)
+         FROM legal_document_revisions seed
+         WHERE seed.revision_code = 'terms-v1'`,
+          [draftId, "Unapproved fixture draft", "Remain an unapproved draft"],
+        );
+        await client.query(
+          `INSERT INTO legal_document_revisions
+           (id, document_id, sequence, edit_version, status, content_version,
+            title, summary, sections, content_hash, revision_code, effective_at,
+            approval_evidence, approved_by, approved_at)
+         SELECT $1::uuid, seed.document_id,
+                (SELECT max(sequence) + 1 FROM legal_document_revisions
+                 WHERE document_id = seed.document_id),
+                1, 'APPROVED', 1, $2::text, $3::text, seed.sections,
+                legal_document_revision_content_hash(1, $2::text, $3::text, seed.sections),
+                $4, clock_timestamp() - interval '1 minute',
+                'Unpublished fixture regression', seed.approved_by,
+                clock_timestamp()
+         FROM legal_document_revisions seed
+         WHERE seed.revision_code = 'terms-v1'`,
+          [
+            approvedId,
+            "Unpublished fixture revision",
+            "Remain unpublished",
+            extraCode,
+          ],
+        );
+
+        await publishE2eLegalFixtures(client);
+        const revisions = await client.query<{
+          id: string;
+          status: string;
+          publication_count: number;
+        }>(
+          `SELECT revision.id, revision.status,
+                count(publication.id)::int AS publication_count
+         FROM legal_document_revisions revision
+         LEFT JOIN legal_document_publications publication
+           ON publication.revision_id = revision.id
+         WHERE revision.id IN ($1::uuid, $2::uuid)
+         GROUP BY revision.id, revision.status`,
+          [draftId, approvedId],
+        );
+        expect(revisions.rows).toEqual(
+          expect.arrayContaining([
+            { id: draftId, status: "DRAFT", publication_count: 0 },
+            { id: approvedId, status: "APPROVED", publication_count: 0 },
+          ]),
+        );
+      },
+    );
   });
 
   it("has every resource-foundation table after migration", async () => {
@@ -1313,6 +1382,14 @@ describe("persistence foundations", () => {
       "reference-slice-quality",
       async (client, fixtures) => {
         const foundation = await fixtures.createFoundation();
+        // Other E2E files can activate PLA/FINE. Retire it only inside this
+        // rollback transaction so the mismatch assertion is order-independent.
+        await client.query(
+          `UPDATE reference_profiles
+           SET state = 'RETIRED',
+               retired_at = greatest(clock_timestamp(), activated_at)
+           WHERE material = 'PLA' AND quality = 'FINE' AND state = 'ACTIVE'`,
+        );
         const referenceProfileId = fixtures.id("fine-reference-profile");
         await fixtures.createRevisionIdentity(
           referenceProfileId,
