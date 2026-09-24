@@ -1192,17 +1192,27 @@ export function assistedSlaMetrics(
   const respondedLate = responded.filter(
     (request) => responseAt(request)! > request.slaDueAt,
   );
+  const declined = responded.filter(
+    (request) => request.status === "REJECTED" && request.quotes.length === 0,
+  );
   const pendingOverdue = assisted.filter(
     (request) => responseAt(request) === null && request.slaDueAt < generatedAt,
   );
   return {
     scope: "PLATFORM",
     definition:
-      "Assisted SLA uses persisted request creation, due, and first issued-offer evidence against the database clock.",
+      "Assisted SLA uses persisted request creation, due, and first operator response (offer or pre-offer decline) against the database clock.",
     requests: assisted.length,
     responded: responded.length,
     respondedOnTime: respondedOnTime.length,
     respondedLate: respondedLate.length,
+    declined: declined.length,
+    declinedOnTime: declined.filter(
+      (request) => responseAt(request)! <= request.slaDueAt,
+    ).length,
+    declinedLate: declined.filter(
+      (request) => responseAt(request)! > request.slaDueAt,
+    ).length,
     pendingOverdue: pendingOverdue.length,
     responseRate: ratio(respondedOnTime.length, assisted.length),
   };

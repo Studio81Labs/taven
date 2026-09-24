@@ -73,6 +73,7 @@ import type {
   AcceptedOfferOrderStatusDto,
   AutomaticQuoteRequestHandoffItemDto,
   CreateQuoteRequestDto,
+  DeclineQuoteRequestDto,
   IssueOfferDto,
   ModelOfferItemDto,
   OfferDeliveryDestinationDto,
@@ -742,6 +743,98 @@ export class QuotesService {
           payload: { operation: "review", status: "IN_REVIEW" },
         });
         return { requestId, status: "IN_REVIEW" };
+      },
+      {
+        beforeReplay: async () => {
+          requireOperatorPermission(
+            operator,
+            OPERATOR_PERMISSIONS.QUOTES_WRITE,
+          );
+          operatorNode(operator);
+        },
+      },
+    );
+  }
+
+  async declineRequest(
+    operator: OperatorContext,
+    requestId: string,
+    input: DeclineQuoteRequestDto,
+    idempotencyKey: string | undefined,
+  ): Promise<QuoteRequestStatusDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    const nodeId = operatorNode(operator);
+    requestId = normalizedUuid(requestId, "requestId");
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const expectedStatus = input?.expectedStatus;
+    if (expectedStatus !== "NEW" && expectedStatus !== "IN_REVIEW") {
+      throw new BadRequestException("expectedStatus is invalid");
+    }
+    const reason = typeof input?.reason === "string" ? input.reason.trim() : "";
+    if (!reason || reason.length > 1000) {
+      throw new BadRequestException(
+        "reason must be nonblank and at most 1000 characters",
+      );
+    }
+    const reasonCode =
+      typeof input?.reasonCode === "string" ? input.reasonCode : "";
+    if (!/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode)) {
+      throw new BadRequestException("reasonCode is invalid");
+    }
+    return this.idempotent<QuoteRequestStatusDto>(
+      "quote-request.decline",
+      commandKey,
+      fingerprintOf({ requestId, expectedStatus, reason, reasonCode }),
+      async (transaction) => {
+        const request = await lockedRequest(transaction, requestId);
+        if (!request) {
+          throw new NotFoundException("Quote request was not found");
+        }
+        if (
+          request.status !== expectedStatus ||
+          request.currentQuoteId !== null
+        ) {
+          throw new ConflictException("Quote request cannot be declined");
+        }
+        await applyTransition(
+          request,
+          QuoteRequestStatus.REJECTED,
+          commandKey,
+          {
+            declineReason: reason,
+            declineReasonCode: reasonCode,
+            declineHasIssuedQuote: false,
+          },
+        );
+        const observedAt = await databaseNow(transaction);
+        const resultId = randomUUID();
+        await transaction.quoteRequest.update({
+          where: { id: requestId },
+          data: {
+            status: QuoteRequestStatus.REJECTED,
+            rejectedAt: observedAt,
+            rejectionReason: reason,
+            slaRespondedAt: observedAt,
+            currentStateCommandKey: commandKey,
+            currentStateResultId: resultId,
+            updatedAt: observedAt,
+          },
+        });
+        await this.audit.recordOperator(transaction, operator, {
+          quoteRequestId: requestId,
+          nodeId,
+          createdAt: observedAt,
+          eventType: "quote_request.declined",
+          idempotencyKey: commandKey,
+          correlationId: resultId,
+          payload: {
+            operation: "decline",
+            status: "REJECTED",
+            reason,
+            reasonCode,
+          },
+        });
+        return { requestId, status: "REJECTED" };
       },
       {
         beforeReplay: async () => {

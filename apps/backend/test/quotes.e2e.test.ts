@@ -488,6 +488,255 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ]);
   });
 
+  it("declines a new request once without an offer and preserves its evidence", async () => {
+    const created = await quotes.createRequest(
+      requestInput("decline"),
+      "198.51.100.175",
+      key("decline-create"),
+    );
+    const requestId = created.requestId;
+    const attachmentId = randomUUID();
+    await prisma.photoAsset.create({
+      data: {
+        id: attachmentId,
+        kind: "QUOTE_REFERENCE",
+        scopeKind: "QUOTE_REQUEST",
+        scopeId: requestId,
+        storageObjectKey: photoOriginalObjectKey(attachmentId),
+        contentHash: "e".repeat(64),
+        mediaType: "image/jpeg",
+        sizeBytes: 128,
+        uploadedAt: new Date(),
+        retentionDays: 90,
+        photoDeleteAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1_000),
+      },
+    });
+    const path = `admin/quote-requests/${requestId}/decline`;
+    const commandKey = key("decline-command");
+    const body = {
+      expectedStatus: "NEW" as const,
+      reason: "Requested material is unavailable",
+      reasonCode: "UNFULFILLABLE",
+    };
+    await expect(
+      quotes.declineRequest(
+        { ...operator, permissions: [] },
+        requestId,
+        body,
+        key("decline-no-permission"),
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      quotes.declineRequest(
+        { ...operator, nodeIds: [] },
+        requestId,
+        body,
+        key("decline-no-node"),
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      prisma.quoteRequest.update({
+        where: { id: requestId },
+        data: {
+          status: "REJECTED",
+          rejectedAt: new Date(),
+          slaRespondedAt: new Date(),
+        },
+      }),
+    ).rejects.toThrow();
+    const denied = await apiJson(path, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": commandKey,
+      },
+      body: JSON.stringify(body),
+    });
+    expect(denied.response.status).toBe(401);
+    const malformed = await apiJson(path, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": key("decline-malformed"),
+      },
+      body: JSON.stringify({ ...body, reasonCode: "bad code" }),
+    });
+    expect(malformed.response.status).toBe(400);
+    const missing = await apiJson(
+      `admin/quote-requests/${randomUUID()}/decline`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": key("decline-missing"),
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(missing.response.status).toBe(404);
+    const declined = await apiJson<{ requestId: string; status: string }>(
+      path,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": commandKey,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(declined.response.status).toBe(200);
+    expect(declined.body).toEqual({ requestId, status: "REJECTED" });
+    const replay = await apiJson(path, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": commandKey,
+      },
+      body: JSON.stringify(body),
+    });
+    expect(replay.response.status).toBe(200);
+    const changed = await apiJson(path, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": commandKey,
+      },
+      body: JSON.stringify({ ...body, reasonCode: "OTHER" }),
+    });
+    expect(changed.response.status).toBe(409);
+
+    const [request, audit, legal, attachments, quoteCount, orderCount] =
+      await Promise.all([
+        prisma.quoteRequest.findUniqueOrThrow({ where: { id: requestId } }),
+        prisma.auditEvent.findMany({
+          where: {
+            quoteRequestId: requestId,
+            eventType: "quote_request.declined",
+          },
+        }),
+        prisma.legalAcceptance.findMany({
+          where: { quoteRequestId: requestId },
+        }),
+        prisma.photoAsset.findUniqueOrThrow({ where: { id: attachmentId } }),
+        prisma.quote.count({ where: { quoteRequestId: requestId } }),
+        prisma.individualOrderOrigin.count({
+          where: { quote: { quoteRequestId: requestId } },
+        }),
+      ]);
+    expect(request.currentQuoteId).toBeNull();
+    expect(request.rejectedAt).toEqual(request.slaRespondedAt);
+    expect(request.rejectionReason).toBe(body.reason);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]?.payload).toMatchObject({
+      reasonCode: body.reasonCode,
+      reason: body.reason,
+    });
+    expect(legal.length).toBeGreaterThan(0);
+    expect(attachments.scopeId).toBe(requestId);
+    expect(quoteCount).toBe(0);
+    expect(orderCount).toBe(0);
+    expect(
+      (
+        await operatorCommand(
+          `admin/quote-requests/${requestId}/review`,
+          key("decline-review"),
+        )
+      ).response.status,
+    ).toBe(409);
+    await expect(
+      prisma.quoteRequest.update({
+        where: { id: requestId },
+        data: { rejectionReason: "Changed after decline" },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("serializes review against a stale pre-offer decline", async () => {
+    const created = await quotes.createRequest(
+      requestInput("decline-race"),
+      "198.51.100.176",
+      key("decline-race-create"),
+    );
+    const requestId = created.requestId;
+    const outcomes = await Promise.allSettled([
+      quotes.beginReview(operator, requestId, key("decline-race-review")),
+      quotes.declineRequest(
+        operator,
+        requestId,
+        {
+          expectedStatus: "NEW",
+          reason: "Cannot produce this part",
+          reasonCode: "UNFULFILLABLE",
+        },
+        key("decline-race-decline"),
+      ),
+    ]);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    const loser = outcomes.find((outcome) => outcome.status === "rejected");
+    expect((loser as PromiseRejectedResult).reason.getStatus()).toBe(409);
+    const request = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: requestId },
+    });
+    expect(request.status).toBe(
+      outcomes[0]?.status === "fulfilled" ? "IN_REVIEW" : "REJECTED",
+    );
+  });
+
+  it("gives offer issuance and decline one legal winner", async () => {
+    const created = await quotes.createRequest(
+      requestInput("decline-issue-race"),
+      "198.51.100.177",
+      key("decline-issue-race-create"),
+    );
+    const requestId = created.requestId;
+    await quotes.beginReview(
+      operator,
+      requestId,
+      key("decline-issue-race-review"),
+    );
+    const items = await prepareOfferItems(requestId, defaultItems());
+    const offer = offerInput(
+      new Date(Date.now() + 60 * 60 * 1_000),
+      defaultComponents(),
+      items,
+    ) as unknown as IssueOfferDto;
+    const outcomes = await Promise.allSettled([
+      quotes.issueOffer(operator, requestId, offer, key("decline-race-issue")),
+      quotes.declineRequest(
+        operator,
+        requestId,
+        {
+          expectedStatus: "IN_REVIEW",
+          reason: "Cannot complete the requested work",
+          reasonCode: "UNFULFILLABLE",
+        },
+        key("decline-race-after-review"),
+      ),
+    ]);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    const loser = outcomes.find((outcome) => outcome.status === "rejected");
+    expect((loser as PromiseRejectedResult).reason.getStatus()).toBe(409);
+    const request = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: requestId },
+    });
+    expect(request.status).toBe(
+      outcomes[0]?.status === "fulfilled" ? "QUOTED" : "REJECTED",
+    );
+    expect(
+      await prisma.quote.count({ where: { quoteRequestId: requestId } }),
+    ).toBe(request.status === "QUOTED" ? 1 : 0);
+  });
+
   it("submits idempotently, isolates attachments, issues, previews, and accepts once", async () => {
     const createKey = key("create");
     const requestBody = requestInput("accept");

@@ -14,9 +14,11 @@ import {
 } from "@nestjs/common";
 import {
   ApiBearerAuth,
+  ApiBadRequestResponse,
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiGoneResponse,
   ApiHeader,
   ApiNotFoundResponse,
@@ -48,6 +50,7 @@ import {
   AcceptedOfferDto,
   AcceptedOfferOrderStatusDto,
   CreateQuoteRequestDto,
+  DeclineQuoteRequestDto,
   IssueOfferDto,
   OfferIssuedDto,
   OfferCheckoutContactDto,
@@ -605,6 +608,36 @@ export class OperatorQuoteRequestsController {
     @Headers("idempotency-key") idempotencyKey?: string,
   ): Promise<QuoteRequestStatusDto> {
     return this.quotes.beginReview(operator, requestId, idempotencyKey);
+  }
+
+  @Post(":requestId/decline")
+  @HttpCode(200)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({
+    summary: "Decline an unquoted request with an audited reason",
+  })
+  @ApiParam({ name: "requestId", type: String, format: "uuid" })
+  @ApiBody({ type: DeclineQuoteRequestDto })
+  @ApiOkResponse({ type: QuoteRequestStatusDto })
+  @ApiBadRequestResponse({ description: "Malformed decline input or key" })
+  @ApiUnauthorizedResponse({ description: "Operator session is required" })
+  @ApiForbiddenResponse({ description: "Operator lacks quote write scope" })
+  @ApiNotFoundResponse({ description: "Quote request was not found" })
+  @ApiConflictResponse({
+    description: "Request status changed or offer exists",
+  })
+  decline(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("requestId") requestId: string,
+    @Body() body: DeclineQuoteRequestDto,
+    @Headers("idempotency-key") idempotencyKey?: string,
+  ): Promise<QuoteRequestStatusDto> {
+    return this.quotes.declineRequest(
+      operator,
+      requestId,
+      body,
+      idempotencyKey,
+    );
   }
 
   @Post(":requestId/offers")

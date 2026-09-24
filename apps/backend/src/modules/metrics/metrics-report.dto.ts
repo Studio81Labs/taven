@@ -546,6 +546,15 @@ export class AssistedSlaMetricsDto {
   respondedLate!: number;
 
   @ApiProperty({ type: Number, minimum: 0 })
+  declined!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  declinedOnTime!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
+  declinedLate!: number;
+
+  @ApiProperty({ type: Number, minimum: 0 })
   pendingOverdue!: number;
 
   @ApiProperty({ type: MetricRatioDto })

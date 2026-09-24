@@ -539,6 +539,18 @@
       },
       "AssistedSlaMetricsDto": {
         "properties": {
+          "declined": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "declinedLate": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "declinedOnTime": {
+            "minimum": 0,
+            "type": "number"
+          },
           "definition": {
             "type": "string"
           },
@@ -579,6 +591,9 @@
           "responded",
           "respondedOnTime",
           "respondedLate",
+          "declined",
+          "declinedOnTime",
+          "declinedLate",
           "pendingOverdue",
           "responseRate"
         ],
@@ -3420,6 +3435,35 @@
         },
         "required": [
           "shipmentPlanId"
+        ],
+        "type": "object"
+      },
+      "DeclineQuoteRequestDto": {
+        "properties": {
+          "expectedStatus": {
+            "enum": [
+              "NEW",
+              "IN_REVIEW"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "reasonCode": {
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9_]{0,99}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedStatus",
+          "reason",
+          "reasonCode"
         ],
         "type": "object"
       },
@@ -19042,6 +19086,90 @@
           }
         ],
         "summary": "Read typed offer composer choices and current policy",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/decline": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_decline",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclineQuoteRequestDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestStatusDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "description": "Malformed decline input or key"
+          },
+          "401": {
+            "description": "Operator session is required"
+          },
+          "403": {
+            "description": "Operator lacks quote write scope"
+          },
+          "404": {
+            "description": "Quote request was not found"
+          },
+          "409": {
+            "description": "Request status changed or offer exists"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Decline an unquoted request with an audited reason",
         "tags": [
           "operator quote requests"
         ]
