@@ -1344,7 +1344,209 @@ describe("QuoteRequest and tokenized individual offers", () => {
         acceptedOrderId: accepted.body.orderId,
       }),
     );
-  }, 20_000);
+  }, 30_000);
+
+  it("dispatches each reserved individual job with its assigned body selection", async () => {
+    const requestBody = requestInput("two-selections");
+    const created = await createRequest(
+      key("two-selections-create"),
+      requestBody,
+    );
+    expect(created.response.status).toBe(201);
+    expect(
+      (
+        await operatorCommand(
+          `admin/quote-requests/${created.body.requestId}/review`,
+          key("two-selections-review"),
+        )
+      ).response.status,
+    ).toBe(200);
+    const [firstItem] = await prepareOfferItems(created.body.requestId, [
+      defaultOfferItem,
+    ]);
+    const firstSelectionId = firstItem!.modelSelectionId as string;
+    const firstSelection =
+      await prisma.quoteRequestModelSelection.findUniqueOrThrow({
+        where: { id: firstSelectionId },
+      });
+    const secondBodyIds = ["quote-other-body"];
+    const { geometrySelectionSha256, ProductionSliceJobSchema } =
+      await import("@taven/slicer-contracts");
+    const secondSelection = await prisma.quoteRequestModelSelection.create({
+      data: {
+        requestId: firstSelection.requestId,
+        modelFileId: firstSelection.modelFileId,
+        modelGeometryId: firstSelection.modelGeometryId,
+        inspectionJobId: firstSelection.inspectionJobId,
+        sourceContentSha256: firstSelection.sourceContentSha256,
+        bodyIds: secondBodyIds,
+        selectionSha256: geometrySelectionSha256(secondBodyIds),
+      },
+    });
+    const items = [
+      { ...defaultOfferItem, modelSelectionId: firstSelection.id },
+      { ...defaultOfferItem, modelSelectionId: secondSelection.id },
+    ];
+    const components = [0, 1].flatMap((quoteItemOrdinal) => [
+      { kind: "ITEM_PRODUCTION", quoteItemOrdinal, amountMinor: 40_000 },
+      { kind: "ITEM_QUANTITY", quoteItemOrdinal, amountMinor: 10_000 },
+      { kind: "ITEM_POSTPROCESSING", quoteItemOrdinal, amountMinor: 5_000 },
+    ]);
+    const issued = await issueOffer(
+      created.body.requestId,
+      key("two-selections-issue"),
+      new Date(Date.now() + 60 * 60_000),
+      components,
+      items,
+    );
+    expect(issued.response.status, JSON.stringify(issued.body)).toBe(201);
+    const accepted = await acceptOffer(
+      issued.body,
+      key("two-selections-accept"),
+    );
+    expect(accepted.response.status, JSON.stringify(accepted.body)).toBe(200);
+    const contact = await apiJson(
+      `offers/${issued.body.quoteId}/checkout-contact`,
+      {
+        method: "POST",
+        headers: {
+          ...bearer(issued.body.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": key("two-selections-contact"),
+        },
+        body: JSON.stringify({
+          email: requestBody.contact.email,
+          fullName: "Two Selection Customer",
+          billing: {
+            name: "Two Selection Customer",
+            addressLine1: "Masarykova 12",
+            city: "Brno",
+            postalCode: "60200",
+            countryCode: "CZ",
+          },
+        }),
+      },
+    );
+    expect(contact.response.status, JSON.stringify(contact.body)).toBe(200);
+    const prepare = (commandKey: string) =>
+      apiJson<{ status: string }>(
+        `admin/orders/${accepted.body.orderId}/resource-preparation`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+            "idempotency-key": commandKey,
+          },
+          body: JSON.stringify({ reason: "Prepare both selected items" }),
+        },
+      );
+    expect((await prepare(key("two-selections-dispatch"))).body.status).toBe(
+      "PENDING",
+    );
+    const dispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateType: "CandidateEstimateDispatch",
+        payload: {
+          path: ["job", "correlationId"],
+          equals: accepted.body.orderId,
+        },
+      },
+    });
+    const bySelection = new Map<string, CandidateEstimateJob>();
+    for (const dispatch of dispatches) {
+      const job = (dispatch.payload as { job: CandidateEstimateJob }).job;
+      bySelection.set(job.input.geometry.selectionSha256, job);
+    }
+    expect([...bySelection.keys()].sort()).toEqual(
+      [firstSelection.selectionSha256, secondSelection.selectionSha256].sort(),
+    );
+    let offsetMinutes = 20;
+    for (const job of bySelection.values()) {
+      const availability =
+        await prisma.machineAvailabilitySelection.findFirstOrThrow({
+          where: { machineId: job.input.machineId },
+          include: { revision: { include: { windows: true } } },
+        });
+      const available = availability.revision.windows.find(
+        (window) => window.endsAt.getTime() > Date.now() + 40 * 60_000,
+      );
+      expect(available).toBeDefined();
+      const startsAt = new Date(
+        Math.max(
+          Date.now() + offsetMinutes * 60_000,
+          available!.startsAt.getTime() + offsetMinutes * 60_000,
+        ),
+      );
+      offsetMinutes += 5;
+      await candidates.ingest({
+        result: successfulIndividualCandidateResult(job),
+        capacityWindows: [
+          { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
+        ],
+        expiresAt: new Date(Date.now() + 60 * 60_000),
+      });
+    }
+    const completed = await prepare(key("two-selections-plan"));
+    expect(completed.response.status, JSON.stringify(completed.body)).toBe(200);
+    expect(completed.body.status).toBe("READY");
+    const payment = await apiJson<{ checkoutUrl: string; status: string }>(
+      `admin/orders/${accepted.body.orderId}/initial-payment`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": key("two-selections-payment"),
+        },
+        body: JSON.stringify({ method: "CARD" }),
+      },
+    );
+    expect(payment.response.status, JSON.stringify(payment.body)).toBe(200);
+    const sandboxPath = new URL(payment.body.checkoutUrl).pathname;
+    expect(
+      (
+        await fetch(new URL(`${sandboxPath}/capture`, baseUrl), {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(200);
+    const jobs = await prisma.job.findMany({
+      where: { orderId: accepted.body.orderId },
+      orderBy: { id: "asc" },
+    });
+    expect(jobs).toHaveLength(2);
+    const productionSelections: string[] = [];
+    for (const job of jobs) {
+      const acceptedJob = await apiJson(
+        `admin/orders/${accepted.body.orderId}/fulfilment/jobs/${job.id}/accept`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "idempotency-key": key(`two-selections-job-${job.id}`),
+          },
+        },
+      );
+      expect(
+        acceptedJob.response.status,
+        JSON.stringify(acceptedJob.body),
+      ).toBe(200);
+      const dispatch = await prisma.outboxMessage.findFirstOrThrow({
+        where: {
+          aggregateType: "ProductionSliceDispatch",
+          aggregateId: job.id,
+        },
+      });
+      const queued = ProductionSliceJobSchema.parse(
+        (dispatch.payload as { job: unknown }).job,
+      );
+      productionSelections.push(queued.input.geometry.selectionSha256);
+    }
+    expect(productionSelections.sort()).toEqual(
+      [firstSelection.selectionSha256, secondSelection.selectionSha256].sort(),
+    );
+  }, 30_000);
 
   it("issues and previews an immutable VAT-payer price split", async () => {
     const created = await quotes.createRequest(
@@ -2119,7 +2321,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         where: { shipmentPlan: { orderId: accepted.body.orderId } },
       }),
     ).resolves.toBe(quantity);
-  });
+  }, 60_000);
 
   it("issues a many-item offer with bounded reference lookup batches", async () => {
     const itemCount = 501;

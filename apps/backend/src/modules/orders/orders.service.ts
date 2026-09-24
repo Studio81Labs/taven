@@ -355,6 +355,8 @@ export class OrdersService {
       },
       select: {
         id: true,
+        phaseResourcePlanId: true,
+        phaseResourcePlanJobId: true,
         machineId: true,
         printConfigRevision: { select: { id: true, settings: true } },
         machineProfile: {
@@ -428,11 +430,13 @@ export class OrdersService {
     const individualSelections = individualOrigin
       ? await transaction.$queryRaw<
           Array<{
+            order_item_id: string;
             body_ids: string[];
             selection_sha256: string;
           }>
         >`
-          SELECT DISTINCT selection.body_ids, selection.selection_sha256
+          SELECT DISTINCT item.id AS order_item_id,
+                          selection.body_ids, selection.selection_sha256
           FROM individual_order_item_sources source
           JOIN order_items item ON item.id = source.order_item_id
           JOIN quote_items quote_item ON quote_item.id = source.quote_item_id
@@ -444,6 +448,10 @@ export class OrdersService {
            AND selection.model_geometry_id = item.model_geometry_id
           JOIN model_files model_file ON model_file.id = item.source_model_file_id
           JOIN fulfilment_slots slot ON slot.order_item_id = item.id
+          JOIN phase_resource_plan_slots plan_slot
+            ON plan_slot.fulfilment_slot_id = slot.id
+           AND plan_slot.phase_resource_plan_id = ${reservation.phaseResourcePlanId}::uuid
+           AND plan_slot.phase_resource_plan_job_id = ${reservation.phaseResourcePlanJobId}::uuid
           JOIN shipment_plan_fulfilment_slots allocation
             ON allocation.fulfilment_slot_id = slot.id
           WHERE item.order_id = ${orderId}::uuid

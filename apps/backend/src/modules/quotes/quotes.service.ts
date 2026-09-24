@@ -159,6 +159,7 @@ type IdempotencyOptions<T> = Readonly<{
   responseCodec?: IdempotencyResponseCodec<T>;
   responseStatusCode?: number | ((response: T) => number);
   beforeReplay?: (transaction: Transaction) => Promise<void>;
+  transactionTimeoutMs?: number;
 }>;
 type QuoteCapabilityKey = Readonly<{ id: string; key: string }>;
 type LockedAutomaticQuoteHandoff =
@@ -1988,17 +1989,21 @@ export class QuotesService {
           });
         }
         await transaction.$executeRaw`
-          UPDATE fulfilment_slots slot
-          SET settlement_amount_minor = coalesce((
-            SELECT sum(allocation.amount_minor)
+          WITH amounts AS (
+            SELECT allocation.fulfilment_slot_id,
+                   sum(allocation.amount_minor) AS amount_minor
             FROM price_component_fulfilment_allocations allocation
             JOIN price_snapshot_components component
               ON component.id = allocation.price_snapshot_component_id
-            WHERE allocation.fulfilment_slot_id = slot.id
-              AND component.price_snapshot_id = ${quote.priceBinding.priceSnapshot.id}::uuid
-          ), 0),
-          updated_at = ${observedAt}
-          WHERE slot.order_id = ${orderId}::uuid
+            WHERE component.price_snapshot_id = ${quote.priceBinding.priceSnapshot.id}::uuid
+            GROUP BY allocation.fulfilment_slot_id
+          )
+          UPDATE fulfilment_slots slot
+          SET settlement_amount_minor = amounts.amount_minor,
+              updated_at = ${observedAt}
+          FROM amounts
+          WHERE slot.id = amounts.fulfilment_slot_id
+            AND slot.order_id = ${orderId}::uuid
         `;
         await transaction.orderActivePriceBinding.create({
           data: { orderId, orderPriceBindingId },
@@ -2107,6 +2112,7 @@ export class QuotesService {
       {
         responseStatusCode: (response) =>
           response.kind === "expired" ? HttpStatus.GONE : HttpStatus.OK,
+        transactionTimeoutMs: 60_000,
       },
     );
     if (result.kind === "expired") {
@@ -2650,77 +2656,83 @@ export class QuotesService {
     if (!primaryFingerprint) {
       throw new Error("At least one idempotency fingerprint is required");
     }
-    return this.prisma.$transaction(async (transaction) => {
-      const lockKey = `${namespace}:${idempotencyKey}`;
-      await transaction.$queryRaw`
+    return this.prisma.$transaction(
+      async (transaction) => {
+        const lockKey = `${namespace}:${idempotencyKey}`;
+        await transaction.$queryRaw`
         SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text
       `;
-      await options?.beforeReplay?.(transaction);
-      const observedAt = await databaseNow(transaction);
-      const existing = await transaction.idempotencyRecord.findFirst({
-        where: { namespace, idempotencyKey },
-        orderBy: { generation: "desc" },
-      });
-      if (existing && existing.expiresAt.getTime() > observedAt.getTime()) {
-        if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
-          throw new ConflictException(
-            "Idempotency key was already used with different input",
-          );
+        await options?.beforeReplay?.(transaction);
+        const observedAt = await databaseNow(transaction);
+        const existing = await transaction.idempotencyRecord.findFirst({
+          where: { namespace, idempotencyKey },
+          orderBy: { generation: "desc" },
+        });
+        if (existing && existing.expiresAt.getTime() > observedAt.getTime()) {
+          if (!acceptedFingerprints.includes(existing.requestFingerprint)) {
+            throw new ConflictException(
+              "Idempotency key was already used with different input",
+            );
+          }
+          if (
+            existing.status !== IdempotencyStatus.COMPLETED ||
+            existing.responseBody === null
+          ) {
+            throw new ConflictException("Idempotent command is incomplete");
+          }
+          return options?.responseCodec
+            ? options.responseCodec.fromStoredResponse(
+                existing.responseBody,
+                existing.requestFingerprint,
+                existing.generation,
+              )
+            : (existing.responseBody as T);
         }
-        if (
-          existing.status !== IdempotencyStatus.COMPLETED ||
-          existing.responseBody === null
-        ) {
-          throw new ConflictException("Idempotent command is incomplete");
-        }
-        return options?.responseCodec
-          ? options.responseCodec.fromStoredResponse(
-              existing.responseBody,
-              existing.requestFingerprint,
-              existing.generation,
-            )
-          : (existing.responseBody as T);
-      }
 
-      const record = await transaction.idempotencyRecord.create({
-        data: {
-          namespace,
-          idempotencyKey,
-          generation: (existing?.generation ?? 0) + 1,
-          requestFingerprint: primaryFingerprint,
-          expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
-        },
-      });
-      const response = await operation(transaction, record.generation);
-      const storedResponse = jsonInput(
-        options?.responseCodec
-          ? options.responseCodec.toStoredResponse(response, record.generation)
-          : response,
-      );
-      if (storedResponse === undefined) {
-        throw new Error("Idempotent response is not JSON serializable");
-      }
-      const responseStatusCode =
-        typeof options?.responseStatusCode === "function"
-          ? options.responseStatusCode(response)
-          : (options?.responseStatusCode ?? HttpStatus.OK);
-      if (
-        !Number.isInteger(responseStatusCode) ||
-        responseStatusCode < 100 ||
-        responseStatusCode > 599
-      ) {
-        throw new Error("Idempotent response status code is invalid");
-      }
-      await transaction.idempotencyRecord.update({
-        where: { id: record.id },
-        data: {
-          status: IdempotencyStatus.COMPLETED,
-          responseStatusCode,
-          responseBody: storedResponse,
-        },
-      });
-      return response;
-    });
+        const record = await transaction.idempotencyRecord.create({
+          data: {
+            namespace,
+            idempotencyKey,
+            generation: (existing?.generation ?? 0) + 1,
+            requestFingerprint: primaryFingerprint,
+            expiresAt: addDays(observedAt, IDEMPOTENCY_DAYS),
+          },
+        });
+        const response = await operation(transaction, record.generation);
+        const storedResponse = jsonInput(
+          options?.responseCodec
+            ? options.responseCodec.toStoredResponse(
+                response,
+                record.generation,
+              )
+            : response,
+        );
+        if (storedResponse === undefined) {
+          throw new Error("Idempotent response is not JSON serializable");
+        }
+        const responseStatusCode =
+          typeof options?.responseStatusCode === "function"
+            ? options.responseStatusCode(response)
+            : (options?.responseStatusCode ?? HttpStatus.OK);
+        if (
+          !Number.isInteger(responseStatusCode) ||
+          responseStatusCode < 100 ||
+          responseStatusCode > 599
+        ) {
+          throw new Error("Idempotent response status code is invalid");
+        }
+        await transaction.idempotencyRecord.update({
+          where: { id: record.id },
+          data: {
+            status: IdempotencyStatus.COMPLETED,
+            responseStatusCode,
+            responseBody: storedResponse,
+          },
+        });
+        return response;
+      },
+      { timeout: options?.transactionTimeoutMs ?? 5_000 },
+    );
   }
 }
 
