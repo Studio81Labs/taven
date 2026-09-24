@@ -404,7 +404,36 @@ export async function replaceE2eCheckoutDocumentsForBrowser(
     throw new Error("Invalid isolated legal replacement schedule");
   }
   const pool = new Pool({ connectionString: databaseUrl });
-  const client = await pool.connect();
+  let client: PoolClient;
+  try {
+    // Playwright retries reuse this disposable database. The prior attempt may
+    // have committed a future publication that cannot be replaced yet.
+    let waitedMilliseconds = 0;
+    for (;;) {
+      const pending = await pool.query<{ remaining_ms: number }>(
+        `SELECT greatest(0, coalesce(ceil(extract(epoch FROM
+           max(publication.starts_at) - clock_timestamp()) * 1000), 0))::int
+           AS remaining_ms
+         FROM legal_document_publications publication
+         JOIN legal_documents document ON document.id = publication.document_id
+         WHERE document.key IN ('terms', 'claims', 'photoConsent')
+           AND publication.cancelled_at IS NULL
+           AND publication.starts_at > clock_timestamp()`,
+      );
+      const remainingMilliseconds = pending.rows[0]!.remaining_ms;
+      if (remainingMilliseconds === 0) break;
+      if (waitedMilliseconds >= 60_000) {
+        throw new Error("Pending legal fixture publication did not activate");
+      }
+      const waitMilliseconds = Math.min(1_000, remainingMilliseconds + 50);
+      await new Promise((resolve) => setTimeout(resolve, waitMilliseconds));
+      waitedMilliseconds += waitMilliseconds;
+    }
+    client = await pool.connect();
+  } catch (error) {
+    await pool.end();
+    throw error;
+  }
   try {
     await client.query("BEGIN");
     const documents = await client.query<{

@@ -933,6 +933,24 @@ test.describe("Real API Integration Journey", () => {
     ).toBeVisible();
   });
 
+  test("waits out a pending legal publication before a fixture retry", async () => {
+    test.skip(
+      process.env.INTEGRATION_MUTABLE_FIXTURES !== "true",
+      "Requires the isolated mutable legal publication fixture",
+    );
+    test.setTimeout(30_000);
+    const databaseUrl = process.env.DATABASE_URL!;
+    const pending = await replaceE2eCheckoutDocumentsForBrowser(
+      databaseUrl,
+      2_000,
+    );
+    const retried = await replaceE2eCheckoutDocumentsForBrowser(databaseUrl);
+    for (const key of ["terms", "claims", "photoConsent"] as const) {
+      expect(retried[key].previousRevision).toBe(pending[key].revision);
+      expect(retried[key].previousContentHash).toBe(pending[key].contentHash);
+    }
+  });
+
   test("requires fresh consent and binding after real legal revision replacement", async ({
     page,
     browser,
