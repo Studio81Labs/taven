@@ -3565,6 +3565,213 @@ describe("QuoteRequest and tokenized individual offers", () => {
     }
   }, 30_000);
 
+  it("rejects cancellation and stale request after their lock waits cross publication start", async () => {
+    const document = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "privacy" },
+    });
+    const previousPublication =
+      await prisma.legalDocumentPublication.findFirstOrThrow({
+        where: {
+          documentId: document.id,
+          cancelledAt: null,
+          startsAt: { lte: new Date() },
+          OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }],
+        },
+        orderBy: { startsAt: "desc" },
+      });
+    const latestRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { documentId: document.id },
+      orderBy: { sequence: "desc" },
+    });
+    const title = "Scheduled privacy revision for cancellation boundary";
+    const summary =
+      "A scheduled notice used by the cancellation race regression.";
+    const sections = [{ title: "Privacy", paragraphs: ["Updated notice."] }];
+    const nextRevision = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: document.id,
+        sequence: latestRevision.sequence + 1,
+        editVersion: 1,
+        status: "APPROVED",
+        contentVersion: 1,
+        title,
+        summary,
+        sections,
+        contentHash: computeLegalRevisionContentHash({
+          contentVersion: 1,
+          title,
+          summary,
+          sections,
+        }),
+        revisionCode: `privacy-cancel-boundary-${randomUUID()}`,
+        effectiveAt: new Date(Date.now() - 1_000),
+        approvalEvidence: "Scheduled privacy cancellation E2E fixture",
+        approvedBy: operator.operatorId,
+        approvedAt: new Date(),
+      },
+    });
+    const startsAt = new Date((await databaseNow(prisma)).getTime() + 12_000);
+    const scheduled = await legalDocuments.publishRevision(
+      operator,
+      "privacy",
+      nextRevision.id,
+      {
+        expectedGeneration: document.generation,
+        startsAt: startsAt.toISOString(),
+        reason: "Scheduled privacy cancellation E2E fixture",
+        reasonCode: "E2E_PRIVACY_CANCEL_BOUNDARY",
+      },
+      key("privacy-cancel-boundary-publish"),
+    );
+    let releaseDocument!: () => void;
+    const documentMayUnlock = new Promise<void>((resolve) => {
+      releaseDocument = resolve;
+    });
+    let documentLocked!: () => void;
+    const documentIsLocked = new Promise<void>((resolve) => {
+      documentLocked = resolve;
+    });
+    const holdingDocument = prisma.$transaction(
+      async (transaction) => {
+        await transaction.$queryRaw`
+          SELECT key FROM "legal_documents" WHERE key = 'privacy' FOR UPDATE
+        `;
+        documentLocked();
+        await documentMayUnlock;
+      },
+      { timeout: 20_000 },
+    );
+    const cancellationKey = key("privacy-cancel-boundary-cancel");
+    const staleKey = key("privacy-cancel-boundary-request");
+    const staleBody = requestInput("privacy-cancel-boundary-stale");
+    let cancellation: Promise<unknown> | undefined;
+    let staleRequest: Promise<unknown> | undefined;
+    try {
+      await Promise.race([documentIsLocked, holdingDocument]);
+      await vi.waitFor(
+        async () => {
+          expect((await databaseNow(prisma)).getTime()).toBeGreaterThanOrEqual(
+            startsAt.getTime() - 3_000,
+          );
+        },
+        { timeout: 15_000, interval: 50 },
+      );
+      cancellation = legalDocuments
+        .cancelPublication(
+          operator,
+          "privacy",
+          scheduled.id,
+          {
+            expectedGeneration: document.generation + 1,
+            reason: "Cancellation blocked across scheduled start",
+            reasonCode: "E2E_CANCEL_AFTER_START",
+          },
+          cancellationKey,
+        )
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      staleRequest = quotes
+        .createRequest(staleBody, "198.51.100.103", staleKey)
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      await vi.waitFor(
+        async () => {
+          const rows = await prisma.$queryRaw<Array<{ blocked: bigint }>>`
+            SELECT count(*)::bigint AS blocked
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND query LIKE '%FROM "legal_documents"%'
+              AND (query LIKE '%FOR UPDATE%' OR query LIKE '%FOR SHARE%')
+          `;
+          expect(rows[0]?.blocked).toBeGreaterThanOrEqual(2n);
+        },
+        { timeout: 2_000, interval: 25 },
+      );
+      expect((await databaseNow(prisma)).getTime()).toBeLessThan(
+        startsAt.getTime(),
+      );
+      await vi.waitFor(
+        async () => {
+          expect((await databaseNow(prisma)).getTime()).toBeGreaterThanOrEqual(
+            startsAt.getTime(),
+          );
+        },
+        { timeout: 5_000, interval: 25 },
+      );
+      releaseDocument();
+      await holdingDocument;
+      await expect(cancellation).resolves.toMatchObject({
+        status: 409,
+        response: {
+          message: "Cannot cancel a publication that has already started",
+        },
+      });
+      await expect(staleRequest).resolves.toMatchObject({
+        status: 503,
+        response: { code: "LAUNCH_APPROVAL_REQUIRED" },
+      });
+      await expect(
+        prisma.legalDocumentPublication.findUniqueOrThrow({
+          where: { id: scheduled.id },
+          select: { cancelledAt: true },
+        }),
+      ).resolves.toEqual({ cancelledAt: null });
+      await expect(
+        prisma.legalDocument.findUniqueOrThrow({
+          where: { id: document.id },
+          select: { generation: true },
+        }),
+      ).resolves.toEqual({ generation: document.generation + 1 });
+      await expect(
+        prisma.customer.count({ where: { email: staleBody.contact.email } }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.legalAcceptanceDecision.count({
+          where: { commandIdentity: staleKey },
+        }),
+      ).resolves.toBe(0);
+      for (const [namespace, idempotencyKey] of [
+        ["legal-document", cancellationKey],
+        ["quote-request.create", staleKey],
+      ] as const) {
+        await expect(
+          prisma.idempotencyRecord.count({
+            where: { namespace, idempotencyKey },
+          }),
+        ).resolves.toBe(0);
+      }
+    } finally {
+      releaseDocument();
+      await holdingDocument.catch(() => undefined);
+      await cancellation?.catch(() => undefined);
+      await staleRequest?.catch(() => undefined);
+      await prisma.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          "SET LOCAL session_replication_role = 'replica'",
+        );
+        await transaction.$executeRaw`
+          DELETE FROM legal_document_publications
+          WHERE id = ${scheduled.id}::uuid
+        `;
+        await transaction.$executeRaw`
+          UPDATE legal_document_publications
+          SET ends_at = ${previousPublication.endsAt}
+          WHERE id = ${previousPublication.id}::uuid
+        `;
+        await transaction.$executeRaw`
+          UPDATE legal_documents
+          SET generation = ${document.generation}
+          WHERE id = ${document.id}::uuid
+        `;
+      });
+    }
+  }, 30_000);
+
   function requestInput(scope: string) {
     return {
       description: `A detailed individual quote request for ${scope}`,
