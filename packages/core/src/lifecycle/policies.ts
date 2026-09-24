@@ -8798,7 +8798,7 @@ export const quoteRequestPolicy: TransitionPolicy<QuoteRequestStatus> = {
       if (
         typeof reason !== "string" ||
         reason.trim().length === 0 ||
-        reason.length > 1000 ||
+        Array.from(reason).length > 1000 ||
         typeof reasonCode !== "string" ||
         !/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode) ||
         command.context?.declineHasIssuedQuote !== false

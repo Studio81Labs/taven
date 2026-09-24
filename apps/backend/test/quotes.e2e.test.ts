@@ -633,10 +633,27 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(request.rejectedAt).toEqual(request.slaRespondedAt);
     expect(request.rejectionReason).toBe(body.reason);
     expect(audit).toHaveLength(1);
-    expect(audit[0]?.payload).toMatchObject({
+    expect(audit[0]).toMatchObject({
       reasonCode: body.reasonCode,
       reason: body.reason,
+      payload: { operation: "decline", status: "REJECTED" },
     });
+    const auditRead = await apiJson<{
+      items: Array<{ reason: string; reasonCode: string; payload: unknown }>;
+    }>(
+      `admin/audit-events?quoteRequestId=${requestId}&eventType=quote_request.declined`,
+      {
+        headers: operatorHeaders(false),
+      },
+    );
+    expect(auditRead.response.status).toBe(200);
+    expect(auditRead.body.items).toEqual([
+      expect.objectContaining({
+        reason: body.reason,
+        reasonCode: body.reasonCode,
+        payload: { operation: "decline", status: "REJECTED" },
+      }),
+    ]);
     expect(legal.length).toBeGreaterThan(0);
     expect(attachments.scopeId).toBe(requestId);
     expect(quoteCount).toBe(0);
@@ -688,6 +705,30 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(request.status).toBe(
       outcomes[0]?.status === "fulfilled" ? "IN_REVIEW" : "REJECTED",
     );
+  });
+
+  it("accepts a decline reason up to 1000 Unicode code points", async () => {
+    const created = await quotes.createRequest(
+      requestInput("decline-unicode"),
+      "198.51.100.178",
+      key("decline-unicode-create"),
+    );
+    const reason = "🙂".repeat(501);
+    const declined = await quotes.declineRequest(
+      operator,
+      created.requestId,
+      { expectedStatus: "NEW", reason, reasonCode: "UNFULFILLABLE" },
+      key("decline-unicode-command"),
+    );
+    expect(declined.status).toBe("REJECTED");
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        quoteRequestId: created.requestId,
+        eventType: "quote_request.declined",
+      },
+    });
+    expect(audit.reason).toBe(reason);
+    expect(audit.reasonCode).toBe("UNFULFILLABLE");
   });
 
   it("gives offer issuance and decline one legal winner", async () => {

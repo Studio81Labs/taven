@@ -11232,6 +11232,18 @@ describe("v0 lifecycle policy tables", () => {
           context: { ...command.context, declineReasonCode: "bad code" },
         }),
       ).toThrow(TransitionGuardError);
+      expect(
+        transition(quoteRequestPolicy, {
+          ...command,
+          context: { ...command.context, declineReason: "🙂".repeat(1_000) },
+        }).kind,
+      ).toBe("changed");
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          ...command,
+          context: { ...command.context, declineReason: "🙂".repeat(1_001) },
+        }),
+      ).toThrow(TransitionGuardError);
       expect(isTerminal(quoteRequestPolicy, "rejected")).toBe(true);
     },
   );

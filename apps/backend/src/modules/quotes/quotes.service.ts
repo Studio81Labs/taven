@@ -771,7 +771,7 @@ export class QuotesService {
       throw new BadRequestException("expectedStatus is invalid");
     }
     const reason = typeof input?.reason === "string" ? input.reason.trim() : "";
-    if (!reason || reason.length > 1000) {
+    if (!reason || Array.from(reason).length > 1000) {
       throw new BadRequestException(
         "reason must be nonblank and at most 1000 characters",
       );
@@ -827,12 +827,9 @@ export class QuotesService {
           eventType: "quote_request.declined",
           idempotencyKey: commandKey,
           correlationId: resultId,
-          payload: {
-            operation: "decline",
-            status: "REJECTED",
-            reason,
-            reasonCode,
-          },
+          reason,
+          reasonCode,
+          payload: { operation: "decline", status: "REJECTED" },
         });
         return { requestId, status: "REJECTED" };
       },
