@@ -238,6 +238,14 @@ describe("operator quote-request page", () => {
       ]),
     };
     const rootAttachments = { findMany: vi.fn() };
+    const transactionModels = {
+      findMany: vi
+        .fn()
+        .mockResolvedValue([
+          { requestId, modelFileId: "88888888-8888-4888-8888-888888888888" },
+        ]),
+    };
+    const transactionOrigins = { findMany: vi.fn().mockResolvedValue([]) };
     const transaction = {
       $executeRaw: vi.fn().mockResolvedValue(undefined),
       $queryRaw: vi
@@ -253,6 +261,8 @@ describe("operator quote-request page", () => {
           ]),
       },
       photoAsset: transactionAttachments,
+      quoteRequestModel: transactionModels,
+      individualOrderOrigin: transactionOrigins,
     };
     const prisma = {
       $transaction: vi.fn(
@@ -260,6 +270,8 @@ describe("operator quote-request page", () => {
           work(transaction),
       ),
       photoAsset: rootAttachments,
+      quoteRequestModel: { findMany: vi.fn() },
+      individualOrderOrigin: { findMany: vi.fn() },
     };
     const service = new QuotesService(prisma as never, {} as never);
 
@@ -284,13 +296,31 @@ describe("operator quote-request page", () => {
       }),
     );
     expect(rootAttachments.findMany).not.toHaveBeenCalled();
+    expect(transactionModels.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { requestId: { in: [requestId, secondRequestId] } },
+      }),
+    );
+    expect(transactionOrigins.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          quote: {
+            quoteRequestId: { in: [requestId, secondRequestId] },
+          },
+        },
+      }),
+    );
+    expect(prisma.quoteRequestModel.findMany).not.toHaveBeenCalled();
+    expect(prisma.individualOrderOrigin.findMany).not.toHaveBeenCalled();
     expect(page.items).toMatchObject([
       {
         requestId,
+        attachedModelFileIds: ["88888888-8888-4888-8888-888888888888"],
         attachments: [{ id: "66666666-6666-4666-8666-666666666666" }],
       },
       {
         requestId: secondRequestId,
+        attachedModelFileIds: [],
         attachments: [{ id: "77777777-7777-4777-8777-777777777777" }],
       },
     ]);
