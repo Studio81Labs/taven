@@ -60,7 +60,15 @@ const error = ref("");
 const success = ref("");
 const busy = ref(false);
 const loading = ref(false);
+const listRefreshRequired = ref(false);
 const inventoryRefreshRequired = ref(false);
+const resourceWriteBlocked = computed(
+  () =>
+    busy.value ||
+    loading.value ||
+    listRefreshRequired.value ||
+    inventoryRefreshRequired.value,
+);
 const availabilityRefreshRequired = ref(false);
 const reason = ref("");
 const form = ref<
@@ -121,6 +129,7 @@ async function refresh(): Promise<void> {
     calibrationCursor.value = calibrationData.nextCursor ?? null;
     capabilities.value = capabilityData.items;
     capabilityCursor.value = capabilityData.nextCursor ?? null;
+    listRefreshRequired.value = false;
     if (selectedInventoryId.value)
       await inspectInventory(selectedInventoryId.value);
     if (availabilityMachineId.value && !availabilityDirty.value)
@@ -323,13 +332,7 @@ async function run<Body>(
   write: (body: Readonly<Body>, key: string) => Promise<unknown>,
   message: string,
 ): Promise<void> {
-  if (
-    busy.value ||
-    loading.value ||
-    inventoryRefreshRequired.value ||
-    !canWrite.value
-  )
-    return;
+  if (resourceWriteBlocked.value || !canWrite.value) return;
   busy.value = true;
   error.value = "";
   success.value = "";
@@ -337,6 +340,7 @@ async function run<Body>(
   try {
     await journal.submit(action, body, write);
     writeConfirmed = true;
+    listRefreshRequired.value = true;
     if (selectedInventoryId.value) {
       inventoryRefreshRequired.value = true;
       ++inventoryReadGeneration;
@@ -768,25 +772,19 @@ onMounted(() => void refresh());
           <template v-if="canWrite">
             <button
               type="button"
-              :disabled="
-                busy || loading || inventoryRefreshRequired || !reason.trim()
-              "
+              :disabled="resourceWriteBlocked || !reason.trim()"
               @click="machineStatus(machine.id, 'ACTIVE')"
             >
               Aktivní</button
             ><button
               type="button"
-              :disabled="
-                busy || loading || inventoryRefreshRequired || !reason.trim()
-              "
+              :disabled="resourceWriteBlocked || !reason.trim()"
               @click="machineStatus(machine.id, 'MAINTENANCE')"
             >
               Údržba</button
             ><button
               type="button"
-              :disabled="
-                busy || loading || inventoryRefreshRequired || !reason.trim()
-              "
+              :disabled="resourceWriteBlocked || !reason.trim()"
               @click="machineStatus(machine.id, 'DISABLED')"
             >
               Vypnout
@@ -805,7 +803,7 @@ onMounted(() => void refresh());
       <button
         v-if="canWrite"
         type="button"
-        :disabled="busy || loading"
+        :disabled="resourceWriteBlocked"
         @click="form = 'machine'"
       >
         Registrovat stroj
@@ -910,17 +908,13 @@ onMounted(() => void refresh());
           <template v-if="canWrite">
             <button
               type="button"
-              :disabled="
-                busy || loading || inventoryRefreshRequired || !reason.trim()
-              "
+              :disabled="resourceWriteBlocked || !reason.trim()"
               @click="calibrationAction(item.id, 'activate')"
             >
               Aktivovat</button
             ><button
               type="button"
-              :disabled="
-                busy || loading || inventoryRefreshRequired || !reason.trim()
-              "
+              :disabled="resourceWriteBlocked || !reason.trim()"
               @click="calibrationAction(item.id, 'retire')"
             >
               Vyřadit
@@ -939,7 +933,7 @@ onMounted(() => void refresh());
       <button
         v-if="canWrite"
         type="button"
-        :disabled="busy || loading"
+        :disabled="resourceWriteBlocked"
         @click="form = 'calibration'"
       >
         Nová kalibrace
@@ -976,7 +970,7 @@ onMounted(() => void refresh());
       <button
         v-if="canWrite"
         type="button"
-        :disabled="busy || loading"
+        :disabled="resourceWriteBlocked"
         @click="openReceipt"
       >
         Přijmout novou šarži
@@ -1012,41 +1006,31 @@ onMounted(() => void refresh());
         <div class="operator-actions">
           <button
             type="button"
-            :disabled="
-              busy || loading || inventoryRefreshRequired || !reason.trim()
-            "
+            :disabled="resourceWriteBlocked || !reason.trim()"
             @click="mount('MOUNTED')"
           >
             Nasadit</button
           ><button
             type="button"
-            :disabled="
-              busy || loading || inventoryRefreshRequired || !reason.trim()
-            "
+            :disabled="resourceWriteBlocked || !reason.trim()"
             @click="mount('UNMOUNTED')"
           >
             Sundat</button
           ><button
             type="button"
-            :disabled="
-              busy || loading || inventoryRefreshRequired || !reason.trim()
-            "
+            :disabled="resourceWriteBlocked || !reason.trim()"
             @click="changeInventoryStatus('AVAILABLE')"
           >
             Dostupné</button
           ><button
             type="button"
-            :disabled="
-              busy || loading || inventoryRefreshRequired || !reason.trim()
-            "
+            :disabled="resourceWriteBlocked || !reason.trim()"
             @click="changeInventoryStatus('DEPLETED')"
           >
             Vyčerpané</button
           ><button
             type="button"
-            :disabled="
-              busy || loading || inventoryRefreshRequired || !reason.trim()
-            "
+            :disabled="resourceWriteBlocked || !reason.trim()"
             @click="changeInventoryStatus('RETIRED')"
           >
             Vyřadit
@@ -1058,9 +1042,7 @@ onMounted(() => void refresh());
             <input v-model="adjustmentMilligrams" required /></label
           ><button
             type="submit"
-            :disabled="
-              busy || loading || inventoryRefreshRequired || !reason.trim()
-            "
+            :disabled="resourceWriteBlocked || !reason.trim()"
           >
             Upravit množství
           </button>
@@ -1069,14 +1051,14 @@ onMounted(() => void refresh());
           <button
             v-if="inventory.receiptCoverage === 'UNKNOWN'"
             type="button"
-            :disabled="busy || loading"
+            :disabled="resourceWriteBlocked"
             @click="openLegacyReceipt"
           >
             Doplnit počáteční doklad</button
           ><button
             v-if="currentReceipt"
             type="button"
-            :disabled="busy || loading"
+            :disabled="resourceWriteBlocked"
             @click="openCorrection"
           >
             Opravit doklad
@@ -1223,9 +1205,7 @@ onMounted(() => void refresh());
         <button
           type="submit"
           :disabled="
-            busy ||
-            loading ||
-            inventoryRefreshRequired ||
+            resourceWriteBlocked ||
             ((form === 'correction' || form === 'legacy-receipt') &&
               !reason.trim())
           "

@@ -295,12 +295,35 @@ test("creating a price revision leaves the selected policy untouched", async ({
   };
   await mockSession(page);
   await mockCatalog(page, state);
+  let releasePriceWrite: (() => void) | undefined;
+  await page.route("**/admin/catalog/price-lists", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    state.createdPriceRevisions?.push(
+      (route.request().postDataJSON() as { revision: string }).revision,
+    );
+    await new Promise<void>((resolve) => {
+      releasePriceWrite = resolve;
+    });
+    await route.fulfill({ json: { id: "created-price" } });
+  });
   await page.goto("/katalog");
   await page.getByRole("button", { name: "Vytvořit revizi ceníku" }).click();
   await page.getByLabel("Označení revize").fill("v3");
   await page
     .getByRole("button", { name: "Vytvořit revizi", exact: true })
     .click();
+  await expect.poll(() => Boolean(releasePriceWrite)).toBe(true);
+  for (const label of [
+    "Vytvořit revizi ceníku",
+    "Nová revize profilu",
+    "Nová revize profilu stroje",
+    "Nová revize konfigurace",
+    "Nová schopnost stroje",
+  ])
+    await expect(
+      page.getByRole("button", { name: label, exact: true }),
+    ).toBeDisabled();
+  releasePriceWrite?.();
   await expect(
     page.getByText("Aktuálně vybraná verze: 1", { exact: false }),
   ).toBeVisible();

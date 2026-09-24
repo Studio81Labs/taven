@@ -349,6 +349,8 @@ test("a confirmed receipt closes its form when the following read fails", async 
   const machineId = "00000000-0000-0000-0000-000000000003";
   let failReads = false;
   let receiptPosts = 0;
+  let machineStatusPosts = 0;
+  let machineStatus = "ACTIVE";
   let releaseReceipt: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
     route.fulfill({
@@ -379,6 +381,14 @@ test("a confirmed receipt closes its form when the following read fails", async 
       });
       failReads = true;
       await route.fulfill({ json: { id: "new-receipt" } });
+    } else if (
+      route.request().method() === "POST" &&
+      path.endsWith(`/machines/${machineId}/status`)
+    ) {
+      machineStatusPosts += 1;
+      machineStatus = "MAINTENANCE";
+      failReads = true;
+      await route.fulfill({ json: { id: machineId, status: machineStatus } });
     } else if (failReads) {
       await route.fulfill({ status: 503, json: { message: "read outage" } });
     } else if (path.endsWith("/machines")) {
@@ -392,7 +402,7 @@ test("a confirmed receipt closes its form when the following read fails", async 
               code: "M1",
               displayName: "Stroj 1",
               installedNozzleMicrometers: 400,
-              status: "ACTIVE",
+              status: machineStatus,
             },
           ],
         },
@@ -435,6 +445,19 @@ test("a confirmed receipt closes its form when the following read fails", async 
     page.getByRole("button", { name: "Zapsat", exact: true }),
   ).toHaveCount(0);
   expect(receiptPosts).toBe(1);
+  failReads = false;
+  await page.getByRole("button", { name: "Obnovit zdroje" }).click();
+  await page.getByRole("textbox", { name: "Důvod změny" }).fill("Servis");
+  const maintenance = page.getByRole("button", { name: "Údržba" });
+  await maintenance.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Zápis byl potvrzen, ale obnovení přehledu selhalo",
+  );
+  await expect(maintenance).toBeDisabled();
+  expect(machineStatusPosts).toBe(1);
+  failReads = false;
+  await page.getByRole("button", { name: "Obnovit zdroje" }).click();
+  await expect(maintenance).toBeEnabled();
 });
 
 test("a confirmed adjustment cannot be repeated until inventory detail refreshes", async ({

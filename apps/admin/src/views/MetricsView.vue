@@ -332,6 +332,7 @@ async function recordEvidence(): Promise<void> {
 }
 
 function editEvidence(kind: "cost" | "spend", id = ""): void {
+  if (busy.value) return;
   draftOrderId.value = orderId.value;
   amountMinor.value = "";
   sourceKey.value = "";
@@ -887,6 +888,7 @@ onMounted(() => void refresh());
           <button
             v-if="canWrite && item.isCurrent"
             type="button"
+            :disabled="busy"
             @click="editEvidence('cost', item.id)"
           >
             Opravit
@@ -901,7 +903,12 @@ onMounted(() => void refresh());
       >
         Další náklady
       </button>
-      <button v-if="canWrite" type="button" @click="editEvidence('cost')">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="busy"
+        @click="editEvidence('cost')"
+      >
         Zapsat skutečný náklad
       </button>
     </section>
@@ -917,6 +924,7 @@ onMounted(() => void refresh());
           <button
             v-if="canWrite && item.isCurrent"
             type="button"
+            :disabled="busy"
             @click="editEvidence('spend', item.id)"
           >
             Opravit
@@ -931,7 +939,12 @@ onMounted(() => void refresh());
       >
         Další výdaje
       </button>
-      <button v-if="canWrite" type="button" @click="editEvidence('spend')">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="busy"
+        @click="editEvidence('spend')"
+      >
         Zapsat akviziční výdaj
       </button>
     </section>
@@ -1000,7 +1013,9 @@ onMounted(() => void refresh());
             "
         /></label>
         <button type="submit" :disabled="busy">Zapsat doklad</button
-        ><button type="button" @click="entry = ''">Zavřít</button>
+        ><button type="button" :disabled="busy" @click="entry = ''">
+          Zavřít
+        </button>
       </form>
     </section>
   </section>

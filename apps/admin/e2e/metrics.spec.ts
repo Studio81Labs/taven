@@ -271,10 +271,14 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   expect(orderQueries[1]?.get("channel")).toBeNull();
   releaseOrderPage?.();
   let releaseRefresh: (() => void) | undefined;
+  let holdRefresh = true;
   await page.route(/\/admin\/metrics\?/, async (route) => {
-    await new Promise<void>((resolve) => {
-      releaseRefresh = resolve;
-    });
+    if (holdRefresh) {
+      holdRefresh = false;
+      await new Promise<void>((resolve) => {
+        releaseRefresh = resolve;
+      });
+    }
     await route.fulfill({ json: report });
   });
   await page.getByRole("button", { name: "Načíst report" }).click();
@@ -406,4 +410,32 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
       ),
   );
   await expect(page.getByRole("alert")).toHaveCount(0);
+  await orderInput.fill(costOrderId);
+  await page.getByRole("button", { name: "Načíst", exact: true }).click();
+  await expect(costs.getByRole("button", { name: "Opravit" })).toBeVisible();
+  let releaseSpendWrite: (() => void) | undefined;
+  await page.route("**/admin/acquisition-spend", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await new Promise<void>((resolve) => {
+      releaseSpendWrite = resolve;
+    });
+    await route.fulfill({ json: { id: "new-spend" } });
+  });
+  await spend.getByRole("button", { name: "Opravit" }).click();
+  await spendEvidence
+    .getByRole("textbox", { name: "Jedinečný klíč zdroje" })
+    .fill("new-spend-key");
+  await spendEvidence.getByRole("textbox", { name: /Důvod/ }).fill("Oprava");
+  await spendEvidence.getByRole("button", { name: "Zapsat doklad" }).click();
+  await expect.poll(() => Boolean(releaseSpendWrite)).toBe(true);
+  await expect(costs.getByRole("button", { name: "Opravit" })).toBeDisabled();
+  await expect(
+    costs.getByRole("button", { name: "Zapsat skutečný náklad" }),
+  ).toBeDisabled();
+  await expect(spend.getByRole("button", { name: "Opravit" })).toBeDisabled();
+  await expect(
+    spend.getByRole("button", { name: "Zapsat akviziční výdaj" }),
+  ).toBeDisabled();
+  releaseSpendWrite?.();
+  await expect(page.locator(".form-success")).toContainText("Důkaz byl zapsán");
 });

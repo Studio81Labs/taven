@@ -358,6 +358,7 @@ async function inspectCapability(id: string): Promise<void> {
 }
 
 function edit(type: typeof editor.value): void {
+  if (busy.value || loading.value) return;
   if (
     type === "price" &&
     (priceDetailPending.value ||
@@ -837,6 +838,8 @@ onUnmounted(() => noticePager.dispose());
         v-if="canWrite"
         type="button"
         :disabled="
+          busy ||
+          loading ||
           priceDetailPending ||
           !selectedPrice ||
           selectedPrice.id !== requestedPriceId
@@ -895,6 +898,8 @@ onUnmounted(() => noticePager.dispose());
         v-if="canWrite"
         type="button"
         :disabled="
+          busy ||
+          loading ||
           referenceDetailPending ||
           (!!requestedReferenceId &&
             selectedReference?.id !== requestedReferenceId)
@@ -956,6 +961,8 @@ onUnmounted(() => noticePager.dispose());
         v-if="canWrite"
         type="button"
         :disabled="
+          busy ||
+          loading ||
           profileDetailPending ||
           (!!requestedProfileId && selectedProfile?.id !== requestedProfileId)
         "
@@ -996,6 +1003,8 @@ onUnmounted(() => noticePager.dispose());
         v-if="canWrite"
         type="button"
         :disabled="
+          busy ||
+          loading ||
           configDetailPending ||
           (!!requestedConfigId && selectedConfig?.id !== requestedConfigId)
         "
@@ -1031,7 +1040,12 @@ onUnmounted(() => noticePager.dispose());
       >
         Další schopnosti
       </button>
-      <button v-if="canWrite" type="button" @click="edit('capability')">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="busy || loading"
+        @click="edit('capability')"
+      >
         Nová schopnost stroje
       </button>
     </section>
@@ -1181,7 +1195,9 @@ onUnmounted(() => noticePager.dispose());
         <div class="operator-actions">
           <button type="submit" :disabled="busy || loading">
             Vytvořit revizi</button
-          ><button type="button" @click="editor = ''">Zavřít</button>
+          ><button type="button" :disabled="busy" @click="editor = ''">
+            Zavřít
+          </button>
         </div>
       </form>
     </section>
