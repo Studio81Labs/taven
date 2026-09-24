@@ -137,6 +137,25 @@ describe("assisted request model preparation", () => {
     );
     expect(foreign.response.status).toBe(404);
 
+    const unsupported = await api(
+      `admin/quote-requests/${requestId}/model-uploads`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          format: "STEP",
+          originalFilename: "part.step",
+          contentType: "application/step",
+          sizeBytes: bytes.byteLength,
+          sha256: sha256(bytes),
+        }),
+      },
+    );
+    expect(unsupported.response.status).toBe(400);
+
     const initiated = await api<{
       uploadId: string;
       assetId: string;

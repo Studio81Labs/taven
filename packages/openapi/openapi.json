@@ -4748,6 +4748,48 @@
         ],
         "type": "object"
       },
+      "InitiateOperatorModelUploadDto": {
+        "properties": {
+          "contentType": {
+            "example": "model/stl",
+            "maxLength": 100,
+            "type": "string"
+          },
+          "format": {
+            "enum": [
+              "STL",
+              "3MF"
+            ],
+            "example": "STL",
+            "type": "string"
+          },
+          "originalFilename": {
+            "example": "bracket.stl",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "sha256": {
+            "example": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "maxLength": 64,
+            "minLength": 64,
+            "type": "string"
+          },
+          "sizeBytes": {
+            "example": 128000,
+            "maximum": 104857600,
+            "minimum": 1,
+            "type": "number"
+          }
+        },
+        "required": [
+          "originalFilename",
+          "contentType",
+          "sizeBytes",
+          "sha256",
+          "format"
+        ],
+        "type": "object"
+      },
       "InitiatePhotoUploadDto": {
         "properties": {
           "contentType": {
@@ -5206,6 +5248,7 @@
           }
         },
         "required": [
+          "expectedSelectionVersion",
           "summary",
           "expiresAt",
           "priceListId",
@@ -18798,7 +18841,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/InitiateModelUploadDto"
+                "$ref": "#/components/schemas/InitiateOperatorModelUploadDto"
               }
             }
           },

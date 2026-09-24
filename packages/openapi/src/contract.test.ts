@@ -74,6 +74,14 @@ describe("OpenAPI artifact", () => {
       string,
       unknown
     >;
+    expect(schemas.IssueOfferDto?.required).toContain(
+      "expectedSelectionVersion",
+    );
+    expect(
+      schemas.InitiateOperatorModelUploadDto?.properties?.format,
+    ).toMatchObject({
+      enum: ["STL", "3MF"],
+    });
     expect(issueOffer.items).toMatchObject({
       type: "array",
       items: { $ref: "#/components/schemas/ModelOfferItemDto" },

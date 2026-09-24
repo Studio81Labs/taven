@@ -417,11 +417,12 @@ export class OfferPaymentPolicyDto {
 }
 
 export class IssueOfferDto {
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: "integer",
     minimum: 1,
     maximum: POSTGRES_INTEGER_MAX,
   })
+  // Fresh commands require this; completed legacy idempotency replays may omit it.
   expectedSelectionVersion?: number;
 
   @ApiProperty({

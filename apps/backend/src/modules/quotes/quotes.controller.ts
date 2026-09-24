@@ -37,7 +37,7 @@ import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { RequireOperatorPermissions } from "../admin-access/require-operator-permissions.decorator";
 import {
   ConfirmedUploadResponseDto,
-  InitiateModelUploadDto,
+  InitiateOperatorModelUploadDto,
   SignedDownloadResponseDto,
   UploadIntentResponseDto,
 } from "../storage/storage.dto";
@@ -331,12 +331,12 @@ export class OperatorQuoteRequestsController {
   @Post(":requestId/model-uploads")
   @ApiOperation({ summary: "Initiate a request-scoped operator model upload" })
   @ApiParam({ name: "requestId", type: String, format: "uuid" })
-  @ApiBody({ type: InitiateModelUploadDto })
+  @ApiBody({ type: InitiateOperatorModelUploadDto })
   @ApiCreatedResponse({ type: UploadIntentResponseDto })
   initiateModelUpload(
     @CurrentOperator() operator: OperatorContext,
     @Param("requestId") requestId: string,
-    @Body() body: InitiateModelUploadDto,
+    @Body() body: InitiateOperatorModelUploadDto,
   ): Promise<UploadIntentResponseDto> {
     return this.uploads.initiateOperatorModelUpload(operator, requestId, body);
   }

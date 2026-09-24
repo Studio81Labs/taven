@@ -3699,6 +3699,21 @@ export interface components {
             /** @example 128000 */
             sizeBytes: number;
         };
+        InitiateOperatorModelUploadDto: {
+            /** @example model/stl */
+            contentType: string;
+            /**
+             * @example STL
+             * @enum {string}
+             */
+            format: "STL" | "3MF";
+            /** @example bracket.stl */
+            originalFilename: string;
+            /** @example aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa */
+            sha256: string;
+            /** @example 128000 */
+            sizeBytes: number;
+        };
         InitiatePhotoUploadDto: {
             /** @enum {string} */
             contentType: "image/jpeg" | "image/png" | "image/webp";
@@ -3799,7 +3814,7 @@ export interface components {
             contractTotalMinor: number;
             deliveryDestination: components["schemas"]["OfferDeliveryDestinationDto"];
             depositMinor: number;
-            expectedSelectionVersion?: number;
+            expectedSelectionVersion: number;
             /** Format: date-time */
             expiresAt: string;
             inputSnapshot: {
@@ -9015,7 +9030,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["InitiateModelUploadDto"];
+                "application/json": components["schemas"]["InitiateOperatorModelUploadDto"];
             };
         };
         responses: {

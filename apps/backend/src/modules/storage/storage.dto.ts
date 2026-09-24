@@ -1,4 +1,4 @@
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, OmitType } from "@nestjs/swagger";
 
 export class InitiateModelUploadDto {
   @ApiProperty({ type: String, enum: ["STL", "3MF", "STEP"], example: "STL" })
@@ -25,6 +25,14 @@ export class InitiateModelUploadDto {
     maxLength: 64,
   })
   sha256!: string;
+}
+
+export class InitiateOperatorModelUploadDto extends OmitType(
+  InitiateModelUploadDto,
+  ["format"] as const,
+) {
+  @ApiProperty({ type: String, enum: ["STL", "3MF"], example: "STL" })
+  format!: "STL" | "3MF";
 }
 
 export class InitiatePhotoUploadDto {
