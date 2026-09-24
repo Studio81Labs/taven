@@ -139,6 +139,12 @@ export class QuoteRequestReferencePreparationDto {
 
   @ApiProperty({ type: [String], description: "Pending worker-v2 job IDs" })
   pendingJobIds!: string[];
+
+  @ApiProperty({
+    type: [String],
+    description: "Terminally failed worker-v2 job IDs",
+  })
+  failedJobIds!: string[];
 }
 
 export class QuoteComposerPrintConfigDto {
@@ -174,6 +180,13 @@ export class QuoteComposerDeliveryOptionDto {
   supportedCategoryIds!: readonly string[];
 }
 
+export class QuoteComposerIndividualPaymentPolicyDto {
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 36500 })
+  balancePaymentDays!: number;
+  @ApiProperty({ type: [String], minItems: 1 })
+  earnedComponentKinds!: string[];
+}
+
 export class QuoteComposerPolicyDto {
   @ApiProperty({ type: String, format: "uuid" })
   priceListId!: string;
@@ -185,6 +198,11 @@ export class QuoteComposerPolicyDto {
   taxRegime!: "NON_VAT_PAYER" | "VAT_PAYER";
   @ApiProperty({ type: "integer" })
   vatRateBasisPoints!: number;
+  @ApiProperty({
+    type: () => QuoteComposerIndividualPaymentPolicyDto,
+    nullable: true,
+  })
+  individualPaymentPolicy!: QuoteComposerIndividualPaymentPolicyDto | null;
 }
 
 export class QuoteComposerChoicesDto {

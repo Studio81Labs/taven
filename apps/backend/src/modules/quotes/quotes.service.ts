@@ -874,9 +874,7 @@ export class QuotesService {
             priceList.id,
           ))
         ) {
-          throw new BadRequestException(
-            "priceListId does not support individual split payments",
-          );
+          throw individualPaymentPolicyUnavailable();
         }
         await validateOfferItemReferences(
           transaction,
@@ -1340,16 +1338,19 @@ export class QuotesService {
       const taxPolicy = parseSellerTaxPolicy(policy.priceList.parameters);
       if (
         taxPolicy.regime !== offer.taxRegime ||
-        taxPolicy.vatRateBasisPoints !== offer.vatRateBasisPoints ||
-        !(await individualSplitPaymentPolicyIsValid(
-          transaction,
-          policy.priceListId,
-        ))
+        taxPolicy.vatRateBasisPoints !== offer.vatRateBasisPoints
       ) {
         throw new BadRequestException(
           "Offer policy does not match the selected price list",
         );
       }
+      if (
+        !(await individualSplitPaymentPolicyIsValid(
+          transaction,
+          policy.priceListId,
+        ))
+      )
+        throw individualPaymentPolicyUnavailable();
       await validateOfferItemReferences(
         transaction,
         requestId,
@@ -4133,6 +4134,13 @@ async function individualSplitPaymentPolicyIsValid(
     WHERE "id" = ${priceListId}::uuid
   `;
   return rows[0]?.valid === true;
+}
+
+function individualPaymentPolicyUnavailable(): ConflictException {
+  return new ConflictException({
+    code: "INDIVIDUAL_PAYMENT_POLICY_UNAVAILABLE",
+    message: "Selected price list has no complete individual payment policy",
+  });
 }
 
 type CoreModule = typeof import("@taven/core", {

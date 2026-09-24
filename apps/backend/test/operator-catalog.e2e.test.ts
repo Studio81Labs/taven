@@ -15,6 +15,10 @@ import {
   slicerSettingsSnapshot,
 } from "../src/modules/slicing/slicer-profile-snapshot.service";
 import {
+  canonicalJson,
+  type CanonicalJson,
+} from "../src/modules/resources/resource-identity";
+import {
   OBJECT_STORAGE,
   type ObjectStorage,
 } from "../src/modules/storage/object-storage.port";
@@ -228,10 +232,26 @@ describe("operator catalog commands", () => {
         currency_revision: { currency: "CZK", revision: "automatic-v0-czk" },
       },
     });
+    const historicalAutomaticDetail = await fetch(
+      new URL(`/admin/catalog/price-lists/${baseline.id}`, baseUrl),
+      { headers: { cookie: adminCookie } },
+    );
+    expect(historicalAutomaticDetail.status).toBe(200);
+    await expect(historicalAutomaticDetail.json()).resolves.toMatchObject({
+      parameters: baseline.parameters,
+    });
     const parameters = JSON.parse(JSON.stringify(baseline.parameters)) as {
       automaticQuote: Record<string, unknown>;
       sellerTaxPolicy: Record<string, unknown>;
+      balance_payment_days: number;
+      balance_timeout_earned_component_kinds: string[];
     };
+    parameters.balance_payment_days = 7;
+    parameters.balance_timeout_earned_component_kinds = [
+      "ITEM_PRODUCTION",
+      "ITEM_QUANTITY",
+      "ITEM_POSTPROCESSING",
+    ];
     const body = {
       currency: "CZK",
       revision: `operator-${randomUUID()}`,
@@ -265,6 +285,61 @@ describe("operator catalog commands", () => {
       id: created.id,
       parameters,
     });
+    for (const [label, invalid] of Object.entries({
+      historicalTwoKeys: baseline.parameters,
+      missingDays: {
+        ...parameters,
+        balance_payment_days: undefined,
+      },
+      nullDays: { ...parameters, balance_payment_days: null },
+      stringDays: { ...parameters, balance_payment_days: "7" },
+      fractionalDays: { ...parameters, balance_payment_days: 1.5 },
+      zeroDays: { ...parameters, balance_payment_days: 0 },
+      overflowDays: { ...parameters, balance_payment_days: 36501 },
+      missingKinds: {
+        ...parameters,
+        balance_timeout_earned_component_kinds: undefined,
+      },
+      emptyKinds: {
+        ...parameters,
+        balance_timeout_earned_component_kinds: [],
+      },
+      duplicateKinds: {
+        ...parameters,
+        balance_timeout_earned_component_kinds: [
+          "ITEM_PRODUCTION",
+          "ITEM_PRODUCTION",
+        ],
+      },
+      unknownKind: {
+        ...parameters,
+        balance_timeout_earned_component_kinds: ["UNKNOWN"],
+      },
+      nonStringKind: {
+        ...parameters,
+        balance_timeout_earned_component_kinds: [7],
+      },
+    })) {
+      const rejected = await command(
+        "/admin/catalog/price-lists",
+        { ...body, revision: `invalid-${randomUUID()}`, parameters: invalid },
+        `catalog-invalid-${randomUUID()}`,
+      );
+      expect(rejected.status, label).toBe(400);
+    }
+    const vatKind = await command(
+      "/admin/catalog/price-lists",
+      {
+        ...body,
+        revision: `vat-kind-${randomUUID()}`,
+        parameters: {
+          ...parameters,
+          balance_timeout_earned_component_kinds: ["VAT"],
+        },
+      },
+      `catalog-vat-${randomUUID()}`,
+    );
+    expect(vatKind.status).toBe(200);
     for (const revision of ["legacy-v0-czk", "legacy-v0-eur"]) {
       const legacy = await prisma.priceList.findFirstOrThrow({
         where: { revision },
@@ -368,6 +443,11 @@ describe("operator catalog commands", () => {
         where: { currency: "CZK" },
       });
     for (const unsafeParameters of [
+      { ...parameters, balance_payment_days: 0 },
+      {
+        ...parameters,
+        balance_timeout_earned_component_kinds: ["UNKNOWN"],
+      },
       {
         ...parameters,
         automaticQuote: {
@@ -443,6 +523,107 @@ describe("operator catalog commands", () => {
     ).toBe(403);
   });
 
+  it("replays completed historical two-key catalog commands without republication", async () => {
+    const legacy = await prisma.priceList.findUniqueOrThrow({
+      where: {
+        currency_revision: { currency: "CZK", revision: "automatic-v0-czk" },
+      },
+    });
+    const createBody = {
+      currency: "CZK",
+      revision: legacy.revision,
+      termsRevision: legacy.termsRevision,
+      parameters: legacy.parameters,
+    };
+    const createKey = `historical-create-${randomUUID()}`;
+    await prisma.idempotencyRecord.create({
+      data: {
+        namespace: "cat:price-list:create",
+        idempotencyKey: createKey,
+        requestFingerprint: createHash("sha256")
+          .update(
+            canonicalJson({
+              nodeId: fixture.nodeId,
+              input: createBody,
+            } as CanonicalJson),
+          )
+          .digest("hex"),
+        status: "COMPLETED",
+        responseStatusCode: 200,
+        responseBody: { id: legacy.id },
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+    const replay = await command(
+      "/admin/catalog/price-lists",
+      createBody,
+      createKey,
+    );
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toEqual({ id: legacy.id });
+    expect(
+      (
+        await command(
+          "/admin/catalog/price-lists",
+          createBody,
+          `fresh-two-key-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+
+    const selected = await prisma.commercialPolicySelection.findUniqueOrThrow({
+      where: { currency: "CZK" },
+    });
+    const activateBody = {
+      expectedSelectionVersion: selected.selectionVersion,
+      reason: "Historical activation retry",
+    };
+    const activateKey = `historical-activation-${randomUUID()}`;
+    const result = {
+      id: legacy.id,
+      currency: "CZK",
+      priceListId: legacy.id,
+      selectionVersion: selected.selectionVersion,
+    };
+    await prisma.idempotencyRecord.create({
+      data: {
+        namespace: "cat:commercial-policy:activate",
+        idempotencyKey: activateKey,
+        requestFingerprint: createHash("sha256")
+          .update(
+            canonicalJson({
+              nodeId: fixture.nodeId,
+              priceListId: legacy.id,
+              ...activateBody,
+            }),
+          )
+          .digest("hex"),
+        status: "COMPLETED",
+        responseStatusCode: 200,
+        responseBody: result,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+    const path = `/admin/catalog/price-lists/${legacy.id}/activate`;
+    const activationReplay = await command(path, activateBody, activateKey);
+    expect(activationReplay.status).toBe(200);
+    await expect(activationReplay.json()).resolves.toEqual(result);
+    expect(
+      (
+        await command(
+          path,
+          activateBody,
+          `fresh-legacy-activation-${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    await expect(
+      prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+      }),
+    ).resolves.toMatchObject(selected);
+  });
+
   it("publishes one selected list with version CAS, replay, audit and a shared-row fence", async () => {
     const original = await prisma.commercialPolicySelection.findUniqueOrThrow({
       where: { currency: "CZK" },
@@ -452,7 +633,15 @@ describe("operator catalog commands", () => {
       currency: "CZK",
       revision: `publication-${randomUUID()}`,
       termsRevision: original.priceList.termsRevision,
-      parameters: original.priceList.parameters,
+      parameters: {
+        ...(original.priceList.parameters as Record<string, unknown>),
+        balance_payment_days: 7,
+        balance_timeout_earned_component_kinds: [
+          "ITEM_PRODUCTION",
+          "ITEM_QUANTITY",
+          "ITEM_POSTPROCESSING",
+        ],
+      },
     };
     const created = await responseBody(
       command(
@@ -580,16 +769,16 @@ describe("operator catalog commands", () => {
       const same = (await sameTarget.json()) as { selectionVersion: number };
       expect(same.selectionVersion).toBe(result.selectionVersion + 1);
       const rollback = await command(
-        `/admin/catalog/price-lists/${original.priceListId}/activate`,
+        `/admin/catalog/price-lists/${created.id}/activate`,
         {
           expectedSelectionVersion: same.selectionVersion,
-          reason: "Restore baseline policy after publication test",
+          reason: "Republish complete policy for version test",
         },
         `commercial-restore-${randomUUID()}`,
       );
       expect(rollback.status).toBe(200);
       await expect(rollback.json()).resolves.toMatchObject({
-        priceListId: original.priceListId,
+        priceListId: created.id,
         selectionVersion: same.selectionVersion + 1,
       });
       const afterRollbackVersion = same.selectionVersion + 1;
@@ -603,7 +792,7 @@ describe("operator catalog commands", () => {
       const competing = await Promise.all(
         ["first", "second"].map((suffix) =>
           command(
-            `/admin/catalog/price-lists/${original.priceListId}/activate`,
+            `/admin/catalog/price-lists/${created.id}/activate`,
             {
               expectedSelectionVersion: afterRollbackVersion,
               reason: `Concurrent publication ${suffix}`,
@@ -625,7 +814,7 @@ describe("operator catalog commands", () => {
           where: { currency: "CZK" },
         }),
       ).resolves.toMatchObject({
-        priceListId: original.priceListId,
+        priceListId: created.id,
         selectionVersion: afterRollbackVersion + 1,
       });
     } finally {

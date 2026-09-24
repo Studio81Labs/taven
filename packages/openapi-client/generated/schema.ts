@@ -3841,6 +3841,10 @@ export interface components {
             /** Format: uuid */
             photoAssetId?: string;
         };
+        LegacyAutomaticPriceListParametersDto: {
+            automaticQuote: components["schemas"]["AutomaticQuoteParametersDto"];
+            sellerTaxPolicy: components["schemas"]["SellerTaxPolicyDto"];
+        };
         LegacyPriceListParametersDto: {
             balance_payment_days: number;
             balance_timeout_earned_component_kinds: string[];
@@ -4943,7 +4947,7 @@ export interface components {
             currency: string;
             /** Format: uuid */
             id: string;
-            parameters: components["schemas"]["PriceListParametersDto"] | components["schemas"]["LegacyPriceListParametersDto"];
+            parameters: components["schemas"]["PriceListParametersDto"] | components["schemas"]["LegacyAutomaticPriceListParametersDto"] | components["schemas"]["LegacyPriceListParametersDto"];
             revision: string;
             termsRevision: string;
         };
@@ -4953,6 +4957,8 @@ export interface components {
         };
         PriceListParametersDto: {
             automaticQuote: components["schemas"]["AutomaticQuoteParametersDto"];
+            balance_payment_days: number;
+            balance_timeout_earned_component_kinds: ("ITEM_PRODUCTION" | "ITEM_QUANTITY" | "ITEM_POSTPROCESSING" | "ORDER_MIN_PRINT" | "ORDER_SMALL_SURCHARGE" | "SHIPMENT" | "EXPRESS" | "PAYMENT_FEE" | "VAT")[];
             sellerTaxPolicy: components["schemas"]["SellerTaxPolicyDto"];
         };
         PriceListReadDto: {
@@ -5078,7 +5084,12 @@ export interface components {
             providerEndpointId: string;
             supportedCategoryIds: string[];
         };
+        QuoteComposerIndividualPaymentPolicyDto: {
+            balancePaymentDays: number;
+            earnedComponentKinds: string[];
+        };
         QuoteComposerPolicyDto: {
+            individualPaymentPolicy: components["schemas"]["QuoteComposerIndividualPaymentPolicyDto"] | null;
             /** Format: uuid */
             priceListId: string;
             revision: string;
@@ -5193,6 +5204,8 @@ export interface components {
             sourceContentSha256: string;
         };
         QuoteRequestReferencePreparationDto: {
+            /** @description Terminally failed worker-v2 job IDs */
+            failedJobIds: string[];
             partsPerPlate: number;
             /** @description Pending worker-v2 job IDs */
             pendingJobIds: string[];

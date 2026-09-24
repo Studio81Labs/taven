@@ -208,13 +208,14 @@ export class OperatorCatalogService {
     key?: string,
   ): Promise<CatalogResult> {
     const nodeId = this.globalNode(operator);
-    const input = await priceListInput(body);
+    const input = priceListInput(body);
     return this.command(
       operator,
       "catalog:price-list:create",
       key,
       { nodeId, input },
       async (tx, idempotencyKey) => {
+        await validatePriceListParameters(input.parameters);
         const priceList = await this.catalog.createPriceList(input, tx);
         await this.record(tx, operator, nodeId, idempotencyKey, priceList.id, {
           eventType: "catalog.price-list.created",
@@ -1610,15 +1611,12 @@ function printConfigRevisionInput(
   };
 }
 
-async function priceListInput(
-  body: CreatePriceListDto,
-): Promise<CreatePriceListInput> {
+function priceListInput(body: CreatePriceListDto): CreatePriceListInput {
   body = commandBody(body);
   if (body.currency !== "CZK") {
     throw new BadRequestException("currency must be CZK in v0");
   }
   const parameters = settings(body.parameters);
-  await validatePriceListParameters(parameters);
   return {
     revision: text(body.revision, "revision", 100),
     termsRevision: text(body.termsRevision, "termsRevision", 100),

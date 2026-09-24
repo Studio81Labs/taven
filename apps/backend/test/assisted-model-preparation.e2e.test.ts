@@ -8,6 +8,7 @@ import { AppModule } from "../src/app.module";
 import { configureHttpBodyParsers } from "../src/http-body.config";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
+import { parseAutomaticQuotePricingParameters } from "../src/modules/automatic-quotes/automatic-quote-pricing";
 import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
 
 process.env.TAVEN_ENVIRONMENT ??= "development";
@@ -89,7 +90,7 @@ describe("assisted request model preparation", () => {
       `assisted-create-${randomUUID()}`,
     );
     requestId = request.requestId;
-  });
+  }, 30_000);
 
   afterAll(async () => {
     await app?.close();
@@ -214,6 +215,28 @@ describe("assisted request model preparation", () => {
         inspectionStatus: "PENDING",
       }),
     ]);
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `assisted-inspection-dead-letter:${dispatch.id}`,
+        aggregateType: "SlicingDispatchDeadLetter",
+        aggregateId: dispatch.id,
+        messageType: "slicing.model_inspection.dead-lettered",
+        schemaVersion: 2,
+        payload: { dispatchId: dispatch.id },
+      },
+    });
+    const failedInspection = await api<{
+      items: Array<{
+        inspectionStatus: string;
+        inspectionFailureCode: string | null;
+      }>;
+    }>(`admin/quote-requests/${requestId}/models`, {
+      headers: operatorHeaders(),
+    });
+    expect(failedInspection.body.items[0]).toMatchObject({
+      inspectionStatus: "FAILED",
+      inspectionFailureCode: "INSPECTION_DISPATCH_FAILED",
+    });
     const premature = await api(
       `admin/quote-requests/${requestId}/models/select`,
       {
@@ -420,6 +443,30 @@ describe("assisted request model preparation", () => {
     ReferenceSliceJobSchema.parse(
       (referenceDispatch.payload as { job: unknown }).job,
     );
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `assisted-reference-dead-letter:${referenceDispatch.id}`,
+        aggregateType: "SlicingDispatchDeadLetter",
+        aggregateId: referenceDispatch.id,
+        messageType: "slicing.reference_slice.dead-lettered",
+        schemaVersion: 2,
+        payload: { dispatchId: referenceDispatch.id },
+      },
+    });
+    const failureParams = new URLSearchParams(
+      Object.entries(preparation).map(([name, value]) => [name, String(value)]),
+    );
+    const failedReference = await api<{
+      failedJobIds: string[];
+      pendingJobIds: string[];
+    }>(`admin/quote-requests/${requestId}/references/status?${failureParams}`, {
+      headers: operatorHeaders(),
+    });
+    expect(failedReference.response.status).toBe(200);
+    expect(failedReference.body.failedJobIds).toEqual(
+      prepared.body.pendingJobIds,
+    );
+    expect(failedReference.body.pendingJobIds).toEqual([]);
 
     const { buildReferenceSliceCacheKey, RevisionRef, Sha256Digest } =
       await import("@taven/core");
@@ -463,6 +510,7 @@ describe("assisted request model preparation", () => {
     expect(ready.body).toMatchObject({
       primaryReferenceSliceResultId: slice.id,
       pendingJobIds: [],
+      failedJobIds: [],
     });
     const composer = await api<{
       models: {
@@ -474,6 +522,10 @@ describe("assisted request model preparation", () => {
         selectionVersion: number;
         taxRegime: string;
         vatRateBasisPoints: number;
+        individualPaymentPolicy: {
+          balancePaymentDays: number;
+          earnedComponentKinds: string[];
+        } | null;
       };
       referenceProfiles: Array<{ id: string }>;
     }>(`admin/quote-requests/${requestId}/composer`, {
@@ -500,6 +552,12 @@ describe("assisted request model preparation", () => {
       where: { currency: "CZK" },
       include: { priceList: true },
     });
+    expect(composer.body.policy.individualPaymentPolicy).toEqual(
+      "balance_payment_days" in
+        (policy.priceList.parameters as Record<string, unknown>)
+        ? expect.objectContaining({ balancePaymentDays: 7 })
+        : null,
+    );
     const gross = 110_000;
     const taxRate = composer.body.policy.vatRateBasisPoints;
     const vat = Math.floor(
@@ -589,6 +647,119 @@ describe("assisted request model preparation", () => {
       },
     );
     expect(stale.response.status).toBe(409);
+    if (!composer.body.policy.individualPaymentPolicy) {
+      const unavailable = await api<{ code: string }>(
+        `admin/quote-requests/${requestId}/offers/preview`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(offer),
+        },
+      );
+      expect(unavailable.response.status).toBe(409);
+      expect(unavailable.body.code).toBe(
+        "INDIVIDUAL_PAYMENT_POLICY_UNAVAILABLE",
+      );
+      const unavailableKey = `missing-policy-${randomUUID()}`;
+      const unavailableIssue = await api<{ code: string }>(
+        `admin/quote-requests/${requestId}/offers`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+            "idempotency-key": unavailableKey,
+          },
+          body: JSON.stringify(offer),
+        },
+      );
+      expect(unavailableIssue.response.status).toBe(409);
+      expect(unavailableIssue.body.code).toBe(
+        "INDIVIDUAL_PAYMENT_POLICY_UNAVAILABLE",
+      );
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: {
+            namespace: "quote-request.issue-offer",
+            idempotencyKey: unavailableKey,
+          },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.quote.count({ where: { quoteRequestId: requestId } }),
+      ).toBe(0);
+    }
+    const source = await api<{
+      revision: string;
+      termsRevision: string;
+      parameters: Record<string, unknown>;
+    }>(`admin/catalog/price-lists/${policy.priceListId}`, {
+      headers: operatorHeaders(),
+    });
+    expect(source.response.status).toBe(200);
+    const successorBody = {
+      revision: `assisted-combined-${randomUUID()}`,
+      termsRevision: source.body.termsRevision,
+      currency: "CZK",
+      parameters: {
+        ...source.body.parameters,
+        balance_payment_days: 7,
+        balance_timeout_earned_component_kinds: [
+          "ITEM_PRODUCTION",
+          "ITEM_QUANTITY",
+          "ITEM_POSTPROCESSING",
+        ],
+      },
+    };
+    const createKey = `combined-create-${randomUUID()}`;
+    const createSuccessor = () =>
+      api<{ id: string }>("admin/catalog/price-lists", {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": createKey,
+        },
+        body: JSON.stringify(successorBody),
+      });
+    const created = await createSuccessor();
+    expect(created.response.status, JSON.stringify(created.body)).toBe(200);
+    expect((await createSuccessor()).body).toEqual(created.body);
+    const successor = await prisma.priceList.findUniqueOrThrow({
+      where: { id: created.body.id },
+    });
+    expect(successor.parameters).toMatchObject({
+      sellerTaxPolicy: source.body.parameters.sellerTaxPolicy,
+      automaticQuote: source.body.parameters.automaticQuote,
+    });
+    expect(parseAutomaticQuotePricingParameters(successor.parameters)).toEqual(
+      parseAutomaticQuotePricingParameters(policy.priceList.parameters),
+    );
+    const activationBody = {
+      expectedSelectionVersion: policy.selectionVersion,
+      reason: "Assisted offer integration test",
+    };
+    const activated = await api<{ selectionVersion: number }>(
+      `admin/catalog/price-lists/${created.body.id}/activate`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": `combined-activate-${randomUUID()}`,
+        },
+        body: JSON.stringify(activationBody),
+      },
+    );
+    expect(activated.response.status, JSON.stringify(activated.body)).toBe(200);
+    const refreshedOffer = {
+      ...offer,
+      priceListId: created.body.id,
+      expectedSelectionVersion: activated.body.selectionVersion,
+    };
     const preview = await api<{
       contractTotalMinor: number;
       balanceMinor: number;
@@ -596,7 +767,7 @@ describe("assisted request model preparation", () => {
     }>(`admin/quote-requests/${requestId}/offers/preview`, {
       method: "POST",
       headers: { ...operatorHeaders(true), "content-type": "application/json" },
-      body: JSON.stringify(offer),
+      body: JSON.stringify(refreshedOffer),
     });
     expect(preview.response.status, JSON.stringify(preview.body)).toBe(200);
     expect(preview.body).toMatchObject({
@@ -616,7 +787,7 @@ describe("assisted request model preparation", () => {
           "content-type": "application/json",
           "idempotency-key": `issue-${randomUUID()}`,
         },
-        body: JSON.stringify(offer),
+        body: JSON.stringify(refreshedOffer),
       },
     );
     expect(issued.response.status).toBe(201);
@@ -636,7 +807,7 @@ describe("assisted request model preparation", () => {
       acceptedOrderId: null,
     });
     expect(detail.body).not.toHaveProperty("offerToken");
-  });
+  }, 20_000);
 });
 
 function sha256(value: string | Uint8Array): string {

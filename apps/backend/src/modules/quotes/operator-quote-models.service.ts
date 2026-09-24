@@ -29,6 +29,7 @@ import {
   type DeliveryCapabilityPort,
 } from "../automatic-quotes/delivery-capability.port";
 import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
+import { parseIndividualPaymentPolicy } from "../resources/price-list-validation";
 import { databaseNow } from "../legal-approvals/legal-approvals.service";
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
 import {
@@ -108,6 +109,9 @@ export class OperatorQuoteModelsService {
         selectionVersion: selection.selectionVersion,
         taxRegime: tax.regime,
         vatRateBasisPoints: tax.vatRateBasisPoints,
+        individualPaymentPolicy: parseIndividualPaymentPolicy(
+          selection.priceList.parameters,
+        ),
       },
       deliveryOptions: [...this.delivery.configuredOptions()],
     };
@@ -600,6 +604,7 @@ async function prepareReferenceInTransaction(
   ].filter((value) => value > 0);
   const results: Array<string | null> = [];
   const pendingJobIds: string[] = [];
+  const failedJobIds: string[] = [];
   for (const occupancy of occupancies) {
     const cacheKey = buildReferenceSliceCacheKey({
       geometryHash: Sha256Digest.parse(geometry.geometryHash),
@@ -661,7 +666,33 @@ async function prepareReferenceInTransaction(
     const jobId = deterministicUuid(
       `assisted-reference:${selection.id}:${config.id}:${profile.id}:${occupancy}`,
     );
-    pendingJobIds.push(jobId);
+    const dispatch = await database.outboxMessage.findFirst({
+      where: {
+        aggregateId: jobId,
+        messageType: "slicing.reference-slice.requested",
+      },
+      select: { id: true },
+    });
+    const terminal = dispatch
+      ? await database.outboxMessage.findFirst({
+          where: {
+            aggregateId: dispatch.id,
+            OR: [
+              { messageType: "slicing.reference_slice.result-received" },
+              { messageType: "slicing.reference_slice.dead-lettered" },
+            ],
+          },
+          select: { messageType: true, payload: true },
+        })
+      : null;
+    const terminalResult = asRecord(asRecord(terminal?.payload)?.result);
+    const terminalOutcome = asRecord(terminalResult?.outcome);
+    if (
+      terminal?.messageType === "slicing.reference_slice.dead-lettered" ||
+      terminalOutcome?.status === "failed"
+    )
+      failedJobIds.push(jobId);
+    else pendingJobIds.push(jobId);
     if (!enqueueTransaction) continue;
     const inputFingerprintSha256 = slicingInputFingerprint(
       "reference_slice",
@@ -696,6 +727,7 @@ async function prepareReferenceInTransaction(
     primaryReferenceSliceResultId: results[0] ?? null,
     tailReferenceSliceResultId: results[1] ?? null,
     pendingJobIds,
+    failedJobIds,
   };
 }
 
@@ -754,6 +786,24 @@ async function inspectionForJob(
       messageType: "slicing.model_inspection.result-received",
     },
   });
+  if (!receipt) {
+    const deadLetter = await database.outboxMessage.findFirst({
+      where: {
+        aggregateType: "SlicingDispatchDeadLetter",
+        aggregateId: dispatch.id,
+        messageType: "slicing.model_inspection.dead-lettered",
+      },
+      select: { id: true },
+    });
+    if (deadLetter) {
+      return {
+        status: "FAILED",
+        bodyIds: [],
+        failureCode: "INSPECTION_DISPATCH_FAILED",
+        sourceContentSha256: null,
+      };
+    }
+  }
   const payload = asRecord(receipt?.payload);
   const { ModelInspectionResultSchema } =
     await import("@taven/slicer-contracts");

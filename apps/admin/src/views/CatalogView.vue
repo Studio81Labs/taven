@@ -85,6 +85,23 @@ const editor = ref<
 const priceRevision = ref("");
 const termsRevision = ref("");
 const priceParameters = ref("{}");
+const balancePaymentDays = ref(7);
+const earnedComponentKinds = ref<string[]>([
+  "ITEM_PRODUCTION",
+  "ITEM_QUANTITY",
+  "ITEM_POSTPROCESSING",
+]);
+const balanceKindOptions = [
+  "ITEM_PRODUCTION",
+  "ITEM_QUANTITY",
+  "ITEM_POSTPROCESSING",
+  "ORDER_MIN_PRINT",
+  "ORDER_SMALL_SURCHARGE",
+  "SHIPMENT",
+  "EXPRESS",
+  "PAYMENT_FEE",
+  "VAT",
+] as const;
 const material = ref<"PLA" | "PETG">("PLA");
 const quality = ref<"DRAFT" | "STANDARD" | "FINE">("STANDARD");
 const slicerEngine = ref("");
@@ -391,6 +408,13 @@ function edit(type: typeof editor.value): void {
       2,
     );
     termsRevision.value = selectedPrice.value.termsRevision;
+    const policy = selectedPrice.value.parameters;
+    balancePaymentDays.value =
+      "balance_payment_days" in policy ? policy.balance_payment_days : 7;
+    earnedComponentKinds.value =
+      "balance_timeout_earned_component_kinds" in policy
+        ? [...policy.balance_timeout_earned_component_kinds]
+        : ["ITEM_PRODUCTION", "ITEM_QUANTITY", "ITEM_POSTPROCESSING"];
   }
   if (type === "reference" && selectedReference.value) {
     material.value = selectedReference.value.material as typeof material.value;
@@ -428,13 +452,27 @@ async function createRevision(): Promise<void> {
   success.value = "";
   try {
     if (editor.value === "price") {
+      const parameters = parseJsonObject(priceParameters.value);
+      if (
+        !Number.isInteger(balancePaymentDays.value) ||
+        balancePaymentDays.value < 1 ||
+        balancePaymentDays.value > 36500 ||
+        earnedComponentKinds.value.length === 0
+      )
+        throw new Error(
+          "Vyplňte platný počet dní a alespoň jednu uznanou složku.",
+        );
       const body: S["CreatePriceListDto"] = {
         currency: "CZK",
         revision: priceRevision.value.trim(),
         termsRevision: termsRevision.value.trim(),
-        parameters: parseJsonObject(
-          priceParameters.value,
-        ) as S["PriceListParametersDto"],
+        parameters: {
+          ...parameters,
+          balance_payment_days: balancePaymentDays.value,
+          balance_timeout_earned_component_kinds: [
+            ...earnedComponentKinds.value,
+          ],
+        } as S["PriceListParametersDto"],
       };
       await journal.submit("create-price", body, async (frozen, key) =>
         requireData(
@@ -834,6 +872,19 @@ onUnmounted(() => noticePager.dispose());
           Starší formát parametrů není šablonou pro novou podporovanou revizi.
         </p>
         <pre>{{ JSON.stringify(selectedPrice.parameters, null, 2) }}</pre>
+        <p v-if="'balance_payment_days' in selectedPrice.parameters">
+          Doplatek: {{ selectedPrice.parameters.balance_payment_days }} dní;
+          uznané složky:
+          {{
+            selectedPrice.parameters.balance_timeout_earned_component_kinds.join(
+              ", ",
+            )
+          }}
+        </p>
+        <p v-else>
+          Individuální platební pravidla chybí. Pro nové nabídky vytvořte a
+          publikujte úplnou revizi.
+        </p>
       </div>
       <button
         v-if="canWrite"
@@ -1081,6 +1132,27 @@ onUnmounted(() => noticePager.dispose());
             >Úplné cenové parametry JSON
             <textarea v-model="priceParameters" rows="16" required />
           </label>
+          <label
+            >Dní do doplatku
+            <input
+              v-model.number="balancePaymentDays"
+              type="number"
+              min="1"
+              max="36500"
+              step="1"
+              required
+            />
+          </label>
+          <fieldset>
+            <legend>Uznané složky při vypršení doplatku</legend>
+            <label v-for="kind in balanceKindOptions" :key="kind">
+              <input
+                v-model="earnedComponentKinds"
+                type="checkbox"
+                :value="kind"
+              />{{ kind }}
+            </label>
+          </fieldset>
         </template>
         <template v-if="editor === 'reference' || editor === 'profile'">
           <label

@@ -5295,6 +5295,21 @@
         },
         "type": "object"
       },
+      "LegacyAutomaticPriceListParametersDto": {
+        "properties": {
+          "automaticQuote": {
+            "$ref": "#/components/schemas/AutomaticQuoteParametersDto"
+          },
+          "sellerTaxPolicy": {
+            "$ref": "#/components/schemas/SellerTaxPolicyDto"
+          }
+        },
+        "required": [
+          "sellerTaxPolicy",
+          "automaticQuote"
+        ],
+        "type": "object"
+      },
       "LegacyPriceListParametersDto": {
         "properties": {
           "balance_payment_days": {
@@ -9302,9 +9317,12 @@
             "type": "string"
           },
           "parameters": {
-            "oneOf": [
+            "anyOf": [
               {
                 "$ref": "#/components/schemas/PriceListParametersDto"
+              },
+              {
+                "$ref": "#/components/schemas/LegacyAutomaticPriceListParametersDto"
               },
               {
                 "$ref": "#/components/schemas/LegacyPriceListParametersDto"
@@ -9350,13 +9368,39 @@
           "automaticQuote": {
             "$ref": "#/components/schemas/AutomaticQuoteParametersDto"
           },
+          "balance_payment_days": {
+            "maximum": 36500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "balance_timeout_earned_component_kinds": {
+            "items": {
+              "enum": [
+                "ITEM_PRODUCTION",
+                "ITEM_QUANTITY",
+                "ITEM_POSTPROCESSING",
+                "ORDER_MIN_PRINT",
+                "ORDER_SMALL_SURCHARGE",
+                "SHIPMENT",
+                "EXPRESS",
+                "PAYMENT_FEE",
+                "VAT"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
           "sellerTaxPolicy": {
             "$ref": "#/components/schemas/SellerTaxPolicyDto"
           }
         },
         "required": [
           "sellerTaxPolicy",
-          "automaticQuote"
+          "automaticQuote",
+          "balance_payment_days",
+          "balance_timeout_earned_component_kinds"
         ],
         "type": "object"
       },
@@ -9796,8 +9840,38 @@
         ],
         "type": "object"
       },
+      "QuoteComposerIndividualPaymentPolicyDto": {
+        "properties": {
+          "balancePaymentDays": {
+            "maximum": 36500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "earnedComponentKinds": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "balancePaymentDays",
+          "earnedComponentKinds"
+        ],
+        "type": "object"
+      },
       "QuoteComposerPolicyDto": {
         "properties": {
+          "individualPaymentPolicy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuoteComposerIndividualPaymentPolicyDto"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
           "priceListId": {
             "format": "uuid",
             "type": "string"
@@ -9825,7 +9899,8 @@
           "revision",
           "selectionVersion",
           "taxRegime",
-          "vatRateBasisPoints"
+          "vatRateBasisPoints",
+          "individualPaymentPolicy"
         ],
         "type": "object"
       },
@@ -10188,6 +10263,13 @@
       },
       "QuoteRequestReferencePreparationDto": {
         "properties": {
+          "failedJobIds": {
+            "description": "Terminally failed worker-v2 job IDs",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "partsPerPlate": {
             "type": "integer"
           },
@@ -10230,7 +10312,8 @@
           "referenceProfileId",
           "quantity",
           "partsPerPlate",
-          "pendingJobIds"
+          "pendingJobIds",
+          "failedJobIds"
         ],
         "type": "object"
       },
