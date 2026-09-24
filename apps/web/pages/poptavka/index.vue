@@ -36,10 +36,22 @@ const presentedLegalDocuments = {
   prohibitedContent: usePublicLegalDocument("prohibitedContent"),
   photoConsent: usePublicLegalDocument("photoConsent"),
 };
+const legalRefreshInProgress = ref(false);
+const legalRefreshAttempted = ref(false);
+let legalRefreshGeneration = 0;
 async function refreshLegalAvailability(): Promise<void> {
-  const selected = await refreshAvailability();
-  for (const { refresh } of Object.values(presentedLegalDocuments)) {
-    await refresh(selected);
+  const generation = ++legalRefreshGeneration;
+  legalRefreshInProgress.value = true;
+  try {
+    const selected = await refreshAvailability();
+    for (const { refresh } of Object.values(presentedLegalDocuments)) {
+      await refresh(selected);
+    }
+  } finally {
+    if (generation === legalRefreshGeneration) {
+      legalRefreshInProgress.value = false;
+      legalRefreshAttempted.value = true;
+    }
   }
 }
 onMounted(() => void refreshLegalAvailability());
@@ -89,6 +101,20 @@ const retentionPolicyEffective = presentedLegalDocuments.retention.effective;
 const prohibitedContentPolicyEffective =
   presentedLegalDocuments.prohibitedContent.effective;
 const photoConsentEffective = presentedLegalDocuments.photoConsent.effective;
+const legalVerificationRetryable = computed(() => {
+  if (!legalRefreshAttempted.value || legalRefreshInProgress.value)
+    return false;
+  const selected = availability.value;
+  if (!selected) return true;
+  return (
+    (selected.documents.privacy.effective && !privacyNoticeEffective.value) ||
+    (selected.documents.retention.effective &&
+      !retentionPolicyEffective.value) ||
+    (selected.documents.prohibitedContent.effective &&
+      !prohibitedContentPolicyEffective.value) ||
+    (selected.documents.photoConsent.effective && !photoConsentEffective.value)
+  );
+});
 const privacyNoticeEvidence = computed(() => {
   const document = availability.value?.documents.privacy;
   return privacyNoticeEffective.value && document
@@ -516,6 +542,21 @@ function isPositiveDimension(value: number | ""): value is number {
               </span>
             </label>
           </fieldset>
+
+          <div
+            v-if="legalVerificationRetryable && !requestFieldsLocked"
+            class="request-error"
+            role="status"
+          >
+            <p>Aktuální právní dokumenty se nepodařilo ověřit.</p>
+            <button
+              class="text-button"
+              type="button"
+              @click="refreshLegalAvailability"
+            >
+              Zkusit načíst dokumenty znovu
+            </button>
+          </div>
 
           <div
             v-if="phase === 'creating' || phase === 'uploading'"
