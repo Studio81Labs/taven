@@ -1648,7 +1648,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     });
     const candidateFrontier = vi.spyOn(
       app.get(AutomaticQuotesService),
-      "hasPermanentlyFailedCandidateRequirement",
+      "hasUnavailableCandidateRequirement",
     );
     candidateFrontier.mockResolvedValueOnce(true);
     try {

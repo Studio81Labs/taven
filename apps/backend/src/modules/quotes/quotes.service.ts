@@ -2310,11 +2310,11 @@ export class QuotesService {
         ) AS available
       `,
     ]);
-    const failedCandidateRequirement =
+    const unavailableCandidateRequirement =
       origin.order.status === "DRAFT" &&
       candidateDispatch[0]?.available &&
       origin.order.acceptedOrderPriceBindingId
-        ? await this.automaticQuotes.hasPermanentlyFailedCandidateRequirement(
+        ? await this.automaticQuotes.hasUnavailableCandidateRequirement(
             origin.order.acceptedOrderPriceBindingId,
             now,
           )
@@ -2344,7 +2344,7 @@ export class QuotesService {
               : origin.order.status === "DRAFT"
                 ? candidateDispatch[0]?.available &&
                   origin.order.acceptedOrderPriceBindingId &&
-                  !failedCandidateRequirement
+                  !unavailableCandidateRequirement
                   ? "PREPARING"
                   : candidateDispatch[0]?.seen
                     ? "UNAVAILABLE"

@@ -4155,7 +4155,7 @@ export class AutomaticQuotesService {
     return null;
   }
 
-  async hasPermanentlyFailedCandidateRequirement(
+  async hasUnavailableCandidateRequirement(
     bindingId: string,
     observedAt: Date,
   ): Promise<boolean> {
@@ -4164,7 +4164,7 @@ export class AutomaticQuotesService {
       bindingId,
       observedAt,
     );
-    return frontier.allFailedRequirement;
+    return frontier.allFailedRequirement || frontier.missingOptionRequirement;
   }
 
   private async automaticCandidateFrontier(
