@@ -917,6 +917,27 @@ export class RejectOfferDto extends ExpectedOfferDto {
   reason?: string;
 }
 
+export class DeclineQuoteRequestDto {
+  @ApiProperty({ enum: ["NEW", "IN_REVIEW"] })
+  expectedStatus!: "NEW" | "IN_REVIEW";
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 1000,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
+  reason!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 100,
+    pattern: "^[A-Z][A-Z0-9_]{0,99}$",
+  })
+  reasonCode!: string;
+}
+
 export class AcceptedOfferDto {
   @ApiProperty({ type: String, format: "uuid" })
   orderId!: string;

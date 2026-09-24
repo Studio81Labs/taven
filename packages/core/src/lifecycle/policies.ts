@@ -8784,11 +8784,33 @@ export const quoteRequestPolicy: TransitionPolicy<QuoteRequestStatus> = {
     return true;
   },
   transitions: {
-    new: ["in_review"],
-    in_review: ["quoted"],
+    new: ["in_review", "rejected"],
+    in_review: ["quoted", "rejected"],
     quoted: ["quoted", "accepted", "rejected", "expired"],
   },
   guard: (command) => {
+    if (
+      (command.current === "new" || command.current === "in_review") &&
+      command.target === "rejected"
+    ) {
+      const reason = command.context?.declineReason;
+      const reasonCode = command.context?.declineReasonCode;
+      if (
+        typeof reason !== "string" ||
+        reason.trim().length === 0 ||
+        Array.from(reason).length > 1000 ||
+        typeof reasonCode !== "string" ||
+        !/^[A-Z][A-Z0-9_]{0,99}$/.test(reasonCode) ||
+        command.context?.declineHasIssuedQuote !== false
+      ) {
+        throw new TransitionGuardError(
+          "QuoteRequest",
+          command.current,
+          command.target,
+          "pre-offer decline requires a reason, code, and no issued quote",
+        );
+      }
+    }
     if (command.current === "in_review" && command.target === "quoted") {
       requireAtomicIssuedQuoteCreation("QuoteRequest", command);
     }

@@ -22,6 +22,9 @@ import {
 import { Instant } from "../primitives/time.js";
 
 const permittedContext = {
+  declineReason: "Cannot make this model",
+  declineReasonCode: "UNFULFILLABLE",
+  declineHasIssuedQuote: false,
   quoteAvailable: true,
   quoteRequestId: "quote-request-1",
   issuedQuoteId: "quote-1",
@@ -11195,6 +11198,55 @@ describe("v0 lifecycle policy tables", () => {
       }),
     ).toEqual({ kind: "changed", previous: "in_review", current: "quoted" });
   });
+
+  it.each(["new", "in_review"] as const)(
+    "permits audited pre-offer decline from %s and keeps it terminal",
+    (current) => {
+      const command = {
+        aggregateId: "quote-request-1",
+        currentStateCommandKey: "previous-command",
+        currentStateResultId: "previous-result",
+        current,
+        target: "rejected" as const,
+        idempotencyKey: `decline-${current}`,
+        context: {
+          declineReason: "Cannot make this model",
+          declineReasonCode: "UNFULFILLABLE",
+          declineHasIssuedQuote: false,
+        },
+      };
+      expect(transition(quoteRequestPolicy, command)).toEqual({
+        kind: "changed",
+        previous: current,
+        current: "rejected",
+      });
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          ...command,
+          context: { ...command.context, declineHasIssuedQuote: true },
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          ...command,
+          context: { ...command.context, declineReasonCode: "bad code" },
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(
+        transition(quoteRequestPolicy, {
+          ...command,
+          context: { ...command.context, declineReason: "🙂".repeat(1_000) },
+        }).kind,
+      ).toBe("changed");
+      expect(() =>
+        transition(quoteRequestPolicy, {
+          ...command,
+          context: { ...command.context, declineReason: "🙂".repeat(1_001) },
+        }),
+      ).toThrow(TransitionGuardError);
+      expect(isTerminal(quoteRequestPolicy, "rejected")).toBe(true);
+    },
+  );
 
   it("reconciles a complete atomic quoted-to-quoted offer reissue", () => {
     const context = contextForTransition("quoted", "quoted");

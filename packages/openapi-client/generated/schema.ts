@@ -1620,6 +1620,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/quote-requests/{requestId}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decline an unquoted request with an audited reason */
+        post: operations["OperatorQuoteRequestsController_decline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/quote-requests/{requestId}/expire": {
         parameters: {
             query?: never;
@@ -2604,6 +2621,9 @@ export interface components {
             reasonCode: string;
         };
         AssistedSlaMetricsDto: {
+            declined: number;
+            declinedLate: number;
+            declinedOnTime: number;
             definition: string;
             pendingOverdue: number;
             requests: number;
@@ -3346,6 +3366,12 @@ export interface components {
             replacesShipmentId?: string;
             /** Format: uuid */
             shipmentPlanId: string;
+        };
+        DeclineQuoteRequestDto: {
+            /** @enum {string} */
+            expectedStatus: "NEW" | "IN_REVIEW";
+            reason: string;
+            reasonCode: string;
         };
         DevelopmentOperatorLoginDto: {
             /** Format: email */
@@ -9160,6 +9186,71 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["QuoteComposerChoicesDto"];
                 };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_decline: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeclineQuoteRequestDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestStatusDto"];
+                };
+            };
+            /** @description Malformed decline input or key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Operator session is required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Operator lacks quote write scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Quote request was not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request status changed or offer exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

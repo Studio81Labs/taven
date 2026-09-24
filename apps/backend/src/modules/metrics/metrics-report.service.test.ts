@@ -416,6 +416,48 @@ describe("v0-1 metric classifications", () => {
     });
   });
 
+  it("counts declined requests as responses separately from issued offers", () => {
+    const report = assistedSlaMetrics(
+      [
+        {
+          attribution: null,
+          createdAt: new Date("2026-01-01T00:00:00.000Z"),
+          slaDueAt: new Date("2026-01-01T01:00:00.000Z"),
+          slaRespondedAt: new Date("2026-01-01T00:30:00.000Z"),
+          status: "REJECTED",
+          quotes: [],
+        },
+        {
+          attribution: null,
+          createdAt: new Date("2026-01-01T00:00:00.000Z"),
+          slaDueAt: new Date("2026-01-01T01:00:00.000Z"),
+          slaRespondedAt: new Date("2026-01-01T02:00:00.000Z"),
+          status: "REJECTED",
+          quotes: [],
+        },
+        {
+          attribution: null,
+          createdAt: new Date("2026-01-01T00:00:00.000Z"),
+          slaDueAt: new Date("2026-01-01T01:00:00.000Z"),
+          slaRespondedAt: new Date("2026-01-01T00:45:00.000Z"),
+          status: "REJECTED",
+          quotes: [{ issuedAt: new Date("2026-01-01T00:45:00.000Z") }],
+        },
+      ],
+      new Date("2026-01-01T03:00:00.000Z"),
+      undefined,
+    );
+    expect(report).toMatchObject({
+      requests: 3,
+      responded: 3,
+      respondedOnTime: 2,
+      respondedLate: 1,
+      declined: 2,
+      declinedOnTime: 1,
+      declinedLate: 1,
+    });
+  });
+
   it("reports separate automatic preflight cohort conversion", () => {
     const report = quoteMetrics(
       [
