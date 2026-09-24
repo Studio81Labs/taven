@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Pool, type PoolClient } from "pg";
+import { Client, Pool, type PoolClient } from "pg";
 import {
   canonicalJson,
   type CanonicalJson,
@@ -381,6 +381,67 @@ function assertIsolatedBrowserDatabase(databaseUrl: string): void {
     throw new Error(
       "Legal browser fixture requires the isolated local database",
     );
+  }
+}
+
+/** Cuts off only the disposable browser database, leaving PostgreSQL's maintenance DB online. */
+export async function pauseE2eBrowserDatabase(
+  databaseUrl: string,
+): Promise<() => Promise<void>> {
+  assertIsolatedBrowserDatabase(databaseUrl);
+  if (process.env.INTEGRATION_DATABASE_OUTAGE !== "true") {
+    throw new Error("Browser database outage requires an explicit test gate");
+  }
+  const maintenanceUrl = new URL(databaseUrl);
+  maintenanceUrl.pathname = "/postgres";
+  const client = new Client({ connectionString: maintenanceUrl.toString() });
+  let paused = false;
+  try {
+    await client.connect();
+    const role = await client.query<{ rolsuper: boolean }>(
+      `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`,
+    );
+    if (role.rows[0]?.rolsuper !== true) {
+      throw new Error(
+        "Browser database outage requires the isolated CI superuser",
+      );
+    }
+    await client.query(
+      `ALTER DATABASE taven_web_browser WITH ALLOW_CONNECTIONS false`,
+    );
+    paused = true;
+    await client.query(
+      `SELECT pg_terminate_backend(pid)
+       FROM pg_stat_activity
+       WHERE datname = 'taven_web_browser' AND pid <> pg_backend_pid()`,
+    );
+    const active = await client.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pg_stat_activity
+       WHERE datname = 'taven_web_browser'`,
+    );
+    if (active.rows[0]?.count !== 0) {
+      throw new Error("Isolated browser database still has active connections");
+    }
+    return async () => {
+      try {
+        await client.query(
+          `ALTER DATABASE taven_web_browser WITH ALLOW_CONNECTIONS true`,
+        );
+      } finally {
+        await client.end();
+      }
+    };
+  } catch (error) {
+    try {
+      if (paused) {
+        await client.query(
+          `ALTER DATABASE taven_web_browser WITH ALLOW_CONNECTIONS true`,
+        );
+      }
+    } finally {
+      await client.end();
+    }
+    throw error;
   }
 }
 
