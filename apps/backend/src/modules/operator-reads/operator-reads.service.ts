@@ -817,27 +817,128 @@ export class OperatorReadsService {
       throw new BadRequestException("kind is invalid");
     if (input.cursor) assertUuid(input.cursor, "cursor");
     const limit = pageLimit(input.limit);
+    const nodeId = operatorNode(operator);
     return this.prisma.$transaction(async (tx) => {
-      const fulfilment = await this.orders.getFulfilmentInTransaction(
-        operator,
-        orderId,
-        tx,
-      );
-      const rows = orderedHistory<
-        OperatorFulfilmentHistoryPageDto["items"][number]
-      >(fulfilment[kind]);
-      const offset = input.cursor
-        ? rows.findIndex((row) => row.id === input.cursor) + 1
-        : 0;
-      if (input.cursor && offset === 0)
-        throw new BadRequestException("cursor is invalid");
-      const page = rows.slice(offset, offset + limit);
-      return {
-        items: page,
-        ...(rows.length > offset + limit
-          ? { nextCursor: page.at(-1)!.id }
-          : {}),
+      await assertOperationalOrderScope(tx, orderId, nodeId);
+      const pagination = {
+        orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }],
+        take: limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
       };
+      switch (kind) {
+        case "jobs": {
+          if (
+            input.cursor &&
+            !(await tx.job.findFirst({
+              where: { id: input.cursor, orderId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          return fulfilmentHistoryPage(
+            await tx.job.findMany({
+              where: { orderId },
+              include: {
+                shipmentAssignment: true,
+                replacementRequestSource: true,
+              },
+              ...pagination,
+            }),
+            limit,
+          );
+        }
+        case "shipments": {
+          if (
+            input.cursor &&
+            !(await tx.shipment.findFirst({
+              where: { id: input.cursor, orderId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          return fulfilmentHistoryPage(
+            await tx.shipment.findMany({
+              where: { orderId },
+              include: { jobAssignments: true },
+              ...pagination,
+            }),
+            limit,
+          );
+        }
+        case "slots": {
+          if (
+            input.cursor &&
+            !(await tx.fulfilmentSlot.findFirst({
+              where: { id: input.cursor, orderId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          return fulfilmentHistoryPage(
+            await tx.fulfilmentSlot.findMany({
+              where: { orderId },
+              ...pagination,
+            }),
+            limit,
+          );
+        }
+        case "replacementRequests": {
+          if (
+            input.cursor &&
+            !(await tx.replacementRequest.findFirst({
+              where: { id: input.cursor, orderId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          return fulfilmentHistoryPage(
+            await tx.replacementRequest.findMany({
+              where: { orderId },
+              ...pagination,
+            }),
+            limit,
+          );
+        }
+        case "claims": {
+          if (
+            input.cursor &&
+            !(await tx.claim.findFirst({
+              where: { id: input.cursor, orderId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          return fulfilmentHistoryPage(
+            await tx.claim.findMany({
+              where: { orderId },
+              include: {
+                resolutions: true,
+                refunds: true,
+                reshipmentAuthorizations: true,
+              },
+              ...pagination,
+            }),
+            limit,
+          );
+        }
+        case "priceAdjustments": {
+          if (
+            input.cursor &&
+            !(await tx.priceAdjustment.findFirst({
+              where: { id: input.cursor, orderId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          return fulfilmentHistoryPage(
+            await tx.priceAdjustment.findMany({
+              where: { orderId },
+              ...pagination,
+            }),
+            limit,
+          );
+        }
+      }
     });
   }
 
@@ -1767,6 +1868,21 @@ function historySlice<T extends { id: string; createdAt: string }>(
   return {
     items,
     ...(ordered.length > limit ? { nextCursor: items.at(-1)!.id } : {}),
+  };
+}
+
+function fulfilmentHistoryPage<T extends { id: string }>(
+  rows: T[],
+  limit: number,
+): OperatorFulfilmentHistoryPageDto {
+  const page = rows.slice(0, limit);
+  return {
+    items: JSON.parse(
+      JSON.stringify(page, (_key, value: unknown) =>
+        typeof value === "bigint" ? value.toString() : value,
+      ),
+    ) as OperatorFulfilmentHistoryPageDto["items"],
+    ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
   };
 }
 
