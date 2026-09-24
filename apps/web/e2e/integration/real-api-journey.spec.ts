@@ -9,12 +9,15 @@ import {
 } from "@playwright/test";
 import {
   archiveE2eCheckoutDocumentsForBrowser,
+  pauseE2eBrowserDatabase,
   readE2eAcceptedLegalVersionsForBrowser,
   readE2eCheckoutEffectsForBrowser,
+  readE2eFunnelEvidenceForBrowser,
   readE2eParcelAllocationsForBrowser,
   replaceE2eCheckoutDocumentsForBrowser,
   resetE2eAnonymousAdmissionLimitsForBrowser,
 } from "../../../backend/test/support/publish-e2e-legal-fixtures";
+import { observeBrowserDiagnostics } from "./browser-diagnostics";
 
 const INTEGRATION_API_URL =
   process.env.INTEGRATION_API_URL || "https://api-staging.taven.cz";
@@ -258,6 +261,8 @@ test.describe("Real API Integration Journey", () => {
     );
     expect(legal.status()).toBe(200);
 
+    const diagnostics = observeBrowserDiagnostics(page);
+
     await page.goto("/");
     await expect(
       page.getByRole("heading", { name: /Nahraj model/i, level: 1 }),
@@ -339,6 +344,40 @@ test.describe("Real API Integration Journey", () => {
             request,
             checkoutSession,
           );
+          const databaseUrl = process.env.DATABASE_URL!;
+          const readFunnel = () =>
+            readE2eFunnelEvidenceForBrowser(
+              databaseUrl,
+              checkoutSession.sessionId,
+              checkoutSession.sessionToken,
+              "browser-144@example.test",
+            );
+          await expect
+            .poll(async () => (await readFunnel()).quoteViews, {
+              timeout: 15_000,
+            })
+            .toBe(1);
+          for (let replay = 0; replay < 2; replay += 1) {
+            const observed = await request.post(
+              `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/observations`,
+              {
+                headers: {
+                  Authorization: `Bearer ${checkoutSession.sessionToken}`,
+                },
+                data: { eventType: "quote.viewed" },
+              },
+            );
+            expect(observed.status()).toBe(204);
+          }
+          expect(await readFunnel()).toMatchObject({
+            quoteViews: 1,
+            checkoutStarts: 0,
+            capturedPayments: 0,
+            confirmedOrders: 0,
+            capturedPaymentRows: 0,
+            unexpectedSources: 0,
+            sensitiveEventRows: 0,
+          });
         }
         await page
           .getByRole("button", { name: /Objednat a zaplatit/i })
@@ -350,6 +389,42 @@ test.describe("Real API Integration Journey", () => {
         const pendingPaymentId = await page.locator("main code").textContent();
         if (!pendingPaymentId) {
           throw new Error("Sandbox checkout did not identify its payment");
+        }
+        if (process.env.INTEGRATION_MUTABLE_FIXTURES === "true") {
+          const databaseUrl = process.env.DATABASE_URL!;
+          const readFunnel = () =>
+            readE2eFunnelEvidenceForBrowser(
+              databaseUrl,
+              checkoutSession.sessionId,
+              checkoutSession.sessionToken,
+              "browser-144@example.test",
+            );
+          await expect
+            .poll(async () => (await readFunnel()).checkoutStarts, {
+              timeout: 15_000,
+            })
+            .toBe(1);
+          for (let replay = 0; replay < 2; replay += 1) {
+            const observed = await request.post(
+              `${INTEGRATION_API_URL}/automatic-quote-sessions/${checkoutSession.sessionId}/observations`,
+              {
+                headers: {
+                  Authorization: `Bearer ${checkoutSession.sessionToken}`,
+                },
+                data: { eventType: "checkout.started" },
+              },
+            );
+            expect(observed.status()).toBe(204);
+          }
+          expect(await readFunnel()).toMatchObject({
+            quoteViews: 1,
+            checkoutStarts: 1,
+            capturedPayments: 0,
+            confirmedOrders: 0,
+            capturedPaymentRows: 0,
+            unexpectedSources: 0,
+            sensitiveEventRows: 0,
+          });
         }
         await page.goto(
           `/checkout/payment/success?sessionId=${checkoutSession.sessionId}&paymentId=${pendingPaymentId}`,
@@ -422,6 +497,72 @@ test.describe("Real API Integration Journey", () => {
           status: "CAPTURED",
           provider: "sandbox",
         });
+        if (process.env.INTEGRATION_MUTABLE_FIXTURES === "true") {
+          await expect
+            .poll(() =>
+              readE2eFunnelEvidenceForBrowser(
+                process.env.DATABASE_URL!,
+                checkoutSession.sessionId,
+                checkoutSession.sessionToken,
+                "browser-144@example.test",
+              ),
+            )
+            .toMatchObject({
+              quoteViews: 1,
+              checkoutStarts: 1,
+              capturedPayments: 1,
+              confirmedOrders: 1,
+              capturedPaymentRows: 1,
+              unexpectedSources: 0,
+              sensitiveEventRows: 0,
+            });
+          const observations = diagnostics.observationBodies();
+          expect(
+            observations.every(
+              (body) =>
+                typeof body === "object" &&
+                body !== null &&
+                !Array.isArray(body) &&
+                Object.keys(body).length === 1 &&
+                "eventType" in body &&
+                ["quote.viewed", "checkout.started"].includes(
+                  String(body.eventType),
+                ),
+            ),
+          ).toBe(true);
+          expect(
+            observations.some(
+              (body) =>
+                typeof body === "object" &&
+                body !== null &&
+                "eventType" in body &&
+                body.eventType === "quote.viewed",
+            ),
+          ).toBe(true);
+          expect(
+            observations.some(
+              (body) =>
+                typeof body === "object" &&
+                body !== null &&
+                "eventType" in body &&
+                body.eventType === "checkout.started",
+            ),
+          ).toBe(true);
+          diagnostics.assertSanitized(
+            [
+              checkoutSession.sessionToken,
+              "browser-144@example.test",
+              "solid taven_cube_20mm",
+              process.env.TAVEN_S3_SECRET_ACCESS_KEY ?? "",
+              "Bearer ",
+            ],
+            [
+              new URL(process.env.INTEGRATION_WEB_URL!).origin,
+              new URL(INTEGRATION_API_URL).origin,
+              new URL(process.env.INTEGRATION_STORAGE_URL!).origin,
+            ],
+          );
+        }
       }
     }
   });
@@ -1107,5 +1248,89 @@ test.describe("Real API Integration Journey", () => {
     } finally {
       await freshContext.close();
     }
+  });
+
+  test("fails closed during a real isolated database outage without accepting legal evidence or payment", async ({
+    page,
+  }) => {
+    test.skip(
+      !completePayment ||
+        process.env.INTEGRATION_MUTABLE_FIXTURES !== "true" ||
+        process.env.INTEGRATION_DATABASE_OUTAGE !== "true",
+      "Requires the isolated real-API browser database outage gate",
+    );
+    test.setTimeout(360_000);
+    const databaseUrl = process.env.DATABASE_URL!;
+    const { checkoutSession } = await prepareSandboxCheckout(page, "CARD");
+    const effectsBefore = await readE2eCheckoutEffectsForBrowser(
+      databaseUrl,
+      checkoutSession.sessionId,
+    );
+    expect(effectsBefore).toEqual({
+      acceptedOrderPriceBindingId: null,
+      paymentCount: 0,
+      acceptanceCount: 0,
+      decisionCount: 0,
+      idempotencyCount: 0,
+    });
+    const submit = page.getByRole("button", { name: /Objednat a zaplatit/i });
+    await expect(submit).toBeEnabled();
+    let paymentPosts = 0;
+    let availabilityGets = 0;
+    page.on("request", (outgoing) => {
+      if (
+        outgoing.method() === "GET" &&
+        outgoing.url() === `${INTEGRATION_API_URL}/legal-documents/availability`
+      ) {
+        availabilityGets += 1;
+      }
+      if (
+        outgoing.method() === "POST" &&
+        outgoing
+          .url()
+          .endsWith(
+            `/automatic-quote-sessions/${checkoutSession.sessionId}/checkout/payments`,
+          )
+      ) {
+        paymentPosts += 1;
+      }
+    });
+
+    const restoreDatabase = await pauseE2eBrowserDatabase(databaseUrl);
+    try {
+      const legalTab = await page.context().newPage();
+      try {
+        await legalTab.goto("/vop");
+        await expect(
+          legalTab.getByText("NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI"),
+        ).toBeVisible({ timeout: 60_000 });
+        await expect(
+          legalTab.getByRole("heading", {
+            name: "Tato stránka není právní dokument",
+          }),
+        ).toBeVisible();
+      } finally {
+        await legalTab.close();
+      }
+
+      await submit.click();
+      await expect(
+        page.getByRole("heading", { name: "Objednávku zatím nelze zaplatit." }),
+      ).toBeVisible({ timeout: 60_000 });
+      await expect(
+        page.locator('section[aria-labelledby="checkout-title"]'),
+      ).toHaveAttribute("aria-busy", "false");
+      await expect(submit).toHaveCount(0);
+      expect(availabilityGets).toBe(1);
+      expect(paymentPosts).toBe(0);
+    } finally {
+      await restoreDatabase();
+    }
+    expect(
+      await readE2eCheckoutEffectsForBrowser(
+        databaseUrl,
+        checkoutSession.sessionId,
+      ),
+    ).toEqual(effectsBefore);
   });
 });

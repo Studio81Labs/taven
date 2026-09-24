@@ -130,7 +130,12 @@ export function usePublicLegalDocument(
       stateIdentity === currentIdentity.value &&
       revisionCode === (pinnedRevision ? toValue(pinnedRevision) : null) &&
       contentHash === (pinnedContentHash ? toValue(pinnedContentHash) : null);
-    const selected = selectedAvailability ?? (await refreshAvailability());
+    // An explicitly unavailable read is final for this refresh. Retrying once
+    // per document could recover mid-submit and continue the original click.
+    const selected =
+      selectedAvailability === undefined
+        ? await refreshAvailability()
+        : selectedAvailability;
     if (!isCurrent()) return;
     const record = selected?.documents[key];
     if (

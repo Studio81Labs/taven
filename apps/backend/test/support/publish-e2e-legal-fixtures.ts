@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Pool, type PoolClient } from "pg";
+import { Client, Pool, type PoolClient } from "pg";
 import {
   canonicalJson,
   type CanonicalJson,
@@ -157,6 +157,83 @@ export async function readE2eCheckoutEffectsForBrowser(
   }
 }
 
+/** Sanitized first-party funnel evidence from the isolated browser database. */
+export async function readE2eFunnelEvidenceForBrowser(
+  databaseUrl: string,
+  sessionId: string,
+  sessionToken: string,
+  customerEmail: string,
+): Promise<{
+  quoteViews: number;
+  checkoutStarts: number;
+  capturedPayments: number;
+  confirmedOrders: number;
+  capturedPaymentRows: number;
+  unexpectedSources: number;
+  sensitiveEventRows: number;
+}> {
+  assertIsolatedBrowserDatabase(databaseUrl);
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const result = await pool.query<{
+      quote_views: number;
+      checkout_starts: number;
+      captured_payments: number;
+      confirmed_orders: number;
+      captured_payment_rows: number;
+      unexpected_sources: number;
+      sensitive_event_rows: number;
+    }>(
+      `SELECT
+         (SELECT count(*)::int FROM business_events event
+          WHERE event.quote_session_id = origin.quote_session_id
+            AND event.event_type = 'quote.viewed') AS quote_views,
+         (SELECT count(*)::int FROM business_events event
+          WHERE event.quote_session_id = origin.quote_session_id
+            AND event.event_type = 'checkout.started') AS checkout_starts,
+         (SELECT count(*)::int FROM business_events event
+          WHERE event.order_id = origin.order_id
+            AND event.event_type = 'payment.captured') AS captured_payments,
+         (SELECT count(*)::int FROM business_events event
+          WHERE event.order_id = origin.order_id
+            AND event.event_type = 'order.confirmed') AS confirmed_orders,
+         (SELECT count(*)::int FROM payments payment
+          WHERE payment.order_id = origin.order_id
+            AND payment.status = 'CAPTURED') AS captured_payment_rows,
+         (SELECT count(*)::int FROM business_events event
+          WHERE (event.quote_session_id = origin.quote_session_id
+                 OR event.order_id = origin.order_id)
+            AND ((event.event_type IN ('quote.viewed', 'checkout.started')
+                  AND event.source <> 'CLIENT')
+              OR (event.event_type IN ('payment.captured', 'order.confirmed')
+                  AND event.source <> 'SERVER'))) AS unexpected_sources,
+         (SELECT count(*)::int FROM business_events event
+          WHERE (event.quote_session_id = origin.quote_session_id
+                 OR event.order_id = origin.order_id)
+            AND (strpos(event.payload::text, $2) > 0
+              OR strpos(event.payload::text, $3) > 0)) AS sensitive_event_rows
+       FROM automatic_order_origins origin
+       WHERE origin.quote_session_id = $1`,
+      [sessionId, sessionToken, customerEmail],
+    );
+    const row = result.rows[0];
+    if (!row || result.rows.length !== 1) {
+      throw new Error("Isolated browser funnel order is unavailable");
+    }
+    return {
+      quoteViews: row.quote_views,
+      checkoutStarts: row.checkout_starts,
+      capturedPayments: row.captured_payments,
+      confirmedOrders: row.confirmed_orders,
+      capturedPaymentRows: row.captured_payment_rows,
+      unexpectedSources: row.unexpected_sources,
+      sensitiveEventRows: row.sensitive_event_rows,
+    };
+  } finally {
+    await pool.end();
+  }
+}
+
 /** Exact immutable acceptance versions persisted by the isolated checkout. */
 export async function readE2eAcceptedLegalVersionsForBrowser(
   databaseUrl: string,
@@ -304,6 +381,67 @@ function assertIsolatedBrowserDatabase(databaseUrl: string): void {
     throw new Error(
       "Legal browser fixture requires the isolated local database",
     );
+  }
+}
+
+/** Cuts off only the disposable browser database, leaving PostgreSQL's maintenance DB online. */
+export async function pauseE2eBrowserDatabase(
+  databaseUrl: string,
+): Promise<() => Promise<void>> {
+  assertIsolatedBrowserDatabase(databaseUrl);
+  if (process.env.INTEGRATION_DATABASE_OUTAGE !== "true") {
+    throw new Error("Browser database outage requires an explicit test gate");
+  }
+  const maintenanceUrl = new URL(databaseUrl);
+  maintenanceUrl.pathname = "/postgres";
+  const client = new Client({ connectionString: maintenanceUrl.toString() });
+  let paused = false;
+  try {
+    await client.connect();
+    const role = await client.query<{ rolsuper: boolean }>(
+      `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`,
+    );
+    if (role.rows[0]?.rolsuper !== true) {
+      throw new Error(
+        "Browser database outage requires the isolated CI superuser",
+      );
+    }
+    await client.query(
+      `ALTER DATABASE taven_web_browser WITH ALLOW_CONNECTIONS false`,
+    );
+    paused = true;
+    await client.query(
+      `SELECT pg_terminate_backend(pid, 5000)
+       FROM pg_stat_activity
+       WHERE datname = 'taven_web_browser' AND pid <> pg_backend_pid()`,
+    );
+    const active = await client.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM pg_stat_activity
+       WHERE datname = 'taven_web_browser'`,
+    );
+    if (active.rows[0]?.count !== 0) {
+      throw new Error("Isolated browser database still has active connections");
+    }
+    return async () => {
+      try {
+        await client.query(
+          `ALTER DATABASE taven_web_browser WITH ALLOW_CONNECTIONS true`,
+        );
+      } finally {
+        await client.end();
+      }
+    };
+  } catch (error) {
+    try {
+      if (paused) {
+        await client.query(
+          `ALTER DATABASE taven_web_browser WITH ALLOW_CONNECTIONS true`,
+        );
+      }
+    } finally {
+      await client.end();
+    }
+    throw error;
   }
 }
 

@@ -13,6 +13,67 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     await request.post("http://127.0.0.1:4175/__test/reset");
   });
 
+  test("resumes an uploaded session when the browser allows session storage again", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const storage = window.sessionStorage;
+      let denied = true;
+      Object.defineProperty(window, "sessionStorage", {
+        configurable: true,
+        get: () => {
+          if (denied)
+            throw new DOMException("Storage blocked", "SecurityError");
+          return storage;
+        },
+      });
+      Object.defineProperty(window, "__allowSessionStorage", {
+        value: () => {
+          denied = false;
+        },
+      });
+    });
+
+    let createdSessions = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/automatic-quote-sessions"
+      ) {
+        createdSessions += 1;
+      }
+    });
+
+    await page.goto("/");
+    const fileChooserPromise = page.waitForEvent("filechooser");
+    await page.getByText("Přetáhni soubor sem").click();
+    await (await fileChooserPromise).setFiles(FIXTURE_PATH);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: "Nahrání je uložené, ale prohlížeč zablokoval dočasnou relaci.",
+      }),
+    ).toBeVisible();
+    await expect(page).toHaveURL("/");
+    expect(createdSessions).toBe(1);
+
+    await page.evaluate(() => {
+      (
+        window as Window & { __allowSessionStorage?: () => void }
+      ).__allowSessionStorage?.();
+    });
+    await page.getByRole("button", { name: "Zkusit pokračovat" }).click();
+
+    await expect(page).toHaveURL(/\/objednavka/);
+    await expect(
+      page.getByRole("heading", { name: "Nastavte výrobu.", level: 2 }),
+    ).toBeVisible();
+    expect(createdSessions).toBe(1);
+  });
+
   test("keeps destination reselection available after a commercial conflict", async ({
     page,
     request,
@@ -43,6 +104,75 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     await expect(
       page.getByRole("heading", { name: "Dokončení objednávky" }),
     ).toBeVisible();
+  });
+
+  test("clears an expired quote and starts a new upload after preparation returns 410", async ({
+    page,
+    request,
+  }) => {
+    let createdSessions = 0;
+    page.on("request", (outgoing) => {
+      if (
+        outgoing.method() === "POST" &&
+        new URL(outgoing.url()).pathname === "/automatic-quote-sessions"
+      ) {
+        createdSessions += 1;
+      }
+    });
+
+    await page.goto("/");
+    await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+    await expect(page).toHaveURL(/\/objednavka/);
+    const previousSessionId = await page.evaluate(() => {
+      const raw = sessionStorage.getItem("taven:automatic-quote-session:v1");
+      return raw ? (JSON.parse(raw) as { sessionId: string }).sessionId : null;
+    });
+    expect(previousSessionId).toBeTruthy();
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { expireSessionOnNextPrepare: true },
+    });
+
+    const expiredPrepare = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/prepare"),
+    );
+    await page
+      .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+      .click();
+    expect((await expiredPrepare).status()).toBe(410);
+    await expect(
+      page.getByRole("heading", { name: "Relace už není aktivní." }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Objednat a zaplatit/i }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(() =>
+        sessionStorage.getItem("taven:automatic-quote-session:v1"),
+      ),
+    ).toBeNull();
+    expect(createdSessions).toBe(1);
+
+    const newFileChooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "Vybrat soubor znovu" }).click();
+    await (await newFileChooser).setFiles(FIXTURE_PATH);
+    await page.getByRole("button", { name: "Nahrát a zkontrolovat" }).click();
+    await expect(page).toHaveURL(/\/objednavka/);
+    const currentSessionId = () =>
+      page.evaluate(() => {
+        const raw = sessionStorage.getItem("taven:automatic-quote-session:v1");
+        return raw
+          ? (JSON.parse(raw) as { sessionId: string }).sessionId
+          : null;
+      });
+    await expect.poll(currentSessionId).not.toBeNull();
+    const newSessionId = await currentSessionId();
+    expect(newSessionId).not.toBe(previousSessionId);
+    expect(createdSessions).toBe(2);
   });
 
   test("full direct customer journey: model upload -> estimate -> configurator -> checkout -> payment -> confirmation", async ({

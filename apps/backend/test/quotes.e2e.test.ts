@@ -2941,7 +2941,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).rejects.toThrow("Quote request legal acceptance decision is incomplete");
   });
 
-  it("rejects legacy photo-consent repairs without a database decision", async () => {
+  it("owns decision time and transaction provenance and rejects later ledger repairs", async () => {
     const requestId = randomUUID();
     const quoteSession = await prisma.quoteSession.create({
       data: {
@@ -2952,14 +2952,15 @@ describe("QuoteRequest and tokenized individual offers", () => {
       },
     });
     const commandIdentity = key("legacy-photo-consent-repair");
+    const beforeDecision = await databaseNow(prisma);
     const decision = await prisma.$transaction(async (transaction) => {
       const created = await transaction.legalAcceptanceDecision.create({
         data: {
           id: randomUUID(),
           quoteRequestId: requestId,
           commandIdentity: `fixture:${requestId}:privacy`,
-          decidedAt: new Date(),
-          originatingXid: "test",
+          decidedAt: new Date("2000-01-01T00:00:00.000Z"),
+          originatingXid: "forged-xid",
         },
       });
       await transaction.quoteRequest.create({
@@ -2990,6 +2991,25 @@ describe("QuoteRequest and tokenized individual offers", () => {
       });
       return created;
     });
+    const afterDecision = await databaseNow(prisma);
+    expect(decision.decidedAt.getTime()).toBeGreaterThanOrEqual(
+      beforeDecision.getTime(),
+    );
+    expect(decision.decidedAt.getTime()).toBeLessThanOrEqual(
+      afterDecision.getTime(),
+    );
+    expect(decision.originatingXid).not.toBe("forged-xid");
+    await expect(
+      prisma.legalAcceptanceDecision.create({
+        data: {
+          id: randomUUID(),
+          quoteRequestId: requestId,
+          commandIdentity: key("duplicate-privacy-decision"),
+          decidedAt: new Date(),
+          originatingXid: "forged-xid",
+        },
+      }),
+    ).rejects.toThrow("requires a new request");
     const photoRevisionRows = await prisma.$queryRaw<Array<{ id: string }>>`
       SELECT id
       FROM legal_document_revisions
@@ -3007,6 +3027,119 @@ describe("QuoteRequest and tokenized individual offers", () => {
            'PHOTO_PUBLICATION_GRANTED', ${decision.decidedAt}, ${commandIdentity})
       `,
     ).rejects.toThrow("New legal acceptance requires a database decision");
+    await expect(
+      prisma.$executeRaw`
+        INSERT INTO legal_acceptances
+          (id, quote_request_id, revision_id, purpose, accepted_at,
+           command_identity, decision_id)
+        VALUES
+          (${randomUUID()}::uuid, ${requestId}::uuid, ${photoRevision.id}::uuid,
+           'PHOTO_PUBLICATION_GRANTED', ${decision.decidedAt},
+           ${decision.commandIdentity}, ${decision.id}::uuid)
+      `,
+    ).rejects.toThrow("Legal acceptance does not match its database decision");
+    await expect(
+      prisma.$executeRaw`
+        UPDATE legal_acceptance_decisions
+        SET command_identity = 'tampered'
+        WHERE id = ${decision.id}::uuid
+      `,
+    ).rejects.toThrow("Legal acceptance decisions are immutable");
+    const privacyEvidence = await prisma.legalAcceptance.findFirstOrThrow({
+      where: { decisionId: decision.id },
+      select: { id: true },
+    });
+    await expect(
+      prisma.$executeRaw`
+        DELETE FROM legal_acceptances WHERE id = ${privacyEvidence.id}::uuid
+      `,
+    ).rejects.toThrow("Legal acceptance evidence is append-only");
+  });
+
+  it("rejects orphan decisions, request sources, and mismatched ledger evidence", async () => {
+    const orphanRequestId = randomUUID();
+    const orphanDecisionId = randomUUID();
+    await expect(
+      prisma.$executeRaw`
+        INSERT INTO legal_acceptance_decisions
+          (id, quote_request_id, command_identity, decided_at, originating_xid)
+        VALUES
+          (${orphanDecisionId}::uuid, ${orphanRequestId}::uuid,
+           ${key("orphan-privacy-decision")}, clock_timestamp(), 'forged-xid')
+      `,
+    ).rejects.toThrow();
+    await expect(
+      prisma.legalAcceptanceDecision.count({ where: { id: orphanDecisionId } }),
+    ).resolves.toBe(0);
+
+    await expect(
+      prisma.$executeRaw`
+        INSERT INTO legal_acceptance_decisions
+          (id, quote_request_id, source_quote_id, command_identity,
+           decided_at, originating_xid)
+        VALUES
+          (${randomUUID()}::uuid, ${randomUUID()}::uuid, ${randomUUID()}::uuid,
+           ${key("invalid-request-source")}, clock_timestamp(), 'forged-xid')
+      `,
+    ).rejects.toThrow("Request creation decision cannot have a source Quote");
+
+    const privacyRevision = await prisma.legalDocumentRevision.findFirstOrThrow(
+      {
+        where: { revisionCode: e2eLegalRevisionCodes.privacy },
+        select: { id: true },
+      },
+    );
+    for (const mismatch of ["command", "subject", "time"] as const) {
+      const requestId = randomUUID();
+      await expect(
+        prisma.$transaction(async (transaction) => {
+          const decision = await transaction.legalAcceptanceDecision.create({
+            data: {
+              id: randomUUID(),
+              quoteRequestId: requestId,
+              commandIdentity: key(`${mismatch}-mismatch-decision`),
+              decidedAt: new Date(),
+              originatingXid: "forged-xid",
+            },
+          });
+          await transaction.quoteRequest.create({
+            data: {
+              id: requestId,
+              publicReference: `decision-${randomUUID()}`,
+              currentStateCommandKey: decision.commandIdentity,
+              createdAt: decision.decidedAt,
+              updatedAt: decision.decidedAt,
+            },
+          });
+          const ledgerSubject =
+            mismatch === "subject" ? randomUUID() : requestId;
+          const ledgerCommand =
+            mismatch === "command"
+              ? key("different-command")
+              : decision.commandIdentity;
+          const ledgerTime =
+            mismatch === "time"
+              ? new Date(decision.decidedAt.getTime() - 1_000)
+              : decision.decidedAt;
+          await transaction.$executeRaw`
+            INSERT INTO legal_acceptances
+              (id, quote_request_id, revision_id, purpose, accepted_at,
+               command_identity, decision_id)
+            VALUES
+              (${randomUUID()}::uuid, ${ledgerSubject}::uuid,
+               ${privacyRevision.id}::uuid, 'PRIVACY_NOTICE_ACKNOWLEDGED',
+               ${ledgerTime}, ${ledgerCommand}, ${decision.id}::uuid)
+          `;
+        }),
+      ).rejects.toThrow(
+        "Legal acceptance does not match its database decision",
+      );
+      await expect(
+        prisma.legalAcceptanceDecision.count({
+          where: { quoteRequestId: requestId },
+        }),
+      ).resolves.toBe(0);
+    }
   });
 
   it("reissues against the newly published terms revision", async () => {

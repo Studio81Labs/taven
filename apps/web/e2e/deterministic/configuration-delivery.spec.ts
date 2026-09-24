@@ -195,3 +195,107 @@ test.describe("Rendered configuration and delivery", () => {
     ).toBeVisible();
   });
 });
+
+test("Packeta picker ignores cancelled and stale callbacks, then requotes the selected point", async ({
+  page,
+  request,
+}) => {
+  await request.post("http://127.0.0.1:4175/__test/reset");
+  await request.post("http://127.0.0.1:4175/__test/state", {
+    data: { packetaSelector: true },
+  });
+  await page.addInitScript(() => {
+    type Point = { id?: unknown } | null;
+    const callbacks: Array<(point: Point) => void> = [];
+    Object.defineProperty(window, "__packetaCallbacks", { value: callbacks });
+    Object.defineProperty(window, "Packeta", {
+      value: {
+        Widget: {
+          pick: (_accountId: string, callback: (point: Point) => void) => {
+            callbacks.push(callback);
+          },
+          close: () => {},
+        },
+      },
+    });
+  });
+
+  let destinationRequests = 0;
+  page.on("request", (outgoing) => {
+    if (
+      outgoing.method() === "PUT" &&
+      outgoing.url().includes("/delivery-destination")
+    ) {
+      destinationRequests += 1;
+    }
+  });
+  const selectPoint = async (index: number, id: string | null) => {
+    await page.evaluate(
+      ({ index, id }) => {
+        const callback = (
+          window as Window & {
+            __packetaCallbacks?: Array<
+              (point: { id?: unknown } | null) => void
+            >;
+          }
+        ).__packetaCallbacks?.[index];
+        if (!callback) throw new Error(`Missing Packeta callback ${index}`);
+        callback(id === null ? null : { id });
+      },
+      { index, id },
+    );
+  };
+  const picker = page.getByRole("button", { name: "Vybrat výdejní místo" });
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
+  await page
+    .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+    .click();
+  await expect(page).toHaveURL(/\/objednavka/);
+  await expect(picker).toBeVisible();
+  await picker.click();
+  await selectPoint(0, null);
+  await expect(picker).toBeFocused();
+  await picker.click();
+  await selectPoint(0, "packeta-1");
+
+  const firstDestination = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      response.url().includes("/delivery-destination"),
+  );
+  await selectPoint(1, "packeta-2");
+  expect((await firstDestination).request().postDataJSON()).toMatchObject({
+    endpointType: "pickup_point",
+    providerEndpointId: "packeta-2",
+  });
+  await expect(page.locator(".price-summary .total-price")).toContainText(
+    "469,00",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Dokončení objednávky" }),
+  ).toBeVisible();
+  expect(destinationRequests).toBe(1);
+
+  await picker.click();
+  const secondDestination = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      response.url().includes("/delivery-destination"),
+  );
+  await selectPoint(2, "packeta-1");
+  const reselection = await secondDestination;
+  expect(reselection.request().postDataJSON()).toMatchObject({
+    providerEndpointId: "packeta-1",
+  });
+  expect(await reselection.json()).toMatchObject({
+    phase: "ELIGIBILITY_PENDING",
+    checkoutReady: false,
+    bindingQuote: null,
+  });
+  await expect(page.locator(".price-summary .total-price")).toContainText(
+    "439,00",
+  );
+  expect(destinationRequests).toBe(2);
+});

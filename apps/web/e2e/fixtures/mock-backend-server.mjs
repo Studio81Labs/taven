@@ -22,6 +22,8 @@ let testState = {
   paymentOutcome: "CAPTURED", // "CAPTURED" | "PENDING" | "FAILED"
   prepareCommercialConflictOnce: false,
   expressFailureOnce: false,
+  expireSessionOnNextPrepare: false,
+  packetaSelector: false,
   riskScenario: null, // null | "warning"
   recordedObservations: [],
   lastAssistedQuote: null,
@@ -61,6 +63,8 @@ function resetState() {
     paymentOutcome: "CAPTURED",
     prepareCommercialConflictOnce: false,
     expressFailureOnce: false,
+    expireSessionOnNextPrepare: false,
+    packetaSelector: false,
     riskScenario: null,
     recordedObservations: [],
     lastAssistedQuote: null,
@@ -203,9 +207,12 @@ function createDefaultSession(
       },
     ],
     deliverySelector: {
-      mode: "CONFIGURED",
+      mode: testState.packetaSelector ? "PACKETA" : "CONFIGURED",
       available: true,
       allowedEndpointTypes: ["pickup_point"],
+      ...(testState.packetaSelector
+        ? { widget: { accountId: "test-widget", options: { language: "cs" } } }
+        : {}),
     },
     selectedDeliveryDestination: null,
     express: {
@@ -1036,6 +1043,17 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (subpath === "/prepare" && method === "POST") {
+        if (testState.expireSessionOnNextPrepare) {
+          testState.expireSessionOnNextPrepare = false;
+          session.phase = "EXPIRED";
+          session.checkoutReady = false;
+          session.bindingQuote = null;
+          sendJson(res, 410, {
+            statusCode: 410,
+            message: "Automatic quote session expired",
+          });
+          return;
+        }
         if (testState.expressFailureOnce && session.express.requested) {
           testState.expressFailureOnce = false;
           session.phase = "HANDOFF_REQUIRED";
