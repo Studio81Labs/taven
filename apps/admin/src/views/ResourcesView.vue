@@ -663,6 +663,7 @@ async function publishAvailability(): Promise<void> {
     busy.value ||
     loading.value ||
     availabilityRefreshRequired.value ||
+    !availabilityDirty.value ||
     !availabilityRangeCurrent.value
   )
     return;
@@ -889,6 +890,7 @@ onMounted(() => void refresh());
               busy ||
               loading ||
               availabilityRefreshRequired ||
+              !availabilityDirty ||
               !reason.trim() ||
               !availabilityRangeCurrent
             "

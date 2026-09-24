@@ -446,4 +446,19 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   ).toBeDisabled();
   releaseSpendWrite?.();
   await expect(page.locator(".form-success")).toContainText("Důkaz byl zapsán");
+  await expect(
+    page.getByRole("button", { name: "Další objednávky" }),
+  ).toBeVisible();
+  await page.route(/\/admin\/metrics\?/, (route) =>
+    route.fulfill({ status: 503, json: { message: "report unavailable" } }),
+  );
+  await page.getByRole("textbox", { name: "Začátek" }).fill("2026-09-03");
+  await page.getByRole("button", { name: "Načíst report" }).click();
+  await expect(page.getByRole("alert")).toContainText("Služba není dostupná");
+  await expect(page.getByText("v0-1 preflight:", { exact: false })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("button", { name: "Další objednávky" }),
+  ).toHaveCount(0);
 });

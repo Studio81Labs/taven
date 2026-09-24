@@ -122,6 +122,10 @@ async function refresh(): Promise<void> {
   const generation = ++reportReadGeneration;
   loading.value = true;
   error.value = "";
+  report.value = null;
+  orders.value = [];
+  orderCursor.value = null;
+  appliedQuery.value = null;
   try {
     const query = filters();
     const [metricsResponse, orderResponse, warningsResponse, spendResponse] =

@@ -222,8 +222,14 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   await page.getByRole("button", { name: "Detail a rychlé změny" }).click();
   await page.getByLabel("Důvod změny").fill("Nasazeno pro tisk");
   await page.getByRole("button", { name: "Dostupnost" }).first().click();
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeDisabled();
   const draftStart = page.getByRole("textbox", { name: "Začátek" });
   await draftStart.fill("2026-09-23T09:00:00+02:00");
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeEnabled();
   await page.getByRole("button", { name: "Nasadit" }).click();
   await expect(draftStart).toHaveValue("2026-09-23T09:00:00+02:00");
   await expect(page.locator(".form-success")).toContainText(
@@ -286,6 +292,12 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   await expect(
     page.getByText("Verze výběru 1", { exact: false }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeDisabled();
+  await page
+    .getByRole("textbox", { name: "Začátek" })
+    .fill("2026-09-23T09:00:00+02:00");
   await page.getByRole("button", { name: "Publikovat dostupnost" }).click();
   await expect(page.getByRole("alert")).toContainText(
     "Zápis byl potvrzen, ale obnovení dostupnosti selhalo",
@@ -300,10 +312,13 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Publikovat dostupnost" }),
-  ).toBeEnabled();
+  ).toBeDisabled();
   await page
     .getByRole("textbox", { name: "Začátek" })
     .fill("2026-09-23T09:00:00+02:00");
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeEnabled();
   await page.getByRole("button", { name: "Publikovat dostupnost" }).click();
   await expect(page.getByRole("alert")).toContainText(
     "Obnovení dostupnosti selhalo",
@@ -315,7 +330,7 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   await page.getByRole("button", { name: "Načíst" }).click();
   await expect(
     page.getByRole("button", { name: "Publikovat dostupnost" }),
-  ).toBeEnabled();
+  ).toBeDisabled();
   holdRangeRead = true;
   await page.getByRole("button", { name: "Načíst" }).click();
   await expect.poll(() => Boolean(releaseRangeRead)).toBe(true);
