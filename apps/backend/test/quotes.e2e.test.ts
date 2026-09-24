@@ -14,7 +14,10 @@ import type { IssueOfferDto } from "../src/modules/quotes/quotes.dto";
 import { computeLegalRevisionContentHash } from "../src/modules/legal-documents/legal-documents.service";
 import { QuotesService } from "../src/modules/quotes/quotes.service";
 import { LegalDocumentsService } from "../src/modules/legal-documents/legal-documents.service";
-import { LegalApprovalsService } from "../src/modules/legal-approvals/legal-approvals.service";
+import {
+  databaseNow,
+  LegalApprovalsService,
+} from "../src/modules/legal-approvals/legal-approvals.service";
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
@@ -3355,6 +3358,193 @@ describe("QuoteRequest and tokenized individual offers", () => {
           UPDATE legal_document_publications
           SET ends_at = ${publication.endsAt}
           WHERE id = ${publication.id}::uuid
+        `;
+        await transaction.$executeRaw`
+          UPDATE legal_documents
+          SET generation = ${document.generation}
+          WHERE id = ${document.id}::uuid
+        `;
+      });
+    }
+  });
+
+  it("uses the database instant after a legal lock wait across scheduled privacy activation", async () => {
+    const document = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "privacy" },
+    });
+    const previousPublication =
+      await prisma.legalDocumentPublication.findFirstOrThrow({
+        where: {
+          documentId: document.id,
+          cancelledAt: null,
+          startsAt: { lte: new Date() },
+          OR: [{ endsAt: null }, { endsAt: { gt: new Date() } }],
+        },
+        orderBy: { startsAt: "desc" },
+      });
+    const latestRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
+      where: { documentId: document.id },
+      orderBy: { sequence: "desc" },
+    });
+    const title = "Scheduled privacy revision for lock boundary";
+    const summary =
+      "A scheduled privacy notice used by the lock-boundary regression.";
+    const sections = [{ title: "Privacy", paragraphs: ["Updated notice."] }];
+    const revisionCode = `privacy-lock-boundary-${randomUUID()}`;
+    const nextRevision = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: document.id,
+        sequence: latestRevision.sequence + 1,
+        editVersion: 1,
+        status: "APPROVED",
+        contentVersion: 1,
+        title,
+        summary,
+        sections,
+        contentHash: computeLegalRevisionContentHash({
+          contentVersion: 1,
+          title,
+          summary,
+          sections,
+        }),
+        revisionCode,
+        effectiveAt: new Date(Date.now() - 1_000),
+        approvalEvidence: "Scheduled privacy lock-boundary E2E fixture",
+        approvedBy: operator.operatorId,
+        approvedAt: new Date(),
+      },
+    });
+    const startsAt = new Date((await databaseNow(prisma)).getTime() + 3_000);
+    const scheduled = await legalDocuments.publishRevision(
+      operator,
+      "privacy",
+      nextRevision.id,
+      {
+        expectedGeneration: document.generation,
+        startsAt: startsAt.toISOString(),
+        reason: "Scheduled privacy lock-boundary E2E fixture",
+        reasonCode: "E2E_PRIVACY_LOCK_BOUNDARY",
+      },
+      key("privacy-lock-boundary-publish"),
+    );
+    let releaseDocument!: () => void;
+    const documentMayUnlock = new Promise<void>((resolve) => {
+      releaseDocument = resolve;
+    });
+    let documentLocked!: () => void;
+    const documentIsLocked = new Promise<void>((resolve) => {
+      documentLocked = resolve;
+    });
+    const holdingDocument = prisma.$transaction(
+      async (transaction) => {
+        await transaction.$queryRaw`
+          SELECT key FROM "legal_documents" WHERE key = 'privacy' FOR UPDATE
+        `;
+        documentLocked();
+        await documentMayUnlock;
+      },
+      { timeout: 10_000 },
+    );
+    const staleBody = requestInput("privacy-lock-boundary-stale");
+    const staleKey = key("privacy-lock-boundary-stale-create");
+    let staleRequest: Promise<unknown> | undefined;
+    try {
+      await Promise.race([documentIsLocked, holdingDocument]);
+      staleRequest = quotes
+        .createRequest(staleBody, "198.51.100.101", staleKey)
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      await vi.waitFor(
+        async () => {
+          const rows = await prisma.$queryRaw<Array<{ blocked: bigint }>>`
+            SELECT count(*)::bigint AS blocked
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND query LIKE '%FROM "legal_documents"%'
+              AND query LIKE '%FOR SHARE%'
+          `;
+          expect(rows[0]?.blocked).toBeGreaterThan(0n);
+        },
+        { timeout: 2_000, interval: 25 },
+      );
+      expect((await databaseNow(prisma)).getTime()).toBeLessThan(
+        startsAt.getTime(),
+      );
+      await vi.waitFor(
+        async () => {
+          expect((await databaseNow(prisma)).getTime()).toBeGreaterThanOrEqual(
+            startsAt.getTime(),
+          );
+        },
+        { timeout: 5_000, interval: 25 },
+      );
+      releaseDocument();
+      await holdingDocument;
+      await expect(staleRequest).resolves.toMatchObject({
+        status: 503,
+        response: { code: "LAUNCH_APPROVAL_REQUIRED" },
+      });
+      await expect(
+        prisma.customer.count({ where: { email: staleBody.contact.email } }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.legalAcceptanceDecision.count({
+          where: { commandIdentity: staleKey },
+        }),
+      ).resolves.toBe(0);
+      await expect(
+        prisma.idempotencyRecord.count({
+          where: {
+            namespace: "quote-request.create",
+            idempotencyKey: staleKey,
+          },
+        }),
+      ).resolves.toBe(0);
+
+      const fresh = await quotes.createRequest(
+        {
+          ...requestInput("privacy-lock-boundary-fresh"),
+          privacyNoticeRevision: revisionCode,
+        },
+        "198.51.100.102",
+        key("privacy-lock-boundary-fresh-create"),
+      );
+      const decision = await prisma.legalAcceptanceDecision.findUniqueOrThrow({
+        where: { quoteRequestId: fresh.requestId },
+      });
+      const privacyAcceptance = await prisma.legalAcceptance.findFirstOrThrow({
+        where: {
+          quoteRequestId: fresh.requestId,
+          purpose: "PRIVACY_NOTICE_ACKNOWLEDGED",
+        },
+      });
+      expect(decision.decidedAt.getTime()).toBeGreaterThanOrEqual(
+        startsAt.getTime(),
+      );
+      expect(privacyAcceptance).toMatchObject({
+        revisionId: nextRevision.id,
+        decisionId: decision.id,
+        acceptedAt: decision.decidedAt,
+      });
+    } finally {
+      releaseDocument();
+      await holdingDocument.catch(() => undefined);
+      await staleRequest?.catch(() => undefined);
+      await prisma.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          "SET LOCAL session_replication_role = 'replica'",
+        );
+        await transaction.$executeRaw`
+          DELETE FROM legal_document_publications
+          WHERE id = ${scheduled.id}::uuid
+        `;
+        await transaction.$executeRaw`
+          UPDATE legal_document_publications
+          SET ends_at = ${previousPublication.endsAt}
+          WHERE id = ${previousPublication.id}::uuid
         `;
         await transaction.$executeRaw`
           UPDATE legal_documents
