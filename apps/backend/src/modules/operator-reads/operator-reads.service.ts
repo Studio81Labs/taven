@@ -2226,7 +2226,7 @@ export function orderBarriers(
   return codes;
 }
 
-function orderActions(
+export function orderActions(
   operator: OperatorContext,
   fulfilment: FulfilmentProjectionDto,
   shipmentPlans: ReadonlyArray<{ id: string }>,
@@ -2393,9 +2393,15 @@ function orderActions(
   }
   add(
     canFinance &&
-      !["CANCELLED", "CANCELLED_SETTLED", "REFUNDED", "COMPLETED"].includes(
-        fulfilment.orderStatus,
-      ),
+      ![
+        "CANCELLED",
+        "CANCELLED_SETTLED",
+        "REFUNDED",
+        "COMPLETED",
+        "SHIPPED",
+        "DELIVERED",
+        "PARTIALLY_FULFILLED",
+      ].includes(fulfilment.orderStatus),
     "CANCEL_ORDER",
     "ORDER",
     fulfilment.orderId,

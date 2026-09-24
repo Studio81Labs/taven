@@ -6,7 +6,11 @@ import {
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
-import { OperatorReadsService, orderBarriers } from "./operator-reads.service";
+import {
+  OperatorReadsService,
+  orderActions,
+  orderBarriers,
+} from "./operator-reads.service";
 
 const nodeId = "11111111-1111-4111-8111-111111111111";
 const cursorId = "22222222-2222-4222-8222-222222222222";
@@ -310,5 +314,43 @@ describe("operator order barriers", () => {
     expect(orderBarriers(fulfilment as never, [], [], 0n)).toContain(
       "SHIPMENT_UNRESOLVED",
     );
+  });
+});
+
+describe("operator order actions", () => {
+  it("does not advertise cancellation after shipment handoff", () => {
+    const operator = {
+      operatorId: "55555555-5555-4555-8555-555555555555",
+      role: "ADMIN" as const,
+      permissions: [
+        OPERATOR_PERMISSIONS.OPERATIONS_WRITE,
+        OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
+      ],
+      nodeIds: [nodeId],
+      authenticationMethod: "DEVELOPMENT_PASSWORD" as const,
+      sessionId: "66666666-6666-4666-8666-666666666666",
+    };
+    const fulfilment = {
+      orderId: "77777777-7777-4777-8777-777777777777",
+      orderStatus: "IN_PRODUCTION",
+      jobs: [],
+      shipments: [],
+      replacementRequests: [],
+      priceAdjustments: [],
+      claims: [],
+    };
+    expect(
+      orderActions(operator, fulfilment as never, [], [], []).some(
+        (action) => action.action === "CANCEL_ORDER" && action.enabled,
+      ),
+    ).toBe(true);
+    for (const status of ["SHIPPED", "DELIVERED", "PARTIALLY_FULFILLED"]) {
+      fulfilment.orderStatus = status;
+      expect(
+        orderActions(operator, fulfilment as never, [], [], []).some(
+          (action) => action.action === "CANCEL_ORDER",
+        ),
+      ).toBe(false);
+    }
   });
 });

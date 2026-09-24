@@ -151,8 +151,10 @@ function harness() {
     }),
   );
   const printingReadiness = vi.fn().mockResolvedValue([]);
+  const matchingShipment = vi.fn().mockResolvedValue(null);
   const prisma = {
     job: { findFirst },
+    shipment: { findFirst: matchingShipment },
     $queryRaw: printingReadiness,
     $transaction: async (callback: (tx: object) => Promise<unknown>) =>
       callback({}),
@@ -171,11 +173,50 @@ function harness() {
     headObject,
     createDownloadUrl,
     printingReadiness,
+    matchingShipment,
     sourceDeleteAfter,
   };
 }
 
 describe("operator job artifact downloads", () => {
+  it("enables packing only with a shipment in the same plan", async () => {
+    const test = harness();
+    test.job.status = JobStatus.QC_APPROVED;
+    const writer: OperatorContext = {
+      ...operator,
+      role: "OPERATOR",
+      permissions: [
+        OPERATOR_PERMISSIONS.OPERATIONS_READ,
+        OPERATOR_PERMISSIONS.OPERATIONS_WRITE,
+      ],
+    };
+    const withoutShipment = await test.service.detail(writer, jobId);
+    expect(withoutShipment.actions).toContainEqual(
+      expect.objectContaining({
+        action: "PACK_JOB",
+        enabled: false,
+        blockingCodes: ["MATCHING_SHIPMENT_REQUIRED"],
+      }),
+    );
+    test.matchingShipment.mockResolvedValue({ id: sourceId });
+    const withShipment = await test.service.detail(writer, jobId);
+    expect(withShipment.actions).toContainEqual(
+      expect.objectContaining({
+        action: "PACK_JOB",
+        enabled: true,
+        blockingCodes: [],
+      }),
+    );
+    expect(test.matchingShipment).toHaveBeenCalledWith({
+      where: {
+        orderId,
+        shipmentPlanId,
+        status: { in: ["PLANNED", "LABEL_CREATED"] },
+      },
+      select: { id: true },
+    });
+  });
+
   it("requires current reservation, machine, and mount facts before enabling printing", async () => {
     const test = harness();
     test.job.status = JobStatus.GCODE_READY;

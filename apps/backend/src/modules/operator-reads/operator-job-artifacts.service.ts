@@ -12,6 +12,7 @@ import {
   JobStatus,
   Prisma,
   RetentionHold,
+  ShipmentStatus,
   SliceKind,
 } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -63,6 +64,7 @@ function jobActions(
   operator: OperatorContext,
   job: OperatorJobDetailDto,
   readiness: { held: boolean; machineReady: boolean; mounted: boolean },
+  matchingShipment: boolean,
 ): OperatorActionDto[] {
   const actions: OperatorActionDto[] = [];
   const canOperate = operator.permissions.includes(
@@ -125,7 +127,7 @@ function jobActions(
       add("APPROVE_QC");
       break;
     case JobStatus.QC_APPROVED:
-      add("PACK_JOB", ["MATCHING_SHIPMENT_REQUIRED"]);
+      add("PACK_JOB", matchingShipment ? [] : ["MATCHING_SHIPMENT_REQUIRED"]);
       break;
     case JobStatus.FAILED:
     case JobStatus.QC_REJECTED:
@@ -288,6 +290,19 @@ export class OperatorJobArtifactsService {
       job.status === JobStatus.GCODE_READY
         ? await this.printingReadiness(job)
         : { held: false, machineReady: false, mounted: false };
+    const matchingShipment =
+      job.status === JobStatus.QC_APPROVED
+        ? await this.prisma.shipment.findFirst({
+            where: {
+              orderId: job.orderId,
+              shipmentPlanId: job.shipmentPlanId,
+              status: {
+                in: [ShipmentStatus.PLANNED, ShipmentStatus.LABEL_CREATED],
+              },
+            },
+            select: { id: true },
+          })
+        : null;
     const promisedDate = job.order.individualOrigin?.quote.promisedDate;
     const acceptedItems = new Map(
       (job.order.automaticQuoteDraft?.items ?? []).map((item) => [
@@ -373,7 +388,12 @@ export class OperatorJobArtifactsService {
       },
       actions: [],
     };
-    detail.actions = jobActions(operator, detail, readiness);
+    detail.actions = jobActions(
+      operator,
+      detail,
+      readiness,
+      !!matchingShipment,
+    );
     return detail;
   }
 
