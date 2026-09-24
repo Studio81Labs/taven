@@ -69,6 +69,22 @@ Attestation establishes origin/integrity, not absence of vulnerabilities or S3
 compatibility. Review publisher advisories/SBOM or an image vulnerability report
 and escalate an unmitigated issue relevant to the approved test use.
 
+The #249 adoption check on 2026-09-24 independently verified the expected
+source, workflow, tag and index subject with the command above. The native
+linux/arm64 image reports server `RELEASE.2026-09-16T00-00-00Z` at source
+`2a4d51406b7ed87af5fe6fe0f801f3290f96eb3c` and bundled `mcli` at the
+same release, client commit `e952aa78f10a2b77dd525a2b7e3143bcda0cd377`.
+The [publisher release](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-09-16T00-00-00Z)
+records its passed Go VulnCheck and downloadable SPDX 2.3 package SBOM. An
+arm64 Docker Scout image scan reported seven high findings and no critical
+findings. Its two server-module matches, CVE-2018-1000538 and
+CVE-2026-39414, refer to behavior fixed before this release (the latter in
+June 2026). The other five matches concern OS `acl`, `attr`, `pcre2` and
+`glibc`; the server and bundled client are static executables, and the
+reported exploit conditions are outside the isolated local/CI S3 test path.
+The scan is retained as adoption evidence, not a claim that the image is free
+of vulnerabilities. Reassess it with each reviewed image update.
+
 ## Application, runtime and data boundaries
 
 Production/staging Garage v2.3.0 and R2 choices remain unchanged. No deployment

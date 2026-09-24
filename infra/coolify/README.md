@@ -200,8 +200,9 @@ in #39.
 ## Local development
 
 Use only `infra/docker/docker-compose.yml` for local development and
-integration tests. It contains the local PostgreSQL, Redis, MinIO, Garage
-contract, backend, web, admin, slicer, and all backend-image worker services.
+integration tests. It contains local PostgreSQL, Redis, Silo (under the
+`minio` compatibility service alias), the Garage contract, backend, web,
+admin, slicer, and all backend-image worker services.
 Its local-only defaults enable the private test flows. `garage.toml` is used
 only by the local Garage contract service; it is not a Coolify deployment
 definition.

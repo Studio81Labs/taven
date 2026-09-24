@@ -47,8 +47,19 @@ is deliberately excluded; start its isolated Node worker, Orca runtime, and
 dispatcher containers explicitly with `pnpm stack:worker`.
 
 Default local ports are `3001` for the API, `3000` for the public web app, and
-`3002` for admin. PostgreSQL uses `5435`, Redis uses `6381`, and MinIO uses
-`9010` with its console on `9011`, avoiding the sibling repositories' defaults.
+`3002` for admin. PostgreSQL uses `5435`, Redis uses `6381`, and the local Silo
+S3 test store uses `9010` with its console on `9011`, avoiding the sibling
+repositories' defaults. The `minio` Compose service name remains an endpoint
+compatibility alias.
+
+The Silo stack uses the new `taven-dev-silo` Compose project and `silodata`
+volume, with a fresh PostgreSQL database and Redis volume. Existing
+`taven-dev` volumes are retained. If the old project is running, stop it with
+`docker compose -p taven-dev -f infra/docker/docker-compose.yml down` before
+starting the new stack so the loopback ports are free. This does not migrate
+historical local database records or objects; keep the old project and its
+volumes together for retained-data access. Do not mount its MinIO data volume
+into Silo or pair its database with a new empty Silo store.
 
 Manage local infrastructure independently with:
 
@@ -68,7 +79,7 @@ This builds the same independently runnable backend, web, and admin images used
 by the integration stack, applies Prisma migrations once, and waits until every
 long-running service is healthy. The public app is available at
 `http://localhost:3000`, the API at `http://localhost:3001`, the admin app at
-`http://localhost:3002`, and MinIO at `http://localhost:9010`. All published
+`http://localhost:3002`, and Silo at `http://localhost:9010`. All published
 ports bind to loopback and every credential in the Compose file is local-only.
 The local Compose overlay intentionally enables the development/staging test
 flows (binding quote/offer, quote-photo upload, checkout-payment, and the web
@@ -82,18 +93,25 @@ public web remains acquisition-disabled until its separately approved content
 manifest and runtime gate allow it.
 
 Follow logs or stop the stack with `pnpm stack:logs` and `pnpm stack:down`.
-`pnpm stack:reset` also deletes the local PostgreSQL, Redis, MinIO, and Garage
-volumes; use it only when intentionally testing a clean-volume startup.
+`pnpm stack:reset` also deletes the active project's local PostgreSQL, Redis,
+Silo, and Garage volumes; use it only when intentionally testing a clean-volume
+startup. It does not delete the retained `taven-dev` project volumes.
 
 The slicer fixture worker is deliberately excluded from `stack:up`. Start it
 explicitly with `pnpm stack:worker`. Run the same object-storage integration
-contract against the default MinIO or the pinned Garage compatibility profile
+contract against local Silo or the pinned Garage compatibility profile
 with:
 
 ```bash
 pnpm stack:storage:test:minio
 pnpm stack:storage:test:garage
 ```
+
+`stack:storage:test:minio` is the retained command alias for the Silo contract
+target. It tests a real S3 server, not the historical MinIO image. Taven
+maintainers under `@akadlec` review future Silo releases, exact digests,
+publisher provenance, bundled client, advisories, and contract evidence in a
+dedicated PR; there is no automatic provider fallback or floating update.
 
 Garage is exposed only while its compatibility profile is running, at
 `http://localhost:3900`. Each contract command resets only its dedicated
