@@ -22,6 +22,10 @@ import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { OrdersService } from "../orders/orders.service";
 import type { FulfilmentProjectionDto } from "../orders/orders.dto";
+import type {
+  FulfilmentClaimDto,
+  FulfilmentRefundDto,
+} from "../orders/orders.dto";
 import { referenceProfileActivationNotice } from "../resources/reference-profile-activation-notice.dto";
 import {
   CapacityReservationPageDto,
@@ -38,6 +42,7 @@ import {
   OperatorRefundPageDto,
   OperatorSettlementPageDto,
   OperatorFulfilmentHistoryPageDto,
+  OperatorClaimChildHistoryPageDto,
   type OperatorFulfilmentHistoryCursorsDto,
   type OperatorSettlementDto,
   type OperatorPaymentDto,
@@ -908,18 +913,33 @@ export class OperatorReadsService {
             }))
           )
             throw new BadRequestException("cursor is invalid");
-          return fulfilmentHistoryPage(
+          const page = fulfilmentHistoryPage(
             await tx.claim.findMany({
               where: { orderId },
               include: {
-                resolutions: true,
-                refunds: true,
-                reshipmentAuthorizations: true,
+                resolutions: {
+                  orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                  take: 26,
+                },
+                refunds: {
+                  orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                  take: 26,
+                },
+                reshipmentAuthorizations: {
+                  orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                  take: 26,
+                },
               },
               ...pagination,
             }),
             limit,
           );
+          return {
+            ...page,
+            items: page.items.map((claim) =>
+              boundedClaim(claim as FulfilmentClaimDto, 25),
+            ),
+          };
         }
         case "priceAdjustments": {
           if (
@@ -933,6 +953,97 @@ export class OperatorReadsService {
           return fulfilmentHistoryPage(
             await tx.priceAdjustment.findMany({
               where: { orderId },
+              ...pagination,
+            }),
+            limit,
+          );
+        }
+      }
+    });
+  }
+
+  async claimChildHistory(
+    operator: OperatorContext,
+    orderId: string,
+    claimId: string,
+    kind: string,
+    input: PageInput,
+  ): Promise<OperatorClaimChildHistoryPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    assertUuid(orderId, "orderId");
+    assertUuid(claimId, "claimId");
+    if (!isClaimChildHistoryKind(kind))
+      throw new BadRequestException("kind is invalid");
+    if (input.cursor) assertUuid(input.cursor, "cursor");
+    const limit = pageLimit(input.limit);
+    const nodeId = operatorNode(operator);
+    return this.prisma.$transaction(async (tx) => {
+      await assertOperationalOrderScope(tx, orderId, nodeId);
+      if (
+        !(await tx.claim.findFirst({
+          where: { id: claimId, orderId },
+          select: { id: true },
+        }))
+      )
+        throw new NotFoundException("Claim was not found");
+      const pagination = {
+        orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }],
+        take: limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      };
+      switch (kind) {
+        case "resolutions": {
+          if (
+            input.cursor &&
+            !(await tx.claimSlotResolution.findFirst({
+              where: { id: input.cursor, claimId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          return claimChildHistoryPage(
+            await tx.claimSlotResolution.findMany({
+              where: { claimId },
+              ...pagination,
+            }),
+            limit,
+          );
+        }
+        case "refunds": {
+          if (
+            input.cursor &&
+            !(await tx.refundTransaction.findFirst({
+              where: { id: input.cursor, claimId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          const page = claimChildHistoryPage(
+            await tx.refundTransaction.findMany({
+              where: { claimId },
+              ...pagination,
+            }),
+            limit,
+          );
+          return {
+            ...page,
+            items: page.items.map((refund) =>
+              claimRefund(refund as FulfilmentRefundDto),
+            ),
+          };
+        }
+        case "reshipmentAuthorizations": {
+          if (
+            input.cursor &&
+            !(await tx.reshipmentAuthorization.findFirst({
+              where: { id: input.cursor, claimId },
+              select: { id: true },
+            }))
+          )
+            throw new BadRequestException("cursor is invalid");
+          return claimChildHistoryPage(
+            await tx.reshipmentAuthorization.findMany({
+              where: { claimId },
               ...pagination,
             }),
             limit,
@@ -1836,6 +1947,15 @@ type FulfilmentHistoryKind =
   | "claims"
   | "priceAdjustments";
 
+type ClaimChildHistoryKind =
+  "resolutions" | "refunds" | "reshipmentAuthorizations";
+
+function isClaimChildHistoryKind(
+  value: string,
+): value is ClaimChildHistoryKind {
+  return ["resolutions", "refunds", "reshipmentAuthorizations"].includes(value);
+}
+
 function isFulfilmentHistoryKind(
   value: string,
 ): value is FulfilmentHistoryKind {
@@ -1886,6 +2006,66 @@ function fulfilmentHistoryPage<T extends { id: string }>(
   };
 }
 
+function claimChildHistoryPage<T extends { id: string }>(
+  rows: T[],
+  limit: number,
+): OperatorClaimChildHistoryPageDto {
+  const page = rows.slice(0, limit);
+  return {
+    items: JSON.parse(
+      JSON.stringify(page, (_key, value: unknown) =>
+        typeof value === "bigint" ? value.toString() : value,
+      ),
+    ) as OperatorClaimChildHistoryPageDto["items"],
+    ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+  };
+}
+
+function boundedClaim(
+  claim: FulfilmentClaimDto,
+  limit: number,
+): FulfilmentClaimDto {
+  const resolutions = historySlice(claim.resolutions, limit);
+  const refunds = historySlice(claim.refunds, limit);
+  const reshipmentAuthorizations = historySlice(
+    claim.reshipmentAuthorizations,
+    limit,
+  );
+  return {
+    ...claim,
+    resolutions: resolutions.items,
+    refunds: refunds.items.map(claimRefund),
+    reshipmentAuthorizations: reshipmentAuthorizations.items,
+    historyNextCursors: {
+      ...(resolutions.nextCursor
+        ? { resolutions: resolutions.nextCursor }
+        : {}),
+      ...(refunds.nextCursor ? { refunds: refunds.nextCursor } : {}),
+      ...(reshipmentAuthorizations.nextCursor
+        ? { reshipmentAuthorizations: reshipmentAuthorizations.nextCursor }
+        : {}),
+    },
+  };
+}
+
+function claimRefund(refund: FulfilmentRefundDto): FulfilmentRefundDto {
+  return {
+    id: refund.id,
+    paymentId: refund.paymentId,
+    claimId: refund.claimId,
+    priceAdjustmentId: refund.priceAdjustmentId,
+    provider: refund.provider,
+    providerRefundId: refund.providerRefundId,
+    amountMinor: refund.amountMinor,
+    reason: refund.reason,
+    status: refund.status,
+    requestedAt: refund.requestedAt,
+    completedAt: refund.completedAt,
+    createdAt: refund.createdAt,
+    updatedAt: refund.updatedAt,
+  };
+}
+
 function boundedFulfilment(
   full: FulfilmentProjectionDto,
   limit: number,
@@ -1906,7 +2086,7 @@ function boundedFulfilment(
       shipments: shipments.items,
       slots: slots.items,
       replacementRequests: replacementRequests.items,
-      claims: claims.items,
+      claims: claims.items.map((claim) => boundedClaim(claim, limit)),
       priceAdjustments: priceAdjustments.items,
     },
     nextCursors: {

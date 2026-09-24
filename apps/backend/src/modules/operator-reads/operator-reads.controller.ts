@@ -44,6 +44,7 @@ import {
   OperatorRefundPageDto,
   OperatorSettlementPageDto,
   OperatorFulfilmentHistoryPageDto,
+  OperatorClaimChildHistoryPageDto,
   PriceListPageDto,
   PriceListDetailDto,
   ReferenceProfileActivationNoticePageDto,
@@ -244,6 +245,39 @@ export class OperatorReadsController {
     return this.reads.fulfilmentHistory(
       operator,
       orderId,
+      kind,
+      pageQuery(query, PAGE_FIELDS),
+    );
+  }
+
+  @Get("admin/orders/:orderId/fulfilment-history/claims/:claimId/:kind")
+  @ApiOperation({ summary: "Page through scoped claim child history" })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiParam({ name: "claimId", type: String, format: "uuid" })
+  @ApiParam({
+    name: "kind",
+    enum: ["resolutions", "refunds", "reshipmentAuthorizations"],
+  })
+  @ApiOkResponse({ type: OperatorClaimChildHistoryPageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  claimChildHistory(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Param("claimId") claimId: string,
+    @Param("kind") kind: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorClaimChildHistoryPageDto> {
+    return this.reads.claimChildHistory(
+      operator,
+      orderId,
+      claimId,
       kind,
       pageQuery(query, PAGE_FIELDS),
     );

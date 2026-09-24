@@ -164,3 +164,83 @@ describe("OperatorReadsService reference-profile activation notices", () => {
     });
   });
 });
+
+describe("OperatorReadsService claim child history", () => {
+  it("pages a scoped claim and omits internal refund dispatch fields", async () => {
+    const orderId = "77777777-7777-4777-8777-777777777777";
+    const claimId = "88888888-8888-4888-8888-888888888888";
+    const now = new Date("2026-01-02T03:04:05.678Z");
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: cursorId,
+        paymentId: "99999999-9999-4999-8999-999999999999",
+        claimId,
+        priceAdjustmentId: null,
+        provider: "SANDBOX",
+        providerRefundId: null,
+        amountMinor: 100n,
+        reason: "CUSTOMER_CANCELLATION",
+        status: "FAILED",
+        requestedAt: now,
+        completedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        idempotencyKey: "internal-command-key",
+      },
+      { id: secondReservationId },
+    ]);
+    const transaction = {
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ node_id: nodeId }]),
+      claim: { findFirst: vi.fn().mockResolvedValue({ id: claimId }) },
+      refundTransaction: { findMany },
+    };
+    const service = new OperatorReadsService(
+      {
+        $transaction: (callback: (tx: typeof transaction) => unknown) =>
+          callback(transaction),
+      } as never,
+      {} as never,
+    );
+    const operator = {
+      operatorId: "55555555-5555-4555-8555-555555555555",
+      role: "VIEWER" as const,
+      permissions: [OPERATOR_PERMISSIONS.OPERATIONS_READ],
+      nodeIds: [nodeId],
+      authenticationMethod: "DEVELOPMENT_PASSWORD" as const,
+      sessionId: "66666666-6666-4666-8666-666666666666",
+    };
+
+    await expect(
+      service.claimChildHistory(operator, orderId, claimId, "refunds", {
+        limit: 1,
+      }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: cursorId,
+          paymentId: "99999999-9999-4999-8999-999999999999",
+          claimId,
+          priceAdjustmentId: null,
+          provider: "SANDBOX",
+          providerRefundId: null,
+          amountMinor: "100",
+          reason: "CUSTOMER_CANCELLATION",
+          status: "FAILED",
+          requestedAt: now.toISOString(),
+          completedAt: null,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        },
+      ],
+      nextCursor: cursorId,
+    });
+    expect(findMany).toHaveBeenCalledWith({
+      where: { claimId },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 2,
+    });
+  });
+});

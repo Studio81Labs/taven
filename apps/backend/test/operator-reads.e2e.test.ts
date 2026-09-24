@@ -1079,6 +1079,32 @@ describe("operator read contracts", () => {
         )
       ).status,
     ).toBe(400);
+    const absentClaimId = randomUUID();
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/fulfilment-history/claims/${absentClaimId}/refunds`,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/fulfilment-history/claims/${absentClaimId}/invalid`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(
+          new URL(
+            `/admin/orders/${fixture.orderId}/fulfilment-history/claims/${absentClaimId}/refunds`,
+            baseUrl,
+          ),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
     expect(
       (
         await fetch(

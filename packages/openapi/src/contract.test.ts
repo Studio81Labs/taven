@@ -390,14 +390,20 @@ describe("OpenAPI artifact", () => {
                   name === "kind"
                     ? {
                         type: "string",
-                        enum: [
-                          "jobs",
-                          "shipments",
-                          "slots",
-                          "replacementRequests",
-                          "claims",
-                          "priceAdjustments",
-                        ],
+                        enum: path.includes("/claims/{claimId}/")
+                          ? [
+                              "resolutions",
+                              "refunds",
+                              "reshipmentAuthorizations",
+                            ]
+                          : [
+                              "jobs",
+                              "shipments",
+                              "slots",
+                              "replacementRequests",
+                              "claims",
+                              "priceAdjustments",
+                            ],
                       }
                     : { type: "string", format: "uuid" },
               }),

@@ -3570,6 +3570,9 @@
             "format": "date-time",
             "type": "string"
           },
+          "historyNextCursors": {
+            "$ref": "#/components/schemas/FulfilmentClaimHistoryCursorsDto"
+          },
           "id": {
             "format": "uuid",
             "type": "string"
@@ -3644,6 +3647,23 @@
           "refunds",
           "reshipmentAuthorizations"
         ],
+        "type": "object"
+      },
+      "FulfilmentClaimHistoryCursorsDto": {
+        "properties": {
+          "refunds": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reshipmentAuthorizations": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "resolutions": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "FulfilmentClaimSlotResolutionDto": {
@@ -7905,6 +7925,34 @@
         },
         "required": [
           "methods"
+        ],
+        "type": "object"
+      },
+      "OperatorClaimChildHistoryPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FulfilmentClaimSlotResolutionDto"
+                },
+                {
+                  "$ref": "#/components/schemas/FulfilmentRefundDto"
+                },
+                {
+                  "$ref": "#/components/schemas/FulfilmentReshipmentAuthorizationDto"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -17982,6 +18030,95 @@
           }
         ],
         "summary": "Page through scoped fulfilment lineage",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment-history/claims/{claimId}/{kind}": {
+      "get": {
+        "operationId": "OperatorReadsController_claimChildHistory",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "resolutions",
+                "refunds",
+                "reshipmentAuthorizations"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorClaimChildHistoryPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Page through scoped claim child history",
         "tags": [
           "operator reads"
         ]

@@ -6,6 +6,9 @@ import {
 } from "@nestjs/swagger";
 import {
   FulfilmentClaimDto,
+  FulfilmentClaimSlotResolutionDto,
+  FulfilmentRefundDto,
+  FulfilmentReshipmentAuthorizationDto,
   FulfilmentJobDto,
   FulfilmentPriceAdjustmentDto,
   FulfilmentProjectionDto,
@@ -859,6 +862,32 @@ export class OperatorFulfilmentHistoryPageDto {
     | FulfilmentReplacementRequestDto
     | FulfilmentClaimDto
     | FulfilmentPriceAdjustmentDto
+  >;
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
+}
+
+@ApiExtraModels(
+  FulfilmentClaimSlotResolutionDto,
+  FulfilmentRefundDto,
+  FulfilmentReshipmentAuthorizationDto,
+)
+export class OperatorClaimChildHistoryPageDto {
+  @ApiProperty({
+    type: "array",
+    items: {
+      oneOf: [
+        FulfilmentClaimSlotResolutionDto,
+        FulfilmentRefundDto,
+        FulfilmentReshipmentAuthorizationDto,
+      ].map((model) => ({ $ref: getSchemaPath(model) })),
+    },
+  })
+  items!: Array<
+    | FulfilmentClaimSlotResolutionDto
+    | FulfilmentRefundDto
+    | FulfilmentReshipmentAuthorizationDto
   >;
 
   @ApiPropertyOptional(UUID)

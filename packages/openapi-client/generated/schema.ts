@@ -1161,6 +1161,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment-history/claims/{claimId}/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped claim child history */
+        get: operations["OperatorReadsController_claimChildHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/adjustments": {
         parameters: {
             query?: never;
@@ -3536,6 +3553,7 @@ export interface components {
         FulfilmentClaimDto: {
             /** Format: date-time */
             createdAt: string;
+            historyNextCursors?: components["schemas"]["FulfilmentClaimHistoryCursorsDto"];
             /** Format: uuid */
             id: string;
             /** Format: uuid */
@@ -3556,6 +3574,14 @@ export interface components {
             status: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        FulfilmentClaimHistoryCursorsDto: {
+            /** Format: uuid */
+            refunds?: string;
+            /** Format: uuid */
+            reshipmentAuthorizations?: string;
+            /** Format: uuid */
+            resolutions?: string;
         };
         FulfilmentClaimSlotResolutionDto: {
             /** Format: uuid */
@@ -4782,6 +4808,11 @@ export interface components {
         };
         OperatorAuthMethodsDto: {
             methods: ("EMAIL_PASSWORD" | "GITHUB")[];
+        };
+        OperatorClaimChildHistoryPageDto: {
+            items: (components["schemas"]["FulfilmentClaimSlotResolutionDto"] | components["schemas"]["FulfilmentRefundDto"] | components["schemas"]["FulfilmentReshipmentAuthorizationDto"])[];
+            /** Format: uuid */
+            nextCursor?: string;
         };
         OperatorFinancialProjectionDto: {
             activeContractNetMinor?: string | null;
@@ -8684,6 +8715,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperatorFulfilmentHistoryPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_claimChildHistory: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                kind: "resolutions" | "refunds" | "reshipmentAuthorizations";
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorClaimChildHistoryPageDto"];
                 };
             };
         };

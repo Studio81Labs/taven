@@ -738,6 +738,17 @@ export class FulfilmentReshipmentAuthorizationDto {
   updatedAt!: string;
 }
 
+export class FulfilmentClaimHistoryCursorsDto {
+  @ApiPropertyOptional(UUID)
+  resolutions?: string;
+
+  @ApiPropertyOptional(UUID)
+  refunds?: string;
+
+  @ApiPropertyOptional(UUID)
+  reshipmentAuthorizations?: string;
+}
+
 export class FulfilmentClaimDto {
   @ApiProperty(UUID)
   id!: string;
@@ -780,6 +791,9 @@ export class FulfilmentClaimDto {
 
   @ApiProperty({ type: [FulfilmentReshipmentAuthorizationDto] })
   reshipmentAuthorizations!: FulfilmentReshipmentAuthorizationDto[];
+
+  @ApiPropertyOptional({ type: FulfilmentClaimHistoryCursorsDto })
+  historyNextCursors?: FulfilmentClaimHistoryCursorsDto;
 }
 
 export class FulfilmentPriceAdjustmentDto {
