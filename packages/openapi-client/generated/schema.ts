@@ -1569,6 +1569,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/quote-requests/{requestId}/composer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read typed offer composer choices and current policy */
+        get: operations["OperatorQuoteRequestsController_composerChoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/quote-requests/{requestId}/expire": {
         parameters: {
             query?: never;
@@ -1580,6 +1597,108 @@ export interface paths {
         put?: never;
         /** Expire an overdue individual offer */
         post: operations["OperatorQuoteRequestsController_expire"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/model-uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Initiate a request-scoped operator model upload */
+        post: operations["OperatorQuoteRequestsController_initiateModelUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/model-uploads/{uploadId}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm and attach a verified operator model */
+        post: operations["OperatorQuoteRequestsController_confirmModelUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List attached models and preparation evidence */
+        get: operations["OperatorQuoteRequestsController_modelsForRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/models/{modelFileId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Download an attached retained model source */
+        post: operations["OperatorQuoteRequestsController_downloadModel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/models/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Attach a retained automatic handoff model */
+        post: operations["OperatorQuoteRequestsController_importHandoffModel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/models/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select inspected bodies for an immutable request model */
+        post: operations["OperatorQuoteRequestsController_selectModelBodies"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1603,6 +1722,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/quote-requests/{requestId}/offers/{quoteId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one immutable offer without a customer capability */
+        get: operations["OperatorQuoteRequestsController_operatorOffer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/offers/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate and preview exact offer price and payment schedule */
+        post: operations["OperatorQuoteRequestsController_previewDraftOffer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/quote-requests/{requestId}/offers/reissue": {
         parameters: {
             query?: never;
@@ -1614,6 +1767,40 @@ export interface paths {
         put?: never;
         /** Reissue the current immutable individual offer */
         post: operations["OperatorQuoteRequestsController_reissue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/references/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare selected model reference slices with worker v2 */
+        post: operations["OperatorQuoteRequestsController_prepareReference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/quote-requests/{requestId}/references/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read selected model reference preparation status */
+        get: operations["OperatorQuoteRequestsController_referenceStatus"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3493,6 +3680,10 @@ export interface components {
              */
             status: "ok";
         };
+        ImportQuoteRequestModelDto: {
+            /** Format: uuid */
+            modelFileId: string;
+        };
         InitiateModelUploadDto: {
             /** @example model/stl */
             contentType: string;
@@ -3608,6 +3799,7 @@ export interface components {
             contractTotalMinor: number;
             deliveryDestination: components["schemas"]["OfferDeliveryDestinationDto"];
             depositMinor: number;
+            expectedSelectionVersion?: number;
             /** Format: date-time */
             expiresAt: string;
             inputSnapshot: {
@@ -4017,6 +4209,8 @@ export interface components {
             /** Format: uuid */
             modelGeometryId: string;
             /** Format: uuid */
+            modelSelectionId?: string;
+            /** Format: uuid */
             primaryReferenceSliceResultId?: string;
             /** Format: uuid */
             printConfigRevisionId: string;
@@ -4046,6 +4240,26 @@ export interface components {
             };
             endpointType: string;
             providerEndpointId: string;
+        };
+        OfferDraftPreviewDto: {
+            balanceMinor: number;
+            components: components["schemas"]["OfferPreviewPriceComponentDto"][];
+            contractTotalMinor: number;
+            depositMinor: number;
+            /** Format: uuid */
+            legalClaimsRevisionId: string;
+            /** Format: uuid */
+            legalTermsRevisionId: string;
+            netAmountMinor: number;
+            paymentSchedules: components["schemas"]["OfferPaymentScheduleDto"][];
+            /** Format: uuid */
+            priceListId: string;
+            /** Format: uuid */
+            requestId: string;
+            selectionVersion: number;
+            shipmentPlans: components["schemas"]["OfferShipmentPlanDto"][];
+            termsRevision: string;
+            vatAmountMinor: number;
         };
         OfferIssuedDto: {
             claimPolicyRevision?: string;
@@ -4129,6 +4343,8 @@ export interface components {
             material: "PLA" | "PETG";
             /** Format: uuid */
             modelGeometryId: string;
+            /** Format: uuid */
+            modelSelectionId?: string | null;
             ordinal: number;
             /** Format: uuid */
             primaryReferenceSliceResultId: string | null;
@@ -4345,6 +4561,51 @@ export interface components {
             /** @description Canonical volume in cubic micrometers */
             volumeCubicMicrometers: string;
         };
+        OperatorOfferDetailDto: {
+            /** Format: uuid */
+            acceptedOrderId?: string | null;
+            claimPolicyRevision: string;
+            /** @description Immutable claims document content for the pinned claim-policy revision. */
+            claimsSnapshot: {
+                [key: string]: unknown;
+            };
+            claimWindowDays: number;
+            components: components["schemas"]["OfferPreviewPriceComponentDto"][];
+            contractTotalMinor: number;
+            currency: string;
+            deliveryDestination: components["schemas"]["OfferDeliveryDestinationDto"];
+            /** Format: date-time */
+            expiresAt: string;
+            isCurrent: boolean;
+            /** Format: date-time */
+            issuedAt: string;
+            items: components["schemas"]["OfferPreviewItemDto"][];
+            legalClaimsContentHash: string;
+            /** Format: uuid */
+            legalClaimsRevisionId: string;
+            legalTermsContentHash: string;
+            /** Format: uuid */
+            legalTermsRevisionId: string;
+            netAmountMinor: number;
+            paymentSchedules: components["schemas"]["OfferPaymentScheduleDto"][];
+            /** Format: date */
+            promisedDate?: string | null;
+            /** Format: uuid */
+            quoteId: string;
+            /** Format: uuid */
+            requestId: string;
+            shipmentPlans: components["schemas"]["OfferShipmentPlanDto"][];
+            summary: string;
+            /** @enum {string} */
+            taxRegime: "NON_VAT_PAYER" | "VAT_PAYER";
+            termsRevision: string;
+            termsSnapshot: {
+                [key: string]: unknown;
+            };
+            vatAmountMinor: number;
+            vatRateBasisPoints: number;
+            version: number;
+        };
         OperatorOrderDetailDto: {
             acceptedPrice?: components["schemas"]["OperatorAcceptedPriceDto"] | null;
             acceptedTermsRevision?: string | null;
@@ -4432,6 +4693,9 @@ export interface components {
             updatedAt: string;
         };
         OperatorQuoteRequestDetailDto: {
+            /** Format: uuid */
+            acceptedOrderId?: string | null;
+            attachedModelFileIds: string[];
             attachments: components["schemas"]["QuoteAttachmentDto"][];
             attribution?: {
                 [key: string]: unknown;
@@ -4442,6 +4706,8 @@ export interface components {
             currentOfferId?: string | null;
             currentOfferVersion?: number | null;
             description: string;
+            /** Format: date-time */
+            firstRespondedAt?: string | null;
             measurements?: {
                 [key: string]: unknown;
             } | null;
@@ -4599,6 +4865,16 @@ export interface components {
             clean: number;
             unknown: number;
             warning: number;
+        };
+        PrepareQuoteRequestReferenceDto: {
+            partsPerPlate: number;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            quantity: number;
+            /** Format: uuid */
+            referenceProfileId: string;
+            /** Format: uuid */
+            selectionId: string;
         };
         PriceAdjustmentAllocationDto: {
             /** @description Exact per-slot credit allocation; required for non-express adjustments and derived from the immutable express component when omitted for express adjustments */
@@ -4789,6 +5065,42 @@ export interface components {
             /** Format: date-time */
             uploadedAt: string;
         };
+        QuoteComposerChoicesDto: {
+            deliveryOptions: components["schemas"]["QuoteComposerDeliveryOptionDto"][];
+            models: components["schemas"]["QuoteRequestModelsDto"];
+            policy: components["schemas"]["QuoteComposerPolicyDto"];
+            printConfigs: components["schemas"]["QuoteComposerPrintConfigDto"][];
+            referenceProfiles: components["schemas"]["QuoteComposerReferenceProfileDto"][];
+        };
+        QuoteComposerDeliveryOptionDto: {
+            endpointType: string;
+            label: string;
+            providerEndpointId: string;
+            supportedCategoryIds: string[];
+        };
+        QuoteComposerPolicyDto: {
+            /** Format: uuid */
+            priceListId: string;
+            revision: string;
+            selectionVersion: number;
+            /** @enum {string} */
+            taxRegime: "NON_VAT_PAYER" | "VAT_PAYER";
+            vatRateBasisPoints: number;
+        };
+        QuoteComposerPrintConfigDto: {
+            /** Format: uuid */
+            id: string;
+            infillPercent: number;
+            layerHeightMicrometers: number;
+            quality: string;
+        };
+        QuoteComposerReferenceProfileDto: {
+            /** Format: uuid */
+            id: string;
+            material: string;
+            quality: string;
+            slicerVersion: string;
+        };
         QuoteContactDto: {
             /** Format: email */
             email: string;
@@ -4831,6 +5143,70 @@ export interface components {
             slaDueAt: string;
             /** @enum {string} */
             status: "NEW" | "IN_REVIEW" | "QUOTED" | "ACCEPTED" | "REJECTED" | "EXPIRED";
+        };
+        QuoteRequestModelAttachedDto: {
+            /** Format: uuid */
+            inspectionJobId: string;
+            /** Format: uuid */
+            modelFileId: string;
+        };
+        QuoteRequestModelDto: {
+            availableBodyIds: string[];
+            contentSha256: string;
+            /** @enum {string} */
+            format: "STL" | "3MF";
+            inspectionFailureCode?: string | null;
+            /** Format: uuid */
+            inspectionJobId: string;
+            /** @enum {string} */
+            inspectionStatus: "PENDING" | "SUCCEEDED" | "FAILED";
+            /** Format: uuid */
+            modelFileId: string;
+            originalFilename: string;
+            selections: components["schemas"]["QuoteRequestModelSelectionDto"][];
+            sizeBytes: string;
+            sourceAvailable: boolean;
+            /** Format: date-time */
+            sourceDeleteAfter: string;
+        };
+        QuoteRequestModelsDto: {
+            items: components["schemas"]["QuoteRequestModelDto"][];
+        };
+        QuoteRequestModelSelectedDto: {
+            /** Format: uuid */
+            modelGeometryId: string;
+            /** Format: uuid */
+            selectionId: string;
+        };
+        QuoteRequestModelSelectionDto: {
+            bodyIds: string[];
+            /** Format: date-time */
+            createdAt: string;
+            geometryReady: boolean;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            modelFileId: string;
+            /** Format: uuid */
+            modelGeometryId: string;
+            selectionSha256: string;
+            sourceContentSha256: string;
+        };
+        QuoteRequestReferencePreparationDto: {
+            partsPerPlate: number;
+            /** @description Pending worker-v2 job IDs */
+            pendingJobIds: string[];
+            /** Format: uuid */
+            primaryReferenceSliceResultId?: string | null;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            quantity: number;
+            /** Format: uuid */
+            referenceProfileId: string;
+            /** Format: uuid */
+            selectionId: string;
+            /** Format: uuid */
+            tailReferenceSliceResultId?: string | null;
         };
         QuoteRequestStatusDto: {
             /** Format: uuid */
@@ -5038,6 +5414,11 @@ export interface components {
         SelectAutomaticQuoteDestinationDto: {
             endpointType: string;
             providerEndpointId: string;
+        };
+        SelectQuoteRequestModelDto: {
+            bodyIds: string[];
+            /** Format: uuid */
+            modelFileId: string;
         };
         SellerTaxPolicyDto: {
             /** @enum {string} */
@@ -8550,6 +8931,30 @@ export interface operations {
             };
         };
     };
+    OperatorQuoteRequestsController_composerChoices: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteComposerChoicesDto"];
+                };
+            };
+        };
+    };
     OperatorQuoteRequestsController_expire: {
         parameters: {
             query?: never;
@@ -8580,6 +8985,168 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    OperatorQuoteRequestsController_initiateModelUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InitiateModelUploadDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadIntentResponseDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_confirmModelUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                uploadId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfirmedUploadResponseDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_modelsForRequest: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestModelsDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_downloadModel: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                modelFileId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedDownloadResponseDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_importHandoffModel: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportQuoteRequestModelDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestModelAttachedDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_selectModelBodies: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SelectQuoteRequestModelDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestModelSelectedDto"];
+                };
             };
         };
     };
@@ -8627,6 +9194,59 @@ export interface operations {
             };
         };
     };
+    OperatorQuoteRequestsController_operatorOffer: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                quoteId: string;
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorOfferDetailDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_previewDraftOffer: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueOfferDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfferDraftPreviewDto"];
+                };
+            };
+        };
+    };
     OperatorQuoteRequestsController_reissue: {
         parameters: {
             query?: never;
@@ -8653,6 +9273,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OfferIssuedDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_prepareReference: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareQuoteRequestReferenceDto"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestReferencePreparationDto"];
+                };
+            };
+        };
+    };
+    OperatorQuoteRequestsController_referenceStatus: {
+        parameters: {
+            query: {
+                partsPerPlate: number;
+                quantity: number;
+                referenceProfileId: string;
+                printConfigRevisionId: string;
+                selectionId: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteRequestReferencePreparationDto"];
                 };
             };
         };

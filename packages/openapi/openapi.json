@@ -4693,6 +4693,18 @@
         ],
         "type": "object"
       },
+      "ImportQuoteRequestModelDto": {
+        "properties": {
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelFileId"
+        ],
+        "type": "object"
+      },
       "InitiateModelUploadDto": {
         "properties": {
           "contentType": {
@@ -5118,6 +5130,11 @@
           },
           "depositMinor": {
             "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expectedSelectionVersion": {
+            "maximum": 2147483647,
             "minimum": 1,
             "type": "integer"
           },
@@ -6578,6 +6595,10 @@
             "format": "uuid",
             "type": "string"
           },
+          "modelSelectionId": {
+            "format": "uuid",
+            "type": "string"
+          },
           "primaryReferenceSliceResultId": {
             "format": "uuid",
             "type": "string"
@@ -6679,6 +6700,83 @@
           "endpointType",
           "addressSnapshot",
           "capabilitySnapshot"
+        ],
+        "type": "object"
+      },
+      "OfferDraftPreviewDto": {
+        "properties": {
+          "balanceMinor": {
+            "type": "integer"
+          },
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPreviewPriceComponentDto"
+            },
+            "type": "array"
+          },
+          "contractTotalMinor": {
+            "type": "integer"
+          },
+          "depositMinor": {
+            "type": "integer"
+          },
+          "legalClaimsRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "legalTermsRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "netAmountMinor": {
+            "type": "integer"
+          },
+          "paymentSchedules": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPaymentScheduleDto"
+            },
+            "type": "array"
+          },
+          "priceListId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionVersion": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "shipmentPlans": {
+            "items": {
+              "$ref": "#/components/schemas/OfferShipmentPlanDto"
+            },
+            "type": "array"
+          },
+          "termsRevision": {
+            "type": "string"
+          },
+          "vatAmountMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requestId",
+          "priceListId",
+          "selectionVersion",
+          "termsRevision",
+          "legalTermsRevisionId",
+          "legalClaimsRevisionId",
+          "contractTotalMinor",
+          "netAmountMinor",
+          "vatAmountMinor",
+          "depositMinor",
+          "balanceMinor",
+          "components",
+          "shipmentPlans",
+          "paymentSchedules"
         ],
         "type": "object"
       },
@@ -6978,6 +7076,11 @@
           },
           "modelGeometryId": {
             "format": "uuid",
+            "type": "string"
+          },
+          "modelSelectionId": {
+            "format": "uuid",
+            "nullable": true,
             "type": "string"
           },
           "ordinal": {
@@ -7774,6 +7877,169 @@
         ],
         "type": "object"
       },
+      "OperatorOfferDetailDto": {
+        "properties": {
+          "acceptedOrderId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "claimPolicyRevision": {
+            "type": "string"
+          },
+          "claimsSnapshot": {
+            "additionalProperties": true,
+            "description": "Immutable claims document content for the pinned claim-policy revision.",
+            "type": "object"
+          },
+          "claimWindowDays": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPreviewPriceComponentDto"
+            },
+            "type": "array"
+          },
+          "contractTotalMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "deliveryDestination": {
+            "$ref": "#/components/schemas/OfferDeliveryDestinationDto"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "isCurrent": {
+            "type": "boolean"
+          },
+          "issuedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPreviewItemDto"
+            },
+            "type": "array"
+          },
+          "legalClaimsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalClaimsRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "legalTermsContentHash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "legalTermsRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "netAmountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "paymentSchedules": {
+            "items": {
+              "$ref": "#/components/schemas/OfferPaymentScheduleDto"
+            },
+            "type": "array"
+          },
+          "promisedDate": {
+            "format": "date",
+            "nullable": true,
+            "type": "string"
+          },
+          "quoteId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "requestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "shipmentPlans": {
+            "items": {
+              "$ref": "#/components/schemas/OfferShipmentPlanDto"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "taxRegime": {
+            "enum": [
+              "NON_VAT_PAYER",
+              "VAT_PAYER"
+            ],
+            "type": "string"
+          },
+          "termsRevision": {
+            "type": "string"
+          },
+          "termsSnapshot": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "vatAmountMinor": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "vatRateBasisPoints": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "maximum": 2147483647,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quoteId",
+          "version",
+          "termsRevision",
+          "claimPolicyRevision",
+          "claimWindowDays",
+          "legalTermsRevisionId",
+          "legalTermsContentHash",
+          "legalClaimsRevisionId",
+          "legalClaimsContentHash",
+          "summary",
+          "termsSnapshot",
+          "claimsSnapshot",
+          "currency",
+          "contractTotalMinor",
+          "taxRegime",
+          "vatRateBasisPoints",
+          "netAmountMinor",
+          "vatAmountMinor",
+          "items",
+          "deliveryDestination",
+          "shipmentPlans",
+          "components",
+          "paymentSchedules",
+          "expiresAt",
+          "requestId",
+          "isCurrent",
+          "issuedAt"
+        ],
+        "type": "object"
+      },
       "OperatorOrderDetailDto": {
         "properties": {
           "acceptedPrice": {
@@ -8091,6 +8357,18 @@
       },
       "OperatorQuoteRequestDetailDto": {
         "properties": {
+          "acceptedOrderId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "attachedModelFileIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
           "attachments": {
             "items": {
               "$ref": "#/components/schemas/QuoteAttachmentDto"
@@ -8124,6 +8402,11 @@
             "type": "integer"
           },
           "description": {
+            "type": "string"
+          },
+          "firstRespondedAt": {
+            "format": "date-time",
+            "nullable": true,
             "type": "string"
           },
           "measurements": {
@@ -8178,7 +8461,8 @@
           "contact",
           "slaDueAt",
           "slaBreached",
-          "attachments"
+          "attachments",
+          "attachedModelFileIds"
         ],
         "type": "object"
       },
@@ -8730,6 +9014,38 @@
           "clean",
           "warning",
           "unknown"
+        ],
+        "type": "object"
+      },
+      "PrepareQuoteRequestReferenceDto": {
+        "properties": {
+          "partsPerPlate": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selectionId",
+          "printConfigRevisionId",
+          "referenceProfileId",
+          "quantity",
+          "partsPerPlate"
         ],
         "type": "object"
       },
@@ -9418,6 +9734,149 @@
         ],
         "type": "object"
       },
+      "QuoteComposerChoicesDto": {
+        "properties": {
+          "deliveryOptions": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteComposerDeliveryOptionDto"
+            },
+            "type": "array"
+          },
+          "models": {
+            "$ref": "#/components/schemas/QuoteRequestModelsDto"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/QuoteComposerPolicyDto"
+          },
+          "printConfigs": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteComposerPrintConfigDto"
+            },
+            "type": "array"
+          },
+          "referenceProfiles": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteComposerReferenceProfileDto"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models",
+          "printConfigs",
+          "referenceProfiles",
+          "policy",
+          "deliveryOptions"
+        ],
+        "type": "object"
+      },
+      "QuoteComposerDeliveryOptionDto": {
+        "properties": {
+          "endpointType": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "providerEndpointId": {
+            "type": "string"
+          },
+          "supportedCategoryIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "providerEndpointId",
+          "endpointType",
+          "label",
+          "supportedCategoryIds"
+        ],
+        "type": "object"
+      },
+      "QuoteComposerPolicyDto": {
+        "properties": {
+          "priceListId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "selectionVersion": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "taxRegime": {
+            "enum": [
+              "NON_VAT_PAYER",
+              "VAT_PAYER"
+            ],
+            "type": "string"
+          },
+          "vatRateBasisPoints": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceListId",
+          "revision",
+          "selectionVersion",
+          "taxRegime",
+          "vatRateBasisPoints"
+        ],
+        "type": "object"
+      },
+      "QuoteComposerPrintConfigDto": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "infillPercent": {
+            "type": "integer"
+          },
+          "layerHeightMicrometers": {
+            "type": "integer"
+          },
+          "quality": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "quality",
+          "infillPercent",
+          "layerHeightMicrometers"
+        ],
+        "type": "object"
+      },
+      "QuoteComposerReferenceProfileDto": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "slicerVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "material",
+          "quality",
+          "slicerVersion"
+        ],
+        "type": "object"
+      },
       "QuoteContactDto": {
         "properties": {
           "email": {
@@ -9557,6 +10016,221 @@
           "slaDueAt",
           "slaBreached",
           "attachments"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestModelAttachedDto": {
+        "properties": {
+          "inspectionJobId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelFileId",
+          "inspectionJobId"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestModelDto": {
+        "properties": {
+          "availableBodyIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "contentSha256": {
+            "type": "string"
+          },
+          "format": {
+            "enum": [
+              "STL",
+              "3MF"
+            ],
+            "type": "string"
+          },
+          "inspectionFailureCode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "inspectionJobId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "inspectionStatus": {
+            "enum": [
+              "PENDING",
+              "SUCCEEDED",
+              "FAILED"
+            ],
+            "type": "string"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "originalFilename": {
+            "type": "string"
+          },
+          "selections": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteRequestModelSelectionDto"
+            },
+            "type": "array"
+          },
+          "sizeBytes": {
+            "type": "string"
+          },
+          "sourceAvailable": {
+            "type": "boolean"
+          },
+          "sourceDeleteAfter": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelFileId",
+          "format",
+          "originalFilename",
+          "contentSha256",
+          "sizeBytes",
+          "inspectionJobId",
+          "inspectionStatus",
+          "availableBodyIds",
+          "sourceAvailable",
+          "sourceDeleteAfter",
+          "selections"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestModelsDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/QuoteRequestModelDto"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestModelSelectedDto": {
+        "properties": {
+          "modelGeometryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selectionId",
+          "modelGeometryId"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestModelSelectionDto": {
+        "properties": {
+          "bodyIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "geometryReady": {
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "modelGeometryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionSha256": {
+            "type": "string"
+          },
+          "sourceContentSha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "modelFileId",
+          "modelGeometryId",
+          "bodyIds",
+          "selectionSha256",
+          "sourceContentSha256",
+          "geometryReady",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "QuoteRequestReferencePreparationDto": {
+        "properties": {
+          "partsPerPlate": {
+            "type": "integer"
+          },
+          "pendingJobIds": {
+            "description": "Pending worker-v2 job IDs",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "primaryReferenceSliceResultId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "referenceProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "selectionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "tailReferenceSliceResultId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "selectionId",
+          "printConfigRevisionId",
+          "referenceProfileId",
+          "quantity",
+          "partsPerPlate",
+          "pendingJobIds"
         ],
         "type": "object"
       },
@@ -10379,6 +11053,26 @@
         "required": [
           "providerEndpointId",
           "endpointType"
+        ],
+        "type": "object"
+      },
+      "SelectQuoteRequestModelDto": {
+        "properties": {
+          "bodyIds": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "modelFileId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "modelFileId",
+          "bodyIds"
         ],
         "type": "object"
       },
@@ -17882,6 +18576,54 @@
         ]
       }
     },
+    "/admin/quote-requests/{requestId}/composer": {
+      "get": {
+        "operationId": "OperatorQuoteRequestsController_composerChoices",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteComposerChoicesDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read typed offer composer choices and current policy",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
     "/admin/quote-requests/{requestId}/expire": {
       "post": {
         "operationId": "OperatorQuoteRequestsController_expire",
@@ -17939,6 +18681,364 @@
           }
         ],
         "summary": "Expire an overdue individual offer",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/model-uploads": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_initiateModelUpload",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitiateModelUploadDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadIntentResponseDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Initiate a request-scoped operator model upload",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/model-uploads/{uploadId}/confirm": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_confirmModelUpload",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "uploadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmedUploadResponseDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Confirm and attach a verified operator model",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/models": {
+      "get": {
+        "operationId": "OperatorQuoteRequestsController_modelsForRequest",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestModelsDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List attached models and preparation evidence",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/models/{modelFileId}/download": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_downloadModel",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "modelFileId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedDownloadResponseDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Download an attached retained model source",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/models/import": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_importHandoffModel",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportQuoteRequestModelDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestModelAttachedDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Attach a retained automatic handoff model",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/models/select": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_selectModelBodies",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectQuoteRequestModelDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestModelSelectedDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Select inspected bodies for an immutable request model",
         "tags": [
           "operator quote requests"
         ]
@@ -18019,6 +19119,121 @@
         ]
       }
     },
+    "/admin/quote-requests/{requestId}/offers/{quoteId}": {
+      "get": {
+        "operationId": "OperatorQuoteRequestsController_operatorOffer",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "quoteId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOfferDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read one immutable offer without a customer capability",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/offers/preview": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_previewDraftOffer",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueOfferDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfferDraftPreviewDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Validate and preview exact offer price and payment schedule",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
     "/admin/quote-requests/{requestId}/offers/reissue": {
       "post": {
         "operationId": "OperatorQuoteRequestsController_reissue",
@@ -18083,6 +19298,168 @@
           }
         ],
         "summary": "Reissue the current immutable individual offer",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/references/prepare": {
+      "post": {
+        "operationId": "OperatorQuoteRequestsController_prepareReference",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareQuoteRequestReferenceDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestReferencePreparationDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Prepare selected model reference slices with worker v2",
+        "tags": [
+          "operator quote requests"
+        ]
+      }
+    },
+    "/admin/quote-requests/{requestId}/references/status": {
+      "get": {
+        "operationId": "OperatorQuoteRequestsController_referenceStatus",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "partsPerPlate",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quantity",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "referenceProfileId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "printConfigRevisionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "selectionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteRequestReferencePreparationDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read selected model reference preparation status",
         "tags": [
           "operator quote requests"
         ]

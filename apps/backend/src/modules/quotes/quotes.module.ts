@@ -9,6 +9,8 @@ import {
   QuoteRequestsController,
 } from "./quotes.controller";
 import { QuotesService } from "./quotes.service";
+import { OperatorQuoteModelsService } from "./operator-quote-models.service";
+import { AutomaticQuotesModule } from "../automatic-quotes/automatic-quotes.module";
 
 @Module({
   imports: [
@@ -16,13 +18,14 @@ import { QuotesService } from "./quotes.service";
     AuditModule,
     StorageModule,
     LegalApprovalsModule,
+    AutomaticQuotesModule,
   ],
   controllers: [
     QuoteRequestsController,
     OffersController,
     OperatorQuoteRequestsController,
   ],
-  providers: [QuotesService],
+  providers: [QuotesService, OperatorQuoteModelsService],
   exports: [QuotesService],
 })
 export class QuotesModule {}

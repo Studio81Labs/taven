@@ -15,6 +15,7 @@ import {
   PhotoScopeKind,
   Prisma,
   RetentionHold,
+  QuoteRequestStatus,
   UploadAssetKind,
   UploadIntentStatus,
 } from "@prisma/client";
@@ -43,6 +44,7 @@ import {
   LegalApprovalsService,
 } from "../legal-approvals/legal-approvals.service";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
+import { enqueueModelInspection } from "../slicing/model-inspection-dispatch";
 import type {
   ConfirmedUploadResponseDto,
   InitiateModelUploadDto,
@@ -178,6 +180,78 @@ export class UploadService {
     );
   }
 
+  async initiateOperatorModelUpload(
+    operator: OperatorContext,
+    requestId: string,
+    input: InitiateModelUploadDto,
+  ): Promise<UploadIntentResponseDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    operatorNode(operator);
+    requestId = normalizedUuid(requestId, "requestId");
+    if (input?.format !== "STL" && input?.format !== "3MF") {
+      throw new BadRequestException("Operator model must be STL or 3MF");
+    }
+    const uploadId = randomUUID();
+    const assetId = randomUUID();
+    const metadata = this.validateModelInput(input, uploadId);
+    const token = createCapabilityToken();
+    const expiresAt = this.intentExpiry();
+    const quarantineKey = quarantineObjectKey(uploadId);
+    const finalKey = modelSourceObjectKey(assetId);
+    await this.prisma.$transaction(async (transaction) => {
+      const rows = await transaction.$queryRaw<
+        Array<{ status: QuoteRequestStatus }>
+      >`
+        SELECT status FROM quote_requests WHERE id = ${requestId}::uuid FOR UPDATE
+      `;
+      const request = rows[0];
+      if (!request) throw new NotFoundException("Quote request was not found");
+      if (!acceptsOperatorModel(request.status)) {
+        throw new ConflictException("Quote request cannot accept a model");
+      }
+      await transaction.uploadIntent.create({
+        data: {
+          id: uploadId,
+          assetKind: UploadAssetKind.MODEL_FILE,
+          capabilityTokenHash: hashToken(token),
+          originalFilename: metadata.displayFilename,
+          modelFormat: toModelFileFormat(metadata.format),
+          intendedAssetId: assetId,
+          expectedContentType: metadata.contentType,
+          expectedSizeBytes: BigInt(metadata.sizeBytes),
+          expectedContentHash: metadata.sha256,
+          quarantineObjectKey: quarantineKey,
+          finalObjectKey: finalKey,
+          expiresAt,
+          quoteRequestId: requestId,
+          initiatingOperatorId: operator.operatorId,
+        },
+      });
+    });
+    return this.createUploadResponse(
+      uploadId,
+      assetId,
+      token,
+      quarantineKey,
+      metadata,
+      expiresAt,
+    );
+  }
+
+  async confirmOperatorModelUpload(
+    operator: OperatorContext,
+    requestId: string,
+    uploadId: string,
+    authorization?: string,
+  ): Promise<ConfirmedUploadResponseDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    operatorNode(operator);
+    return this.confirmUpload(uploadId, authorization, {
+      operator,
+      requestId: normalizedUuid(requestId, "requestId"),
+    });
+  }
+
   async initiatePhotoUpload(
     input: InitiatePhotoUploadDto,
     authorization?: string,
@@ -288,6 +362,10 @@ export class UploadService {
   async confirmUpload(
     uploadId: string,
     authorization?: string,
+    operatorScope?: Readonly<{
+      operator: OperatorContext;
+      requestId: string;
+    }>,
   ): Promise<ConfirmedUploadResponseDto> {
     uploadId = normalizedUuid(uploadId, "uploadId");
     const token = bearerToken(authorization);
@@ -295,6 +373,14 @@ export class UploadService {
       where: { id: uploadId },
     });
     assertCapability(intent, token);
+    if (
+      operatorScope
+        ? intent.quoteRequestId !== operatorScope.requestId ||
+          intent.initiatingOperatorId !== operatorScope.operator.operatorId
+        : intent.quoteRequestId != null
+    ) {
+      throw new UnauthorizedException("Upload scope is invalid");
+    }
     if (intent.status === UploadIntentStatus.CONFIRMED) {
       return this.confirmedResponse(intent);
     }
@@ -360,6 +446,17 @@ export class UploadService {
           QUOTE_UPLOAD_LEGAL_DOCUMENTS,
         );
       }
+      if (operatorScope) {
+        const rows = await transaction.$queryRaw<
+          Array<{ status: QuoteRequestStatus }>
+        >`
+          SELECT status FROM quote_requests
+          WHERE id = ${operatorScope.requestId}::uuid FOR UPDATE
+        `;
+        if (!rows[0]) {
+          throw new NotFoundException("Quote request was not found");
+        }
+      }
       const rows = await transaction.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM upload_intents WHERE id = ${confirmedIntentId}::uuid FOR UPDATE
       `;
@@ -369,7 +466,24 @@ export class UploadService {
         where: { id: confirmedIntentId },
       });
       assertCapability(current, token);
+      if (
+        operatorScope
+          ? current.quoteRequestId !== operatorScope.requestId ||
+            current.initiatingOperatorId !== operatorScope.operator.operatorId
+          : current.quoteRequestId != null
+      ) {
+        throw new UnauthorizedException("Upload scope is invalid");
+      }
       if (current.status === UploadIntentStatus.CONFIRMED) return current;
+      if (operatorScope) {
+        const request = await transaction.quoteRequest.findUniqueOrThrow({
+          where: { id: operatorScope.requestId },
+          select: { status: true },
+        });
+        if (!acceptsOperatorModel(request.status)) {
+          throw new ConflictException("Quote request cannot accept a model");
+        }
+      }
       if (
         current.status !== UploadIntentStatus.PENDING ||
         current.expiresAt.getTime() <= Date.now()
@@ -488,6 +602,41 @@ export class UploadService {
           modelFileId: current.intendedAssetId,
           observedAt: uploadedAt,
         });
+        if (operatorScope) {
+          const inspectionJobId = randomUUID();
+          await transaction.quoteRequestModel.create({
+            data: {
+              requestId: operatorScope.requestId,
+              modelFileId: current.intendedAssetId,
+              attachedByOperatorId: operatorScope.operator.operatorId,
+              inspectionJobId,
+              createdAt: uploadedAt,
+            },
+          });
+          await enqueueModelInspection(transaction, {
+            jobId: inspectionJobId,
+            correlationId: operatorScope.requestId,
+            source: {
+              id: current.intendedAssetId,
+              format: current.modelFormat,
+              storageObjectKey: current.finalObjectKey,
+              contentHash: current.expectedContentHash,
+            },
+            operation: { mode: "inspect_source" },
+          });
+          await this.audit.recordOperator(transaction, operatorScope.operator, {
+            nodeId: operatorNode(operatorScope.operator),
+            quoteRequestId: operatorScope.requestId,
+            createdAt: uploadedAt,
+            eventType: "quote_request.model_attached",
+            correlationId: inspectionJobId,
+            payload: {
+              operation: "operator_model_upload",
+              modelFileId: current.intendedAssetId,
+              inspectionJobId,
+            },
+          });
+        }
         return transaction.uploadIntent.update({
           where: { id: current.id },
           data: {
@@ -609,6 +758,45 @@ export class UploadService {
           status: "ISSUED",
           photoAssetId,
         },
+      }),
+    );
+    return download;
+  }
+
+  async createOperatorQuoteModelDownload(
+    operator: OperatorContext,
+    quoteRequestId: string,
+    modelFileId: string,
+  ): Promise<SignedDownloadResponseDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    const nodeId = operatorNode(operator);
+    quoteRequestId = normalizedUuid(quoteRequestId, "requestId");
+    modelFileId = normalizedUuid(modelFileId, "modelFileId");
+    const attached = await this.prisma.quoteRequestModel.findUnique({
+      where: {
+        requestId_modelFileId: { requestId: quoteRequestId, modelFileId },
+      },
+      include: { modelFile: true },
+    });
+    if (!attached) throw new NotFoundException("Request model was not found");
+    const source = attached.modelFile;
+    const expiresAt = availableDownloadDeadline(
+      source.deletedAt,
+      source.retentionHold,
+      source.sourceDeleteAfter,
+      this.storageConfig.signedUrlTtlSeconds,
+    );
+    const download = await this.signDownload(
+      source.storageObjectKey,
+      expiresAt,
+    );
+    await this.prisma.$transaction((transaction) =>
+      this.audit.recordOperator(transaction, operator, {
+        quoteRequestId,
+        nodeId,
+        eventType: "quote_request.model_download_issued",
+        correlationId: randomUUID(),
+        payload: { operation: "model_download", modelFileId },
       }),
     );
     return download;
@@ -1187,6 +1375,14 @@ export class UploadService {
         // The upload-intent retention job remains the durable cleanup fallback.
       });
   }
+}
+
+function acceptsOperatorModel(status: QuoteRequestStatus): boolean {
+  return (
+    status === QuoteRequestStatus.NEW ||
+    status === QuoteRequestStatus.IN_REVIEW ||
+    status === QuoteRequestStatus.QUOTED
+  );
 }
 
 function extensionOf(filename: string): string {

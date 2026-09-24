@@ -56,6 +56,7 @@ import { AuditService } from "../audit/audit.service";
 import { normalizeAttribution } from "../metrics/attribution";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
+import { lockCommercialPolicy } from "../resources/commercial-policy-selection";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
   AcceptOfferDto,
@@ -69,6 +70,8 @@ import type {
   OfferPaymentCapturePolicyDto,
   OfferPaymentScheduleDto,
   OfferPreviewDto,
+  OfferDraftPreviewDto,
+  OperatorOfferDetailDto,
   OfferPreviewPriceComponentDto,
   OperatorQuoteRequestDetailDto,
   OperatorQuoteRequestPageDto,
@@ -610,7 +613,23 @@ export class QuotesService {
       },
     });
     if (!request) throw new NotFoundException("Quote request was not found");
-    return this.operatorRequestDetail(request, observedAt);
+    const [associations, accepted] = await Promise.all([
+      this.prisma.quoteRequestModel.findMany({
+        where: { requestId },
+        select: { modelFileId: true },
+        orderBy: { createdAt: "asc" },
+      }),
+      this.prisma.individualOrderOrigin.findFirst({
+        where: { quote: { quoteRequestId: requestId } },
+        select: { orderId: true },
+      }),
+    ]);
+    return this.operatorRequestDetail(request, observedAt, undefined, {
+      attachedModelFileIds: associations.map(
+        (association) => association.modelFileId,
+      ),
+      acceptedOrderId: accepted?.orderId ?? null,
+    });
   }
 
   async beginReview(
@@ -714,6 +733,14 @@ export class QuotesService {
         assertBindingQuoteFlowsEnabled();
         const legalApprovals = this.requiredLegalApprovals();
         await legalApprovals.lock(transaction, ["terms", "claims"]);
+        const selectedPolicy = await lockCommercialPolicy(transaction);
+        if (
+          offer.expectedSelectionVersion === undefined ||
+          selectedPolicy.selectionVersion !== offer.expectedSelectionVersion ||
+          selectedPolicy.priceListId !== offer.priceListId
+        ) {
+          throw new ConflictException("Commercial policy selection changed");
+        }
         const request = await lockedRequest(transaction, requestId);
         if (!request)
           throw new NotFoundException("Quote request was not found");
@@ -851,7 +878,12 @@ export class QuotesService {
             "priceListId does not support individual split payments",
           );
         }
-        await validateOfferItemReferences(transaction, offer.items, observedAt);
+        await validateOfferItemReferences(
+          transaction,
+          requestId,
+          offer.items,
+          observedAt,
+        );
 
         const quoteId = randomUUID();
         const resultId = randomUUID();
@@ -953,6 +985,7 @@ export class QuotesService {
               ordinal: item.ordinal,
               sourceModelFileId: item.sourceModelFileId,
               modelGeometryId: item.modelGeometryId,
+              modelSelectionId: item.modelSelectionId!,
               printConfigRevisionId: item.printConfigRevisionId,
               primaryReferenceSliceResultId:
                 item.primaryReferenceSliceResultId ?? null,
@@ -1234,6 +1267,147 @@ export class QuotesService {
     if (quote.quoteRequest.status !== QuoteRequestStatus.QUOTED) {
       throw new GoneException("Offer is no longer available");
     }
+    return this.renderOfferPreview(quote);
+  }
+
+  async getOperatorOffer(
+    operator: OperatorContext,
+    requestId: string,
+    quoteId: string,
+  ): Promise<OperatorOfferDetailDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    operatorNode(operator);
+    requestId = normalizedUuid(requestId, "requestId");
+    quoteId = normalizedUuid(quoteId, "quoteId");
+    const quote = await this.offerRecord(quoteId);
+    if (!quote || quote.quoteRequestId !== requestId) {
+      throw new NotFoundException("Offer was not found for this request");
+    }
+    const origin = await this.prisma.individualOrderOrigin.findUnique({
+      where: { quoteId },
+      select: { orderId: true },
+    });
+    return {
+      ...this.renderOfferPreview(quote),
+      requestId,
+      isCurrent: quote.quoteRequest.currentQuoteId === quoteId,
+      acceptedOrderId: origin?.orderId ?? null,
+      issuedAt: quote.issuedAt.toISOString(),
+    };
+  }
+
+  async previewDraftOffer(
+    operator: OperatorContext,
+    requestId: string,
+    input: IssueOfferDto,
+  ): Promise<OfferDraftPreviewDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.QUOTES_WRITE);
+    operatorNode(operator);
+    requestId = normalizedUuid(requestId, "requestId");
+    const offer = validateOffer(input);
+    return this.prisma.$transaction(async (transaction) => {
+      await this.requiredLegalApprovals().lock(transaction, [
+        "terms",
+        "claims",
+      ]);
+      const policy = await lockCommercialPolicy(transaction);
+      if (
+        !offer.expectedSelectionVersion ||
+        policy.selectionVersion !== offer.expectedSelectionVersion ||
+        policy.priceListId !== offer.priceListId
+      ) {
+        throw new ConflictException("Commercial policy selection changed");
+      }
+      const request = await transaction.quoteRequest.findUnique({
+        where: { id: requestId },
+      });
+      if (!request) throw new NotFoundException("Quote request was not found");
+      if (
+        request.status !== QuoteRequestStatus.IN_REVIEW &&
+        request.status !== QuoteRequestStatus.QUOTED
+      ) {
+        throw new ConflictException("Quote request is not ready for an offer");
+      }
+      const observedAt = await databaseNow(transaction);
+      if (offer.expiresAt <= observedAt) {
+        throw new BadRequestException("expiresAt must be in the future");
+      }
+      const approvals = await this.requiredLegalApprovals().readAt(
+        transaction,
+        observedAt,
+      );
+      assertEffectiveLegalDocuments(approvals, ["terms", "claims"]);
+      const taxPolicy = parseSellerTaxPolicy(policy.priceList.parameters);
+      if (
+        taxPolicy.regime !== offer.taxRegime ||
+        taxPolicy.vatRateBasisPoints !== offer.vatRateBasisPoints ||
+        !(await individualSplitPaymentPolicyIsValid(
+          transaction,
+          policy.priceListId,
+        ))
+      ) {
+        throw new BadRequestException(
+          "Offer policy does not match the selected price list",
+        );
+      }
+      await validateOfferItemReferences(
+        transaction,
+        requestId,
+        offer.items,
+        observedAt,
+      );
+      return {
+        requestId,
+        priceListId: policy.priceListId,
+        selectionVersion: policy.selectionVersion,
+        termsRevision: approvals.documents.terms.revision,
+        legalTermsRevisionId: approvals.documents.terms.revisionId!,
+        legalClaimsRevisionId: approvals.documents.claims.revisionId!,
+        contractTotalMinor: offer.contractTotalMinor,
+        netAmountMinor: offer.netAmountMinor,
+        vatAmountMinor: offer.vatAmountMinor,
+        depositMinor: offer.depositMinor,
+        balanceMinor: offer.contractTotalMinor - offer.depositMinor,
+        components: offer.components.map((component) => ({
+          kind: component.kind,
+          scope:
+            component.quoteItemOrdinal !== undefined
+              ? PriceComponentScope.QUOTE_ITEM
+              : component.quoteShipmentPlanOrdinal !== undefined
+                ? PriceComponentScope.QUOTE_SHIPMENT_PLAN
+                : PriceComponentScope.ORDER,
+          quoteItemOrdinal: component.quoteItemOrdinal ?? null,
+          shipmentPlanOrdinal: component.quoteShipmentPlanOrdinal ?? null,
+          amountMinor: component.amountMinor,
+          allocation: component.allocation ?? null,
+        })),
+        shipmentPlans: offer.shipmentPlans.map((plan) => ({
+          ...plan,
+          allocationSnapshot: plan.allocationSnapshot ?? {},
+        })),
+        paymentSchedules: [
+          {
+            sequence: 0,
+            role: PaymentRole.DEPOSIT,
+            grossAmountMinor: offer.depositMinor,
+            feeRateBasisPoints: offer.paymentPolicy.deposit.feeRateBasisPoints,
+            feeFixedMinor: offer.paymentPolicy.deposit.feeFixedMinor,
+          },
+          {
+            sequence: 1,
+            role: PaymentRole.BALANCE,
+            grossAmountMinor: offer.contractTotalMinor - offer.depositMinor,
+            feeRateBasisPoints: offer.paymentPolicy.balance.feeRateBasisPoints,
+            feeFixedMinor: offer.paymentPolicy.balance.feeFixedMinor,
+          },
+        ],
+      };
+    });
+  }
+
+  private renderOfferPreview(
+    quote: NonNullable<Awaited<ReturnType<QuotesService["offerRecord"]>>>,
+  ): OfferPreviewDto {
     const snapshot = quote.priceBinding?.priceSnapshot;
     if (!snapshot) throw new ConflictException("Offer price is unavailable");
     if (
@@ -1331,6 +1505,7 @@ export class QuotesService {
       items: quote.items.map((item) => ({
         ordinal: item.ordinal,
         kind: "MODEL" as const,
+        modelSelectionId: item.modelSelectionId,
         sourceModelFileId: item.sourceModelFileId,
         modelGeometryId: item.modelGeometryId,
         printConfigRevisionId: item.printConfigRevisionId,
@@ -1443,6 +1618,11 @@ export class QuotesService {
         }
         if (!quote.deliveryDestination || quote.shipmentPlans.length < 1) {
           throw new ConflictException("Offer shipment topology is unavailable");
+        }
+        if (quote.items.some((item) => !item.modelSelectionId)) {
+          throw new ConflictException(
+            "Offer has no verified model selection; reissue is required",
+          );
         }
         requireFreshWithdrawalAcknowledgement(expected);
 
@@ -1930,7 +2110,7 @@ export class QuotesService {
     );
   }
 
-  private async offerForToken(quoteId: string, token: string) {
+  private async offerRecord(quoteId: string) {
     const quote = await this.prisma.quote.findUnique({
       where: { id: quoteId },
       include: {
@@ -1964,6 +2144,11 @@ export class QuotesService {
         },
       },
     });
+    return quote;
+  }
+
+  private async offerForToken(quoteId: string, token: string) {
+    const quote = await this.offerRecord(quoteId);
     assertOfferCapability(quote, token);
     if (
       quote.quoteRequest.currentQuoteId &&
@@ -2063,11 +2248,22 @@ export class QuotesService {
     },
     observedAt: Date,
     attachments?: RequestAttachments,
+    extra?: Readonly<{
+      attachedModelFileIds: string[];
+      acceptedOrderId: string | null;
+    }>,
   ): Promise<OperatorQuoteRequestDetailDto> {
     const detail = await this.requestDetail(request, observedAt, attachments);
     const handoff = request.automaticQuoteHandoff;
     return {
       ...detail,
+      firstRespondedAt:
+        slaResponseEvidenceAt(
+          request.slaRespondedAt,
+          request.quotes?.[0]?.issuedAt,
+        )?.toISOString() ?? null,
+      acceptedOrderId: extra?.acceptedOrderId ?? null,
+      attachedModelFileIds: extra?.attachedModelFileIds ?? [],
       automaticQuoteHandoff: handoff
         ? {
             automaticQuoteSessionId: handoff.sourceQuoteSessionId,
@@ -2833,6 +3029,15 @@ function validateOffer(input: IssueOfferDto) {
     throw new BadRequestException("Offer input is required");
   }
   const priceListId = normalizedUuid(input.priceListId, "priceListId");
+  const expectedSelectionVersion = input.expectedSelectionVersion;
+  if (
+    expectedSelectionVersion !== undefined &&
+    (!Number.isInteger(expectedSelectionVersion) ||
+      expectedSelectionVersion < 1 ||
+      expectedSelectionVersion > POSTGRES_INTEGER_MAX)
+  ) {
+    throw new BadRequestException("expectedSelectionVersion is invalid");
+  }
   const contractTotalMinor = money(
     input.contractTotalMinor,
     "contractTotalMinor",
@@ -2994,6 +3199,7 @@ function validateOffer(input: IssueOfferDto) {
     expiresAt,
     promisedDate,
     priceListId,
+    expectedSelectionVersion,
     contractTotalMinor,
     ...tax,
     depositMinor,
@@ -3005,6 +3211,9 @@ function validateOffer(input: IssueOfferDto) {
     items,
     components,
     fingerprint: {
+      ...(expectedSelectionVersion === undefined
+        ? {}
+        : { expectedSelectionVersion }),
       summary,
       expiresAt: expiresAt.toISOString(),
       promisedDate: dateOnly(promisedDate),
@@ -3097,6 +3306,13 @@ function validateOfferItem(input: ModelOfferItemDto, ordinal: number) {
     input.sourceModelFileId,
     `items[${ordinal}].sourceModelFileId`,
   );
+  const modelSelectionId =
+    input.modelSelectionId === undefined
+      ? undefined
+      : normalizedUuid(
+          input.modelSelectionId,
+          `items[${ordinal}].modelSelectionId`,
+        );
   const modelGeometryId = normalizedUuid(
     input.modelGeometryId,
     `items[${ordinal}].modelGeometryId`,
@@ -3140,6 +3356,7 @@ function validateOfferItem(input: ModelOfferItemDto, ordinal: number) {
   }
   return {
     kind: "MODEL" as const,
+    modelSelectionId,
     sourceModelFileId,
     modelGeometryId,
     printConfigRevisionId,
@@ -3344,9 +3561,28 @@ function safeMoneyAggregate(value: bigint, name: string): number {
 
 async function validateOfferItemReferences(
   transaction: Transaction,
+  requestId: string,
   items: Array<ReturnType<typeof validateOfferItem>>,
   observedAt: Date,
 ): Promise<void> {
+  if (
+    items.some(
+      (item) => !item.modelSelectionId || !item.primaryReferenceSliceResultId,
+    )
+  ) {
+    throw new BadRequestException(
+      "Fresh offer items require selected model and reference slice evidence",
+    );
+  }
+  const selections = await transaction.quoteRequestModelSelection.findMany({
+    where: {
+      id: { in: items.map((item) => item.modelSelectionId!) },
+      requestId,
+    },
+  });
+  const selectionById = new Map(
+    selections.map((selection) => [selection.id, selection]),
+  );
   const geometryIds = [...new Set(items.map((item) => item.modelGeometryId))];
   const printConfigIds = [
     ...new Set(items.map((item) => item.printConfigRevisionId)),
@@ -3398,6 +3634,7 @@ async function validateOfferItemReferences(
   const sliceById = new Map(slices.map((slice) => [slice.id, slice]));
 
   for (const [ordinal, item] of items.entries()) {
+    const selection = selectionById.get(item.modelSelectionId!);
     const geometry = geometryById.get(item.modelGeometryId);
     const primarySlice = item.primaryReferenceSliceResultId
       ? sliceById.get(item.primaryReferenceSliceResultId)
@@ -3408,6 +3645,10 @@ async function validateOfferItemReferences(
     const source = geometry?.sourceModelFile;
     if (
       !geometry ||
+      !selection ||
+      selection.modelFileId !== item.sourceModelFileId ||
+      selection.modelGeometryId !== item.modelGeometryId ||
+      selection.sourceContentSha256 !== geometry?.sourceModelFile.contentHash ||
       !source ||
       geometry.sourceModelFileId !== item.sourceModelFileId ||
       geometry.deletedAt !== null ||
