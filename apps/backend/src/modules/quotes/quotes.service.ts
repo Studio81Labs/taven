@@ -2251,19 +2251,20 @@ export class QuotesService {
       select: { status: true },
     });
     const now = await databaseNow(this.prisma);
-    const [plans, payment, candidateDispatch] = await Promise.all([
-      this.prisma.phaseResourcePlan.findMany({
-        where: {
-          eligibilitySnapshot: { orderPhase: { orderId: origin.orderId } },
-          reservationSets: { none: {} },
-        },
-        select: { expiresAt: true },
-      }),
-      this.prisma.payment.findFirst({
-        where: { orderId: origin.orderId, role: { in: ["DEPOSIT", "FULL"] } },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      }),
-      this.prisma.$queryRaw<Array<{ seen: boolean; available: boolean }>>`
+    const [plans, payment, candidateDispatch, preparationAttempt] =
+      await Promise.all([
+        this.prisma.phaseResourcePlan.findMany({
+          where: {
+            eligibilitySnapshot: { orderPhase: { orderId: origin.orderId } },
+            reservationSets: { none: {} },
+          },
+          select: { expiresAt: true },
+        }),
+        this.prisma.payment.findFirst({
+          where: { orderId: origin.orderId, role: { in: ["DEPOSIT", "FULL"] } },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        }),
+        this.prisma.$queryRaw<Array<{ seen: boolean; available: boolean }>>`
         WITH latest_dispatch AS (
           SELECT
             dispatch.id,
@@ -2309,10 +2310,19 @@ export class QuotesService {
             )
         ) AS available
       `,
-    ]);
+        this.prisma.auditEvent.findFirst({
+          where: {
+            orderId: origin.orderId,
+            eventType: "individual_order.resource_preparation",
+          },
+          select: { id: true },
+        }),
+      ]);
+    const preparationAttempted =
+      Boolean(preparationAttempt) || candidateDispatch[0]?.seen === true;
     const unavailableCandidateRequirement =
       origin.order.status === "DRAFT" &&
-      candidateDispatch[0]?.available &&
+      preparationAttempted &&
       origin.order.acceptedOrderPriceBindingId
         ? await this.automaticQuotes.hasUnavailableCandidateRequirement(
             origin.order.acceptedOrderPriceBindingId,
@@ -2342,13 +2352,14 @@ export class QuotesService {
                 )
               ? "READY"
               : origin.order.status === "DRAFT"
-                ? candidateDispatch[0]?.available &&
-                  origin.order.acceptedOrderPriceBindingId &&
-                  !unavailableCandidateRequirement
-                  ? "PREPARING"
-                  : candidateDispatch[0]?.seen
-                    ? "UNAVAILABLE"
-                    : "UNPREPARED"
+                ? unavailableCandidateRequirement
+                  ? "UNAVAILABLE"
+                  : candidateDispatch[0]?.available &&
+                      origin.order.acceptedOrderPriceBindingId
+                    ? "PREPARING"
+                    : preparationAttempted
+                      ? "UNAVAILABLE"
+                      : "UNPREPARED"
                 : "UNAVAILABLE";
     let initialPayment: AcceptedOfferOrderStatusDto["initialPayment"] = null;
     if (payment) {

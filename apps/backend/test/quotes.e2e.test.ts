@@ -1024,6 +1024,36 @@ describe("QuoteRequest and tokenized individual offers", () => {
       version: 2,
       ...contact,
     });
+    const dispatchCandidates = vi.spyOn(
+      app.get(AutomaticQuotesService),
+      "dispatchOrderCandidates",
+    );
+    dispatchCandidates.mockResolvedValueOnce(undefined);
+    try {
+      const noCandidatePreparation = await apiJson<{ status: string }>(
+        `admin/orders/${accepted.body.orderId}/resource-preparation`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+            "idempotency-key": key(
+              "accepted-resource-preparation-no-candidate",
+            ),
+          },
+          body: JSON.stringify({ reason: "Check candidate availability" }),
+        },
+      );
+      expect(noCandidatePreparation.response.status).toBe(200);
+      expect(noCandidatePreparation.body.status).toBe("PENDING");
+      const unavailableStatus = await apiJson<{ preparationStatus: string }>(
+        `offers/${issued.body.quoteId}/order-status`,
+        { headers: bearer(issued.body.offerToken) },
+      );
+      expect(unavailableStatus.body.preparationStatus).toBe("UNAVAILABLE");
+    } finally {
+      dispatchCandidates.mockRestore();
+    }
     const prepareResources = await apiJson<{
       status: string;
       phaseResourcePlanId: string | null;
