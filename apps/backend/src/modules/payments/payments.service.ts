@@ -760,23 +760,25 @@ export class PaymentsService {
           "Complete resource plan is unavailable or too short for payment",
         );
       }
-      const reserved = await tx.$queryRaw<
-        Array<{
-          phase_reservation_set_id: string;
-          phase_reservation_set_status: string;
-          expires_at: Date;
-        }>
-      >`
-        SELECT phase_reservation_set_id, phase_reservation_set_status, expires_at
-        FROM taven_create_phase_reservation(
-          ${nodeId}::uuid, ${plan.id}::uuid,
-          ${`individual-initial:${orderId}:${plan.id}`}::text
-        )
-      `;
-      if (
-        reserved[0]?.phase_reservation_set_status !== "RESERVED" ||
-        reserved[0].expires_at <= now
-      ) {
+      let reserved;
+      try {
+        reserved = await this.reservations.reserveInTransaction(tx, {
+          nodeId,
+          phaseResourcePlanId: plan.id,
+          reservationKey: `individual-initial:${orderId}:${plan.id}`,
+        });
+      } catch (error) {
+        if (
+          error instanceof ResourceConflictError ||
+          error instanceof ResourceNotFoundError
+        ) {
+          throw new ConflictException(
+            "Complete resource reservation is unavailable",
+          );
+        }
+        throw error;
+      }
+      if (reserved.status !== "RESERVED" || reserved.expiresAt <= now) {
         throw new ConflictException(
           "Complete resource reservation is unavailable",
         );
@@ -823,7 +825,7 @@ export class PaymentsService {
           method,
           role: schedule.role,
           phaseResourcePlanId: plan.id,
-          phaseReservationSetId: reserved[0].phase_reservation_set_id,
+          phaseReservationSetId: reserved.phaseReservationSetId,
         },
       });
       return {

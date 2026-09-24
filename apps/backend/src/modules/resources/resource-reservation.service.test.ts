@@ -115,6 +115,33 @@ describe("ResourceReservationService", () => {
     expect(queryRaw).toHaveBeenCalledTimes(1);
   });
 
+  it("maps a transactional reservation constraint failure without using the root client", async () => {
+    const rootQuery = vi.fn();
+    const transactionQuery = vi.fn().mockRejectedValue({
+      code: "P2010",
+      meta: {
+        code: "23514",
+        constraint: "phase_reservation_requires_current_capacity",
+      },
+    });
+    const service = new ResourceReservationService({
+      $queryRaw: rootQuery,
+    } as never);
+
+    await expect(
+      service.reserveInTransaction({ $queryRaw: transactionQuery } as never, {
+        nodeId,
+        phaseResourcePlanId: planId,
+        reservationKey: "individual-initial-1",
+      }),
+    ).rejects.toMatchObject({
+      name: "ResourceConflictError",
+      constraint: "phase_reservation_requires_current_capacity",
+    });
+    expect(transactionQuery).toHaveBeenCalledTimes(1);
+    expect(rootQuery).not.toHaveBeenCalled();
+  });
+
   it("delegates fresh-plan reacquisition to the persisted payment guard", async () => {
     const queryRaw = vi.fn().mockResolvedValue([
       {

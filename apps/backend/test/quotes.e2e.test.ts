@@ -26,6 +26,9 @@ import type {
   CandidateEstimateResult,
 } from "@taven/slicer-contracts" with { "resolution-mode": "import" };
 import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
+import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
+import { ResourceConflictError } from "../src/modules/resources/resource-errors";
+import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
 
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 const quoteCapabilityKey =
@@ -52,6 +55,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let prisma: PrismaService;
   let quotes: QuotesService;
   let candidates: CandidateEstimateService;
+  let eligibilityPlans: EligibilityPlanService;
   let legalDocuments: LegalDocumentsService;
   let priceListId: string;
   let selectionVersion: number;
@@ -75,6 +79,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     prisma = app.get(PrismaService);
     quotes = app.get(QuotesService);
     candidates = app.get(CandidateEstimateService);
+    eligibilityPlans = app.get(EligibilityPlanService);
     legalDocuments = app.get(LegalDocumentsService);
     const node = await prisma.node.findFirstOrThrow({
       where: { active: true },
@@ -1092,6 +1097,32 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toBe(200);
     expect(completedPreparation.body.status).toBe("READY");
     expect(completedPreparation.body.phaseResourcePlanId).toBeTruthy();
+    const otherNode = await prisma.node.create({
+      data: {
+        code: `foreign-${randomUUID()}`.slice(0, 50),
+        name: "Foreign preparation node",
+        timeZone: "Europe/Prague",
+      },
+    });
+    const acceptedPhase = await prisma.orderPhase.findFirstOrThrow({
+      where: { orderId: accepted.body.orderId },
+      select: { id: true },
+    });
+    await expect(
+      eligibilityPlans.createCompletePlan({
+        nodeId: otherNode.id,
+        orderPhaseId: acceptedPhase.id,
+        planKey: `foreign-individual:${randomUUID()}`,
+        exclusiveOrderNode: true,
+      }),
+    ).rejects.toMatchObject({
+      constraint: "individual_order_node_scope",
+    });
+    expect(
+      await prisma.phaseResourcePlan.count({
+        where: { orderPhaseId: acceptedPhase.id, nodeId: otherNode.id },
+      }),
+    ).toBe(0);
     const initialKey = key("accepted-individual-initial-payment");
     const createInitialPayment = (
       method: "CARD" | "BANK_TRANSFER",
@@ -1111,6 +1142,23 @@ describe("QuoteRequest and tokenized individual offers", () => {
         },
         body: JSON.stringify({ method }),
       });
+    const reservationService = app.get(ResourceReservationService);
+    const reserveSpy = vi.spyOn(reservationService, "reserveInTransaction");
+    reserveSpy.mockRejectedValueOnce(
+      new ResourceConflictError(
+        "reservation conflicts with the current resource state",
+        "capacity_reservations_no_active_overlap",
+      ),
+    );
+    const staleResource = await createInitialPayment(
+      "CARD",
+      key("accepted-initial-stale-reservation"),
+    );
+    reserveSpy.mockRestore();
+    expect(staleResource.response.status).toBe(409);
+    expect(
+      await prisma.payment.count({ where: { orderId: accepted.body.orderId } }),
+    ).toBe(0);
     const initialPayment = await createInitialPayment("CARD", initialKey);
     expect(
       initialPayment.response.status,
@@ -3046,16 +3094,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
   });
 
   it("rejects unplannable custom-service items before offer persistence", async () => {
-    const created = await createRequest(
-      key("custom-service-create"),
+    const created = await quotes.createRequest(
       requestInput("custom-service-create"),
+      "198.51.100.220",
+      key("custom-service-create"),
     );
     await operatorCommand(
-      `admin/quote-requests/${created.body.requestId}/review`,
+      `admin/quote-requests/${created.requestId}/review`,
       key("custom-service-review"),
     );
     const response = await issueOffer(
-      created.body.requestId,
+      created.requestId,
       key("custom-service-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
       defaultComponents(),
@@ -3070,7 +3119,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     expect(response.response.status).toBe(400);
     expect(
       await prisma.quote.count({
-        where: { quoteRequestId: created.body.requestId },
+        where: { quoteRequestId: created.requestId },
       }),
     ).toBe(0);
   });

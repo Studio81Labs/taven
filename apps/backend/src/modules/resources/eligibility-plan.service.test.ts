@@ -66,6 +66,67 @@ describe("EligibilityPlanService", () => {
     expect(events).toEqual(["fence", "lookup"]);
   });
 
+  it("checks individual node ownership after locking the order phase and before planning", async () => {
+    const events: string[] = [];
+    const queryRaw = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        events.push("plan fence");
+        return [];
+      })
+      .mockImplementationOnce(async () => [{ order_id: orderId }])
+      .mockImplementationOnce(async () => {
+        events.push("order fence");
+        return [];
+      })
+      .mockImplementationOnce(async () => {
+        events.push("phase lock");
+        return [
+          {
+            node_exists: true,
+            phase_status: "QUOTED",
+            observed_at: new Date(),
+          },
+        ];
+      });
+    const findFirst = vi.fn(async () => {
+      events.push("node ownership");
+      return { id: "00000000-0000-4000-8000-000000000010" };
+    });
+    const transaction = {
+      $queryRaw: queryRaw,
+      phaseResourcePlan: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst,
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback) => callback(transaction)),
+    };
+
+    await expect(
+      new EligibilityPlanService(prisma as never).createCompletePlan({
+        nodeId,
+        orderPhaseId,
+        planKey: "individual-node-conflict",
+        exclusiveOrderNode: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "ResourceConflictError",
+      constraint: "individual_order_node_scope",
+    });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { orderPhaseId, nodeId: { not: nodeId } },
+      select: { id: true },
+    });
+    expect(events).toEqual([
+      "plan fence",
+      "order fence",
+      "phase lock",
+      "node ownership",
+    ]);
+  });
+
   it("rejects a candidate at the exact reservation TTL from the fresh planning clock", async () => {
     const observedAt = new Date("2030-01-01T00:00:00.000Z");
     const planningNow = new Date("2030-01-01T01:00:00.000Z");

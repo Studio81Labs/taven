@@ -155,8 +155,17 @@ export class IndividualResourcePreparationService {
         nodeId,
         orderPhaseId: phase.id,
         planKey: `individual:${orderId}:${nodeId}:${key}`,
+        exclusiveOrderNode: true,
       });
     } catch (error) {
+      if (
+        error instanceof ResourceConflictError &&
+        error.constraint === "individual_order_node_scope"
+      ) {
+        throw new NotFoundException(
+          "Individual order is unavailable for this node",
+        );
+      }
       if (!(
         error instanceof ResourceConflictError &&
         error.constraint === "complete_phase_resource_plan_required"

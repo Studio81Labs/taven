@@ -1,4 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
+import type { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
   ResourceConflictError,
@@ -122,9 +123,16 @@ export class ResourceReservationService {
   async reserve(
     input: CreatePhaseReservationInput,
   ): Promise<PhaseReservationResult> {
+    return this.reserveInTransaction(this.prisma, input);
+  }
+
+  async reserveInTransaction(
+    transaction: Pick<Prisma.TransactionClient, "$queryRaw">,
+    input: CreatePhaseReservationInput,
+  ): Promise<PhaseReservationResult> {
     const reservationKey = nonBlank(input.reservationKey, "reservationKey");
     try {
-      const rows = await this.prisma.$queryRaw<ReservationRow[]>`
+      const rows = await transaction.$queryRaw<ReservationRow[]>`
         SELECT
           phase_reservation_set_id,
           phase_reservation_set_status,
