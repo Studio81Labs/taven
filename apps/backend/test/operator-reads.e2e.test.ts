@@ -330,6 +330,99 @@ describe("operator read contracts", () => {
     ).toBe(400);
   });
 
+  it("keeps an open-session cursor valid when that timer completes", async () => {
+    const secondAdmin = await sessionCookie("ADMIN", nodeId);
+    const start = async (auth: { cookie: string; csrfToken: string }) => {
+      const response = await fetch(
+        new URL("/admin/handling-sessions/start", baseUrl),
+        {
+          method: "POST",
+          headers: {
+            cookie: auth.cookie,
+            origin: "http://localhost:3002",
+            "x-csrf-token": auth.csrfToken,
+            "idempotency-key": randomUUID(),
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ component: "HANDLING_ORDER_FIX" }),
+        },
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()) as { id: string };
+    };
+    const first = await start({
+      cookie: adminCookie,
+      csrfToken: adminCsrfToken,
+    });
+    const second = await start(secondAdmin);
+    const response = await read(
+      "/admin/handling-sessions?lifecycle=OPEN&limit=1",
+    );
+    expect(response.status).toBe(200);
+    const page = (await response.json()) as {
+      items: Array<{ id: string }>;
+      nextCursor: string;
+    };
+    expect(page.items).toHaveLength(1);
+    expect(page.nextCursor).toBe(page.items[0]?.id);
+    const cursor = page.nextCursor;
+    const cursorAuth =
+      cursor === first.id
+        ? { cookie: adminCookie, csrfToken: adminCsrfToken }
+        : secondAdmin;
+    const stop = await fetch(
+      new URL(`/admin/handling-sessions/${cursor}/stop`, baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: cursorAuth.cookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": cursorAuth.csrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          allocations: [{ orderId: fixture.orderId, servedUnitCount: "1" }],
+        }),
+      },
+    );
+    expect(stop.status).toBe(200);
+    const continuation = await read(
+      `/admin/handling-sessions?lifecycle=OPEN&limit=1&cursor=${cursor}`,
+    );
+    expect(continuation.status).toBe(200);
+    await expect(continuation.json()).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({
+          id: cursor === first.id ? second.id : first.id,
+          lifecycle: "OPEN",
+        }),
+      ],
+    });
+    const remainingId = cursor === first.id ? second.id : first.id;
+    const remainingAuth =
+      cursor === first.id
+        ? secondAdmin
+        : { cookie: adminCookie, csrfToken: adminCsrfToken };
+    const cleanup = await fetch(
+      new URL(`/admin/handling-sessions/${remainingId}/stop`, baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: remainingAuth.cookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": remainingAuth.csrfToken,
+          "idempotency-key": randomUUID(),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          allocations: [{ orderId: fixture.orderId, servedUnitCount: "1" }],
+        }),
+      },
+    );
+    expect(cleanup.status).toBe(200);
+  });
+
   it("returns exact catalog settings and scoped inventory purchase evidence", async () => {
     const machine = await prisma.machine.findUniqueOrThrow({
       where: { id: fixture.machineId },

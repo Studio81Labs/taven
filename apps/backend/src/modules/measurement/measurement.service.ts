@@ -151,20 +151,33 @@ export class MeasurementService {
     };
     return this.prisma.$transaction(async (tx) => {
       if (orderId) await assertOperationalOrderScope(tx, orderId, nodeId);
-      if (
-        cursor &&
-        !(await tx.handlingSession.findFirst({
-          where: { ...where, id: cursor },
-          select: { id: true },
-        }))
-      ) {
+      const anchor = cursor
+        ? await tx.handlingSession.findFirst({
+            where: {
+              id: cursor,
+              nodeId,
+              ...(orderId ? { allocations: { some: { orderId } } } : {}),
+            },
+            select: { id: true, createdAt: true },
+          })
+        : null;
+      if (cursor && !anchor) {
         throw new BadRequestException("cursor is invalid");
       }
       const rows = await tx.handlingSession.findMany({
-        where,
+        where: {
+          ...where,
+          ...(anchor
+            ? {
+                OR: [
+                  { createdAt: { lt: anchor.createdAt } },
+                  { createdAt: anchor.createdAt, id: { lt: anchor.id } },
+                ],
+              }
+            : {}),
+        },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: limit + 1,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         include: {
           allocations: { orderBy: { id: "asc" }, take: 101 },
         },
