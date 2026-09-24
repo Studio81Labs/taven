@@ -214,8 +214,11 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   await page
     .getByRole("combobox", { name: "Stroj" })
     .selectOption(otherMachineId);
+  const conflictedStart = page.getByRole("textbox", { name: "Začátek" });
+  await conflictedStart.fill("2026-09-23T09:00:00+02:00");
   await page.getByRole("button", { name: "Publikovat dostupnost" }).click();
   await expect(page.getByRole("alert")).toContainText("živou rezervací");
+  await expect(conflictedStart).toHaveValue("2026-09-23T09:00:00+02:00");
   expect(availabilityPosts).toBe(1);
   expect(availabilityPostPaths).toEqual([
     `/admin/nodes/${nodeId}/machines/${machineId}/availability`,
@@ -300,6 +303,9 @@ test("a confirmed receipt closes its form when the following read fails", async 
   await page.getByRole("combobox", { name: "Stroj" }).selectOption(machineId);
   await page.getByRole("textbox", { name: "SKU" }).fill("PLA-new");
   await page.getByRole("textbox", { name: "Dodavatel" }).fill("Vendor");
+  await page
+    .getByRole("textbox", { name: /Nakoupeno/ })
+    .fill("2026-09-23T10:00:00+02:00");
   await page
     .getByRole("textbox", { name: "Přijaté množství mg" })
     .fill("1000000");
@@ -647,6 +653,17 @@ test("receipt correction copies only the current evidence and waits for refresh"
   await expect(
     page.getByRole("button", { name: "Zapsat", exact: true }),
   ).toBeEnabled();
+  await page.getByRole("button", { name: "Přijmout novou šarži" }).click();
+  await expect(page.getByRole("combobox", { name: "Stroj" })).toHaveValue("");
+  await expect(page.getByRole("textbox", { name: "Dodavatel" })).toBeEmpty();
+  await expect(page.getByRole("textbox", { name: /Nakoupeno/ })).toBeEmpty();
+  await expect(
+    page.getByRole("textbox", { name: "Přijaté množství mg" }),
+  ).toBeEmpty();
+  await expect(
+    page.getByRole("textbox", { name: /Jednotková cena čitatel/ }),
+  ).toBeEmpty();
+  await page.getByRole("button", { name: "Zavřít" }).click();
   await page
     .getByRole("button", { name: "Detail a rychlé změny" })
     .nth(1)

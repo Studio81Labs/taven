@@ -115,7 +115,7 @@ async function refresh(): Promise<void> {
     capabilityCursor.value = capabilityData.nextCursor ?? null;
     if (inventory.value) await inspectInventory(inventory.value.id);
     if (availabilityMachineId.value && !availabilityDirty.value)
-      await inspectAvailability(true);
+      await inspectAvailability("skip-dirty");
     if (!error.value) inventoryRefreshRequired.value = false;
   } catch (cause) {
     error.value = errorMessage(cause);
@@ -232,7 +232,23 @@ function openLegacyReceipt(): void {
   form.value = "legacy-receipt";
 }
 
-async function inspectAvailability(preserveDraft = false): Promise<void> {
+function openReceipt(): void {
+  formMachineId.value = "";
+  sku.value = "";
+  lotCode.value = "";
+  material.value = "PLA";
+  color.value = "";
+  vendor.value = "";
+  purchasedAt.value = "";
+  receivedMilligrams.value = "";
+  priceNumerator.value = "";
+  priceDenominator.value = "1000";
+  form.value = "receipt";
+}
+
+async function inspectAvailability(
+  mode: "replace" | "skip-dirty" | "keep-windows" = "replace",
+): Promise<void> {
   if (!availabilityMachineId.value) return;
   const machineId = availabilityMachineId.value;
   const generation = ++availabilityReadGeneration;
@@ -255,14 +271,15 @@ async function inspectAvailability(preserveDraft = false): Promise<void> {
     if (
       generation !== availabilityReadGeneration ||
       machineId !== availabilityMachineId.value ||
-      (preserveDraft && availabilityDirty.value)
+      (mode === "skip-dirty" && availabilityDirty.value)
     )
       return;
     availability.value = detail;
-    windows.value = availability.value.windows.map((item) => ({
-      startsAt: item.startsAt,
-      endsAt: item.endsAt,
-    }));
+    if (mode !== "keep-windows")
+      windows.value = availability.value.windows.map((item) => ({
+        startsAt: item.startsAt,
+        endsAt: item.endsAt,
+      }));
   } catch (cause) {
     if (
       generation === availabilityReadGeneration &&
@@ -654,7 +671,7 @@ async function publishAvailability(): Promise<void> {
     error.value = errorMessage(cause);
     if (cause instanceof OperatorRequestError && cause.status === 409) {
       const conflict = errorMessage(cause);
-      await inspectAvailability();
+      await inspectAvailability("keep-windows");
       error.value = `Publikace koliduje s aktuální verzí nebo živou rezervací. ${conflict} Zkontrolujte intervaly a potvrďte změnu znovu.`;
     }
   } finally {
@@ -876,7 +893,7 @@ onMounted(() => void refresh());
       >
         Další šarže
       </button>
-      <button v-if="canWrite" type="button" @click="form = 'receipt'">
+      <button v-if="canWrite" type="button" @click="openReceipt">
         Přijmout novou šarži
       </button>
     </section>
