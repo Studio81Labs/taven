@@ -857,6 +857,100 @@ test.describe("Real API Integration Journey", () => {
     });
   });
 
+  test("activates scheduled legal publications at the database instant", async ({
+    page,
+    request,
+  }) => {
+    test.skip(
+      process.env.INTEGRATION_MUTABLE_FIXTURES !== "true",
+      "Requires the isolated mutable legal publication fixture",
+    );
+    test.setTimeout(90_000);
+    const replacements = await replaceE2eCheckoutDocumentsForBrowser(
+      process.env.DATABASE_URL!,
+      15_000,
+    );
+    const startsAt = replacements.terms.startsAt;
+    if (!startsAt) throw new Error("Scheduled legal fixture has no start");
+    const readAvailability = async () => {
+      const response = await request.get(
+        `${INTEGRATION_API_URL}/legal-documents/availability`,
+      );
+      expect(response.status()).toBe(200);
+      return response.json();
+    };
+    const before = await readAvailability();
+    expect(Date.parse(before.evaluatedAt)).toBeLessThan(Date.parse(startsAt));
+    for (const key of ["terms", "claims", "photoConsent"] as const) {
+      expect(before.documents[key]).toMatchObject({
+        effective: true,
+        revision: replacements[key].previousRevision,
+        contentHash: replacements[key].previousContentHash,
+      });
+    }
+    await page.clock.install({ time: new Date(Date.now() + 86_400_000) });
+    await page.goto("/vop");
+    await expect(
+      page.getByRole("heading", {
+        name: replacements.terms.previousTitle,
+        level: 1,
+      }),
+    ).toBeVisible();
+
+    await expect
+      .poll(async () => (await readAvailability()).documents.terms.revision, {
+        timeout: 30_000,
+        intervals: [100, 250, 500],
+      })
+      .toBe(replacements.terms.revision);
+    const after = await readAvailability();
+    expect(Date.parse(after.evaluatedAt)).toBeGreaterThanOrEqual(
+      Date.parse(startsAt),
+    );
+    expect(after.policyRevision).not.toBe(before.policyRevision);
+    for (const key of ["terms", "claims", "photoConsent"] as const) {
+      expect(after.documents[key]).toMatchObject({
+        effective: true,
+        revision: replacements[key].revision,
+        contentHash: replacements[key].contentHash,
+      });
+    }
+    await page.reload();
+    await expect(
+      page.getByRole("heading", { name: replacements.terms.title, level: 1 }),
+    ).toBeVisible();
+    await page.goto(
+      `/vop?revision=${replacements.terms.previousRevision}&contentHash=${replacements.terms.previousContentHash}`,
+    );
+    await expect(
+      page.getByRole("heading", {
+        name: replacements.terms.previousTitle,
+        level: 1,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Historické znění", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("waits out a pending legal publication before a fixture retry", async () => {
+    test.skip(
+      process.env.INTEGRATION_MUTABLE_FIXTURES !== "true",
+      "Requires the isolated mutable legal publication fixture",
+    );
+    test.setTimeout(30_000);
+    const databaseUrl = process.env.DATABASE_URL!;
+    const pending = await replaceE2eCheckoutDocumentsForBrowser(
+      databaseUrl,
+      2_000,
+    );
+    const retried = await replaceE2eCheckoutDocumentsForBrowser(databaseUrl);
+    for (const key of ["terms", "claims", "photoConsent"] as const) {
+      expect(retried[key].previousRevision).toBe(pending[key].revision);
+      expect(retried[key].previousContentHash).toBe(pending[key].contentHash);
+    }
+  });
+
   test("requires fresh consent and binding after real legal revision replacement", async ({
     page,
     browser,
