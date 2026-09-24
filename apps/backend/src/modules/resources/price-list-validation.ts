@@ -6,6 +6,51 @@ const MAX_INT64 = 9_223_372_036_854_775_807n;
 const MAX_API_MINOR = BigInt(Number.MAX_SAFE_INTEGER);
 // The public configurator accepts at most 256 items of 1,000 pieces each.
 const MAX_PUBLIC_QUANTITY = 256_000n;
+export const BALANCE_EARNED_COMPONENT_KINDS = [
+  "ITEM_PRODUCTION",
+  "ITEM_QUANTITY",
+  "ITEM_POSTPROCESSING",
+  "ORDER_MIN_PRINT",
+  "ORDER_SMALL_SURCHARGE",
+  "SHIPMENT",
+  "EXPRESS",
+  "PAYMENT_FEE",
+  "VAT",
+] as const;
+
+export type IndividualPaymentPolicy = {
+  balancePaymentDays: number;
+  earnedComponentKinds: (typeof BALANCE_EARNED_COMPONENT_KINDS)[number][];
+};
+
+/** Historical lists may lack this policy; fresh publication requires it. */
+export function parseIndividualPaymentPolicy(
+  value: unknown,
+): IndividualPaymentPolicy | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const parameters = value as Record<string, unknown>;
+  const days = parameters.balance_payment_days;
+  const kinds = parameters.balance_timeout_earned_component_kinds;
+  if (
+    typeof days !== "number" ||
+    !Number.isInteger(days) ||
+    days < 1 ||
+    days > 36500 ||
+    !Array.isArray(kinds) ||
+    kinds.length === 0 ||
+    kinds.some(
+      (kind) =>
+        typeof kind !== "string" ||
+        !(BALANCE_EARNED_COMPONENT_KINDS as readonly string[]).includes(kind),
+    ) ||
+    new Set(kinds).size !== kinds.length
+  )
+    return null;
+  return {
+    balancePaymentDays: days,
+    earnedComponentKinds: [...kinds],
+  };
+}
 const AUTOMATIC_FIELDS = [
   "machineRateMinorPerSecond",
   "laborRateMinorPerSecond",
@@ -116,7 +161,19 @@ export async function validatePriceListParameters(
   value: Prisma.InputJsonObject,
 ): Promise<void> {
   const root = record(value, "parameters");
-  exactKeys(root, ["sellerTaxPolicy", "automaticQuote"], "parameters");
+  exactKeys(
+    root,
+    [
+      "sellerTaxPolicy",
+      "automaticQuote",
+      "balance_payment_days",
+      "balance_timeout_earned_component_kinds",
+    ],
+    "parameters",
+  );
+  if (!parseIndividualPaymentPolicy(root)) {
+    throw new BadRequestException("Individual balance policy is invalid");
+  }
   exactKeys(
     record(root.sellerTaxPolicy, "sellerTaxPolicy"),
     ["regime", "vatRateBasisPoints"],

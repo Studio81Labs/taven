@@ -360,6 +360,27 @@ export class PriceListParametersDto {
 
   @ApiProperty({ type: () => AutomaticQuoteParametersDto })
   automaticQuote!: AutomaticQuoteParametersDto;
+
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 36500 })
+  balance_payment_days!: number;
+
+  @ApiProperty({
+    type: [String],
+    minItems: 1,
+    uniqueItems: true,
+    enum: [
+      "ITEM_PRODUCTION",
+      "ITEM_QUANTITY",
+      "ITEM_POSTPROCESSING",
+      "ORDER_MIN_PRINT",
+      "ORDER_SMALL_SURCHARGE",
+      "SHIPMENT",
+      "EXPRESS",
+      "PAYMENT_FEE",
+      "VAT",
+    ],
+  })
+  balance_timeout_earned_component_kinds!: string[];
 }
 
 export class CreatePriceListDto {

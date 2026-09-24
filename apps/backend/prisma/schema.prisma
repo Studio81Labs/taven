@@ -688,6 +688,7 @@ model ModelFile {
   retentionDeletionJob   RetentionDeletionJob?     @relation("ModelFileRetentionDeletionJob", fields: [retentionDeletionJobId], references: [id], onDelete: Restrict)
   automaticQuoteFiles    AutomaticQuoteModelFile[]
   automaticQuoteItems    AutomaticQuoteItemDraft[]
+  quoteRequestModels     QuoteRequestModel[]
 
   @@index([contentHash])
   @@index([sourceDeleteAfter, retentionHold, deletedAt])
@@ -792,6 +793,8 @@ model UploadIntent {
   confirmedModelFileId  String?            @unique @map("confirmed_model_file_id") @db.Uuid
   confirmedPhotoAssetId String?            @unique @map("confirmed_photo_asset_id") @db.Uuid
   confirmedAt           DateTime?          @map("confirmed_at") @db.Timestamptz(3)
+  quoteRequestId        String?            @map("quote_request_id") @db.Uuid
+  initiatingOperatorId  String?            @map("initiating_operator_id") @db.Uuid
   failureReason         String?            @map("failure_reason") @db.Text
   createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -799,6 +802,8 @@ model UploadIntent {
   customer            Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
   confirmedModelFile  ModelFile?  @relation("UploadIntentModelFile", fields: [confirmedModelFileId], references: [id], onDelete: Restrict)
   confirmedPhotoAsset PhotoAsset? @relation("UploadIntentPhotoAsset", fields: [confirmedPhotoAssetId], references: [id], onDelete: Restrict)
+  quoteRequest        QuoteRequest? @relation(fields: [quoteRequestId], references: [id], onDelete: Restrict)
+  initiatingOperator  OperatorIdentity? @relation(fields: [initiatingOperatorId], references: [id], onDelete: Restrict)
 
   @@index([customerId, createdAt])
   @@index([status, expiresAt])
@@ -1013,6 +1018,8 @@ model OperatorIdentity {
   handlingSessions      HandlingSession[]
   approvedLegalRevisions LegalDocumentRevision[]
   publishedLegalDocuments LegalDocumentPublication[]
+  initiatedModelUploads UploadIntent[]
+  attachedQuoteModels QuoteRequestModel[]
 
   @@map("operator_identities")
 }
@@ -1894,11 +1901,52 @@ model QuoteRequest {
   legalAcceptances              LegalAcceptance[]
   legalAcceptanceDecision       LegalAcceptanceDecision?
   legacyQuoteRequestImports     LegacyQuoteRequestImport[]
+  modelUploads                  UploadIntent[]
+  models                        QuoteRequestModel[]
 
   @@unique([currentQuoteId, id], map: "quote_requests_current_quote_key")
   @@index([customerId, status])
   @@index([status, slaDueAt])
   @@map("quote_requests")
+}
+
+model QuoteRequestModel {
+  requestId            String   @map("request_id") @db.Uuid
+  modelFileId          String   @map("model_file_id") @db.Uuid
+  attachedByOperatorId String   @map("attached_by_operator_id") @db.Uuid
+  inspectionJobId      String   @map("inspection_job_id") @db.Uuid
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  request            QuoteRequest       @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  modelFile          ModelFile          @relation(fields: [modelFileId], references: [id], onDelete: Restrict)
+  attachedByOperator OperatorIdentity   @relation(fields: [attachedByOperatorId], references: [id], onDelete: Restrict)
+  selections         QuoteRequestModelSelection[]
+
+  @@id([requestId, modelFileId])
+  @@unique([requestId, modelFileId, inspectionJobId])
+  @@unique([requestId, inspectionJobId])
+  @@index([modelFileId])
+  @@map("quote_request_models")
+}
+
+model QuoteRequestModelSelection {
+  id                  String   @id @default(uuid()) @db.Uuid
+  requestId           String   @map("request_id") @db.Uuid
+  modelFileId         String   @map("model_file_id") @db.Uuid
+  modelGeometryId     String   @map("model_geometry_id") @db.Uuid
+  inspectionJobId     String   @map("inspection_job_id") @db.Uuid
+  sourceContentSha256 String   @map("source_content_sha256") @db.VarChar(64)
+  bodyIds             String[] @map("body_ids")
+  selectionSha256     String   @map("selection_sha256") @db.VarChar(64)
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  requestModel QuoteRequestModel @relation(fields: [requestId, modelFileId, inspectionJobId], references: [requestId, modelFileId, inspectionJobId], onDelete: Restrict)
+  quoteItems   QuoteItem[]
+
+  @@unique([requestId, modelFileId, selectionSha256])
+  @@unique([id, modelFileId, modelGeometryId])
+  @@index([modelGeometryId])
+  @@map("quote_request_model_selections")
 }
 
 model Quote {
@@ -1963,6 +2011,7 @@ model QuoteItem {
   ordinal                       Int
   sourceModelFileId             String   @map("source_model_file_id") @db.Uuid
   modelGeometryId               String   @map("model_geometry_id") @db.Uuid
+  modelSelectionId              String?  @map("model_selection_id") @db.Uuid
   printConfigRevisionId         String   @map("print_config_revision_id") @db.Uuid
   primaryReferenceSliceResultId String?  @map("reference_slice_result_id") @db.Uuid
   tailReferenceSliceResultId    String?  @map("tail_reference_slice_result_id") @db.Uuid
@@ -1975,6 +2024,7 @@ model QuoteItem {
   quote                       Quote                      @relation(fields: [quoteId], references: [id], onDelete: Restrict)
   sourceModelFile             ModelFile                  @relation("QuoteItemSourceModelFile", fields: [sourceModelFileId], references: [id], onDelete: Restrict)
   modelGeometry               ModelGeometry              @relation(fields: [modelGeometryId, sourceModelFileId], references: [id, sourceModelFileId], onDelete: Restrict)
+  modelSelection              QuoteRequestModelSelection? @relation(fields: [modelSelectionId, sourceModelFileId, modelGeometryId], references: [id, modelFileId, modelGeometryId], onDelete: Restrict)
   printConfigRevision         PrintConfigRevision        @relation(fields: [printConfigRevisionId], references: [id], onDelete: Restrict)
   primaryReferenceSliceResult SliceResult?               @relation("QuoteItemPrimaryReferenceSlice", fields: [primaryReferenceSliceResultId], references: [id], onDelete: Restrict)
   tailReferenceSliceResult    SliceResult?               @relation("QuoteItemTailReferenceSlice", fields: [tailReferenceSliceResultId], references: [id], onDelete: Restrict)

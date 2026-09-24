@@ -4,6 +4,27 @@
 - **Date:** 2026-09-23
 - **Implementation:** Epic #10, escalation #194, PR3a of #183
 
+## Combined publication contract (Epic #10 revision 4, escalation #238)
+
+The same immutable CZK PriceList supplies automatic pricing/tax and individual
+balance terms. Fresh catalog creation and activation require four root fields:
+`sellerTaxPolicy`, `automaticQuote`, `balance_payment_days` (integer 1–36500),
+and a nonempty, unique `balance_timeout_earned_component_kinds` array of the
+supported price component kinds. The development compatibility baseline is
+seven days and ITEM_PRODUCTION, ITEM_QUANTITY, ITEM_POSTPROCESSING. These are
+explicit publication values, never runtime defaults.
+
+The existing automatic-only revision remains selected and can serve automatic
+work until an operator creates and explicitly activates a complete successor
+through authenticated catalog commands. Copy the selected revision's tax and
+automatic configuration exactly; creation alone does not publish. A selected
+incomplete policy makes fresh individual preview/issue/reissue unavailable.
+Completed historical catalog retries and previously issued bindings retain
+their original payload and result. Accepted payments, deadlines, earned
+components and settlement continue to read the bound immutable list after
+any later activation. Historical automatic-only and individual-only rows stay
+readable. This correction adds no policy table or data migration.
+
 ## Context
 
 An immutable PriceList can be created but the automatic quote flow previously

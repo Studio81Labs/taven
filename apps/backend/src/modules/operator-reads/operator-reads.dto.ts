@@ -7,6 +7,7 @@ import {
 import { FulfilmentProjectionDto } from "../orders/orders.dto";
 import { ReferenceProfileActivationNoticeDto } from "../resources/reference-profile-activation-notice.dto";
 import {
+  AutomaticQuoteParametersDto,
   PriceListParametersDto,
   SellerTaxPolicyDto,
 } from "../resources/operator-catalog.dto";
@@ -823,6 +824,14 @@ export class PrintConfigRevisionDetailDto extends PrintConfigRevisionReadDto {
   settings!: Record<string, unknown>;
 }
 
+export class LegacyAutomaticPriceListParametersDto {
+  @ApiProperty({ type: () => SellerTaxPolicyDto })
+  sellerTaxPolicy!: SellerTaxPolicyDto;
+
+  @ApiProperty({ type: () => AutomaticQuoteParametersDto })
+  automaticQuote!: AutomaticQuoteParametersDto;
+}
+
 export class LegacyPriceListParametersDto {
   @ApiProperty({ type: () => SellerTaxPolicyDto })
   sellerTaxPolicy!: SellerTaxPolicyDto;
@@ -834,16 +843,24 @@ export class LegacyPriceListParametersDto {
   balance_timeout_earned_component_kinds!: string[];
 }
 
-@ApiExtraModels(PriceListParametersDto, LegacyPriceListParametersDto)
+@ApiExtraModels(
+  PriceListParametersDto,
+  LegacyAutomaticPriceListParametersDto,
+  LegacyPriceListParametersDto,
+)
 export class PriceListDetailDto extends PriceListReadDto {
   @ApiProperty({
     type: Object,
-    oneOf: [
+    anyOf: [
       { $ref: getSchemaPath(PriceListParametersDto) },
+      { $ref: getSchemaPath(LegacyAutomaticPriceListParametersDto) },
       { $ref: getSchemaPath(LegacyPriceListParametersDto) },
     ],
   })
-  parameters!: PriceListParametersDto | LegacyPriceListParametersDto;
+  parameters!:
+    | PriceListParametersDto
+    | LegacyAutomaticPriceListParametersDto
+    | LegacyPriceListParametersDto;
 }
 
 export class InventoryDetailDto extends InventoryReadDto {

@@ -46,6 +46,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let quotes: QuotesService;
   let legalDocuments: LegalDocumentsService;
   let priceListId: string;
+  let selectionVersion: number;
   let termsSnapshot: Record<string, unknown>;
   let claimsSnapshot: Record<string, unknown>;
   let defaultOfferItem: Record<string, unknown>;
@@ -102,11 +103,66 @@ describe("QuoteRequest and tokenized individual offers", () => {
       sessionId: randomUUID(),
     };
     operatorCookie = `taven_admin=${token}`;
-    const priceList = await prisma.priceList.findFirstOrThrow({
-      where: { currency: "CZK" },
-      orderBy: { createdAt: "asc" },
-    });
-    priceListId = priceList.id;
+    const currentPolicy =
+      await prisma.commercialPolicySelection.findUniqueOrThrow({
+        where: { currency: "CZK" },
+        include: { priceList: true },
+      });
+    const createPolicy = await fetch(
+      new URL("admin/catalog/price-lists", baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: operatorCookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": operatorCsrfToken,
+          "content-type": "application/json",
+          "idempotency-key": key("quote-suite-policy-create"),
+        },
+        body: JSON.stringify({
+          currency: "CZK",
+          revision: `quote-suite-${randomUUID()}`,
+          termsRevision: currentPolicy.priceList.termsRevision,
+          parameters: {
+            ...(currentPolicy.priceList.parameters as Record<string, unknown>),
+            balance_payment_days: 7,
+            balance_timeout_earned_component_kinds: [
+              "ITEM_PRODUCTION",
+              "ITEM_QUANTITY",
+              "ITEM_POSTPROCESSING",
+            ],
+          },
+        }),
+      },
+    );
+    expect(createPolicy.status).toBe(200);
+    const createdPolicy = (await createPolicy.json()) as { id: string };
+    const activatePolicy = await fetch(
+      new URL(
+        `admin/catalog/price-lists/${createdPolicy.id}/activate`,
+        baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: {
+          cookie: operatorCookie,
+          origin: "http://localhost:3002",
+          "x-csrf-token": operatorCsrfToken,
+          "content-type": "application/json",
+          "idempotency-key": key("quote-suite-policy-activate"),
+        },
+        body: JSON.stringify({
+          expectedSelectionVersion: currentPolicy.selectionVersion,
+          reason: "Quote suite combined policy",
+        }),
+      },
+    );
+    expect(activatePolicy.status).toBe(200);
+    const activatedPolicy = (await activatePolicy.json()) as {
+      selectionVersion: number;
+    };
+    priceListId = createdPolicy.id;
+    selectionVersion = activatedPolicy.selectionVersion;
     const termsRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
       where: { revisionCode: e2eLegalRevisionCodes.terms },
       select: {
@@ -775,14 +831,13 @@ describe("QuoteRequest and tokenized individual offers", () => {
     });
     expect(preview.body.claimsSnapshot).toEqual(claimsSnapshot);
     expect(preview.body.items).toEqual([
-      {
+      expect.objectContaining({
         ordinal: 0,
         ...defaultOfferItem,
-        primaryReferenceSliceResultId: null,
+        modelSelectionId: expect.any(String),
         tailReferenceSliceResultId: null,
-        referencePartsPerPlate: null,
         color: null,
-      },
+      }),
     ]);
     expect(preview.body.deliveryDestination).toEqual(
       defaultDeliveryDestination(),
@@ -983,7 +1038,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
 
     const acceptedHistory = await apiJson<
-      Array<{ requestId: string; status: string }>
+      Array<{
+        requestId: string;
+        status: string;
+        acceptedOrderId: string | null;
+      }>
     >("admin/quote-requests?status=ACCEPTED", {
       headers: operatorHeaders(false),
     });
@@ -992,9 +1051,22 @@ describe("QuoteRequest and tokenized individual offers", () => {
       expect.objectContaining({
         requestId: created.body.requestId,
         status: "ACCEPTED",
+        acceptedOrderId: accepted.body.orderId,
       }),
     );
-  });
+    const acceptedPage = await apiJson<{
+      items: Array<{ requestId: string; acceptedOrderId: string | null }>;
+    }>("admin/quote-requests/page?status=ACCEPTED&limit=100", {
+      headers: operatorHeaders(false),
+    });
+    expect(acceptedPage.response.status).toBe(200);
+    expect(acceptedPage.body.items).toContainEqual(
+      expect.objectContaining({
+        requestId: created.body.requestId,
+        acceptedOrderId: accepted.body.orderId,
+      }),
+    );
+  }, 20_000);
 
   it("issues and previews an immutable VAT-payer price split", async () => {
     const created = await quotes.createRequest(
@@ -1007,33 +1079,31 @@ describe("QuoteRequest and tokenized individual offers", () => {
       created.requestId,
       key("vat-payer-offer-review"),
     );
-    const priceList = await prisma.priceList.create({
-      data: {
-        revision: `vat-payer-${randomUUID()}`,
-        termsRevision: "terms-v1",
-        currency: "CZK",
-        parameters: {
-          sellerTaxPolicy: {
-            regime: "VAT_PAYER",
-            vatRateBasisPoints: 2_100,
-          },
-          balance_payment_days: 7,
-          balance_timeout_earned_component_kinds: [
-            "ITEM_PRODUCTION",
-            "ITEM_QUANTITY",
-            "ITEM_POSTPROCESSING",
-            "VAT",
-          ],
-        },
-      },
+    const previousPolicyId = priceListId;
+    const previousPolicy = await prisma.priceList.findUniqueOrThrow({
+      where: { id: previousPolicyId },
     });
+    const vatPolicyId = await publishTestPriceList(
+      {
+        ...(previousPolicy.parameters as Record<string, unknown>),
+        sellerTaxPolicy: { regime: "VAT_PAYER", vatRateBasisPoints: 2_100 },
+        balance_payment_days: 7,
+        balance_timeout_earned_component_kinds: [
+          "ITEM_PRODUCTION",
+          "ITEM_QUANTITY",
+          "ITEM_POSTPROCESSING",
+          "VAT",
+        ],
+      },
+      previousPolicy.termsRevision,
+    );
     const issued = await issueOffer(
       created.requestId,
       key("vat-payer-offer-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
       defaultComponents(),
       defaultItems(),
-      priceList.id,
+      vatPolicyId,
       {
         contractTotalMinor: 133_100,
         depositMinor: 39_930,
@@ -1095,6 +1165,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       key("vat-payer-offer-accept"),
     );
     expect(accepted.response.status).toBe(200);
+    await activateTestPriceList(previousPolicyId);
   });
 
   it("reissues an active offer without changing its numerical provenance", async () => {
@@ -1789,7 +1860,16 @@ describe("QuoteRequest and tokenized individual offers", () => {
       ordinal,
       modelGeometryId: randomUUID(),
       printConfigRevisionId: randomUUID(),
+      modelSelectionId: randomUUID(),
+      referenceSliceResultId: randomUUID(),
     }));
+    const source = await prisma.modelFile.findUniqueOrThrow({
+      where: { id: sourceModelFileId },
+    });
+    const referenceProfile = await prisma.referenceProfile.findFirstOrThrow({
+      where: { material: "PLA", quality: "STANDARD", state: "ACTIVE" },
+    });
+    const inspectionJobId = randomUUID();
     await prisma.$transaction(async (transaction) => {
       await transaction.revisionIdentity.createMany({
         data: references.map(({ printConfigRevisionId }) => ({
@@ -1825,13 +1905,68 @@ describe("QuoteRequest and tokenized individual offers", () => {
           triangleCount: 1,
         })),
       });
+      await transaction.quoteRequestModel.create({
+        data: {
+          requestId: created.requestId,
+          modelFileId: sourceModelFileId,
+          attachedByOperatorId: operator.operatorId,
+          inspectionJobId,
+        },
+      });
+      await transaction.quoteRequestModelSelection.createMany({
+        data: references.map(({ modelGeometryId, modelSelectionId }) => ({
+          id: modelSelectionId,
+          requestId: created.requestId,
+          modelFileId: sourceModelFileId,
+          modelGeometryId,
+          inspectionJobId,
+          sourceContentSha256: source.contentHash,
+          bodyIds: ["quote-test-body"],
+          selectionSha256: createHash("sha256")
+            .update(modelSelectionId)
+            .digest("hex"),
+        })),
+      });
+      await transaction.sliceResult.createMany({
+        data: references.map(
+          ({
+            modelGeometryId,
+            printConfigRevisionId,
+            referenceSliceResultId,
+          }) => ({
+            id: referenceSliceResultId,
+            kind: "REFERENCE",
+            cacheKey: `quote-e2e:${referenceSliceResultId}`,
+            modelGeometryId,
+            printConfigRevisionId,
+            referenceProfileId: referenceProfile.id,
+            partsPerPlate: 1,
+            artifactObjectKey: `quote-tests/slices/${referenceSliceResultId}`,
+            artifactHash: createHash("sha256")
+              .update(referenceSliceResultId)
+              .digest("hex"),
+            estimatedPrintSeconds: 1n,
+            estimatedMaterialMilligrams: 1n,
+            slicerEngine: referenceProfile.slicerEngine,
+            slicerVersion: referenceProfile.slicerVersion,
+          }),
+        ),
+      });
     });
     const items: Array<Record<string, unknown>> = references.map(
-      ({ modelGeometryId, printConfigRevisionId }) => ({
+      ({
+        modelGeometryId,
+        printConfigRevisionId,
+        modelSelectionId,
+        referenceSliceResultId,
+      }) => ({
         kind: "MODEL",
         sourceModelFileId,
         modelGeometryId,
+        modelSelectionId,
         printConfigRevisionId,
+        primaryReferenceSliceResultId: referenceSliceResultId,
+        referencePartsPerPlate: 1,
         material: "PLA",
         quantity: 1,
       }),
@@ -1894,21 +2029,14 @@ describe("QuoteRequest and tokenized individual offers", () => {
   });
 
   it("uses the effective legal revision instead of price-list terms metadata", async () => {
-    const selectedPriceList = await prisma.priceList.create({
-      data: {
-        revision: `quote-e2e-spaced-terms-${randomUUID()}`,
-        termsRevision: "  terms-spaced-v1  ",
-        currency: "CZK",
-        parameters: {
-          sellerTaxPolicy: {
-            regime: "NON_VAT_PAYER",
-            vatRateBasisPoints: 0,
-          },
-          balance_payment_days: 7,
-          balance_timeout_earned_component_kinds: ["ITEM_PRODUCTION"],
-        },
-      },
+    const previousPolicyId = priceListId;
+    const previousPolicy = await prisma.priceList.findUniqueOrThrow({
+      where: { id: previousPolicyId },
     });
+    const selectedPriceListId = await publishTestPriceList(
+      previousPolicy.parameters as Record<string, unknown>,
+      "terms-catalog-metadata-only",
+    );
     const created = await quotes.createRequest(
       requestInput("spaced-terms"),
       "198.51.100.49",
@@ -1926,10 +2054,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
       new Date(Date.now() + 60 * 60 * 1_000),
       defaultComponents(),
       defaultItems(),
-      selectedPriceList.id,
+      selectedPriceListId,
     );
     expect(issued.response.status).toBe(201);
     expect(issued.body.termsRevision).toBe(e2eLegalRevisionCodes.terms);
+    await activateTestPriceList(previousPolicyId);
   });
 
   it("rejects a quote whose terms code differs from its bound legal revision", async () => {
@@ -2129,6 +2258,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         expiresAt: new Date(Date.now() + 600).toISOString(),
         promisedDate: "2026-10-01",
         priceListId,
+        expectedSelectionVersion: selectionVersion,
         contractTotalMinor: 110_000,
         taxRegime: "NON_VAT_PAYER",
         vatRateBasisPoints: 0,
@@ -2140,7 +2270,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         deliveryDestination: defaultDeliveryDestination(),
         shipmentPlans: defaultShipmentPlans(),
         paymentPolicy: defaultPaymentPolicy(),
-        items: defaultItems(),
+        items: await prepareOfferItems(created.requestId, defaultItems()),
         components: defaultComponents(),
       } as unknown as IssueOfferDto,
       key("manual-expiry-issue"),
@@ -2465,7 +2595,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toBe(0);
   });
 
-  it("rejects price lists without a complete split-payment policy", async () => {
+  it("rejects unselected historical price lists before issuance", async () => {
     const created = await quotes.createRequest(
       requestInput("invalid-split-policy-create"),
       "198.51.100.25",
@@ -2515,9 +2645,9 @@ describe("QuoteRequest and tokenized individual offers", () => {
         priceList.id,
       );
 
-      expect(response.response.status).toBe(400);
+      expect(response.response.status).toBe(409);
       expect(response.body).toMatchObject({
-        message: "priceListId does not support individual split payments",
+        message: "Commercial policy selection changed",
       });
     }
     expect(
@@ -3929,6 +4059,10 @@ describe("QuoteRequest and tokenized individual offers", () => {
     const id = randomUUID();
     const modelGeometryId = randomUUID();
     const printConfigRevisionId = randomUUID();
+    const referenceProfile = await prisma.referenceProfile.findFirstOrThrow({
+      where: { material: "PLA", quality: "STANDARD", state: "ACTIVE" },
+    });
+    const referenceSliceId = randomUUID();
     const uploadedAt = new Date(Date.now() - 60_000);
     await prisma.$transaction(async (transaction) => {
       await transaction.modelFile.create({
@@ -3979,6 +4113,25 @@ describe("QuoteRequest and tokenized individual offers", () => {
           settings: {},
         },
       });
+      await transaction.sliceResult.create({
+        data: {
+          id: referenceSliceId,
+          kind: "REFERENCE",
+          cacheKey: `quote-e2e:${referenceSliceId}`,
+          modelGeometryId,
+          printConfigRevisionId,
+          referenceProfileId: referenceProfile.id,
+          partsPerPlate: 1,
+          artifactObjectKey: `quote-tests/slices/${referenceSliceId}`,
+          artifactHash: createHash("sha256")
+            .update(referenceSliceId)
+            .digest("hex"),
+          estimatedPrintSeconds: 1n,
+          estimatedMaterialMilligrams: 1n,
+          slicerEngine: referenceProfile.slicerEngine,
+          slicerVersion: referenceProfile.slicerVersion,
+        },
+      });
     });
     return {
       id,
@@ -3987,6 +4140,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
         sourceModelFileId: id,
         modelGeometryId,
         printConfigRevisionId,
+        primaryReferenceSliceResultId: referenceSliceId,
+        referencePartsPerPlate: 1,
         material: "PLA",
         quantity: 1,
       },
@@ -4034,6 +4189,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       vatAmountMinor?: number;
     } = {},
   ) {
+    items = await prepareOfferItems(requestId, items);
     const offer = offerInput(
       expiresAt,
       components,
@@ -4087,6 +4243,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         typeof expiresAt === "string" ? expiresAt : expiresAt.toISOString(),
       promisedDate: "2026-10-01",
       priceListId: selectedPriceListId,
+      expectedSelectionVersion: selectionVersion,
       contractTotalMinor: options.contractTotalMinor ?? 110_000,
       taxRegime: options.taxRegime ?? "NON_VAT_PAYER",
       vatRateBasisPoints: options.vatRateBasisPoints ?? 0,
@@ -4115,6 +4272,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     reason = "Refresh immutable offer after legal rotation",
     reasonCode = "LEGAL_ROTATION",
   ) {
+    const items = await prepareOfferItems(requestId, defaultItems());
     return apiJson<{
       quoteId: string;
       offerToken: string;
@@ -4135,9 +4293,88 @@ describe("QuoteRequest and tokenized individual offers", () => {
         expectedVersion,
         reason,
         reasonCode,
-        offer: offerInput(expiresAt),
+        offer: offerInput(expiresAt, defaultComponents(), items),
       }),
     });
+  }
+
+  const selectedItems = new Map<string, Promise<string>>();
+  const attachedModels = new Map<string, Promise<string>>();
+  async function prepareOfferItems(
+    requestId: string,
+    items: Array<Record<string, unknown>>,
+  ): Promise<Array<Record<string, unknown>>> {
+    return Promise.all(
+      items.map(async (item) => {
+        if (item.modelSelectionId !== undefined) return item;
+        const sourceId = item.sourceModelFileId;
+        const geometryId = item.modelGeometryId;
+        if (typeof sourceId !== "string" || typeof geometryId !== "string")
+          return item;
+        const source = await prisma.modelFile.findUnique({
+          where: { id: sourceId.toLowerCase() },
+        });
+        const request = await prisma.quoteRequest.findUnique({
+          where: { id: requestId },
+        });
+        const geometry = await prisma.modelGeometry.findUnique({
+          where: { id: geometryId.toLowerCase() },
+        });
+        if (
+          !source ||
+          !request ||
+          !geometry ||
+          geometry.sourceModelFileId !== source.id
+        )
+          return item;
+        const canonicalRequestId = request.id;
+        const cacheKey = `${canonicalRequestId}:${source.id}:${geometryId.toLowerCase()}`;
+        let pending = selectedItems.get(cacheKey);
+        if (!pending) {
+          pending = (async () => {
+            const attachedKey = `${canonicalRequestId}:${source.id}`;
+            let attached = attachedModels.get(attachedKey);
+            if (!attached) {
+              attached = prisma.quoteRequestModel
+                .upsert({
+                  where: {
+                    requestId_modelFileId: {
+                      requestId: canonicalRequestId,
+                      modelFileId: source.id,
+                    },
+                  },
+                  create: {
+                    requestId: canonicalRequestId,
+                    modelFileId: source.id,
+                    attachedByOperatorId: operator.operatorId,
+                    inspectionJobId: randomUUID(),
+                  },
+                  update: {},
+                })
+                .then((model) => model.inspectionJobId);
+              attachedModels.set(attachedKey, attached);
+            }
+            const inspectionJobId = await attached;
+            const selected = await prisma.quoteRequestModelSelection.create({
+              data: {
+                requestId: canonicalRequestId,
+                modelFileId: source.id,
+                modelGeometryId: geometryId.toLowerCase(),
+                inspectionJobId,
+                sourceContentSha256: source.contentHash,
+                bodyIds: ["quote-test-body"],
+                selectionSha256: createHash("sha256")
+                  .update(cacheKey)
+                  .digest("hex"),
+              },
+            });
+            return selected.id;
+          })();
+          selectedItems.set(cacheKey, pending);
+        }
+        return { ...item, modelSelectionId: await pending };
+      }),
+    );
   }
 
   function defaultComponents() {
@@ -4313,6 +4550,50 @@ describe("QuoteRequest and tokenized individual offers", () => {
           }
         : {}),
     };
+  }
+
+  async function activateTestPriceList(id: string): Promise<void> {
+    const activated = await apiJson<{ selectionVersion: number }>(
+      `admin/catalog/price-lists/${id}/activate`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": key("quote-suite-policy-activate"),
+        },
+        body: JSON.stringify({
+          expectedSelectionVersion: selectionVersion,
+          reason: "Quote suite policy switch",
+        }),
+      },
+    );
+    expect(activated.response.status, JSON.stringify(activated.body)).toBe(200);
+    priceListId = id;
+    selectionVersion = activated.body.selectionVersion;
+  }
+
+  async function publishTestPriceList(
+    parameters: Record<string, unknown>,
+    termsRevision: string,
+  ): Promise<string> {
+    const created = await apiJson<{ id: string }>("admin/catalog/price-lists", {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": key("quote-suite-policy-create"),
+      },
+      body: JSON.stringify({
+        currency: "CZK",
+        revision: `quote-suite-${randomUUID()}`,
+        termsRevision,
+        parameters,
+      }),
+    });
+    expect(created.response.status, JSON.stringify(created.body)).toBe(200);
+    await activateTestPriceList(created.body.id);
+    return created.body.id;
   }
 
   async function apiJson<T = Record<string, unknown>>(

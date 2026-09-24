@@ -210,6 +210,15 @@ export class OperatorQuoteRequestDetailDto extends QuoteRequestDetailDto {
     nullable: true,
   })
   automaticQuoteHandoff!: AutomaticQuoteRequestHandoffDto | null;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  firstRespondedAt!: string | null;
+
+  @ApiPropertyOptional({ type: String, format: "uuid", nullable: true })
+  acceptedOrderId!: string | null;
+
+  @ApiProperty({ type: [String], format: "uuid" })
+  attachedModelFileIds!: string[];
 }
 
 export class OperatorQuoteRequestPageDto {
@@ -225,6 +234,10 @@ export class ModelOfferItemDto {
   kind!: "MODEL";
 
   @ApiProperty({ type: String, format: "uuid" })
+  // Fresh commands require this; completed legacy replays retain old input.
+  modelSelectionId?: string;
+
+  @ApiProperty({ type: String, format: "uuid" })
   sourceModelFileId!: string;
 
   @ApiProperty({ type: String, format: "uuid" })
@@ -233,17 +246,18 @@ export class ModelOfferItemDto {
   @ApiProperty({ type: String, format: "uuid" })
   printConfigRevisionId!: string;
 
-  @ApiPropertyOptional({ type: String, format: "uuid" })
+  @ApiProperty({ type: String, format: "uuid" })
   primaryReferenceSliceResultId?: string;
 
   @ApiPropertyOptional({ type: String, format: "uuid" })
   tailReferenceSliceResultId?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: "integer",
     minimum: 1,
     maximum: POSTGRES_INTEGER_MAX,
   })
+  // Fresh commands require this; completed legacy replays retain old input.
   referencePartsPerPlate?: number;
 
   @ApiProperty({ type: String, enum: ["PLA", "PETG"] })
@@ -406,6 +420,14 @@ export class OfferPaymentPolicyDto {
 
 export class IssueOfferDto {
   @ApiProperty({
+    type: "integer",
+    minimum: 1,
+    maximum: POSTGRES_INTEGER_MAX,
+  })
+  // Fresh commands require this; completed legacy idempotency replays may omit it.
+  expectedSelectionVersion?: number;
+
+  @ApiProperty({
     type: String,
     minLength: 3,
     maxLength: 4_000,
@@ -555,6 +577,9 @@ export class OfferPreviewItemDto {
 
   @ApiProperty({ type: String, enum: ["MODEL"] })
   kind!: "MODEL";
+
+  @ApiPropertyOptional({ type: String, format: "uuid", nullable: true })
+  modelSelectionId!: string | null;
 
   @ApiProperty({ type: String, format: "uuid" })
   sourceModelFileId!: string;
@@ -763,6 +788,51 @@ export class OfferPreviewDto {
 
   @ApiPropertyOptional({ type: String, format: "date", nullable: true })
   promisedDate!: string | null;
+}
+
+export class OperatorOfferDetailDto extends OfferPreviewDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  requestId!: string;
+
+  @ApiProperty({ type: Boolean })
+  isCurrent!: boolean;
+
+  @ApiPropertyOptional({ type: String, format: "uuid", nullable: true })
+  acceptedOrderId!: string | null;
+
+  @ApiProperty({ type: String, format: "date-time" })
+  issuedAt!: string;
+}
+
+export class OfferDraftPreviewDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  requestId!: string;
+  @ApiProperty({ type: String, format: "uuid" })
+  priceListId!: string;
+  @ApiProperty({ type: "integer", minimum: 1 })
+  selectionVersion!: number;
+  @ApiProperty({ type: String })
+  termsRevision!: string;
+  @ApiProperty({ type: String, format: "uuid" })
+  legalTermsRevisionId!: string;
+  @ApiProperty({ type: String, format: "uuid" })
+  legalClaimsRevisionId!: string;
+  @ApiProperty({ type: "integer" })
+  contractTotalMinor!: number;
+  @ApiProperty({ type: "integer" })
+  netAmountMinor!: number;
+  @ApiProperty({ type: "integer" })
+  vatAmountMinor!: number;
+  @ApiProperty({ type: "integer" })
+  depositMinor!: number;
+  @ApiProperty({ type: "integer" })
+  balanceMinor!: number;
+  @ApiProperty({ type: [OfferPreviewPriceComponentDto] })
+  components!: OfferPreviewPriceComponentDto[];
+  @ApiProperty({ type: [OfferShipmentPlanDto] })
+  shipmentPlans!: OfferShipmentPlanDto[];
+  @ApiProperty({ type: [OfferPaymentScheduleDto] })
+  paymentSchedules!: OfferPaymentScheduleDto[];
 }
 
 class ExpectedOfferDto {

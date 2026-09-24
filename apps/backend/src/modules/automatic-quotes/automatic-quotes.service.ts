@@ -49,6 +49,12 @@ import {
 } from "../resources/resource-errors";
 import { ResourceReservationService } from "../resources/resource-reservation.service";
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
+import {
+  enqueueModelInspection,
+  INSPECTION_CONFIG_SHA256,
+  INSPECTION_REVISION,
+  modelInspectionInput,
+} from "../slicing/model-inspection-dispatch";
 import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import { reserveAnonymousQuote } from "../quotes/anonymous-quote-limit";
 import {
@@ -99,14 +105,6 @@ const SESSION_DAYS = 30;
 const HANDOFF_CAPABILITY_MINUTES = 15;
 const IDEMPOTENCY_DAYS = 7;
 const HANDOFF_ISSUANCE_MAX_ATTEMPTS = 3;
-const INSPECTION_REVISION = "inspection-v1";
-const CANONICALIZER_REVISION = "canonical-v1";
-const INSPECTION_CONFIG_SHA256 = createHash("sha256")
-  .update("taven-inspection-v1")
-  .digest("hex");
-const CANONICALIZER_CONFIG_SHA256 = createHash("sha256")
-  .update("taven-canonicalizer-v1")
-  .digest("hex");
 const MAX_ITEM_QUANTITY = 1_000;
 const MAX_SLICING_JOB_ATTEMPTS = 100;
 const CANDIDATE_UNUSABLE_DISPOSITION_TYPE =
@@ -853,7 +851,7 @@ export class AutomaticQuotesService {
           },
         });
         if (intent.confirmedModelFile.format !== ModelFileFormat.STEP) {
-          await enqueueInspection(transaction, {
+          await enqueueModelInspection(transaction, {
             jobId: inspectionJobId,
             correlationId: origin.orderId,
             source: intent.confirmedModelFile,
@@ -1918,7 +1916,9 @@ export class AutomaticQuotesService {
     const source = await transaction.modelFile.findUniqueOrThrow({
       where: { id: item.sourceModelFileId },
     });
-    const sourceInput = inspectionInput(source, { mode: "inspect_source" });
+    const sourceInput = modelInspectionInput(source, {
+      mode: "inspect_source",
+    });
     const { slicingInputFingerprint } = await import("@taven/slicer-contracts");
     const jobId = deterministicUuid(
       `canonicalization:${item.id}:${item.selectionSha256}`,
@@ -1929,7 +1929,7 @@ export class AutomaticQuotesService {
       "slicing.model-inspection.requested",
     );
     if (!dispatch) return;
-    await enqueueInspection(transaction, {
+    await enqueueModelInspection(transaction, {
       jobId,
       correlationId,
       source,
@@ -6510,86 +6510,6 @@ function hasUsableInventoryAssignment(
     return false;
   };
   return assign(0);
-}
-
-function inspectionInput(
-  source: {
-    id: string;
-    format: ModelFileFormat;
-    storageObjectKey: string;
-    contentHash: string;
-  },
-  operation: JsonRecord,
-) {
-  return {
-    source: {
-      modelFileId: source.id,
-      format: source.format === ModelFileFormat.STL ? "stl" : "3mf",
-      objectKey: source.storageObjectKey,
-      contentSha256: source.contentHash,
-    },
-    operation,
-    inspectionRevision: INSPECTION_REVISION,
-    inspectionConfigSha256: INSPECTION_CONFIG_SHA256,
-    canonicalizerRevision: CANONICALIZER_REVISION,
-    canonicalizerConfigSha256: CANONICALIZER_CONFIG_SHA256,
-  };
-}
-
-async function enqueueInspection(
-  transaction: Transaction,
-  input: {
-    jobId: string;
-    correlationId: string;
-    source: {
-      id: string;
-      format: ModelFileFormat;
-      storageObjectKey: string;
-      contentHash: string;
-    };
-    attempt?: number;
-    availableAt?: Date;
-    operation: JsonRecord;
-  },
-): Promise<void> {
-  const {
-    ModelInspectionJobSchema,
-    slicingDispatchAttemptKey,
-    slicingInputFingerprint,
-  } = await import("@taven/slicer-contracts");
-  const jobInput = inspectionInput(input.source, input.operation);
-  const inputFingerprintSha256 = slicingInputFingerprint(
-    "model_inspection",
-    jobInput,
-  );
-  const attempt = input.attempt ?? 1;
-  const job = ModelInspectionJobSchema.parse({
-    contractVersion: 2,
-    kind: "model_inspection",
-    jobId: input.jobId,
-    correlationId: input.correlationId,
-    inputFingerprintSha256,
-    idempotencyKey: `slicer:v2:model_inspection:${input.jobId}:${inputFingerprintSha256}`,
-    attempt,
-    input: jobInput,
-  });
-  const deduplicationKey = slicingDispatchAttemptKey(
-    job.idempotencyKey,
-    attempt,
-  );
-  await transaction.outboxMessage.upsert({
-    where: { deduplicationKey },
-    create: {
-      deduplicationKey,
-      aggregateType: "ModelInspectionDispatch",
-      aggregateId: job.jobId,
-      messageType: "slicing.model-inspection.requested",
-      schemaVersion: 2,
-      payload: { job } as unknown as Prisma.InputJsonObject,
-      ...(input.availableAt ? { availableAt: input.availableAt } : {}),
-    },
-    update: {},
-  });
 }
 
 async function terminalResultForJob(

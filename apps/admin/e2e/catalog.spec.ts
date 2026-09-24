@@ -50,6 +50,7 @@ type CatalogState = {
   activationFails?: boolean;
   postedVersions: number[];
   createdPriceRevisions?: string[];
+  createdPriceBodies?: Array<Record<string, unknown>>;
   includeSecondReference?: boolean;
   refreshFailsAfterActivation?: boolean;
   failNextPolicyRead?: boolean;
@@ -103,8 +104,12 @@ async function mockCatalog(page: Page, state: CatalogState): Promise<void> {
         },
       });
     } else if (method === "POST" && path.endsWith("/price-lists")) {
-      const body = request.postDataJSON() as { revision: string };
+      const body = request.postDataJSON() as {
+        revision: string;
+        parameters: Record<string, unknown>;
+      };
       state.createdPriceRevisions?.push(body.revision);
+      state.createdPriceBodies?.push(body);
       await route.fulfill({ json: { id: "created-price" } });
     } else if (method === "GET" && path.includes("/price-lists/")) {
       await route.fulfill({
@@ -297,6 +302,7 @@ test("creating a price revision leaves the selected policy untouched", async ({
     feed: [],
     postedVersions: [],
     createdPriceRevisions: [],
+    createdPriceBodies: [],
     postHeaders: [],
   };
   await mockSession(page);
@@ -304,9 +310,12 @@ test("creating a price revision leaves the selected policy untouched", async ({
   let releasePriceWrite: (() => void) | undefined;
   await page.route("**/admin/catalog/price-lists", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
-    state.createdPriceRevisions?.push(
-      (route.request().postDataJSON() as { revision: string }).revision,
-    );
+    const body = route.request().postDataJSON() as {
+      revision: string;
+      parameters: Record<string, unknown>;
+    };
+    state.createdPriceRevisions?.push(body.revision);
+    state.createdPriceBodies?.push(body);
     await new Promise<void>((resolve) => {
       releasePriceWrite = resolve;
     });
@@ -334,6 +343,14 @@ test("creating a price revision leaves the selected policy untouched", async ({
     page.getByText("Aktuálně vybraná verze: 1", { exact: false }),
   ).toBeVisible();
   expect(state.createdPriceRevisions).toEqual(["v3"]);
+  expect(state.createdPriceBodies?.[0]?.parameters).toMatchObject({
+    balance_payment_days: 7,
+    balance_timeout_earned_component_kinds: [
+      "ITEM_PRODUCTION",
+      "ITEM_QUANTITY",
+      "ITEM_POSTPROCESSING",
+    ],
+  });
   expect(state.postedVersions).toEqual([]);
 });
 

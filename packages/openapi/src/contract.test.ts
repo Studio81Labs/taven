@@ -59,6 +59,24 @@ describe("OpenAPI artifact", () => {
     const contract = JSON.parse(
       await readFile(new URL("../openapi.json", import.meta.url), "utf8"),
     ) as {
+      paths: Record<
+        string,
+        {
+          post?: {
+            parameters?: Array<{
+              name: string;
+              in: string;
+              required?: boolean;
+            }>;
+          };
+          get?: {
+            parameters?: Array<{
+              name: string;
+              schema?: Record<string, unknown>;
+            }>;
+          };
+        }
+      >;
       components: {
         schemas: Record<
           string,
@@ -74,21 +92,82 @@ describe("OpenAPI artifact", () => {
       string,
       unknown
     >;
+    expect(schemas.IssueOfferDto?.required).toContain(
+      "expectedSelectionVersion",
+    );
+    expect(
+      schemas.InitiateOperatorModelUploadDto?.properties?.format,
+    ).toMatchObject({
+      enum: ["STL", "3MF"],
+    });
+    expect(
+      schemas.SelectQuoteRequestModelDto?.properties?.bodyIds,
+    ).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 256,
+      uniqueItems: true,
+      items: {
+        type: "string",
+        minLength: 1,
+        maxLength: 128,
+        pattern: "^[a-z0-9][a-z0-9._:-]*$",
+      },
+    });
+    expect(
+      contract.paths[
+        "/admin/quote-requests/{requestId}/model-uploads/{uploadId}/confirm"
+      ]?.post?.parameters,
+    ).toContainEqual(
+      expect.objectContaining({
+        name: "Authorization",
+        in: "header",
+        required: true,
+      }),
+    );
     expect(issueOffer.items).toMatchObject({
       type: "array",
       items: { $ref: "#/components/schemas/ModelOfferItemDto" },
     });
     expect(schemas.ModelOfferItemDto?.required).toEqual([
       "kind",
+      "modelSelectionId",
       "sourceModelFileId",
       "modelGeometryId",
       "printConfigRevisionId",
+      "primaryReferenceSliceResultId",
+      "referencePartsPerPlate",
       "material",
     ]);
     expect(schemas.ModelOfferItemDto?.properties?.quantity).toMatchObject({
       type: "integer",
       maximum: 1_000,
     });
+    expect(schemas.QuoteComposerChoicesDto?.required).toContain(
+      "deliverySelector",
+    );
+    expect(
+      schemas.QuoteComposerChoicesDto?.properties?.deliverySelector,
+    ).toMatchObject({
+      $ref: "#/components/schemas/AutomaticQuoteDeliverySelectorDto",
+    });
+    expect(
+      schemas.PrepareQuoteRequestReferenceDto?.properties?.quantity,
+    ).toMatchObject({ maximum: 1_000 });
+    expect(
+      schemas.PrepareQuoteRequestReferenceDto?.properties?.partsPerPlate,
+    ).toMatchObject({ maximum: 1_000 });
+    const statusParameters =
+      contract.paths["/admin/quote-requests/{requestId}/references/status"]?.get
+        ?.parameters;
+    for (const name of ["quantity", "partsPerPlate"]) {
+      expect(statusParameters).toContainEqual(
+        expect.objectContaining({
+          name,
+          schema: expect.objectContaining({ maximum: 1_000 }),
+        }),
+      );
+    }
     expect(schemas.CreateQuoteRequestDto?.properties?.purpose).toMatchObject({
       pattern: "\\S",
     });
@@ -158,7 +237,7 @@ describe("OpenAPI artifact", () => {
       ),
     );
 
-    expect(idempotencyHeaders).toHaveLength(79);
+    expect(idempotencyHeaders).toHaveLength(82);
     expect(idempotencyHeaders).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
