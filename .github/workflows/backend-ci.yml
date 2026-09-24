@@ -7,6 +7,7 @@ on:
     paths: &backend-paths
       - "apps/backend/**"
       - "apps/slicer-worker/src/object-store*"
+      - "apps/slicer-worker/package.json"
       - "infra/coolify/retention-grants.sql"
       - "packages/core/**"
       - "packages/slicer-contracts/**"
