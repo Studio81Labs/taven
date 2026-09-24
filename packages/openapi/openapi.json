@@ -4678,6 +4678,84 @@
         ],
         "type": "object"
       },
+      "HandlingAllocationPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HandlingAllocationReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "HandlingAllocationReadDto": {
+        "properties": {
+          "allocatedCostMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "allocatedDurationMilliseconds": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "jobId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderItemId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "servedUnitCount": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "shipmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "targetKey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orderId",
+          "targetKey",
+          "servedUnitCount",
+          "allocatedDurationMilliseconds",
+          "allocatedCostMinor",
+          "currency"
+        ],
+        "type": "object"
+      },
       "HandlingAndMarginMetricsDto": {
         "properties": {
           "actualCosts": {
@@ -4698,6 +4776,125 @@
           "handlingCost",
           "actualCosts",
           "finalContributionMargin"
+        ],
+        "type": "object"
+      },
+      "HandlingSessionPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HandlingSessionReadDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "HandlingSessionReadDto": {
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/HandlingAllocationReadDto"
+            },
+            "type": "array"
+          },
+          "allocationsNextCursor": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "completedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "durationMilliseconds": {
+            "nullable": true,
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "endedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "laborRateDenominator": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "laborRateNumerator": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "laborRatePolicyVersion": {
+            "type": "string"
+          },
+          "lifecycle": {
+            "type": "string"
+          },
+          "nodeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "operatorIdentityId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "totalCostMinor": {
+            "nullable": true,
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "voidedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "voidReason": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "nodeId",
+          "operatorIdentityId",
+          "component",
+          "source",
+          "lifecycle",
+          "startedAt",
+          "laborRateNumerator",
+          "laborRateDenominator",
+          "laborRatePolicyVersion",
+          "currency",
+          "allocations"
         ],
         "type": "object"
       },
@@ -7559,11 +7756,45 @@
         ],
         "type": "object"
       },
+      "OperatorAcceptedFindingDto": {
+        "properties": {
+          "acknowledgementKey": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "findingId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "findingId",
+          "code",
+          "severity",
+          "message",
+          "acknowledgementKey"
+        ],
+        "type": "object"
+      },
       "OperatorAcceptedPriceDto": {
         "properties": {
           "bindingId": {
             "format": "uuid",
             "type": "string"
+          },
+          "components": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorPriceComponentDto"
+            },
+            "type": "array"
           },
           "contractTotalMinor": {
             "pattern": "^-?[0-9]+$",
@@ -7579,8 +7810,17 @@
           "priceListRevision": {
             "type": "string"
           },
+          "pricingRevision": {
+            "type": "string"
+          },
+          "snapshotHash": {
+            "type": "string"
+          },
           "snapshotId": {
             "format": "uuid",
+            "type": "string"
+          },
+          "taxRegime": {
             "type": "string"
           },
           "termsRevision": {
@@ -7589,17 +7829,64 @@
           "vatAmountMinor": {
             "pattern": "^-?[0-9]+$",
             "type": "string"
+          },
+          "vatRateBasisPoints": {
+            "type": "number"
           }
         },
         "required": [
           "bindingId",
           "snapshotId",
+          "snapshotHash",
+          "pricingRevision",
+          "taxRegime",
+          "vatRateBasisPoints",
           "contractTotalMinor",
           "netAmountMinor",
           "vatAmountMinor",
           "currency",
           "priceListRevision",
-          "termsRevision"
+          "termsRevision",
+          "components"
+        ],
+        "type": "object"
+      },
+      "OperatorActionDto": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "blockingCodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "requiresConfirmation": {
+            "type": "boolean"
+          },
+          "requiresReason": {
+            "type": "boolean"
+          },
+          "targetId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "targetType": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "targetType",
+          "targetId",
+          "enabled",
+          "blockingCodes",
+          "requiresReason",
+          "requiresConfirmation"
         ],
         "type": "object"
       },
@@ -7638,8 +7925,18 @@
             "pattern": "^-?[0-9]+$",
             "type": "string"
           },
+          "blockingCodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "currency": {
             "nullable": true,
+            "type": "string"
+          },
+          "outstandingCompensationMinor": {
+            "pattern": "^-?[0-9]+$",
             "type": "string"
           },
           "payments": {
@@ -7657,7 +7954,9 @@
         },
         "required": [
           "settlements",
-          "payments"
+          "payments",
+          "outstandingCompensationMinor",
+          "blockingCodes"
         ],
         "type": "object"
       },
@@ -7789,6 +8088,12 @@
       },
       "OperatorJobDetailDto": {
         "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorActionDto"
+            },
+            "type": "array"
+          },
           "artifacts": {
             "$ref": "#/components/schemas/OperatorJobArtifactsDto"
           },
@@ -7877,7 +8182,8 @@
           "slots",
           "estimate",
           "deadline",
-          "artifacts"
+          "artifacts",
+          "actions"
         ],
         "type": "object"
       },
@@ -8107,6 +8413,36 @@
         ],
         "type": "object"
       },
+      "OperatorLegalAcceptanceDto": {
+        "properties": {
+          "acceptedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "contentHash": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "revisionCode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "revisionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revisionId",
+          "purpose",
+          "revisionCode",
+          "contentHash",
+          "acceptedAt"
+        ],
+        "type": "object"
+      },
       "OperatorOfferDetailDto": {
         "properties": {
           "acceptedOrderId": {
@@ -8272,6 +8608,14 @@
       },
       "OperatorOrderDetailDto": {
         "properties": {
+          "acceptedClaimPolicyRevision": {
+            "nullable": true,
+            "type": "string"
+          },
+          "acceptedClaimWindowDays": {
+            "nullable": true,
+            "type": "number"
+          },
           "acceptedPrice": {
             "allOf": [
               {
@@ -8284,6 +8628,18 @@
           "acceptedTermsRevision": {
             "nullable": true,
             "type": "string"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorActionDto"
+            },
+            "type": "array"
+          },
+          "blockingCodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "confirmedAt": {
             "format": "date-time",
@@ -8306,8 +8662,26 @@
             },
             "type": "array"
           },
+          "legalAcceptances": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorLegalAcceptanceDto"
+            },
+            "type": "array"
+          },
           "publicReference": {
             "type": "string"
+          },
+          "shipmentPlans": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorShipmentPlanDto"
+            },
+            "type": "array"
+          },
+          "slotLineage": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorSlotLineageDto"
+            },
+            "type": "array"
           },
           "status": {
             "type": "string"
@@ -8317,24 +8691,47 @@
               "$ref": "#/components/schemas/OperatorOrderTimelineEventDto"
             },
             "type": "array"
+          },
+          "timelineNextCursor": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "withdrawalExceptionAcknowledgedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
           }
         },
         "required": [
           "id",
           "publicReference",
           "status",
+          "legalAcceptances",
           "items",
           "financial",
           "fulfilment",
-          "timeline"
+          "shipmentPlans",
+          "slotLineage",
+          "timeline",
+          "blockingCodes",
+          "actions"
         ],
         "type": "object"
       },
       "OperatorOrderItemDto": {
         "properties": {
+          "acceptedFindings": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorAcceptedFindingDto"
+            },
+            "type": "array"
+          },
           "color": {
             "nullable": true,
             "type": "string"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/OperatorOrderItemGeometryDto"
           },
           "id": {
             "format": "uuid",
@@ -8365,6 +8762,9 @@
             ],
             "nullable": true,
             "type": "object"
+          },
+          "printConfig": {
+            "$ref": "#/components/schemas/PrintConfigRevisionReadDto"
           },
           "printConfigRevisionId": {
             "format": "uuid",
@@ -8403,7 +8803,41 @@
           "quantity",
           "primaryReferenceSlice",
           "tailReferenceSlice",
-          "preflightFindings"
+          "preflightFindings",
+          "acceptedFindings",
+          "geometry",
+          "printConfig"
+        ],
+        "type": "object"
+      },
+      "OperatorOrderItemGeometryDto": {
+        "properties": {
+          "boundsXMicrometers": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "boundsYMicrometers": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "boundsZMicrometers": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "geometrySha256": {
+            "type": "string"
+          },
+          "volumeCubicMicrometers": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "boundsXMicrometers",
+          "boundsYMicrometers",
+          "boundsZMicrometers",
+          "volumeCubicMicrometers",
+          "geometrySha256"
         ],
         "type": "object"
       },
@@ -8485,6 +8919,24 @@
           "eventType",
           "actorKind",
           "occurredAt"
+        ],
+        "type": "object"
+      },
+      "OperatorOrderTimelinePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorOrderTimelineEventDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -8582,6 +9034,70 @@
           "createdAt",
           "updatedAt",
           "refunds"
+        ],
+        "type": "object"
+      },
+      "OperatorPriceAllocationDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "fulfilmentSlotId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fulfilmentSlotId",
+          "amountMinor"
+        ],
+        "type": "object"
+      },
+      "OperatorPriceComponentDto": {
+        "properties": {
+          "allocation": {
+            "additionalProperties": true,
+            "nullable": true,
+            "type": "object"
+          },
+          "amountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "fulfilmentAllocations": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorPriceAllocationDto"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "orderItemId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "shipmentPlanId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "scope",
+          "amountMinor",
+          "fulfilmentAllocations"
         ],
         "type": "object"
       },
@@ -8808,11 +9324,38 @@
             "nullable": true,
             "type": "string"
           },
+          "provider": {
+            "type": "string"
+          },
+          "providerRefundId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "providerResultEventId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
           "reason": {
+            "type": "string"
+          },
+          "replacesFailureProviderEventId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "replacesRefundTransactionId": {
+            "format": "uuid",
+            "nullable": true,
             "type": "string"
           },
           "requestedAt": {
             "format": "date-time",
+            "type": "string"
+          },
+          "sourceSuccessProviderEventId": {
+            "format": "uuid",
+            "nullable": true,
             "type": "string"
           },
           "status": {
@@ -8824,7 +9367,8 @@
           "amountMinor",
           "reason",
           "status",
-          "requestedAt"
+          "requestedAt",
+          "provider"
         ],
         "type": "object"
       },
@@ -8947,6 +9491,105 @@
           "amountDueMinor",
           "refundableBalanceMinor",
           "settledAt"
+        ],
+        "type": "object"
+      },
+      "OperatorShipmentPlanDto": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "handlingAmountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderPhaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "number"
+          },
+          "packagingAmountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "plannedVolumeCubicMm": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "plannedWeightMilligrams": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "shippingAmountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorShipmentPlanSlotDto"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "orderPhaseId",
+          "ordinal",
+          "category",
+          "plannedVolumeCubicMm",
+          "plannedWeightMilligrams",
+          "shippingAmountMinor",
+          "packagingAmountMinor",
+          "handlingAmountMinor",
+          "slots"
+        ],
+        "type": "object"
+      },
+      "OperatorShipmentPlanSlotDto": {
+        "properties": {
+          "fulfilmentSlotId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "orderItemId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fulfilmentSlotId",
+          "orderItemId"
+        ],
+        "type": "object"
+      },
+      "OperatorSlotLineageDto": {
+        "properties": {
+          "currentJobId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "fulfilmentSlotId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "jobIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "fulfilmentSlotId",
+          "jobIds"
         ],
         "type": "object"
       },
@@ -13559,6 +14202,201 @@
         "summary": "Retire a reference-profile revision",
         "tags": [
           "operator catalog"
+        ]
+      }
+    },
+    "/admin/handling-sessions": {
+      "get": {
+        "operationId": "HandlingSessionReadController_list",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "orderId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lifecycle",
+            "required": false,
+            "schema": {
+              "enum": [
+                "OPEN",
+                "COMPLETED",
+                "VOIDED"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandlingSessionPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List scoped handling sessions and allocations",
+        "tags": [
+          "operator measurement"
+        ]
+      }
+    },
+    "/admin/handling-sessions/{sessionId}": {
+      "get": {
+        "operationId": "HandlingSessionReadController_detail",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandlingSessionReadDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read one scoped handling session and allocations",
+        "tags": [
+          "operator measurement"
+        ]
+      }
+    },
+    "/admin/handling-sessions/{sessionId}/allocations": {
+      "get": {
+        "operationId": "HandlingSessionReadController_allocations",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandlingAllocationPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Page through scoped handling allocations",
+        "tags": [
+          "operator measurement"
         ]
       }
     },
@@ -18870,6 +19708,73 @@
         "summary": "Prepare exact resources for an accepted individual order",
         "tags": [
           "individual order resources"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/timeline": {
+      "get": {
+        "operationId": "OperatorReadsController_orderTimeline",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorOrderTimelinePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read bounded, scoped order audit history",
+        "tags": [
+          "operator reads"
         ]
       }
     },

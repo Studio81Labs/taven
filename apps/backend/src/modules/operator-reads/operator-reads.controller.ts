@@ -39,6 +39,7 @@ import {
   OperatorJobArtifactDownloadDto,
   OperatorOrderDetailDto,
   OperatorOrderPageDto,
+  OperatorOrderTimelinePageDto,
   PriceListPageDto,
   PriceListDetailDto,
   ReferenceProfileActivationNoticePageDto,
@@ -109,6 +110,30 @@ export class OperatorReadsController {
     @Param("orderId") orderId: string,
   ): Promise<OperatorOrderDetailDto> {
     return this.reads.orderDetail(operator, orderId);
+  }
+
+  @Get("admin/orders/:orderId/timeline")
+  @ApiOperation({ summary: "Read bounded, scoped order audit history" })
+  @ApiParam({ name: "orderId", type: String, format: "uuid" })
+  @ApiOkResponse({ type: OperatorOrderTimelinePageDto })
+  @ApiQuery({ name: "cursor", required: false, type: String, format: "uuid" })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    type: "integer",
+    minimum: 1,
+    maximum: 100,
+  })
+  orderTimeline(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<OperatorOrderTimelinePageDto> {
+    return this.reads.orderTimeline(
+      operator,
+      orderId,
+      pageQuery(query, PAGE_FIELDS),
+    );
   }
 
   @Get("admin/jobs")

@@ -38,6 +38,7 @@ import type {
   OperatorJobArtifactAvailabilityDto,
   OperatorJobArtifactDownloadDto,
   OperatorJobDetailDto,
+  OperatorActionDto,
 } from "./operator-reads.dto";
 
 const UUID =
@@ -57,6 +58,91 @@ const TERMINAL_STATES = new Set<JobStatus>([
   JobStatus.FAILED,
   JobStatus.QC_REJECTED,
 ]);
+
+function jobActions(
+  operator: OperatorContext,
+  job: OperatorJobDetailDto,
+): OperatorActionDto[] {
+  const actions: OperatorActionDto[] = [];
+  const canOperate = operator.permissions.includes(
+    OPERATOR_PERMISSIONS.OPERATIONS_WRITE,
+  );
+  const add = (
+    action: string,
+    blockingCodes: string[] = [],
+    requiresReason = false,
+    requiresConfirmation = false,
+  ) => {
+    if (canOperate)
+      actions.push({
+        action,
+        targetType: "JOB",
+        targetId: job.id,
+        enabled: blockingCodes.length === 0,
+        blockingCodes,
+        requiresReason,
+        requiresConfirmation,
+      });
+  };
+  for (const [action, available] of [
+    ["DOWNLOAD_SOURCE_MODEL", job.artifacts.sourceModel.available],
+    ["DOWNLOAD_PREVIEW", job.artifacts.preview.available],
+    ["DOWNLOAD_PRODUCTION", job.artifacts.production.available],
+  ] as const) {
+    if (available)
+      actions.push({
+        action,
+        targetType: "JOB",
+        targetId: job.id,
+        enabled: true,
+        blockingCodes: [],
+        requiresReason: false,
+        requiresConfirmation: false,
+      });
+  }
+  switch (job.status) {
+    case JobStatus.CREATED:
+      add("ACCEPT_JOB");
+      break;
+    case JobStatus.GCODE_READY:
+      add("START_PRINTING", [
+        ...(job.estimate.mountReadyForPrinting ? [] : ["MATERIAL_NOT_MOUNTED"]),
+        ...(job.artifacts.production.available
+          ? []
+          : ["PRODUCTION_ARTIFACT_UNAVAILABLE"]),
+      ]);
+      break;
+    case JobStatus.PRINTING:
+      add("FINISH_PRINTING", ["ACTUAL_MATERIAL_REQUIRED"]);
+      break;
+    case JobStatus.PRINTED:
+      add("SUBMIT_QC", ["QC_EVIDENCE_REQUIRED"]);
+      break;
+    case JobStatus.PHOTO_SUBMITTED:
+      add("APPROVE_QC");
+      break;
+    case JobStatus.QC_APPROVED:
+      add("PACK_JOB", ["MATCHING_SHIPMENT_REQUIRED"]);
+      break;
+    case JobStatus.FAILED:
+    case JobStatus.QC_REJECTED:
+      add("PREPARE_REPLACEMENT", ["FRESH_RESERVATION_REQUIRED"], true);
+      break;
+  }
+  if (
+    new Set<JobStatus>([
+      JobStatus.ACCEPTED,
+      JobStatus.GCODE_READY,
+      JobStatus.PRINTING,
+      JobStatus.PRINTED,
+      JobStatus.PHOTO_SUBMITTED,
+      JobStatus.QC_APPROVED,
+      JobStatus.PACKED,
+    ]).has(job.status as JobStatus)
+  )
+    add("FAIL_JOB", ["FAILURE_DETAILS_REQUIRED"], true, true);
+  return actions;
+}
 
 export type JobArtifactKind = "SOURCE_MODEL" | "PREVIEW" | "PRODUCTION";
 
@@ -216,7 +302,7 @@ export class OperatorJobArtifactsService {
       }
     }
 
-    return {
+    const detail: OperatorJobDetailDto = {
       id: job.id,
       nodeId: job.nodeId,
       orderId: job.orderId,
@@ -278,7 +364,10 @@ export class OperatorJobArtifactsService {
         preview: unavailable("NOT_GENERATED"),
         production: production.availability,
       },
+      actions: [],
     };
+    detail.actions = jobActions(operator, detail);
+    return detail;
   }
 
   async download(
