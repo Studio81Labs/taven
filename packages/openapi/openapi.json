@@ -19106,7 +19106,7 @@
             "operatorSession": []
           }
         ],
-        "summary": "Attach a retained automatic handoff model",
+        "summary": "Attach a retained handoff model or retry an attached inspection",
         "tags": [
           "operator quote requests"
         ]

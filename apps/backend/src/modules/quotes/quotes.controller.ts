@@ -398,7 +398,9 @@ export class OperatorQuoteRequestsController {
 
   @Post(":requestId/models/import")
   @ApiHeader(IDEMPOTENCY_HEADER)
-  @ApiOperation({ summary: "Attach a retained automatic handoff model" })
+  @ApiOperation({
+    summary: "Attach a retained handoff model or retry an attached inspection",
+  })
   @ApiParam({ name: "requestId", type: String, format: "uuid" })
   @ApiBody({ type: ImportQuoteRequestModelDto })
   @ApiCreatedResponse({ type: QuoteRequestModelAttachedDto })

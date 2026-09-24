@@ -307,7 +307,74 @@ describe("assisted request model preparation", () => {
     );
     expect(premature.response.status).toBe(409);
 
-    const job = (dispatch.payload as { job: Record<string, unknown> }).job;
+    const foreignImport = await api(
+      `admin/quote-requests/${requestId}/models/import`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": `import-foreign-${randomUUID()}`,
+        },
+        body: JSON.stringify({ modelFileId: randomUUID() }),
+      },
+    );
+    expect(foreignImport.response.status).toBe(404);
+    const retryKey = `import-retry-${randomUUID()}`;
+    const retryImport = () =>
+      api<{ modelFileId: string; inspectionJobId: string }>(
+        `admin/quote-requests/${requestId}/models/import`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+            "idempotency-key": retryKey,
+          },
+          body: JSON.stringify({ modelFileId: upload.assetId }),
+        },
+      );
+    const retried = await retryImport();
+    expect(retried.response.status).toBe(201);
+    expect(retried.body).toEqual({
+      modelFileId: upload.assetId,
+      inspectionJobId: attached.inspectionJobId,
+    });
+    expect((await retryImport()).body).toEqual(retried.body);
+    const pendingImport = await api(
+      `admin/quote-requests/${requestId}/models/import`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": `import-pending-${randomUUID()}`,
+        },
+        body: JSON.stringify({ modelFileId: upload.assetId }),
+      },
+    );
+    expect(pendingImport.response.status).toBe(201);
+    const retryDispatches = await prisma.outboxMessage.findMany({
+      where: {
+        aggregateId: attached.inspectionJobId,
+        messageType: "slicing.model-inspection.requested",
+      },
+    });
+    expect(retryDispatches).toHaveLength(2);
+    const retryDispatch = retryDispatches.find(
+      (candidate) => candidate.id !== dispatch.id,
+    );
+    expect(retryDispatch).toBeDefined();
+    const job = (retryDispatch!.payload as { job: Record<string, unknown> })
+      .job;
+    expect(job.attempt).toBe(2);
+    expect(job.jobId).toBe(attached.inspectionJobId);
+    const pendingInspection = await api<{
+      items: Array<{ inspectionStatus: string }>;
+    }>(`admin/quote-requests/${requestId}/models`, {
+      headers: operatorHeaders(),
+    });
+    expect(pendingInspection.body.items[0]?.inspectionStatus).toBe("PENDING");
     const result = {
       ...job,
       engine: { name: "orca", version: "2.0", imageSha256: "2".repeat(64) },
@@ -359,9 +426,9 @@ describe("assisted request model preparation", () => {
     ModelInspectionResultSchema.parse(result);
     await prisma.outboxMessage.create({
       data: {
-        deduplicationKey: `assisted-model-test:${dispatch.id}`,
+        deduplicationKey: `assisted-model-test:${retryDispatch!.id}`,
         aggregateType: "SlicingDispatchResult",
-        aggregateId: dispatch.id,
+        aggregateId: retryDispatch!.id,
         messageType: "slicing.model_inspection.result-received",
         schemaVersion: 2,
         payload: { result } as Prisma.InputJsonObject,

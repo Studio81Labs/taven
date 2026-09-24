@@ -205,11 +205,15 @@ export class OperatorQuoteModelsService {
       fingerprint({ requestId, modelFileId }),
       async (transaction) => {
         await lockActiveRequest(transaction, requestId);
-        const handoff =
-          await transaction.automaticQuoteRequestHandoff.findUnique({
-            where: { quoteRequestId: requestId },
-          });
-        if (!handoff?.modelFileIds.includes(modelFileId)) {
+        const existing = await transaction.quoteRequestModel.findUnique({
+          where: { requestId_modelFileId: { requestId, modelFileId } },
+        });
+        const handoff = existing
+          ? null
+          : await transaction.automaticQuoteRequestHandoff.findUnique({
+              where: { quoteRequestId: requestId },
+            });
+        if (!existing && !handoff?.modelFileIds.includes(modelFileId)) {
           throw new NotFoundException("Handoff model was not found");
         }
         const source = await transaction.modelFile.findUnique({
@@ -222,10 +226,35 @@ export class OperatorQuoteModelsService {
         if (!supportedSource(source.format)) {
           throw new BadRequestException("Model format is not supported");
         }
-        const existing = await transaction.quoteRequestModel.findUnique({
-          where: { requestId_modelFileId: { requestId, modelFileId } },
-        });
         if (existing) {
+          const next = nextPreprocessingAttempt(
+            await latestPreprocessingDispatch(
+              transaction,
+              existing.inspectionJobId,
+              "slicing.model-inspection.requested",
+            ),
+          );
+          if (next) {
+            await enqueueModelInspection(transaction, {
+              jobId: existing.inspectionJobId,
+              correlationId: requestId,
+              source,
+              ...next,
+              operation: { mode: "inspect_source" },
+            });
+            await this.audit.recordOperator(transaction, operator, {
+              quoteRequestId: requestId,
+              nodeId,
+              eventType: "quote_request.model_inspection_retried",
+              idempotencyKey: key,
+              correlationId: existing.inspectionJobId,
+              payload: {
+                operation: "retry_inspection",
+                modelFileId,
+                attempt: next.attempt,
+              },
+            });
+          }
           return { modelFileId, inspectionJobId: existing.inspectionJobId };
         }
         const inspectionJobId = randomUUID();

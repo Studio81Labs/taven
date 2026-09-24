@@ -1680,7 +1680,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Attach a retained automatic handoff model */
+        /** Attach a retained handoff model or retry an attached inspection */
         post: operations["OperatorQuoteRequestsController_importHandoffModel"];
         delete?: never;
         options?: never;
