@@ -1079,6 +1079,38 @@ describe("QuoteRequest and tokenized individual offers", () => {
       ],
       expiresAt: new Date(Date.now() + 60 * 60_000),
     });
+    const shortPlanSpy = vi.spyOn(eligibilityPlans, "createCompletePlan");
+    shortPlanSpy.mockResolvedValueOnce({
+      eligibilitySnapshotId: randomUUID(),
+      phaseResourcePlanId: randomUUID(),
+      planKey: "short-lived-test-plan",
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+      candidateResourceEstimateIds: [],
+    });
+    try {
+      const shortPreparation = await apiJson<{ status: string }>(
+        `admin/orders/${accepted.body.orderId}/resource-preparation`,
+        {
+          method: "POST",
+          headers: {
+            ...operatorHeaders(true),
+            "content-type": "application/json",
+            "idempotency-key": key("accepted-resource-preparation-short"),
+          },
+          body: JSON.stringify({ reason: "Check short resource plan" }),
+        },
+      );
+      expect(shortPreparation.response.status).toBe(200);
+      expect(shortPreparation.body.status).toBe("PENDING");
+      expect(
+        await prisma.order.findUniqueOrThrow({
+          where: { id: accepted.body.orderId },
+          select: { status: true },
+        }),
+      ).toEqual({ status: "DRAFT" });
+    } finally {
+      shortPlanSpy.mockRestore();
+    }
     const completedPreparation = await apiJson<{
       status: string;
       phaseResourcePlanId: string | null;
@@ -1916,6 +1948,37 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(accepted.response.status).toBe(200);
     expect(accepted.body.status).toBe("DRAFT");
+    const dispatch = await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `individual-status-candidate:${randomUUID()}`,
+        aggregateType: "CandidateEstimateDispatch",
+        aggregateId: randomUUID(),
+        messageType: "slicing.candidate-estimate.requested",
+        schemaVersion: 1,
+        payload: { job: { correlationId: accepted.body.orderId, attempt: 1 } },
+        status: "DELIVERED",
+        deliveredAt: new Date(),
+      },
+    });
+    const acceptedStatus = () =>
+      apiJson<{ preparationStatus: string }>(
+        `offers/${reissued.body.quoteId}/order-status`,
+        { headers: bearer(reissued.body.offerToken) },
+      );
+    expect((await acceptedStatus()).body.preparationStatus).toBe("PREPARING");
+    await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `individual-status-dead-letter:${dispatch.id}`,
+        aggregateType: "SlicingDispatchDeadLetter",
+        aggregateId: dispatch.id,
+        messageType: "slicing.candidate_estimate.dead-lettered",
+        schemaVersion: 1,
+        payload: { dispatchId: dispatch.id },
+        status: "DELIVERED",
+        deliveredAt: new Date(),
+      },
+    });
+    expect((await acceptedStatus()).body.preparationStatus).toBe("UNAVAILABLE");
     await expect(
       prisma.individualOrderOrigin.findMany({
         where: { quote: { quoteRequestId: created.requestId } },

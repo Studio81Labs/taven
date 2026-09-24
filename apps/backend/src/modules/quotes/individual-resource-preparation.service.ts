@@ -15,6 +15,7 @@ import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
 import { AuditService } from "../audit/audit.service";
 import { AutomaticQuotesService } from "../automatic-quotes/automatic-quotes.service";
+import { REACQUISITION_RESERVATION_MILLISECONDS } from "../payments/payments.service";
 import { databaseNow } from "../legal-approvals/legal-approvals.service";
 import { EligibilityPlanService } from "../resources/eligibility-plan.service";
 import { ResourceConflictError } from "../resources/resource-errors";
@@ -219,7 +220,12 @@ export class IndividualResourcePreparationService {
       });
       if (livePayment)
         throw new ConflictException("Initial payment already owns this order");
-      const validPlan = plan && plan.expiresAt > now ? plan : null;
+      const validPlan =
+        plan &&
+        plan.expiresAt.getTime() >
+          now.getTime() + REACQUISITION_RESERVATION_MILLISECONDS
+          ? plan
+          : null;
       if (validPlan && current.status === OrderStatus.DRAFT) {
         if (!current.withdrawalExceptionAcknowledgedAt) {
           throw new ConflictException("Accepted order evidence is unavailable");

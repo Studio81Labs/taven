@@ -52,6 +52,7 @@ import {
 } from "../admin-access/operator-command";
 import type { OperatorContext } from "../admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../admin-access/operator-permissions";
+import { MAX_SLICING_JOB_ATTEMPTS } from "../automatic-quotes/automatic-quotes.service";
 import { AuditService } from "../audit/audit.service";
 import { normalizeAttribution } from "../metrics/attribution";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
@@ -2245,6 +2246,7 @@ export class QuotesService {
       where: { orderId: origin.orderId },
       select: { status: true },
     });
+    const now = await databaseNow(this.prisma);
     const [plans, payment, candidateDispatch] = await Promise.all([
       this.prisma.phaseResourcePlan.findMany({
         where: {
@@ -2257,15 +2259,53 @@ export class QuotesService {
         where: { orderId: origin.orderId, role: { in: ["DEPOSIT", "FULL"] } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       }),
-      this.prisma.outboxMessage.findFirst({
-        where: {
-          aggregateType: "CandidateEstimateDispatch",
-          payload: { path: ["job", "correlationId"], equals: origin.orderId },
-        },
-        select: { id: true },
-      }),
+      this.prisma.$queryRaw<Array<{ seen: boolean; available: boolean }>>`
+        WITH latest_dispatch AS (
+          SELECT
+            dispatch.id,
+            (dispatch.payload #>> '{job,attempt}')::integer AS attempt,
+            terminal.outcome::text AS outcome,
+            terminal.failure_class AS failure_class,
+            candidate.expires_at AS candidate_expires_at,
+            EXISTS (
+              SELECT 1
+              FROM outbox_messages dead_letter
+              WHERE dead_letter.aggregate_type = 'SlicingDispatchDeadLetter'
+                AND dead_letter.aggregate_id = dispatch.id
+                AND dead_letter.message_type = 'slicing.candidate_estimate.dead-lettered'
+            ) AS dead_lettered,
+            row_number() OVER (
+              PARTITION BY dispatch.aggregate_id
+              ORDER BY (dispatch.payload #>> '{job,attempt}')::integer DESC,
+                dispatch.created_at DESC, dispatch.id DESC
+            ) AS dispatch_rank
+          FROM outbox_messages dispatch
+          LEFT JOIN candidate_estimate_terminal_results terminal
+            ON terminal.outbox_message_id = dispatch.id
+          LEFT JOIN candidate_resource_estimates candidate
+            ON candidate.id = terminal.candidate_resource_estimate_id
+          WHERE dispatch.aggregate_type = 'CandidateEstimateDispatch'
+            AND dispatch.message_type = 'slicing.candidate-estimate.requested'
+            AND dispatch.payload #>> '{job,correlationId}' = ${origin.orderId}
+        )
+        SELECT EXISTS (SELECT 1 FROM latest_dispatch) AS seen,
+        EXISTS (
+          SELECT 1
+          FROM latest_dispatch
+          WHERE dispatch_rank = 1
+            AND NOT dead_lettered
+            AND (
+              outcome IS NULL
+              OR (
+                outcome = 'FAILED'
+                AND failure_class = 'retryable_infrastructure'
+                AND attempt < ${MAX_SLICING_JOB_ATTEMPTS}
+              )
+              OR (outcome = 'SUCCEEDED' AND candidate_expires_at > ${now})
+            )
+        ) AS available
+      `,
     ]);
-    const now = await databaseNow(this.prisma);
     const preparationStatus: AcceptedOfferOrderStatusDto["preparationStatus"] =
       !phase
         ? "UNAVAILABLE"
@@ -2289,9 +2329,11 @@ export class QuotesService {
                 )
               ? "READY"
               : origin.order.status === "DRAFT"
-                ? candidateDispatch
+                ? candidateDispatch[0]?.available
                   ? "PREPARING"
-                  : "UNPREPARED"
+                  : candidateDispatch[0]?.seen
+                    ? "UNAVAILABLE"
+                    : "UNPREPARED"
                 : "UNAVAILABLE";
     let initialPayment: AcceptedOfferOrderStatusDto["initialPayment"] = null;
     if (payment) {
