@@ -136,6 +136,7 @@ describe("OpenAPI artifact", () => {
       "modelGeometryId",
       "printConfigRevisionId",
       "primaryReferenceSliceResultId",
+      "referencePartsPerPlate",
       "material",
     ]);
     expect(schemas.ModelOfferItemDto?.properties?.quantity).toMatchObject({

@@ -252,11 +252,12 @@ export class ModelOfferItemDto {
   @ApiPropertyOptional({ type: String, format: "uuid" })
   tailReferenceSliceResultId?: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: "integer",
     minimum: 1,
     maximum: POSTGRES_INTEGER_MAX,
   })
+  // Fresh commands require this; completed legacy replays retain old input.
   referencePartsPerPlate?: number;
 
   @ApiProperty({ type: String, enum: ["PLA", "PETG"] })

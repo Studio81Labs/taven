@@ -4234,7 +4234,7 @@ export interface components {
             /** Format: uuid */
             printConfigRevisionId: string;
             quantity?: number;
-            referencePartsPerPlate?: number;
+            referencePartsPerPlate: number;
             /** Format: uuid */
             sourceModelFileId: string;
             /** Format: uuid */
