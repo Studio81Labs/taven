@@ -384,13 +384,17 @@ onMounted(() => void refresh());
       sbírány.
     </p>
     <form class="operator-inline" @submit.prevent="refresh">
-      <label>Začátek <input v-model="fromDate" type="date" required /></label>
       <label
-        >Konec (bez tohoto dne) <input v-model="toDate" type="date" required
+        >Začátek
+        <input v-model="fromDate" type="date" :disabled="loading" required
+      /></label>
+      <label
+        >Konec (bez tohoto dne)
+        <input v-model="toDate" type="date" :disabled="loading" required
       /></label>
       <label
         >Kanál
-        <select v-model="channel">
+        <select v-model="channel" :disabled="loading">
           <option value="">Všechny</option>
           <option value="direct">direct</option>
           <option value="organic">organic</option>
@@ -402,7 +406,9 @@ onMounted(() => void refresh());
       <button type="submit" :disabled="loading">Načíst report</button>
     </form>
     <div class="operator-inline">
-      <label>Měsíční shakedown <input v-model="month" type="month" /></label
+      <label
+        >Měsíční shakedown
+        <input v-model="month" type="month" :disabled="loading" /></label
       ><button
         type="button"
         :disabled="loading"

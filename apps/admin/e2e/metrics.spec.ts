@@ -285,6 +285,14 @@ test("shows legacy unknown issuance evidence in its known price band beside the 
   await expect(
     page.getByRole("button", { name: "Použít měsíc" }),
   ).toBeDisabled();
+  await expect(page.getByRole("textbox", { name: "Začátek" })).toBeDisabled();
+  await expect(
+    page.getByRole("textbox", { name: "Konec (bez tohoto dne)" }),
+  ).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "Kanál" })).toBeDisabled();
+  await expect(
+    page.getByRole("textbox", { name: "Měsíční shakedown" }),
+  ).toBeDisabled();
   releaseRefresh?.();
   await expect(
     page.getByRole("button", { name: "Použít měsíc" }),
