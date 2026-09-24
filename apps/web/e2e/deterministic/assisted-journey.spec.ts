@@ -83,6 +83,116 @@ test.describe("Assisted Quote Journey", () => {
     ).toBeGreaterThanOrEqual(10);
   });
 
+  test("recovers from an unavailable legal read only after an explicit retry and fresh acknowledgement", async ({
+    page,
+    request,
+  }) => {
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { legalStatus: "error503" },
+    });
+    let createCalls = 0;
+    page.on("request", (outgoing) => {
+      if (
+        outgoing.method() === "POST" &&
+        outgoing.url() === "http://127.0.0.1:4175/quote-requests"
+      ) {
+        createCalls += 1;
+      }
+    });
+
+    await page.goto("/poptavka?source=no-file");
+    const retryLegal = page.getByRole("button", {
+      name: "Zkusit načíst dokumenty znovu",
+    });
+    const privacyAcknowledgement = page
+      .locator('input[type="checkbox"]')
+      .first();
+    const submit = page.getByRole("button", {
+      name: "Odeslat k lidskému posouzení",
+    });
+    await expect(retryLegal).toBeVisible();
+    await expect(privacyAcknowledgement).toBeDisabled();
+    await page
+      .getByRole("textbox", { name: /Co potřebujete vyrobit/ })
+      .fill("Potřebuji ručně posoudit barevný model pro individuální výrobu.");
+    await page.getByLabel("Jméno *").fill("E2E Retry Test");
+    await page.getByLabel("E-mail *").fill("legal-retry@example.test");
+    await expect(submit).toBeDisabled();
+    expect(createCalls).toBe(0);
+
+    await retryLegal.click();
+    await expect(retryLegal).toBeVisible();
+    await expect(privacyAcknowledgement).toBeDisabled();
+    expect(createCalls).toBe(0);
+
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { legalStatus: "approved" },
+    });
+    await retryLegal.click();
+    await expect(privacyAcknowledgement).toBeEnabled();
+    await expect(privacyAcknowledgement).not.toBeChecked();
+    await expect(submit).toBeDisabled();
+    await privacyAcknowledgement.check();
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Děkujeme. Podklady předáme k lidskému posouzení.",
+      }),
+    ).toBeVisible();
+    expect(createCalls).toBe(1);
+  });
+
+  test("retries a failed immutable privacy document read without granting acknowledgement", async ({
+    page,
+  }) => {
+    let privacyReads = 0;
+    await page.route(
+      "**/legal-documents/privacy/revisions/**",
+      async (route) => {
+        privacyReads += 1;
+        if (privacyReads === 1) {
+          await route.abort("failed");
+        } else {
+          await route.continue();
+        }
+      },
+    );
+
+    await page.goto("/poptavka");
+    const retryLegal = page.getByRole("button", {
+      name: "Zkusit načíst dokumenty znovu",
+    });
+    const privacyAcknowledgement = page
+      .locator('input[type="checkbox"]')
+      .first();
+    await expect(retryLegal).toBeVisible();
+    await expect(privacyAcknowledgement).toBeDisabled();
+
+    await retryLegal.click();
+    await expect(privacyAcknowledgement).toBeEnabled();
+    await expect(privacyAcknowledgement).not.toBeChecked();
+    expect(privacyReads).toBeGreaterThanOrEqual(2);
+  });
+
+  test("keeps draft legal documents closed without presenting an outage retry", async ({
+    page,
+    request,
+  }) => {
+    await request.post("http://127.0.0.1:4175/__test/state", {
+      data: { legalStatus: "draft" },
+    });
+
+    await page.goto("/poptavka");
+    await expect(
+      page.getByText("Formulář lze odeslat až po zveřejnění účinných zásad."),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Zkusit načíst dokumenty znovu" }),
+    ).not.toBeVisible();
+    await expect(page.locator('input[type="checkbox"]').first()).toBeDisabled();
+  });
+
   test("declined print risk carries one request into the assisted form", async ({
     page,
     request,
