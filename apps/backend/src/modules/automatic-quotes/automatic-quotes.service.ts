@@ -3533,7 +3533,7 @@ export class AutomaticQuotesService {
     const expressMaximumPlateCount = expressRequested
       ? automaticParameters.expressMaximumPlateCount
       : undefined;
-    await this.dispatchAutomaticCandidates(orderId, bindingId);
+    await this.dispatchOrderCandidates(orderId, bindingId);
     const phase = await this.prisma.orderPhase.findUnique({
       where: { orderId },
     });
@@ -3773,19 +3773,32 @@ export class AutomaticQuotesService {
     }
   }
 
-  private async dispatchAutomaticCandidates(
+  async dispatchOrderCandidates(
     orderId: string,
     bindingId: string,
+    nodeId?: string,
   ): Promise<void> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
         automaticQuoteDraft: { include: { items: true } },
+        individualOrigin: {
+          select: {
+            quoteId: true,
+            quote: { select: { quoteRequestId: true } },
+          },
+        },
         items: {
           include: {
             sourceModelFile: true,
             modelGeometry: true,
             printConfigRevision: true,
+            primaryReferenceSliceResult: {
+              select: { referenceProfileId: true },
+            },
+            individualSource: {
+              include: { quoteItem: { include: { modelSelection: true } } },
+            },
           },
           orderBy: { ordinal: "asc" },
         },
@@ -3806,22 +3819,68 @@ export class AutomaticQuotesService {
         },
       },
     });
-    if (
-      !order?.automaticQuoteDraft ||
-      order.activePriceBinding?.orderPriceBindingId !== bindingId
-    ) {
+    if (!order || order.activePriceBinding?.orderPriceBindingId !== bindingId) {
       return;
+    }
+    if (!order.automaticQuoteDraft && !order.individualOrigin) return;
+    if (order.individualOrigin && !nodeId) {
+      throw new ConflictException(
+        "Individual candidate dispatch requires a node",
+      );
     }
     const observedAt = await databaseNow(this.prisma);
     const draftsByOrdinal = new Map(
-      order.automaticQuoteDraft.items.map((item) => [item.ordinal, item]),
+      (order.automaticQuoteDraft?.items ?? []).map((item) => [
+        item.ordinal,
+        item,
+      ]),
     );
     const shipmentPlans =
       order.activePriceBinding.orderPriceBinding.shipmentPlans;
     const contracts = await import("@taven/slicer-contracts");
     for (const item of order.items) {
-      const draft = draftsByOrdinal.get(item.ordinal);
-      if (!draft) continue;
+      const automaticDraft = draftsByOrdinal.get(item.ordinal);
+      const quoteItem = item.individualSource?.quoteItem;
+      const selection = quoteItem?.modelSelection;
+      if (
+        order.individualOrigin &&
+        (quoteItem?.quoteId !== order.individualOrigin.quoteId ||
+          !selection ||
+          selection.requestId !== order.individualOrigin.quote.quoteRequestId ||
+          selection.modelFileId !== item.sourceModelFileId ||
+          selection.modelGeometryId !== item.modelGeometryId ||
+          selection.sourceContentSha256 !== item.sourceModelFile.contentHash ||
+          quoteItem.printConfigRevisionId !== item.printConfigRevisionId ||
+          quoteItem.primaryReferenceSliceResultId !==
+            item.primaryReferenceSliceResultId ||
+          quoteItem.quantity !== item.quantity)
+      ) {
+        throw new ConflictException(
+          "Accepted individual item source is unavailable",
+        );
+      }
+      const source = automaticDraft
+        ? {
+            referenceProfileId: automaticDraft.referenceProfileId,
+            bodyIds: automaticDraft.bodyIds,
+            selectionSha256: automaticDraft.selectionSha256,
+          }
+        : selection && item.primaryReferenceSliceResult?.referenceProfileId
+          ? {
+              referenceProfileId:
+                item.primaryReferenceSliceResult.referenceProfileId,
+              bodyIds: selection.bodyIds,
+              selectionSha256: selection.selectionSha256,
+            }
+          : null;
+      if (!source) {
+        if (order.individualOrigin) {
+          throw new ConflictException(
+            "Accepted individual item has no reference selection",
+          );
+        }
+        continue;
+      }
       for (const shipmentPlan of shipmentPlans) {
         const quantity = shipmentPlan.fulfilmentSlotAllocations.filter(
           ({ fulfilmentSlot }) => fulfilmentSlot.orderItemId === item.id,
@@ -3830,14 +3889,17 @@ export class AutomaticQuotesService {
         const profiles = await this.prisma.machineProfile.findMany({
           where: {
             state: RevisionState.ACTIVE,
-            referenceProfileId: draft.referenceProfileId,
+            referenceProfileId: source.referenceProfileId,
             material: item.material,
           },
           include: {
             machineCapability: {
               include: {
                 machines: {
-                  where: { status: MachineStatus.ACTIVE },
+                  where: {
+                    status: MachineStatus.ACTIVE,
+                    ...(nodeId ? { nodeId } : {}),
+                  },
                   include: {
                     node: true,
                     availabilitySelection: {
@@ -3860,7 +3922,7 @@ export class AutomaticQuotesService {
                         material: item.material,
                         remainingMilligrams: { gt: 0n },
                         receipts: { some: { kind: "INITIAL" } },
-                        ...(order.automaticQuoteDraft.expressRequested
+                        ...(order.automaticQuoteDraft?.expressRequested
                           ? { mountStatus: "MOUNTED" as const }
                           : {}),
                         ...(item.color ? { color: item.color } : {}),
@@ -3911,7 +3973,7 @@ export class AutomaticQuotesService {
             for (const inventory of machine.inventories) {
               for (const partsPerPlate of plateCapacities) {
                 const arrangementRevisionId = deterministicUuid(
-                  `automatic-arrangement:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${quantity}:${partsPerPlate}`,
+                  `${order.individualOrigin ? "individual" : "automatic"}-arrangement:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${quantity}:${partsPerPlate}`,
                 );
                 const arrangementContentSha256 = fingerprintOf({
                   bindingId,
@@ -3938,8 +4000,8 @@ export class AutomaticQuotesService {
                     modelGeometryId: item.modelGeometry.id,
                     canonicalObjectKey: item.modelGeometry.canonicalObjectKey,
                     geometrySha256: item.modelGeometry.geometryHash,
-                    bodyIds: draft.bodyIds,
-                    selectionSha256: draft.selectionSha256,
+                    bodyIds: source.bodyIds,
+                    selectionSha256: source.selectionSha256,
                   },
                   machineId: machine.id,
                   machineProfile: {
@@ -3986,7 +4048,7 @@ export class AutomaticQuotesService {
                 });
                 const candidateInput = { ...inputBase, occupancySliceTargets };
                 const initialJobId = deterministicUuid(
-                  `automatic-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}:${partsPerPlate}:${machine.availabilitySelection.revisionId}:${machine.availabilitySelection.selectionVersion}`,
+                  `${order.individualOrigin ? "individual" : "automatic"}-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}:${partsPerPlate}:${machine.availabilitySelection.revisionId}:${machine.availabilitySelection.selectionVersion}`,
                 );
                 const dispatchIdentity =
                   await this.nextAutomaticCandidateDispatch(

@@ -324,22 +324,28 @@ export class OrdersService {
           },
           select: { id: true, payoutAmount: true, payoutCurrency: true },
         });
-        await this.enqueueAutomaticProductionSlice(tx, orderId, jobId);
+        await this.enqueueProductionSlice(tx, orderId, jobId);
         return result(orderId, "JOB_ACCEPTED", accepted);
       },
     );
   }
 
-  private async enqueueAutomaticProductionSlice(
+  private async enqueueProductionSlice(
     transaction: Transaction,
     orderId: string,
     jobId: string,
   ): Promise<void> {
-    const origin = await transaction.automaticOrderOrigin.findUnique({
+    const automaticOrigin = await transaction.automaticOrderOrigin.findUnique({
       where: { orderId },
       select: { orderId: true },
     });
-    if (!origin) return;
+    const individualOrigin = await transaction.individualOrderOrigin.findUnique(
+      {
+        where: { orderId },
+        select: { quoteId: true },
+      },
+    );
+    if (!automaticOrigin && !individualOrigin) return;
 
     const reservation = await transaction.productionReservation.findFirst({
       where: {
@@ -375,6 +381,7 @@ export class OrdersService {
                   },
                 },
                 quantity: true,
+                shipmentPlanId: true,
                 partsPerPlate: true,
                 arrangementRevision: {
                   select: { id: true, contentSha256: true },
@@ -387,33 +394,85 @@ export class OrdersService {
     });
     if (!reservation) {
       throw new ConflictException(
-        "Accepted automatic Job has no held production reservation",
+        "Accepted Job has no held production reservation",
       );
     }
 
     const candidate =
       reservation.phaseResourcePlanJob.candidateResourceEstimate;
-    const draftItems = await transaction.automaticQuoteItemDraft.findMany({
-      where: {
-        orderId,
-        sourceModelFileId: candidate.modelGeometry.sourceModelFileId,
-        targetModelGeometryId: candidate.modelGeometry.id,
-        printConfigRevisionId: reservation.printConfigRevision.id,
-      },
-      select: { bodyIds: true, selectionSha256: true },
-      take: 2,
-    });
+    const draftItems = automaticOrigin
+      ? await transaction.automaticQuoteItemDraft.findMany({
+          where: {
+            orderId,
+            sourceModelFileId: candidate.modelGeometry.sourceModelFileId,
+            targetModelGeometryId: candidate.modelGeometry.id,
+            printConfigRevisionId: reservation.printConfigRevision.id,
+          },
+          select: { bodyIds: true, selectionSha256: true },
+          take: 2,
+        })
+      : [];
     const draftItem = draftItems[0];
-    if (!draftItem && draftItems.length === 0) {
+    if (automaticOrigin && !draftItem && draftItems.length === 0) {
       const automaticDraftItemCount =
         await transaction.automaticQuoteItemDraft.count({
           where: { orderId },
         });
       if (automaticDraftItemCount === 0) return;
     }
-    if (!draftItem || draftItems.length !== 1) {
+    if (automaticOrigin && (!draftItem || draftItems.length !== 1)) {
       throw new ConflictException(
         "Accepted automatic Job has no unambiguous source selection",
+      );
+    }
+    const individualSelections = individualOrigin
+      ? await transaction.$queryRaw<
+          Array<{
+            body_ids: string[];
+            selection_sha256: string;
+          }>
+        >`
+          SELECT DISTINCT selection.body_ids, selection.selection_sha256
+          FROM individual_order_item_sources source
+          JOIN order_items item ON item.id = source.order_item_id
+          JOIN quote_items quote_item ON quote_item.id = source.quote_item_id
+          JOIN quotes quote ON quote.id = quote_item.quote_id
+          JOIN quote_request_model_selections selection
+            ON selection.id = quote_item.model_selection_id
+           AND selection.request_id = quote.quote_request_id
+           AND selection.model_file_id = item.source_model_file_id
+           AND selection.model_geometry_id = item.model_geometry_id
+          JOIN model_files model_file ON model_file.id = item.source_model_file_id
+          JOIN fulfilment_slots slot ON slot.order_item_id = item.id
+          JOIN shipment_plan_fulfilment_slots allocation
+            ON allocation.fulfilment_slot_id = slot.id
+          WHERE item.order_id = ${orderId}::uuid
+            AND quote.id = ${individualOrigin.quoteId}::uuid
+            AND item.model_geometry_id = ${candidate.modelGeometry.id}::uuid
+            AND item.print_config_revision_id = ${reservation.printConfigRevision.id}::uuid
+            AND allocation.shipment_plan_id = ${candidate.shipmentPlanId}::uuid
+            AND quote_item.source_model_file_id = item.source_model_file_id
+            AND quote_item.model_geometry_id = item.model_geometry_id
+            AND quote_item.print_config_revision_id = item.print_config_revision_id
+            AND selection.source_content_sha256 = model_file.content_hash
+        `
+      : [];
+    if (individualOrigin && individualSelections.length !== 1) {
+      throw new ConflictException(
+        "Accepted individual Job has no unambiguous source selection",
+      );
+    }
+    const sourceSelection = automaticOrigin
+      ? draftItem
+      : individualSelections[0]
+        ? {
+            bodyIds: individualSelections[0].body_ids,
+            selectionSha256: individualSelections[0].selection_sha256,
+          }
+        : null;
+    if (!sourceSelection) {
+      throw new ConflictException(
+        "Accepted Job source selection is unavailable",
       );
     }
 
@@ -425,8 +484,8 @@ export class OrdersService {
         modelGeometryId: candidate.modelGeometry.id,
         canonicalObjectKey: candidate.modelGeometry.canonicalObjectKey,
         geometrySha256: candidate.modelGeometry.geometryHash,
-        bodyIds: draftItem.bodyIds,
-        selectionSha256: draftItem.selectionSha256,
+        bodyIds: sourceSelection.bodyIds,
+        selectionSha256: sourceSelection.selectionSha256,
       },
       machineId: reservation.machineId,
       machineProfile: {

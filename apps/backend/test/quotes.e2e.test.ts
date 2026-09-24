@@ -21,6 +21,11 @@ import {
 import { photoOriginalObjectKey } from "../src/modules/storage/storage-keys";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { e2eLegalRevisionCodes } from "./support/publish-e2e-legal-fixtures";
+import type {
+  CandidateEstimateJob,
+  CandidateEstimateResult,
+} from "@taven/slicer-contracts" with { "resolution-mode": "import" };
+import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
 
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 const quoteCapabilityKey =
@@ -37,6 +42,8 @@ process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
 process.env.TAVEN_UPLOAD_CLIENT_HASH_KEY ??= uploadClientHashKey;
 process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED ??= "true";
 process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED ??= "true";
+process.env.TAVEN_CHECKOUT_PAYMENT_FLOWS_ENABLED ??= "true";
+process.env.TAVEN_PAYMENT_PROVIDER ??= "sandbox";
 const initialTermsRevision = process.env.TAVEN_TERMS_REVISION;
 
 describe("QuoteRequest and tokenized individual offers", () => {
@@ -44,6 +51,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
   let baseUrl: URL;
   let prisma: PrismaService;
   let quotes: QuotesService;
+  let candidates: CandidateEstimateService;
   let legalDocuments: LegalDocumentsService;
   let priceListId: string;
   let selectionVersion: number;
@@ -66,6 +74,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
     quotes = app.get(QuotesService);
+    candidates = app.get(CandidateEstimateService);
     legalDocuments = app.get(LegalDocumentsService);
     const node = await prisma.node.findFirstOrThrow({
       where: { active: true },
@@ -249,7 +258,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       key("launch-gate-enabled-issue"),
       new Date(Date.now() + 60 * 60 * 1_000),
     );
-    expect(issued.response.status).toBe(201);
+    expect(issued.response.status, JSON.stringify(issued.body)).toBe(201);
 
     for (const acknowledgeWithdrawalException of [undefined, false]) {
       const rejected = await apiJson(`offers/${issued.body.quoteId}/accept`, {
@@ -940,6 +949,275 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(unauthorizedReplay.response.status).toBe(401);
 
+    const statusBeforeContact = await apiJson<{
+      orderId: string;
+      preparationStatus: string;
+      initialPayment: unknown;
+    }>(`offers/${issued.body.quoteId}/order-status`, {
+      headers: bearer(issued.body.offerToken),
+    });
+    expect(statusBeforeContact.response.status).toBe(200);
+    expect(statusBeforeContact.body).toMatchObject({
+      orderId: accepted.body.orderId,
+      preparationStatus: "UNPREPARED",
+      initialPayment: null,
+    });
+    expect(statusBeforeContact.body).not.toHaveProperty("contact");
+    const foreignStatus = await apiJson(
+      `offers/${issued.body.quoteId}/order-status`,
+      { headers: bearer(randomBytes(32).toString("base64url")) },
+    );
+    expect(foreignStatus.response.status).toBe(401);
+
+    const contact = {
+      email: requestBody.contact.email,
+      fullName: "Accepted Customer",
+      billing: {
+        name: "Accepted Customer",
+        addressLine1: "Masarykova 12",
+        city: "Brno",
+        postalCode: "60200",
+        countryCode: "CZ",
+      },
+    };
+    const contactKey = key("accepted-checkout-contact");
+    const recordContact = (body: typeof contact, commandKey: string) =>
+      apiJson(`offers/${issued.body.quoteId}/checkout-contact`, {
+        method: "POST",
+        headers: {
+          ...bearer(issued.body.offerToken),
+          "content-type": "application/json",
+          "idempotency-key": commandKey,
+        },
+        body: JSON.stringify(body),
+      });
+    const wrongEmail = await recordContact(
+      { ...contact, email: "foreign@example.test" },
+      key("foreign-checkout-contact"),
+    );
+    expect(wrongEmail.response.status).toBe(409);
+    const recordedContact = await recordContact(contact, contactKey);
+    expect(recordedContact.response.status).toBe(200);
+    expect(recordedContact.body).toEqual({
+      orderId: accepted.body.orderId,
+      contactRecorded: true,
+    });
+    expect((await recordContact(contact, contactKey)).body).toEqual(
+      recordedContact.body,
+    );
+    const changedContact = await recordContact(
+      { ...contact, billing: { ...contact.billing, city: "Praha" } },
+      key("changed-checkout-contact"),
+    );
+    expect(changedContact.response.status).toBe(409);
+    const frozenContact = await prisma.order.findUniqueOrThrow({
+      where: { id: accepted.body.orderId },
+      select: { checkoutContactSnapshot: true },
+    });
+    expect(frozenContact.checkoutContactSnapshot).toEqual({
+      version: 2,
+      ...contact,
+    });
+    const prepareResources = await apiJson<{
+      status: string;
+      phaseResourcePlanId: string | null;
+    }>(`admin/orders/${accepted.body.orderId}/resource-preparation`, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": key("accepted-resource-preparation"),
+      },
+      body: JSON.stringify({ reason: "Prepare accepted offer resources" }),
+    });
+    expect(
+      prepareResources.response.status,
+      JSON.stringify(prepareResources.body),
+    ).toBe(200);
+    expect(prepareResources.body.status).toBe("PENDING");
+    expect(prepareResources.body.phaseResourcePlanId).toBeNull();
+    const dispatch = await prisma.outboxMessage.findFirstOrThrow({
+      where: {
+        aggregateType: "CandidateEstimateDispatch",
+        payload: {
+          path: ["job", "correlationId"],
+          equals: accepted.body.orderId,
+        },
+      },
+    });
+    const candidateJob = (dispatch.payload as { job: CandidateEstimateJob })
+      .job;
+    expect(candidateJob.input.geometry).toMatchObject({
+      sourceModelFileId: defaultOfferItem.sourceModelFileId,
+      modelGeometryId: defaultOfferItem.modelGeometryId,
+      bodyIds: ["quote-test-body"],
+      selectionSha256: (
+        await import("@taven/slicer-contracts")
+      ).geometrySelectionSha256(["quote-test-body"]),
+    });
+    const availability =
+      await prisma.machineAvailabilitySelection.findFirstOrThrow({
+        where: { machineId: candidateJob.input.machineId },
+        include: { revision: { include: { windows: true } } },
+      });
+    const available = availability.revision.windows.find(
+      (window) => window.endsAt.getTime() > Date.now() + 15 * 60_000,
+    );
+    expect(available).toBeDefined();
+    const startsAt = new Date(
+      Math.max(Date.now() + 5 * 60_000, available!.startsAt.getTime() + 60_000),
+    );
+    await candidates.ingest({
+      result: successfulIndividualCandidateResult(candidateJob),
+      capacityWindows: [
+        { startsAt, endsAt: new Date(startsAt.getTime() + 60_000) },
+      ],
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const completedPreparation = await apiJson<{
+      status: string;
+      phaseResourcePlanId: string | null;
+    }>(`admin/orders/${accepted.body.orderId}/resource-preparation`, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": key("accepted-resource-preparation-complete"),
+      },
+      body: JSON.stringify({ reason: "Complete accepted resource plan" }),
+    });
+    expect(
+      completedPreparation.response.status,
+      JSON.stringify(completedPreparation.body),
+    ).toBe(200);
+    expect(completedPreparation.body.status).toBe("READY");
+    expect(completedPreparation.body.phaseResourcePlanId).toBeTruthy();
+    const initialKey = key("accepted-individual-initial-payment");
+    const createInitialPayment = (
+      method: "CARD" | "BANK_TRANSFER",
+      commandKey: string,
+    ) =>
+      apiJson<{
+        paymentId: string;
+        status: string;
+        amountMinor: number;
+        checkoutUrl: string | null;
+      }>(`admin/orders/${accepted.body.orderId}/initial-payment`, {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "content-type": "application/json",
+          "idempotency-key": commandKey,
+        },
+        body: JSON.stringify({ method }),
+      });
+    const initialPayment = await createInitialPayment("CARD", initialKey);
+    expect(
+      initialPayment.response.status,
+      JSON.stringify(initialPayment.body),
+    ).toBe(200);
+    expect(initialPayment.body).toMatchObject({
+      status: "PENDING",
+      amountMinor: 33_000,
+    });
+    expect(initialPayment.body.checkoutUrl).toBeTruthy();
+    expect((await createInitialPayment("CARD", initialKey)).body).toEqual(
+      initialPayment.body,
+    );
+    const concurrentInitialAttempts = await Promise.all([
+      createInitialPayment("CARD", key("accepted-initial-concurrent-a")),
+      createInitialPayment("CARD", key("accepted-initial-concurrent-b")),
+    ]);
+    expect(
+      concurrentInitialAttempts.map((attempt) => attempt.response.status),
+    ).toEqual([200, 200]);
+    expect(
+      concurrentInitialAttempts.map((attempt) => attempt.body.paymentId),
+    ).toEqual([initialPayment.body.paymentId, initialPayment.body.paymentId]);
+    expect(
+      (
+        await createInitialPayment(
+          "BANK_TRANSFER",
+          key("changed-initial-method"),
+        )
+      ).response.status,
+    ).toBe(409);
+    const scopedPaymentStatus = await apiJson<{
+      initialPayment: {
+        paymentId: string;
+        status: string;
+        checkoutUrl: string | null;
+      };
+    }>(`offers/${issued.body.quoteId}/order-status`, {
+      headers: bearer(issued.body.offerToken),
+    });
+    expect(scopedPaymentStatus.body.initialPayment).toMatchObject({
+      paymentId: initialPayment.body.paymentId,
+      status: "PENDING",
+      checkoutUrl: initialPayment.body.checkoutUrl,
+    });
+    expect(
+      (
+        await apiJson(`offers/${issued.body.quoteId}/order-status`, {
+          headers: bearer("unrelated-offer-capability"),
+        })
+      ).response.status,
+    ).toBe(401);
+    const sandboxUrl = new URL(initialPayment.body.checkoutUrl!);
+    const sandboxCapture = await fetch(
+      new URL(`${sandboxUrl.pathname}/capture`, baseUrl),
+      {
+        method: "POST",
+        redirect: "manual",
+      },
+    );
+    expect(sandboxCapture.status, await sandboxCapture.text()).toBe(200);
+    const capturedPayment = await prisma.payment.findUniqueOrThrow({
+      where: { id: initialPayment.body.paymentId },
+    });
+    expect(capturedPayment.status).toBe("CAPTURED");
+    const productionJob = await prisma.job.findFirstOrThrow({
+      where: { orderId: accepted.body.orderId },
+      select: { id: true, status: true },
+    });
+    expect(productionJob.status).toBe("CREATED");
+    const jobAccepted = await apiJson<{ code: string }>(
+      `admin/orders/${accepted.body.orderId}/fulfilment/jobs/${productionJob.id}/accept`,
+      {
+        method: "POST",
+        headers: {
+          ...operatorHeaders(true),
+          "idempotency-key": key("accepted-individual-job"),
+        },
+      },
+    );
+    expect(jobAccepted.response.status, JSON.stringify(jobAccepted.body)).toBe(
+      200,
+    );
+    const productionDispatch = await prisma.outboxMessage.findFirstOrThrow({
+      where: {
+        aggregateType: "ProductionSliceDispatch",
+        aggregateId: productionJob.id,
+      },
+    });
+    const { ProductionSliceJobSchema } =
+      await import("@taven/slicer-contracts");
+    const productionInput = ProductionSliceJobSchema.parse(
+      (productionDispatch.payload as { job: unknown }).job,
+    );
+    expect(productionInput.input.geometry.bodyIds).toEqual(
+      candidateJob.input.geometry.bodyIds,
+    );
+    expect(productionInput.input.geometry.selectionSha256).toBe(
+      candidateJob.input.geometry.selectionSha256,
+    );
+    expect(productionInput.input.productionReservationId).toBeTruthy();
+    const preparationStatus = await apiJson<{ preparationStatus: string }>(
+      `offers/${issued.body.quoteId}/order-status`,
+      { headers: bearer(issued.body.offerToken) },
+    );
+    expect(preparationStatus.body.preparationStatus).toBe("ACTIVATED");
+
     const persisted = await prisma.quote.findUniqueOrThrow({
       where: { id: issued.body.quoteId },
       include: {
@@ -1003,7 +1281,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
       await prisma.payment.count({
         where: { orderId: accepted.body.orderId },
       }),
-    ).toBe(0);
+    ).toBe(1);
     expect(
       await prisma.individualOrderOrigin.count({
         where: { quoteId: issued.body.quoteId },
@@ -4083,7 +4361,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
         data: {
           id: modelGeometryId,
           sourceModelFileId: id,
-          canonicalObjectKey: `quote-tests/geometries/${modelGeometryId}`,
+          canonicalObjectKey: `geometries/${modelGeometryId}/canonical`,
           geometryHash: createHash("sha256")
             .update(`${scope}:geometry`)
             .digest("hex"),
@@ -4110,7 +4388,17 @@ describe("QuoteRequest and tokenized individual offers", () => {
           quality: "STANDARD",
           infillPercent: 20,
           layerHeightMicrometers: 200,
-          settings: {},
+          settings: {
+            bundleVersion: 1,
+            presets: [
+              {
+                brim_width: "0",
+                layer_height: "0.2",
+                enable_support: "0",
+                sparse_infill_density: "20%",
+              },
+            ],
+          },
         },
       });
       await transaction.sliceResult.create({
@@ -4355,6 +4643,8 @@ describe("QuoteRequest and tokenized individual offers", () => {
               attachedModels.set(attachedKey, attached);
             }
             const inspectionJobId = await attached;
+            const { geometrySelectionSha256 } =
+              await import("@taven/slicer-contracts");
             const selected = await prisma.quoteRequestModelSelection.create({
               data: {
                 requestId: canonicalRequestId,
@@ -4363,9 +4653,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
                 inspectionJobId,
                 sourceContentSha256: source.contentHash,
                 bodyIds: ["quote-test-body"],
-                selectionSha256: createHash("sha256")
-                  .update(cacheKey)
-                  .digest("hex"),
+                selectionSha256: geometrySelectionSha256(["quote-test-body"]),
               },
             });
             return selected.id;
@@ -4402,7 +4690,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
       providerEndpointId: "test-delivery-endpoint",
       endpointType: "DELIVERY",
       addressSnapshot: { country: "CZ", postalCode: "11000" },
-      capabilitySnapshot: { carrier: "test", service: "standard" },
+      capabilitySnapshot: {
+        carrier: "test",
+        service: "standard",
+        supportedCategoryIds: ["STANDARD"],
+      },
     };
   }
 
@@ -4625,4 +4917,61 @@ function nestedJson(depth: number): Record<string, unknown> {
     result = { nested: result };
   }
   return result;
+}
+
+function successfulIndividualCandidateResult(
+  job: CandidateEstimateJob,
+): CandidateEstimateResult {
+  const plateCount = Math.ceil(job.input.quantity / job.input.partsPerPlate);
+  const occupancies = Array.from({ length: plateCount }, (_, index) =>
+    index < plateCount - 1
+      ? job.input.partsPerPlate
+      : job.input.quantity - job.input.partsPerPlate * (plateCount - 1),
+  );
+  return {
+    ...job,
+    engine: {
+      name: job.input.machineProfile.slicerEngine,
+      version: job.input.machineProfile.slicerVersion,
+      imageSha256: "b".repeat(64),
+    },
+    outcome: {
+      status: "succeeded",
+      metrics: {
+        boundingBox: {
+          xMicrometers: "20000",
+          yMicrometers: "20000",
+          zMicrometers: "20000",
+        },
+        objectCount: 1,
+        bodyCount: job.input.geometry.bodyIds.length,
+        topology: { watertight: true, manifold: true, normals: "consistent" },
+        thinWallFeatureCount: 0,
+        supportVolumeRatioPpm: 0,
+        hasPaintAssignments: false,
+        materialAssignmentCount: 0,
+        estimatedPrintSeconds: String(60 * plateCount),
+        estimatedMaterialMilligrams: String(60 * plateCount),
+        plateCount,
+      },
+      plates: occupancies.map((partsOnPlate, index) => ({
+        plateOrdinal: index + 1,
+        partsOnPlate,
+        estimatedPrintSeconds: "60",
+        estimatedMaterialMilligrams: "60",
+      })),
+      occupancySlices: job.input.occupancySliceTargets.map((target) => ({
+        partsPerPlate: target.partsPerPlate,
+        cacheIdentitySha256: target.cacheIdentitySha256,
+        estimatedPrintSeconds: "60",
+        estimatedMaterialMilligrams: "60",
+        artifact: {
+          objectKey: target.analysisObjectKey,
+          sha256: createHash("sha256")
+            .update(target.analysisObjectKey)
+            .digest("hex"),
+        },
+      })),
+    },
+  };
 }

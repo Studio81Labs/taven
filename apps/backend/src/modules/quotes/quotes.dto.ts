@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { AttributionDto } from "../metrics/attribution.dto";
+import { CheckoutBillingDto } from "../payments/payments.dto";
+import { CheckoutPaymentDto } from "../payments/payments.dto";
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const OFFER_PACKING_UNIT_MAX = 1_000;
@@ -26,6 +28,51 @@ export class QuoteContactDto {
     pattern: NON_BLANK_TEXT_PATTERN,
   })
   phone?: string;
+}
+
+export class OfferCheckoutContactDto {
+  @ApiProperty({ type: String, format: "email", maxLength: 320 })
+  email!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    pattern: NON_BLANK_TEXT_PATTERN,
+  })
+  fullName!: string;
+
+  @ApiProperty({ type: CheckoutBillingDto })
+  billing!: CheckoutBillingDto;
+}
+
+export class OfferCheckoutContactRecordedDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  orderId!: string;
+
+  @ApiProperty({ type: Boolean })
+  contactRecorded!: true;
+}
+
+export class AcceptedOfferOrderStatusDto {
+  @ApiProperty({ type: String, format: "uuid" })
+  orderId!: string;
+
+  @ApiProperty({ type: String })
+  orderReference!: string;
+
+  @ApiProperty({ type: String })
+  orderStatus!: string;
+
+  @ApiProperty({
+    type: String,
+    enum: ["UNPREPARED", "PREPARING", "READY", "ACTIVATED", "UNAVAILABLE"],
+  })
+  preparationStatus!:
+    "UNPREPARED" | "PREPARING" | "READY" | "ACTIVATED" | "UNAVAILABLE";
+
+  @ApiPropertyOptional({ type: CheckoutPaymentDto, nullable: true })
+  initialPayment!: CheckoutPaymentDto | null;
 }
 
 export class CreateQuoteRequestDto {

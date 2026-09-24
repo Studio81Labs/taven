@@ -56,17 +56,22 @@ import { AuditService } from "../audit/audit.service";
 import { normalizeAttribution } from "../metrics/attribution";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { parseSellerTaxPolicy } from "../../pricing/seller-tax-policy";
+import { normalizeCheckoutContact } from "../payments/checkout-contact";
+import { checkoutContactSnapshotMatches } from "../payments/payments.service";
 import { lockCommercialPolicy } from "../resources/commercial-policy-selection";
 import { reserveAnonymousQuote } from "./anonymous-quote-limit";
 import type {
   AcceptOfferDto,
   AcceptedOfferDto,
+  AcceptedOfferOrderStatusDto,
   AutomaticQuoteRequestHandoffItemDto,
   CreateQuoteRequestDto,
   IssueOfferDto,
   ModelOfferItemDto,
   OfferDeliveryDestinationDto,
   OfferIssuedDto,
+  OfferCheckoutContactDto,
+  OfferCheckoutContactRecordedDto,
   OfferPaymentCapturePolicyDto,
   OfferPaymentScheduleDto,
   OfferPreviewDto,
@@ -1901,6 +1906,100 @@ export class QuotesService {
             data: batch,
           });
         }
+        const { allocateMoney, Money } = await coreModule();
+        const priceComponents =
+          await transaction.priceSnapshotComponent.findMany({
+            where: { priceSnapshotId: quote.priceBinding.priceSnapshot.id },
+            orderBy: { id: "asc" },
+          });
+        const orderItemIdByQuoteItemId = new Map(
+          quote.items.map((item) => [
+            item.id,
+            orderItemsByQuoteOrdinal.get(item.ordinal)!.id,
+          ]),
+        );
+        const shipmentPlanIdByQuoteId = new Map(
+          quote.shipmentPlans.map((plan, index) => [
+            plan.id,
+            shipmentPlans[index]!.id!,
+          ]),
+        );
+        const slotIdsByShipmentPlanId = new Map<string, string[]>();
+        for (const allocated of shipmentPlanSlots) {
+          const slots =
+            slotIdsByShipmentPlanId.get(allocated.shipmentPlanId) ?? [];
+          slots.push(allocated.fulfilmentSlotId!);
+          slotIdsByShipmentPlanId.set(allocated.shipmentPlanId, slots);
+        }
+        const componentAllocations: Prisma.PriceComponentFulfilmentAllocationCreateManyInput[] =
+          [];
+        for (const component of priceComponents) {
+          let slotIds: string[];
+          if (
+            component.scope === PriceComponentScope.QUOTE_ITEM &&
+            component.quoteItemId
+          ) {
+            const orderItemId = orderItemIdByQuoteItemId.get(
+              component.quoteItemId,
+            );
+            slotIds = fulfilmentSlots
+              .filter((slot) => slot.orderItemId === orderItemId)
+              .map((slot) => slot.id!);
+          } else if (
+            component.scope === PriceComponentScope.QUOTE_SHIPMENT_PLAN &&
+            component.quoteShipmentPlanId
+          ) {
+            const shipmentPlanId = shipmentPlanIdByQuoteId.get(
+              component.quoteShipmentPlanId,
+            );
+            slotIds = shipmentPlanId
+              ? (slotIdsByShipmentPlanId.get(shipmentPlanId) ?? [])
+              : [];
+          } else if (component.scope === PriceComponentScope.ORDER) {
+            slotIds = fulfilmentSlots.map((slot) => slot.id!);
+          } else {
+            throw new ConflictException(
+              "Accepted price component scope is unavailable",
+            );
+          }
+          if (slotIds.length === 0) {
+            throw new ConflictException(
+              "Accepted price component has no fulfilment slots",
+            );
+          }
+          const allocated = allocateMoney(
+            Money.of(
+              component.amountMinor,
+              quote.priceBinding.priceSnapshot.currency,
+            ),
+            slotIds.sort().map((id) => ({ id, basis: 0n })),
+          );
+          componentAllocations.push(
+            ...allocated.map((allocation) => ({
+              priceSnapshotComponentId: component.id,
+              fulfilmentSlotId: allocation.targetId,
+              amountMinor: allocation.amount.minorUnits,
+            })),
+          );
+        }
+        for (const batch of batchesOf(componentAllocations)) {
+          await transaction.priceComponentFulfilmentAllocation.createMany({
+            data: batch,
+          });
+        }
+        await transaction.$executeRaw`
+          UPDATE fulfilment_slots slot
+          SET settlement_amount_minor = coalesce((
+            SELECT sum(allocation.amount_minor)
+            FROM price_component_fulfilment_allocations allocation
+            JOIN price_snapshot_components component
+              ON component.id = allocation.price_snapshot_component_id
+            WHERE allocation.fulfilment_slot_id = slot.id
+              AND component.price_snapshot_id = ${quote.priceBinding.priceSnapshot.id}::uuid
+          ), 0),
+          updated_at = ${observedAt}
+          WHERE slot.order_id = ${orderId}::uuid
+        `;
         await transaction.orderActivePriceBinding.create({
           data: { orderId, orderPriceBindingId },
         });
@@ -2014,6 +2113,203 @@ export class QuotesService {
       throw new GoneException("Offer is no longer available");
     }
     return result.value;
+  }
+
+  async recordOfferCheckoutContact(
+    quoteId: string,
+    input: OfferCheckoutContactDto,
+    authorization?: string,
+    idempotencyKey?: string,
+  ): Promise<OfferCheckoutContactRecordedDto> {
+    quoteId = normalizedUuid(quoteId, "quoteId");
+    const token = bearerCapability(authorization);
+    const commandKey = requireIdempotencyKey(idempotencyKey);
+    const contact = normalizeCheckoutContact(input);
+    await this.offerForToken(quoteId, token);
+    return this.idempotent(
+      "quote-offer.checkout-contact",
+      commandKey,
+      fingerprintOf({ quoteId, contact }),
+      async (transaction) => {
+        const quote = await lockedOffer(transaction, quoteId);
+        assertOfferCapability(quote, token);
+        assertCurrentOffer(quote);
+        if (quote.quoteRequest.status !== QuoteRequestStatus.ACCEPTED) {
+          throw new ConflictException("Offer has not been accepted");
+        }
+        const origin = await transaction.individualOrderOrigin.findUnique({
+          where: { quoteId },
+          select: { orderId: true },
+        });
+        if (!origin)
+          throw new ConflictException("Accepted order is unavailable");
+        await transaction.$queryRaw`
+          SELECT "id" FROM "orders" WHERE "id" = ${origin.orderId}::uuid FOR UPDATE
+        `;
+        const order = await transaction.order.findUniqueOrThrow({
+          where: { id: origin.orderId },
+          include: {
+            customer: {
+              select: { email: true, displayName: true, phone: true },
+            },
+          },
+        });
+        const payment = await transaction.payment.findFirst({
+          where: { orderId: order.id },
+          select: { id: true },
+        });
+        const requestEmail = contactFrom(
+          quote.quoteRequest.contactSnapshot,
+          order.customer,
+        ).email.toLowerCase();
+        if (
+          !order.customer ||
+          order.customerId !== quote.customerId ||
+          contact.email !== requestEmail ||
+          contact.email !== order.customer.email.toLowerCase()
+        ) {
+          throw new ConflictException(
+            "Checkout email differs from the accepted request",
+          );
+        }
+        if (
+          payment ||
+          (order.status !== "DRAFT" && order.status !== "QUOTED")
+        ) {
+          throw new ConflictException(
+            "Checkout contact can no longer be changed",
+          );
+        }
+        if (
+          !checkoutContactSnapshotMatches(
+            order.checkoutContactSnapshot,
+            contact,
+          )
+        ) {
+          throw new ConflictException(
+            "Checkout contact differs from accepted order contact",
+          );
+        }
+        if (!order.checkoutContactSnapshot) {
+          const observedAt = await databaseNow(transaction);
+          await transaction.order.update({
+            where: { id: order.id },
+            data: {
+              checkoutContactSnapshot: jsonInput({ version: 2, ...contact })!,
+            },
+          });
+          await transaction.auditEvent.create({
+            data: {
+              orderId: order.id,
+              quoteId,
+              eventType: "quote_offer.checkout_contact_recorded",
+              actorKind: AuditActorKind.CUSTOMER,
+              actorId: order.customerId,
+              idempotencyKey: commandKey,
+              correlationId: randomUUID(),
+              payload: jsonInput({ quoteId, orderId: order.id })!,
+              createdAt: observedAt,
+            },
+          });
+        }
+        return { orderId: order.id, contactRecorded: true as const };
+      },
+    );
+  }
+
+  async acceptedOfferOrderStatus(
+    quoteId: string,
+    authorization?: string,
+  ): Promise<AcceptedOfferOrderStatusDto> {
+    quoteId = normalizedUuid(quoteId, "quoteId");
+    const token = bearerCapability(authorization);
+    const quote = await this.offerForToken(quoteId, token);
+    if (quote.quoteRequest.status !== QuoteRequestStatus.ACCEPTED) {
+      throw new ConflictException("Offer has no accepted order");
+    }
+    const origin = await this.prisma.individualOrderOrigin.findUnique({
+      where: { quoteId },
+      include: { order: true },
+    });
+    if (!origin) throw new ConflictException("Accepted order is unavailable");
+    const phase = await this.prisma.orderPhase.findUnique({
+      where: { orderId: origin.orderId },
+      select: { status: true },
+    });
+    const [plans, payment, candidateDispatch] = await Promise.all([
+      this.prisma.phaseResourcePlan.findMany({
+        where: {
+          eligibilitySnapshot: { orderPhase: { orderId: origin.orderId } },
+        },
+        select: { expiresAt: true },
+      }),
+      this.prisma.payment.findFirst({
+        where: { orderId: origin.orderId, role: { in: ["DEPOSIT", "FULL"] } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
+      this.prisma.outboxMessage.findFirst({
+        where: {
+          aggregateType: "CandidateEstimateDispatch",
+          payload: { path: ["job", "correlationId"], equals: origin.orderId },
+        },
+        select: { id: true },
+      }),
+    ]);
+    const now = await databaseNow(this.prisma);
+    const preparationStatus: AcceptedOfferOrderStatusDto["preparationStatus"] =
+      !phase
+        ? "UNAVAILABLE"
+        : phase.status !== "QUOTED"
+          ? "ACTIVATED"
+          : origin.order.status === "QUOTED" &&
+              plans.some((plan) => plan.expiresAt > now)
+            ? "READY"
+            : origin.order.status === "DRAFT"
+              ? candidateDispatch
+                ? "PREPARING"
+                : "UNPREPARED"
+              : "UNAVAILABLE";
+    let initialPayment: AcceptedOfferOrderStatusDto["initialPayment"] = null;
+    if (payment) {
+      if (
+        payment.checkoutMethod !== "CARD" &&
+        payment.checkoutMethod !== "BANK_TRANSFER"
+      ) {
+        throw new ConflictException("Initial payment method is unavailable");
+      }
+      const amountMinor = Number(payment.requestedAmountMinor);
+      if (
+        !Number.isSafeInteger(amountMinor) ||
+        amountMinor < 1 ||
+        !payment.checkoutCaptureExpiresAt
+      ) {
+        throw new ConflictException(
+          "Initial payment projection is unavailable",
+        );
+      }
+      initialPayment = {
+        paymentId: payment.id,
+        provider: payment.provider,
+        method: payment.checkoutMethod,
+        status: payment.status,
+        amountMinor,
+        currency: payment.currency,
+        checkoutUrl:
+          payment.status === "PENDING" &&
+          payment.checkoutCaptureExpiresAt > now &&
+          payment.captureAuthorized
+            ? payment.providerCheckoutUrl
+            : null,
+        expiresAt: payment.checkoutCaptureExpiresAt.toISOString(),
+      };
+    }
+    return {
+      orderId: origin.orderId,
+      orderReference: origin.order.publicReference,
+      orderStatus: origin.order.status,
+      preparationStatus,
+      initialPayment,
+    };
   }
 
   async rejectOffer(
