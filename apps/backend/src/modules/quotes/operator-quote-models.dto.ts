@@ -10,7 +10,18 @@ export class SelectQuoteRequestModelDto {
   @ApiProperty({ type: String, format: "uuid" })
   modelFileId!: string;
 
-  @ApiProperty({ type: [String], minItems: 1 })
+  @ApiProperty({
+    type: [String],
+    minItems: 1,
+    maxItems: 256,
+    uniqueItems: true,
+    items: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      pattern: "^[a-z0-9][a-z0-9._:-]*$",
+    },
+  })
   bodyIds!: string[];
 }
 

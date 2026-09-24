@@ -101,6 +101,20 @@ describe("OpenAPI artifact", () => {
       enum: ["STL", "3MF"],
     });
     expect(
+      schemas.SelectQuoteRequestModelDto?.properties?.bodyIds,
+    ).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 256,
+      uniqueItems: true,
+      items: {
+        type: "string",
+        minLength: 1,
+        maxLength: 128,
+        pattern: "^[a-z0-9][a-z0-9._:-]*$",
+      },
+    });
+    expect(
       contract.paths[
         "/admin/quote-requests/{requestId}/model-uploads/{uploadId}/confirm"
       ]?.post?.parameters,

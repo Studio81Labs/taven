@@ -742,7 +742,8 @@ async function prepareReferenceInTransaction(
     );
     const next = enqueueTransaction ? nextPreprocessingAttempt(latest) : null;
     if (!next || !enqueueTransaction) {
-      if (latest?.deadLettered || latest?.status === "failed")
+      if (!latest) continue;
+      if (latest.deadLettered || latest.status === "failed")
         failedJobIds.push(jobId);
       else pendingJobIds.push(jobId);
       continue;

@@ -578,6 +578,29 @@ describe("assisted request model preparation", () => {
       quantity: 1,
       partsPerPlate: 1,
     };
+    const unstartedParams = new URLSearchParams({
+      selectionId: preparation.selectionId,
+      printConfigRevisionId: preparation.printConfigRevisionId,
+      referenceProfileId: preparation.referenceProfileId,
+      quantity: "1",
+      partsPerPlate: "1",
+    });
+    const unstarted = await api<{
+      primaryReferenceSliceResultId: string | null;
+      pendingJobIds: string[];
+      failedJobIds: string[];
+    }>(
+      `admin/quote-requests/${requestId}/references/status?${unstartedParams}`,
+      {
+        headers: operatorHeaders(),
+      },
+    );
+    expect(unstarted.response.status).toBe(200);
+    expect(unstarted.body).toMatchObject({
+      primaryReferenceSliceResultId: null,
+      pendingJobIds: [],
+      failedJobIds: [],
+    });
     const prepared = await api<{
       primaryReferenceSliceResultId: string | null;
       pendingJobIds: string[];

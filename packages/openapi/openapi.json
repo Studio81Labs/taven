@@ -11194,10 +11194,15 @@
         "properties": {
           "bodyIds": {
             "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-z0-9][a-z0-9._:-]*$",
               "type": "string"
             },
+            "maxItems": 256,
             "minItems": 1,
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "modelFileId": {
             "format": "uuid",
