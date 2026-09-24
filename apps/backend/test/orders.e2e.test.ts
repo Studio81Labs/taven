@@ -4222,6 +4222,34 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         where: { id: fixture.foundation.orderId },
       }),
     ).resolves.toMatchObject({ status: "PARTIALLY_FULFILLED" });
+
+    await expect(prisma.$executeRaw`
+      INSERT INTO refund_transactions (
+        id, payment_id, claim_id, price_adjustment_id,
+        replaces_refund_transaction_id, replaces_failure_provider_event_id,
+        idempotency_key, provider, amount_minor, reason, status
+      )
+      SELECT ${randomUUID()}::uuid, source.payment_id, source.claim_id,
+             source.price_adjustment_id, source.id,
+             source.provider_result_event_id, ${`sibling-${randomUUID()}`},
+             source.provider, source.amount_minor, source.reason, 'PENDING'
+      FROM refund_transactions source
+      WHERE source.id = ${failedRefundId}::uuid
+    `).rejects.toThrow("a refund obligation permits only one replacement");
+
+    await expect(prisma.$executeRaw`
+      INSERT INTO refund_transactions (
+        id, payment_id, claim_id, price_adjustment_id,
+        replaces_refund_transaction_id, replaces_failure_provider_event_id,
+        idempotency_key, provider, amount_minor, reason, status
+      )
+      SELECT ${randomUUID()}::uuid, source.payment_id, source.claim_id,
+             source.price_adjustment_id, source.id,
+             source.provider_result_event_id, ${`nested-${randomUUID()}`},
+             source.provider, source.amount_minor, source.reason, 'PENDING'
+      FROM refund_transactions source
+      WHERE source.id = ${retryRefundId}::uuid
+    `).rejects.toThrow("a replacement refund cannot be retried again");
   });
 
   it("keeps cancellation pending until the exact carrier label void is confirmed", async () => {
