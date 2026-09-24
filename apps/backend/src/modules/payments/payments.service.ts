@@ -606,6 +606,7 @@ export class PaymentsService {
       );
     });
     if (first.replay) return first.replay;
+    assertCheckoutPaymentFlowEnabled();
     const capabilities = await this.provider.capabilities();
     assertCheckoutPaymentMethodsAvailable(capabilities.methods);
     if (
