@@ -15,6 +15,8 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   let releaseAvailabilityPost: (() => void) | undefined;
   let holdNextAvailability = false;
   let releaseStaleAvailability: (() => void) | undefined;
+  let failNextAvailabilityRead = false;
+  let availabilityVersion = 1;
   await page.route("**/admin/auth/session", (route) =>
     route.fulfill({
       json: {
@@ -130,11 +132,18 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
           json: { message: "obsolete availability failed" },
         });
       }
+      if (failNextAvailabilityRead) {
+        failNextAvailabilityRead = false;
+        return route.fulfill({
+          status: 503,
+          json: { message: "availability read failed" },
+        });
+      }
       await route.fulfill({
         json: {
           machineId,
-          revisionId: "revision-1",
-          selectionVersion: 1,
+          revisionId: `revision-${availabilityVersion}`,
+          selectionVersion: availabilityVersion,
           windows: [
             {
               startsAt: "2026-09-23T08:00:00Z",
@@ -173,13 +182,19 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
     ) {
       availabilityPosts += 1;
       availabilityPostPaths.push(path);
-      await new Promise<void>((resolve) => {
-        releaseAvailabilityPost = resolve;
-      });
-      await route.fulfill({
-        status: 409,
-        json: { message: "reservation conflict" },
-      });
+      if (availabilityPosts === 1) {
+        await new Promise<void>((resolve) => {
+          releaseAvailabilityPost = resolve;
+        });
+        await route.fulfill({
+          status: 409,
+          json: { message: "reservation conflict" },
+        });
+      } else {
+        availabilityVersion = 2;
+        failNextAvailabilityRead = true;
+        await route.fulfill({ json: { machineId, selectionVersion: 2 } });
+      }
     } else {
       await route.fulfill({ status: 404, body: "" });
     }
@@ -253,6 +268,25 @@ test("mounts a spool without changing stock and keeps a reservation conflict vis
   await expect(page.getByRole("alert")).not.toContainText(
     "obsolete availability failed",
   );
+  await page.getByRole("button", { name: "Dostupnost" }).first().click();
+  await expect(
+    page.getByText("Verze výběru 1", { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Publikovat dostupnost" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Zápis byl potvrzen, ale obnovení dostupnosti selhalo",
+  );
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeDisabled();
+  expect(availabilityPosts).toBe(2);
+  await page.getByRole("button", { name: "Načíst" }).click();
+  await expect(
+    page.getByText("Verze výběru 2", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Publikovat dostupnost" }),
+  ).toBeEnabled();
 });
 
 test("a confirmed receipt closes its form when the following read fails", async ({

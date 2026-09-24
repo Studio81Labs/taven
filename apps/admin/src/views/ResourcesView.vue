@@ -54,6 +54,7 @@ const success = ref("");
 const busy = ref(false);
 const loading = ref(false);
 const inventoryRefreshRequired = ref(false);
+const availabilityRefreshRequired = ref(false);
 const reason = ref("");
 const form = ref<
   "machine" | "calibration" | "receipt" | "legacy-receipt" | "correction" | ""
@@ -280,6 +281,8 @@ async function inspectAvailability(
         startsAt: item.startsAt,
         endsAt: item.endsAt,
       }));
+    if (availabilityRefreshRequired.value) error.value = "";
+    availabilityRefreshRequired.value = false;
   } catch (cause) {
     if (
       generation === availabilityReadGeneration &&
@@ -627,7 +630,8 @@ async function publishAvailability(): Promise<void> {
     !availability.value ||
     !reason.value.trim() ||
     busy.value ||
-    loading.value
+    loading.value ||
+    availabilityRefreshRequired.value
   )
     return;
   const machineId = availabilityMachineId.value;
@@ -664,9 +668,12 @@ async function publishAvailability(): Promise<void> {
           ),
         ),
     );
+    availabilityRefreshRequired.value = true;
     success.value =
       "Dostupnost byla publikována pro nové rezervace. Existující potvrzené rezervace zůstávají zachovány.";
     await inspectAvailability();
+    if (availabilityRefreshRequired.value)
+      error.value = `Zápis byl potvrzen, ale obnovení dostupnosti selhalo. ${error.value}`;
   } catch (cause) {
     error.value = errorMessage(cause);
     if (cause instanceof OperatorRequestError && cause.status === 409) {
@@ -830,7 +837,12 @@ onMounted(() => void refresh());
             @click="windows.push({ startsAt: from, endsAt: to })"
           >
             Přidat okno</button
-          ><button type="submit" :disabled="busy || loading || !reason.trim()">
+          ><button
+            type="submit"
+            :disabled="
+              busy || loading || availabilityRefreshRequired || !reason.trim()
+            "
+          >
             Publikovat dostupnost
           </button>
         </div>
