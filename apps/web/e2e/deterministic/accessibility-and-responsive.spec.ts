@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const cubePath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../../../tools/slicing-fixtures/fixtures/single-pla/cube.stl",
+);
 
 test.describe("Accessibility and Responsive Viewports", () => {
   test.beforeEach(async ({ request }) => {
@@ -127,5 +134,86 @@ test.describe("Accessibility and Responsive Viewports", () => {
     await page.keyboard.press("Tab");
     const depthField = page.getByLabel("Hloubka Y (mm)");
     await expect(depthField).toBeFocused();
+  });
+
+  test("mobile checkout remains readable and operable by keyboard", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.goto("/");
+    await page.locator('input[type="file"]').setInputFiles(cubePath);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+    await expect(page).toHaveURL(/\/objednavka/);
+    await page
+      .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Dokončení objednávky" }),
+    ).toBeVisible();
+
+    const hasHorizontalOverflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth,
+    );
+    expect(hasHorizontalOverflow).toBe(false);
+    const scan = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    expect(
+      scan.violations.filter(
+        (violation) =>
+          violation.impact === "critical" || violation.impact === "serious",
+      ),
+    ).toEqual([]);
+
+    const fullName = page.getByLabel("Jméno kontaktní osoby");
+    const email = page.getByLabel("E-mail");
+    const billingName = page.getByLabel("Fakturační jméno nebo název");
+    await fullName.focus();
+    await expect(fullName).toBeFocused();
+    await page.keyboard.type("E2E Keyboard Customer");
+    await page.keyboard.press("Tab");
+    await expect(email).toBeFocused();
+    await page.keyboard.type("keyboard-checkout@example.test");
+    await page.keyboard.press("Tab");
+    await expect(billingName).toBeFocused();
+    await page.keyboard.type("E2E Keyboard Customer");
+    await page.getByLabel("Ulice a číslo").fill("Testovací 123");
+    await page.getByLabel("Město").fill("Brno");
+    await page.getByLabel("PSČ").fill("60200");
+
+    const card = page.getByRole("radio", { name: "Platební karta" });
+    await card.focus();
+    await expect(card).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(card).toBeChecked();
+    for (const checkbox of [
+      page.getByRole("checkbox", { name: /VOP/i }),
+      page.getByRole("checkbox", { name: /reklamačním řádem/i }),
+      page.getByRole("checkbox", { name: /výjimka/i }),
+    ]) {
+      await checkbox.focus();
+      await expect(checkbox).toBeFocused();
+      await page.keyboard.press("Space");
+      await expect(checkbox).toBeChecked();
+    }
+    const photoConsent = page.getByRole("checkbox", {
+      name: /Dobrovolně souhlasím/i,
+    });
+    await page.keyboard.press("Tab");
+    await expect(photoConsent).toBeFocused();
+    await expect(photoConsent).not.toBeChecked();
+
+    const submit = page.getByRole("button", { name: /Objednat a zaplatit/i });
+    await expect(submit).toBeEnabled();
+    await submit.focus();
+    await expect(submit).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("heading", { name: "Testovací platební brána" }),
+    ).toBeVisible();
   });
 });
