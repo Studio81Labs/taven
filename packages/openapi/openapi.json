@@ -7945,11 +7945,19 @@
             },
             "type": "array"
           },
+          "paymentsNextCursor": {
+            "format": "uuid",
+            "type": "string"
+          },
           "settlements": {
             "items": {
               "$ref": "#/components/schemas/OperatorSettlementDto"
             },
             "type": "array"
+          },
+          "settlementsNextCursor": {
+            "format": "uuid",
+            "type": "string"
           }
         },
         "required": [
@@ -7957,6 +7965,72 @@
           "payments",
           "outstandingCompensationMinor",
           "blockingCodes"
+        ],
+        "type": "object"
+      },
+      "OperatorFulfilmentHistoryCursorsDto": {
+        "properties": {
+          "claims": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "jobs": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "priceAdjustments": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "replacementRequests": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "shipments": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "slots": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "OperatorFulfilmentHistoryPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FulfilmentJobDto"
+                },
+                {
+                  "$ref": "#/components/schemas/FulfilmentShipmentDto"
+                },
+                {
+                  "$ref": "#/components/schemas/FulfilmentSlotDto"
+                },
+                {
+                  "$ref": "#/components/schemas/FulfilmentReplacementRequestDto"
+                },
+                {
+                  "$ref": "#/components/schemas/FulfilmentClaimDto"
+                },
+                {
+                  "$ref": "#/components/schemas/FulfilmentPriceAdjustmentDto"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -8652,6 +8726,9 @@
           "fulfilment": {
             "$ref": "#/components/schemas/FulfilmentProjectionDto"
           },
+          "fulfilmentNextCursors": {
+            "$ref": "#/components/schemas/OperatorFulfilmentHistoryCursorsDto"
+          },
           "id": {
             "format": "uuid",
             "type": "string"
@@ -8710,6 +8787,7 @@
           "items",
           "financial",
           "fulfilment",
+          "fulfilmentNextCursors",
           "shipmentPlans",
           "slotLineage",
           "timeline",
@@ -9005,6 +9083,10 @@
             },
             "type": "array"
           },
+          "refundsNextCursor": {
+            "format": "uuid",
+            "type": "string"
+          },
           "requestedAmountMinor": {
             "pattern": "^[0-9]+$",
             "type": "string"
@@ -9034,6 +9116,24 @@
           "createdAt",
           "updatedAt",
           "refunds"
+        ],
+        "type": "object"
+      },
+      "OperatorPaymentPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorPaymentDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -9299,6 +9399,102 @@
         ],
         "type": "object"
       },
+      "OperatorRefundPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorRefundPageItemDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "OperatorRefundPageItemDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "claimId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "completedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "paymentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "priceAdjustmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "providerRefundId": {
+            "nullable": true,
+            "type": "string"
+          },
+          "providerResultEventId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "replacesFailureProviderEventId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "replacesRefundTransactionId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "requestedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sourceSuccessProviderEventId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "amountMinor",
+          "reason",
+          "status",
+          "requestedAt",
+          "provider",
+          "paymentId"
+        ],
+        "type": "object"
+      },
       "OperatorRefundTransactionDto": {
         "properties": {
           "amountMinor": {
@@ -9491,6 +9687,24 @@
           "amountDueMinor",
           "refundableBalanceMinor",
           "settledAt"
+        ],
+        "type": "object"
+      },
+      "OperatorSettlementPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorSettlementDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -17690,6 +17904,89 @@
         ]
       }
     },
+    "/admin/orders/{orderId}/fulfilment-history/{kind}": {
+      "get": {
+        "operationId": "OperatorReadsController_fulfilmentHistory",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "jobs",
+                "shipments",
+                "slots",
+                "replacementRequests",
+                "claims",
+                "priceAdjustments"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorFulfilmentHistoryPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Page through scoped fulfilment lineage",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/orders/{orderId}/fulfilment/adjustments": {
       "post": {
         "operationId": "OrdersController_adjustment",
@@ -19639,6 +19936,140 @@
         ]
       }
     },
+    "/admin/orders/{orderId}/payments": {
+      "get": {
+        "operationId": "OperatorReadsController_orderPayments",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorPaymentPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Page through scoped order payments",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/refunds": {
+      "get": {
+        "operationId": "OperatorReadsController_orderRefunds",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorRefundPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Page through scoped order refund attempts",
+        "tags": [
+          "operator reads"
+        ]
+      }
+    },
     "/admin/orders/{orderId}/resource-preparation": {
       "post": {
         "operationId": "IndividualOrderPreparationController_prepare",
@@ -19708,6 +20139,73 @@
         "summary": "Prepare exact resources for an accepted individual order",
         "tags": [
           "individual order resources"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/settlements": {
+      "get": {
+        "operationId": "OperatorReadsController_orderSettlements",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorSettlementPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Page through scoped order settlements",
+        "tags": [
+          "operator reads"
         ]
       }
     },

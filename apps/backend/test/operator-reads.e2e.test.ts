@@ -1011,6 +1011,7 @@ describe("operator read contracts", () => {
           jobIds: expect.arrayContaining([fixtureJob.jobId]),
         }),
       ],
+      fulfilmentNextCursors: {},
       legalAcceptances: expect.any(Array),
       blockingCodes: expect.arrayContaining(["REFUND_UNRESOLVED"]),
       actions: [],
@@ -1038,6 +1039,72 @@ describe("operator read contracts", () => {
     expect(adminDetail.actions.map((action) => action.action)).not.toContain(
       "CANCEL_ORDER",
     );
+    const paymentPage = await read(
+      `/admin/orders/${fixture.orderId}/payments?limit=1`,
+    );
+    expect(paymentPage.status).toBe(200);
+    await expect(paymentPage.json()).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: fixture.paymentId })],
+    });
+    const refundPage = await read(
+      `/admin/orders/${fixture.orderId}/refunds?limit=1`,
+    );
+    expect(refundPage.status).toBe(200);
+    await expect(refundPage.json()).resolves.toMatchObject({
+      items: [
+        expect.objectContaining({
+          id: cancellationRefundId,
+          paymentId: fixture.paymentId,
+        }),
+      ],
+    });
+    const settlementPage = await read(
+      `/admin/orders/${fixture.orderId}/settlements?limit=1`,
+    );
+    expect(settlementPage.status).toBe(200);
+    await expect(settlementPage.json()).resolves.toMatchObject({
+      items: expect.any(Array),
+    });
+    const jobHistory = await read(
+      `/admin/orders/${fixture.orderId}/fulfilment-history/jobs?limit=1`,
+    );
+    expect(jobHistory.status).toBe(200);
+    await expect(jobHistory.json()).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: fixtureJob.jobId })],
+    });
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/fulfilment-history/jobs?cursor=${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await fetch(
+          new URL(
+            `/admin/orders/${fixture.orderId}/fulfilment-history/jobs`,
+            baseUrl,
+          ),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await fetch(
+          new URL(`/admin/orders/${fixture.orderId}/refunds`, baseUrl),
+          { headers: { cookie: foreignCookie } },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await read(
+          `/admin/orders/${fixture.orderId}/payments?cursor=${randomUUID()}`,
+        )
+      ).status,
+    ).toBe(400);
     expect(
       orderDetail.items.find((item) => item.id === fixture.orderItemId)
         ?.preflightFindings,

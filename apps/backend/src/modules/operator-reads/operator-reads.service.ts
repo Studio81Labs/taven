@@ -34,6 +34,14 @@ import {
   OperatorOrderDetailDto,
   OperatorOrderPageDto,
   OperatorOrderTimelinePageDto,
+  OperatorPaymentPageDto,
+  OperatorRefundPageDto,
+  OperatorSettlementPageDto,
+  OperatorFulfilmentHistoryPageDto,
+  type OperatorFulfilmentHistoryCursorsDto,
+  type OperatorSettlementDto,
+  type OperatorPaymentDto,
+  type OperatorRefundTransactionDto,
   PriceListPageDto,
   PrintConfigRevisionPageDto,
   ReferenceProfilePageDto,
@@ -367,14 +375,16 @@ export class OperatorReadsService {
               },
             },
           },
-          settlements: { orderBy: { settledAt: "asc" } },
+          settlements: {
+            orderBy: [{ settledAt: "asc" }, { id: "asc" }],
+          },
           priceBindings: {
             include: {
               payments: {
                 orderBy: { createdAt: "asc" },
                 include: {
                   refunds: {
-                    orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
+                    orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
                   },
                 },
               },
@@ -446,6 +456,12 @@ export class OperatorReadsService {
       const payments = order.priceBindings.flatMap(
         (binding) => binding.payments,
       );
+      const orderedPayments = [...payments].sort(
+        (left, right) =>
+          right.createdAt.getTime() - left.createdAt.getTime() ||
+          right.id.localeCompare(left.id),
+      );
+      const orderedSettlements = [...order.settlements].reverse();
       const compensation = payments.reduce((sum, payment) => {
         if (payment.captureAuthorized || !payment.capturedAt) return sum;
         const refunded = payment.refunds
@@ -461,6 +477,7 @@ export class OperatorReadsService {
         compensation,
       );
       const timeline = order.auditEvents.slice(0, 25);
+      const bounded = boundedFulfilment(fulfilment, 25);
       return {
         id: order.id,
         publicReference: order.publicReference,
@@ -566,64 +583,14 @@ export class OperatorReadsService {
             active?.contractTotalMinor.toString() ?? null,
           activeContractNetMinor: active?.netAmountMinor.toString() ?? null,
           currency: active?.currency ?? null,
-          settlements: order.settlements.map((settlement) => ({
-            id: settlement.id,
-            kind: settlement.kind,
-            currency: settlement.currency,
-            contractTotalMinor: settlement.contractTotalMinor.toString(),
-            capturedTotalMinor: settlement.capturedTotalMinor.toString(),
-            refundAmountMinor: settlement.refundAmountMinor.toString(),
-            amountDueMinor: settlement.amountDueMinor.toString(),
-            refundableBalanceMinor:
-              settlement.refundableBalanceMinor.toString(),
-            settledAt: settlement.settledAt.toISOString(),
-          })),
-          payments: order.priceBindings
-            .flatMap((binding) => binding.payments)
-            .sort(
-              (left, right) =>
-                left.createdAt.getTime() - right.createdAt.getTime() ||
-                left.id.localeCompare(right.id),
-            )
-            .map((payment) => ({
-              id: payment.id,
-              orderPriceBindingId: payment.orderPriceBindingId,
-              priceSnapshotId: payment.priceSnapshotId,
-              role: payment.role,
-              provider: payment.provider,
-              checkoutMethod: payment.checkoutMethod,
-              merchantReference: payment.merchantReference,
-              requestedAmountMinor: payment.requestedAmountMinor.toString(),
-              capturedAmountMinor:
-                payment.capturedAmountMinor?.toString() ?? null,
-              currency: payment.currency,
-              status: payment.status,
-              captureAuthorized: payment.captureAuthorized,
-              captureCutoffAt: iso(payment.captureCutoffAt),
-              checkoutCaptureExpiresAt: iso(payment.checkoutCaptureExpiresAt),
-              balanceDueAt: iso(payment.balanceDueAt),
-              capturedAt: iso(payment.capturedAt),
-              createdAt: payment.createdAt.toISOString(),
-              updatedAt: payment.updatedAt.toISOString(),
-              refunds: payment.refunds.map((refund) => ({
-                id: refund.id,
-                claimId: refund.claimId,
-                priceAdjustmentId: refund.priceAdjustmentId,
-                amountMinor: refund.amountMinor.toString(),
-                reason: refund.reason,
-                status: refund.status,
-                requestedAt: refund.requestedAt.toISOString(),
-                completedAt: iso(refund.completedAt),
-                replacesRefundTransactionId: refund.replacesRefundTransactionId,
-                replacesFailureProviderEventId:
-                  refund.replacesFailureProviderEventId,
-                providerResultEventId: refund.providerResultEventId,
-                sourceSuccessProviderEventId:
-                  refund.sourceSuccessProviderEventId,
-                provider: refund.provider,
-                providerRefundId: refund.providerRefundId,
-              })),
-            })),
+          settlements: orderedSettlements.slice(0, 25).map(operatorSettlement),
+          ...(orderedSettlements.length > 25
+            ? { settlementsNextCursor: orderedSettlements[24]!.id }
+            : {}),
+          payments: orderedPayments.slice(0, 25).map(operatorPayment),
+          ...(orderedPayments.length > 25
+            ? { paymentsNextCursor: orderedPayments[24]!.id }
+            : {}),
           outstandingCompensationMinor: compensation.toString(),
           blockingCodes: blockers.filter((code) =>
             ["COMPENSATION_DUE", "REFUND_UNRESOLVED", "BALANCE_DUE"].includes(
@@ -631,7 +598,8 @@ export class OperatorReadsService {
             ),
           ),
         },
-        fulfilment,
+        fulfilment: bounded.projection,
+        fulfilmentNextCursors: bounded.nextCursors,
         shipmentPlans: order.shipmentPlans.map((plan) => ({
           id: plan.id,
           orderPhaseId: plan.orderPhaseId,
@@ -721,6 +689,154 @@ export class OperatorReadsService {
       return {
         items: page.map(orderTimelineEvent),
         ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+      };
+    });
+  }
+
+  async orderPayments(
+    operator: OperatorContext,
+    orderId: string,
+    input: PageInput,
+  ): Promise<OperatorPaymentPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    assertUuid(orderId, "orderId");
+    if (input.cursor) assertUuid(input.cursor, "cursor");
+    const limit = pageLimit(input.limit);
+    const nodeId = operatorNode(operator);
+    return this.prisma.$transaction(async (tx) => {
+      await assertOperationalOrderScope(tx, orderId, nodeId);
+      if (
+        input.cursor &&
+        !(await tx.payment.findFirst({
+          where: { id: input.cursor, orderId },
+          select: { id: true },
+        }))
+      )
+        throw new BadRequestException("cursor is invalid");
+      const rows = await tx.payment.findMany({
+        where: { orderId },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+        include: {
+          refunds: {
+            orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+            take: 26,
+          },
+        },
+      });
+      const page = rows.slice(0, limit);
+      return {
+        items: page.map(operatorPayment),
+        ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+      };
+    });
+  }
+
+  async orderRefunds(
+    operator: OperatorContext,
+    orderId: string,
+    input: PageInput,
+  ): Promise<OperatorRefundPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    assertUuid(orderId, "orderId");
+    if (input.cursor) assertUuid(input.cursor, "cursor");
+    const limit = pageLimit(input.limit);
+    const nodeId = operatorNode(operator);
+    return this.prisma.$transaction(async (tx) => {
+      await assertOperationalOrderScope(tx, orderId, nodeId);
+      const where = { payment: { orderId } };
+      if (
+        input.cursor &&
+        !(await tx.refundTransaction.findFirst({
+          where: { ...where, id: input.cursor },
+          select: { id: true },
+        }))
+      )
+        throw new BadRequestException("cursor is invalid");
+      const rows = await tx.refundTransaction.findMany({
+        where,
+        orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      });
+      const page = rows.slice(0, limit);
+      return {
+        items: page.map((refund) => ({
+          ...operatorRefund(refund),
+          paymentId: refund.paymentId,
+        })),
+        ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+      };
+    });
+  }
+
+  async orderSettlements(
+    operator: OperatorContext,
+    orderId: string,
+    input: PageInput,
+  ): Promise<OperatorSettlementPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    assertUuid(orderId, "orderId");
+    if (input.cursor) assertUuid(input.cursor, "cursor");
+    const limit = pageLimit(input.limit);
+    const nodeId = operatorNode(operator);
+    return this.prisma.$transaction(async (tx) => {
+      await assertOperationalOrderScope(tx, orderId, nodeId);
+      if (
+        input.cursor &&
+        !(await tx.orderSettlement.findFirst({
+          where: { id: input.cursor, orderId },
+          select: { id: true },
+        }))
+      )
+        throw new BadRequestException("cursor is invalid");
+      const rows = await tx.orderSettlement.findMany({
+        where: { orderId },
+        orderBy: [{ settledAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
+        ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+      });
+      const page = rows.slice(0, limit);
+      return {
+        items: page.map(operatorSettlement),
+        ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
+      };
+    });
+  }
+
+  async fulfilmentHistory(
+    operator: OperatorContext,
+    orderId: string,
+    kind: string,
+    input: PageInput,
+  ): Promise<OperatorFulfilmentHistoryPageDto> {
+    requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_READ);
+    assertUuid(orderId, "orderId");
+    if (!isFulfilmentHistoryKind(kind))
+      throw new BadRequestException("kind is invalid");
+    if (input.cursor) assertUuid(input.cursor, "cursor");
+    const limit = pageLimit(input.limit);
+    return this.prisma.$transaction(async (tx) => {
+      const fulfilment = await this.orders.getFulfilmentInTransaction(
+        operator,
+        orderId,
+        tx,
+      );
+      const rows = orderedHistory<
+        OperatorFulfilmentHistoryPageDto["items"][number]
+      >(fulfilment[kind]);
+      const offset = input.cursor
+        ? rows.findIndex((row) => row.id === input.cursor) + 1
+        : 0;
+      if (input.cursor && offset === 0)
+        throw new BadRequestException("cursor is invalid");
+      const page = rows.slice(offset, offset + limit);
+      return {
+        items: page,
+        ...(rows.length > offset + limit
+          ? { nextCursor: page.at(-1)!.id }
+          : {}),
       };
     });
   }
@@ -1571,6 +1687,153 @@ function orderTimelineEvent(event: {
     reasonCode: event.reasonCode,
     reason: event.reason,
     occurredAt: event.createdAt.toISOString(),
+  };
+}
+
+function operatorRefund(
+  refund: Prisma.RefundTransactionGetPayload<object>,
+): OperatorRefundTransactionDto {
+  return {
+    id: refund.id,
+    claimId: refund.claimId,
+    priceAdjustmentId: refund.priceAdjustmentId,
+    amountMinor: refund.amountMinor.toString(),
+    reason: refund.reason,
+    status: refund.status,
+    requestedAt: refund.requestedAt.toISOString(),
+    completedAt: iso(refund.completedAt),
+    replacesRefundTransactionId: refund.replacesRefundTransactionId,
+    replacesFailureProviderEventId: refund.replacesFailureProviderEventId,
+    providerResultEventId: refund.providerResultEventId,
+    sourceSuccessProviderEventId: refund.sourceSuccessProviderEventId,
+    provider: refund.provider,
+    providerRefundId: refund.providerRefundId,
+  };
+}
+
+function operatorSettlement(
+  settlement: Prisma.OrderSettlementGetPayload<object>,
+): OperatorSettlementDto {
+  return {
+    id: settlement.id,
+    kind: settlement.kind,
+    currency: settlement.currency,
+    contractTotalMinor: settlement.contractTotalMinor.toString(),
+    capturedTotalMinor: settlement.capturedTotalMinor.toString(),
+    refundAmountMinor: settlement.refundAmountMinor.toString(),
+    amountDueMinor: settlement.amountDueMinor.toString(),
+    refundableBalanceMinor: settlement.refundableBalanceMinor.toString(),
+    settledAt: settlement.settledAt.toISOString(),
+  };
+}
+
+type FulfilmentHistoryKind =
+  | "jobs"
+  | "shipments"
+  | "slots"
+  | "replacementRequests"
+  | "claims"
+  | "priceAdjustments";
+
+function isFulfilmentHistoryKind(
+  value: string,
+): value is FulfilmentHistoryKind {
+  return [
+    "jobs",
+    "shipments",
+    "slots",
+    "replacementRequests",
+    "claims",
+    "priceAdjustments",
+  ].includes(value);
+}
+
+function orderedHistory<T extends { id: string; createdAt: string }>(
+  rows: readonly T[],
+): T[] {
+  return [...rows].sort(
+    (left, right) =>
+      right.createdAt.localeCompare(left.createdAt) ||
+      right.id.localeCompare(left.id),
+  );
+}
+
+function historySlice<T extends { id: string; createdAt: string }>(
+  rows: readonly T[],
+  limit: number,
+): { items: T[]; nextCursor?: string } {
+  const ordered = orderedHistory(rows);
+  const items = ordered.slice(0, limit);
+  return {
+    items,
+    ...(ordered.length > limit ? { nextCursor: items.at(-1)!.id } : {}),
+  };
+}
+
+function boundedFulfilment(
+  full: FulfilmentProjectionDto,
+  limit: number,
+): {
+  projection: FulfilmentProjectionDto;
+  nextCursors: OperatorFulfilmentHistoryCursorsDto;
+} {
+  const jobs = historySlice(full.jobs, limit);
+  const shipments = historySlice(full.shipments, limit);
+  const slots = historySlice(full.slots, limit);
+  const replacementRequests = historySlice(full.replacementRequests, limit);
+  const claims = historySlice(full.claims, limit);
+  const priceAdjustments = historySlice(full.priceAdjustments, limit);
+  return {
+    projection: {
+      ...full,
+      jobs: jobs.items,
+      shipments: shipments.items,
+      slots: slots.items,
+      replacementRequests: replacementRequests.items,
+      claims: claims.items,
+      priceAdjustments: priceAdjustments.items,
+    },
+    nextCursors: {
+      ...(jobs.nextCursor ? { jobs: jobs.nextCursor } : {}),
+      ...(shipments.nextCursor ? { shipments: shipments.nextCursor } : {}),
+      ...(slots.nextCursor ? { slots: slots.nextCursor } : {}),
+      ...(replacementRequests.nextCursor
+        ? { replacementRequests: replacementRequests.nextCursor }
+        : {}),
+      ...(claims.nextCursor ? { claims: claims.nextCursor } : {}),
+      ...(priceAdjustments.nextCursor
+        ? { priceAdjustments: priceAdjustments.nextCursor }
+        : {}),
+    },
+  };
+}
+
+function operatorPayment(
+  payment: Prisma.PaymentGetPayload<{ include: { refunds: true } }>,
+): OperatorPaymentDto {
+  return {
+    id: payment.id,
+    orderPriceBindingId: payment.orderPriceBindingId,
+    priceSnapshotId: payment.priceSnapshotId,
+    role: payment.role,
+    provider: payment.provider,
+    checkoutMethod: payment.checkoutMethod,
+    merchantReference: payment.merchantReference,
+    requestedAmountMinor: payment.requestedAmountMinor.toString(),
+    capturedAmountMinor: payment.capturedAmountMinor?.toString() ?? null,
+    currency: payment.currency,
+    status: payment.status,
+    captureAuthorized: payment.captureAuthorized,
+    captureCutoffAt: iso(payment.captureCutoffAt),
+    checkoutCaptureExpiresAt: iso(payment.checkoutCaptureExpiresAt),
+    balanceDueAt: iso(payment.balanceDueAt),
+    capturedAt: iso(payment.capturedAt),
+    createdAt: payment.createdAt.toISOString(),
+    updatedAt: payment.updatedAt.toISOString(),
+    refunds: payment.refunds.slice(0, 25).map(operatorRefund),
+    ...(payment.refunds.length > 25
+      ? { refundsNextCursor: payment.refunds[24]!.id }
+      : {}),
   };
 }
 

@@ -4,7 +4,15 @@ import {
   ApiPropertyOptional,
   getSchemaPath,
 } from "@nestjs/swagger";
-import { FulfilmentProjectionDto } from "../orders/orders.dto";
+import {
+  FulfilmentClaimDto,
+  FulfilmentJobDto,
+  FulfilmentPriceAdjustmentDto,
+  FulfilmentProjectionDto,
+  FulfilmentReplacementRequestDto,
+  FulfilmentShipmentDto,
+  FulfilmentSlotDto,
+} from "../orders/orders.dto";
 import { ReferenceProfileActivationNoticeDto } from "../resources/reference-profile-activation-notice.dto";
 import {
   AutomaticQuoteParametersDto,
@@ -556,6 +564,14 @@ export class OperatorSettlementDto {
   settledAt!: string;
 }
 
+export class OperatorSettlementPageDto {
+  @ApiProperty({ type: [OperatorSettlementDto] })
+  items!: OperatorSettlementDto[];
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
+}
+
 export class OperatorRefundTransactionDto {
   @ApiProperty(UUID)
   id!: string;
@@ -598,6 +614,19 @@ export class OperatorRefundTransactionDto {
 
   @ApiPropertyOptional({ type: String, nullable: true })
   providerRefundId!: string | null;
+}
+
+export class OperatorRefundPageItemDto extends OperatorRefundTransactionDto {
+  @ApiProperty(UUID)
+  paymentId!: string;
+}
+
+export class OperatorRefundPageDto {
+  @ApiProperty({ type: [OperatorRefundPageItemDto] })
+  items!: OperatorRefundPageItemDto[];
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
 }
 
 export class OperatorPaymentDto {
@@ -657,6 +686,17 @@ export class OperatorPaymentDto {
 
   @ApiProperty({ type: [OperatorRefundTransactionDto] })
   refunds!: OperatorRefundTransactionDto[];
+
+  @ApiPropertyOptional(UUID)
+  refundsNextCursor?: string;
+}
+
+export class OperatorPaymentPageDto {
+  @ApiProperty({ type: [OperatorPaymentDto] })
+  items!: OperatorPaymentDto[];
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
 }
 
 export class OperatorOrderTimelineEventDto {
@@ -703,8 +743,14 @@ export class OperatorFinancialProjectionDto {
   @ApiProperty({ type: [OperatorSettlementDto] })
   settlements!: OperatorSettlementDto[];
 
+  @ApiPropertyOptional(UUID)
+  settlementsNextCursor?: string;
+
   @ApiProperty({ type: [OperatorPaymentDto] })
   payments!: OperatorPaymentDto[];
+
+  @ApiPropertyOptional(UUID)
+  paymentsNextCursor?: string;
 
   @ApiProperty(DECIMAL)
   outstandingCompensationMinor!: string;
@@ -762,6 +808,61 @@ export class OperatorSlotLineageDto {
 
   @ApiProperty({ type: [String], format: "uuid" })
   jobIds!: string[];
+}
+
+export class OperatorFulfilmentHistoryCursorsDto {
+  @ApiPropertyOptional(UUID)
+  jobs?: string;
+
+  @ApiPropertyOptional(UUID)
+  shipments?: string;
+
+  @ApiPropertyOptional(UUID)
+  slots?: string;
+
+  @ApiPropertyOptional(UUID)
+  replacementRequests?: string;
+
+  @ApiPropertyOptional(UUID)
+  claims?: string;
+
+  @ApiPropertyOptional(UUID)
+  priceAdjustments?: string;
+}
+
+@ApiExtraModels(
+  FulfilmentJobDto,
+  FulfilmentShipmentDto,
+  FulfilmentSlotDto,
+  FulfilmentReplacementRequestDto,
+  FulfilmentClaimDto,
+  FulfilmentPriceAdjustmentDto,
+)
+export class OperatorFulfilmentHistoryPageDto {
+  @ApiProperty({
+    type: "array",
+    items: {
+      oneOf: [
+        FulfilmentJobDto,
+        FulfilmentShipmentDto,
+        FulfilmentSlotDto,
+        FulfilmentReplacementRequestDto,
+        FulfilmentClaimDto,
+        FulfilmentPriceAdjustmentDto,
+      ].map((model) => ({ $ref: getSchemaPath(model) })),
+    },
+  })
+  items!: Array<
+    | FulfilmentJobDto
+    | FulfilmentShipmentDto
+    | FulfilmentSlotDto
+    | FulfilmentReplacementRequestDto
+    | FulfilmentClaimDto
+    | FulfilmentPriceAdjustmentDto
+  >;
+
+  @ApiPropertyOptional(UUID)
+  nextCursor?: string;
 }
 
 export class OperatorActionDto {
@@ -826,6 +927,9 @@ export class OperatorOrderDetailDto {
 
   @ApiProperty({ type: FulfilmentProjectionDto })
   fulfilment!: FulfilmentProjectionDto;
+
+  @ApiProperty({ type: OperatorFulfilmentHistoryCursorsDto })
+  fulfilmentNextCursors!: OperatorFulfilmentHistoryCursorsDto;
 
   @ApiProperty({ type: [OperatorShipmentPlanDto] })
   shipmentPlans!: OperatorShipmentPlanDto[];

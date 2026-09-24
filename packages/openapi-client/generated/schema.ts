@@ -1144,6 +1144,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment-history/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped fulfilment lineage */
+        get: operations["OperatorReadsController_fulfilmentHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/adjustments": {
         parameters: {
             query?: never;
@@ -1586,6 +1603,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped order payments */
+        get: operations["OperatorReadsController_orderPayments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped order refund attempts */
+        get: operations["OperatorReadsController_orderRefunds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/resource-preparation": {
         parameters: {
             query?: never;
@@ -1597,6 +1648,23 @@ export interface paths {
         put?: never;
         /** Prepare exact resources for an accepted individual order */
         post: operations["IndividualOrderPreparationController_prepare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/settlements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Page through scoped order settlements */
+        get: operations["OperatorReadsController_orderSettlements"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4724,7 +4792,30 @@ export interface components {
             currency?: string | null;
             outstandingCompensationMinor: string;
             payments: components["schemas"]["OperatorPaymentDto"][];
+            /** Format: uuid */
+            paymentsNextCursor?: string;
             settlements: components["schemas"]["OperatorSettlementDto"][];
+            /** Format: uuid */
+            settlementsNextCursor?: string;
+        };
+        OperatorFulfilmentHistoryCursorsDto: {
+            /** Format: uuid */
+            claims?: string;
+            /** Format: uuid */
+            jobs?: string;
+            /** Format: uuid */
+            priceAdjustments?: string;
+            /** Format: uuid */
+            replacementRequests?: string;
+            /** Format: uuid */
+            shipments?: string;
+            /** Format: uuid */
+            slots?: string;
+        };
+        OperatorFulfilmentHistoryPageDto: {
+            items: (components["schemas"]["FulfilmentJobDto"] | components["schemas"]["FulfilmentShipmentDto"] | components["schemas"]["FulfilmentSlotDto"] | components["schemas"]["FulfilmentReplacementRequestDto"] | components["schemas"]["FulfilmentClaimDto"] | components["schemas"]["FulfilmentPriceAdjustmentDto"])[];
+            /** Format: uuid */
+            nextCursor?: string;
         };
         OperatorJobAcceptedRiskDto: {
             acknowledgementKey: string;
@@ -4926,6 +5017,7 @@ export interface components {
             confirmedAt?: string | null;
             financial: components["schemas"]["OperatorFinancialProjectionDto"];
             fulfilment: components["schemas"]["FulfilmentProjectionDto"];
+            fulfilmentNextCursors: components["schemas"]["OperatorFulfilmentHistoryCursorsDto"];
             /** Format: uuid */
             id: string;
             items: components["schemas"]["OperatorOrderItemDto"][];
@@ -5021,11 +5113,18 @@ export interface components {
             priceSnapshotId: string;
             provider: string;
             refunds: components["schemas"]["OperatorRefundTransactionDto"][];
+            /** Format: uuid */
+            refundsNextCursor?: string;
             requestedAmountMinor: string;
             role: string;
             status: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        OperatorPaymentPageDto: {
+            items: components["schemas"]["OperatorPaymentDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
         };
         OperatorPriceAllocationDto: {
             amountMinor: string;
@@ -5103,6 +5202,38 @@ export interface components {
             slicerEngine: string;
             slicerVersion: string;
         };
+        OperatorRefundPageDto: {
+            items: components["schemas"]["OperatorRefundPageItemDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
+        };
+        OperatorRefundPageItemDto: {
+            amountMinor: string;
+            /** Format: uuid */
+            claimId?: string | null;
+            /** Format: date-time */
+            completedAt?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            paymentId: string;
+            /** Format: uuid */
+            priceAdjustmentId?: string | null;
+            provider: string;
+            providerRefundId?: string | null;
+            /** Format: uuid */
+            providerResultEventId?: string | null;
+            reason: string;
+            /** Format: uuid */
+            replacesFailureProviderEventId?: string | null;
+            /** Format: uuid */
+            replacesRefundTransactionId?: string | null;
+            /** Format: date-time */
+            requestedAt: string;
+            /** Format: uuid */
+            sourceSuccessProviderEventId?: string | null;
+            status: string;
+        };
         OperatorRefundTransactionDto: {
             amountMinor: string;
             /** Format: uuid */
@@ -5155,6 +5286,11 @@ export interface components {
             refundAmountMinor: string;
             /** Format: date-time */
             settledAt: string;
+        };
+        OperatorSettlementPageDto: {
+            items: components["schemas"]["OperatorSettlementDto"][];
+            /** Format: uuid */
+            nextCursor?: string;
         };
         OperatorShipmentPlanDto: {
             category: string;
@@ -8524,6 +8660,34 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_fulfilmentHistory: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                kind: "jobs" | "shipments" | "slots" | "replacementRequests" | "claims" | "priceAdjustments";
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorFulfilmentHistoryPageDto"];
+                };
+            };
+        };
+    };
     OrdersController_adjustment: {
         parameters: {
             query?: never;
@@ -9363,6 +9527,60 @@ export interface operations {
             };
         };
     };
+    OperatorReadsController_orderPayments: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorPaymentPageDto"];
+                };
+            };
+        };
+    };
+    OperatorReadsController_orderRefunds: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRefundPageDto"];
+                };
+            };
+        };
+    };
     IndividualOrderPreparationController_prepare: {
         parameters: {
             query?: never;
@@ -9397,6 +9615,33 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    OperatorReadsController_orderSettlements: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorSettlementPageDto"];
+                };
             };
         };
     };
