@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -152,6 +152,10 @@ test.describe("Accessibility and Responsive Viewports", () => {
     await expect(
       page.getByRole("heading", { name: "Dokončení objednávky" }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("group", { name: "Kontakt a fakturační údaje" }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Jméno kontaktní osoby")).toBeVisible();
 
     const hasHorizontalOverflow = await page.evaluate(
       () =>
@@ -172,7 +176,20 @@ test.describe("Accessibility and Responsive Viewports", () => {
     const fullName = page.getByLabel("Jméno kontaktní osoby");
     const email = page.getByLabel("E-mail");
     const billingName = page.getByLabel("Fakturační jméno nebo název");
-    await fullName.focus();
+    const tabTo = async (target: Locator, maxTabs = 40) => {
+      for (let i = 0; i < maxTabs; i += 1) {
+        await page.keyboard.press("Tab");
+        if (
+          await target.evaluate((element) => document.activeElement === element)
+        ) {
+          return;
+        }
+      }
+      throw new Error(
+        `Checkout control was not reached within ${maxTabs} tabs`,
+      );
+    };
+    await tabTo(fullName);
     await expect(fullName).toBeFocused();
     await page.keyboard.type("E2E Keyboard Customer");
     await page.keyboard.press("Tab");
@@ -181,21 +198,31 @@ test.describe("Accessibility and Responsive Viewports", () => {
     await page.keyboard.press("Tab");
     await expect(billingName).toBeFocused();
     await page.keyboard.type("E2E Keyboard Customer");
-    await page.getByLabel("Ulice a číslo").fill("Testovací 123");
-    await page.getByLabel("Město").fill("Brno");
-    await page.getByLabel("PSČ").fill("60200");
+    const street = page.getByLabel("Ulice a číslo");
+    await tabTo(street);
+    await expect(street).toBeFocused();
+    await page.keyboard.type("Testovací 123");
+    await tabTo(page.getByLabel("Doplnění adresy (volitelné)"));
+    const city = page.getByLabel("Město");
+    await tabTo(city);
+    await expect(city).toBeFocused();
+    await page.keyboard.type("Brno");
+    const postalCode = page.getByLabel("PSČ");
+    await tabTo(postalCode);
+    await expect(postalCode).toBeFocused();
+    await page.keyboard.type("60200");
+    await tabTo(page.getByLabel("Země"));
 
     const card = page.getByRole("radio", { name: "Platební karta" });
-    await card.focus();
+    await tabTo(card);
     await expect(card).toBeFocused();
-    await page.keyboard.press("Space");
     await expect(card).toBeChecked();
     for (const checkbox of [
       page.getByRole("checkbox", { name: /VOP/i }),
       page.getByRole("checkbox", { name: /reklamačním řádem/i }),
       page.getByRole("checkbox", { name: /výjimka/i }),
     ]) {
-      await checkbox.focus();
+      await tabTo(checkbox);
       await expect(checkbox).toBeFocused();
       await page.keyboard.press("Space");
       await expect(checkbox).toBeChecked();
@@ -203,13 +230,13 @@ test.describe("Accessibility and Responsive Viewports", () => {
     const photoConsent = page.getByRole("checkbox", {
       name: /Dobrovolně souhlasím/i,
     });
-    await page.keyboard.press("Tab");
+    await tabTo(photoConsent);
     await expect(photoConsent).toBeFocused();
     await expect(photoConsent).not.toBeChecked();
 
     const submit = page.getByRole("button", { name: /Objednat a zaplatit/i });
     await expect(submit).toBeEnabled();
-    await submit.focus();
+    await tabTo(submit);
     await expect(submit).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(
