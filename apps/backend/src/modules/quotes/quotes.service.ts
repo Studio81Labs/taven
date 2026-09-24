@@ -472,9 +472,18 @@ export class QuotesService {
       orderBy: [{ slaDueAt: "asc" }, { createdAt: "asc" }],
       take: 100,
     });
+    const associations = await this.requestAssociations(
+      this.prisma,
+      requests.map((request) => request.id),
+    );
     return Promise.all(
       requests.map((request) =>
-        this.operatorRequestDetail(request, observedAt),
+        this.operatorRequestDetail(
+          request,
+          observedAt,
+          undefined,
+          associations.get(request.id),
+        ),
       ),
     );
   }
@@ -565,6 +574,10 @@ export class QuotesService {
           orderBy: { uploadedAt: "asc" },
         });
         const attachmentsByRequest = groupAttachmentsByRequest(attachments);
+        const associations = await this.requestAssociations(
+          transaction,
+          page.map((request) => request.id),
+        );
         return {
           items: await Promise.all(
             page.map((request) =>
@@ -572,6 +585,7 @@ export class QuotesService {
                 request,
                 observedAt,
                 attachmentsByRequest.get(request.id) ?? [],
+                associations.get(request.id),
               ),
             ),
           ),
@@ -613,23 +627,58 @@ export class QuotesService {
       },
     });
     if (!request) throw new NotFoundException("Quote request was not found");
-    const [associations, accepted] = await Promise.all([
-      this.prisma.quoteRequestModel.findMany({
-        where: { requestId },
-        select: { modelFileId: true },
-        orderBy: { createdAt: "asc" },
-      }),
-      this.prisma.individualOrderOrigin.findFirst({
-        where: { quote: { quoteRequestId: requestId } },
-        select: { orderId: true },
-      }),
+    const associations = await this.requestAssociations(this.prisma, [
+      requestId,
     ]);
-    return this.operatorRequestDetail(request, observedAt, undefined, {
-      attachedModelFileIds: associations.map(
-        (association) => association.modelFileId,
-      ),
-      acceptedOrderId: accepted?.orderId ?? null,
+    return this.operatorRequestDetail(
+      request,
+      observedAt,
+      undefined,
+      associations.get(requestId),
+    );
+  }
+
+  private async requestAssociations(
+    database: Pick<
+      Prisma.TransactionClient,
+      "quoteRequestModel" | "individualOrderOrigin"
+    >,
+    requestIds: string[],
+  ): Promise<
+    Map<
+      string,
+      { attachedModelFileIds: string[]; acceptedOrderId: string | null }
+    >
+  > {
+    const byRequest = new Map(
+      requestIds.map((requestId) => [
+        requestId,
+        {
+          attachedModelFileIds: [] as string[],
+          acceptedOrderId: null as string | null,
+        },
+      ]),
+    );
+    if (requestIds.length === 0) return byRequest;
+    const models = await database.quoteRequestModel.findMany({
+      where: { requestId: { in: requestIds } },
+      select: { requestId: true, modelFileId: true },
+      orderBy: [{ createdAt: "asc" }, { modelFileId: "asc" }],
     });
+    const acceptedOrigins = await database.individualOrderOrigin.findMany({
+      where: { quote: { quoteRequestId: { in: requestIds } } },
+      select: { orderId: true, quote: { select: { quoteRequestId: true } } },
+    });
+    for (const model of models) {
+      byRequest
+        .get(model.requestId)
+        ?.attachedModelFileIds.push(model.modelFileId);
+    }
+    for (const origin of acceptedOrigins) {
+      const association = byRequest.get(origin.quote.quoteRequestId);
+      if (association) association.acceptedOrderId = origin.orderId;
+    }
+    return byRequest;
   }
 
   async beginReview(

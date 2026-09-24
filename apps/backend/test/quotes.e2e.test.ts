@@ -1038,7 +1038,11 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
 
     const acceptedHistory = await apiJson<
-      Array<{ requestId: string; status: string }>
+      Array<{
+        requestId: string;
+        status: string;
+        acceptedOrderId: string | null;
+      }>
     >("admin/quote-requests?status=ACCEPTED", {
       headers: operatorHeaders(false),
     });
@@ -1047,6 +1051,19 @@ describe("QuoteRequest and tokenized individual offers", () => {
       expect.objectContaining({
         requestId: created.body.requestId,
         status: "ACCEPTED",
+        acceptedOrderId: accepted.body.orderId,
+      }),
+    );
+    const acceptedPage = await apiJson<{
+      items: Array<{ requestId: string; acceptedOrderId: string | null }>;
+    }>("admin/quote-requests/page?status=ACCEPTED&limit=100", {
+      headers: operatorHeaders(false),
+    });
+    expect(acceptedPage.response.status).toBe(200);
+    expect(acceptedPage.body.items).toContainEqual(
+      expect.objectContaining({
+        requestId: created.body.requestId,
+        acceptedOrderId: accepted.body.orderId,
       }),
     );
   }, 20_000);

@@ -52,7 +52,6 @@ describe("secure object storage and retention", () => {
   let retention: RetentionService;
   let s3: S3Client;
   let operator: OperatorContext;
-  let termsSnapshot: Record<string, unknown>;
   const cleanupKeys = new Set<string>();
 
   beforeAll(async () => {
@@ -64,23 +63,6 @@ describe("secure object storage and retention", () => {
     baseUrl = new URL(await app.getUrl());
     prisma = app.get(PrismaService);
     await prisma.anonymousUploadLimit.deleteMany();
-    const termsRevision = await prisma.legalDocumentRevision.findFirstOrThrow({
-      where: { revisionCode: e2eLegalRevisionCodes.terms },
-      select: {
-        contentVersion: true,
-        title: true,
-        summary: true,
-        sections: true,
-        contentHash: true,
-      },
-    });
-    termsSnapshot = {
-      contentVersion: termsRevision.contentVersion,
-      title: termsRevision.title,
-      summary: termsRevision.summary,
-      sections: termsRevision.sections,
-      contentHash: termsRevision.contentHash,
-    };
     objects = app.get<ObjectStorage>(OBJECT_STORAGE);
     quotes = app.get(QuotesService);
     retention = app.get(RetentionService);
@@ -674,7 +656,7 @@ describe("secure object storage and retention", () => {
     }
   });
 
-  it("rejects quote-reference confirmation after the request becomes terminal", async () => {
+  it("rejects quote-reference confirmation after the session closes", async () => {
     const bytes = png();
     const created = await quotes.createRequest(
       {
@@ -716,145 +698,14 @@ describe("secure object storage and retention", () => {
     cleanupKeys.add(quarantineObjectKey(initiated.body.uploadId));
     cleanupKeys.add(photoOriginalObjectKey(initiated.body.assetId));
     await putSigned(initiated.body, bytes);
-    await quotes.beginReview(
-      operator,
-      scopeId,
-      `storage-terminal-review-${randomUUID()}`,
-    );
-    const priceList = await prisma.priceList.findFirstOrThrow({
-      where: { currency: "CZK" },
-      orderBy: { createdAt: "asc" },
+    const request = await prisma.quoteRequest.findUniqueOrThrow({
+      where: { id: scopeId },
+      select: { quoteSessionId: true },
     });
-    const modelFileId = randomUUID();
-    const modelGeometryId = randomUUID();
-    const printConfigRevisionId = randomUUID();
-    await prisma.$transaction(async (transaction) => {
-      await transaction.modelFile.create({
-        data: {
-          id: modelFileId,
-          format: "STL",
-          originalFilename: "manually-rebuilt-reference.stl",
-          storageObjectKey: `storage-tests/models/${modelFileId}`,
-          contentHash: createHash("sha256").update(modelFileId).digest("hex"),
-          sizeBytes: 1n,
-          uploadedAt: new Date(),
-          sourceDeleteAfter: new Date(Date.now() + 60 * 60 * 1_000),
-        },
-      });
-      await transaction.modelGeometry.create({
-        data: {
-          id: modelGeometryId,
-          sourceModelFileId: modelFileId,
-          canonicalObjectKey: `storage-tests/geometries/${modelGeometryId}`,
-          geometryHash: createHash("sha256")
-            .update(modelGeometryId)
-            .digest("hex"),
-          canonicalizerRevision: "storage-e2e-v1",
-          volumeCubicMicrometers: 1n,
-          boundsXMicrometers: 1n,
-          boundsYMicrometers: 1n,
-          boundsZMicrometers: 1n,
-          triangleCount: 1,
-        },
-      });
-      await transaction.revisionIdentity.create({
-        data: {
-          id: printConfigRevisionId,
-          kind: "PRINT_CONFIG",
-          digest: createHash("sha256")
-            .update(printConfigRevisionId)
-            .digest("hex"),
-        },
-      });
-      await transaction.printConfigRevision.create({
-        data: {
-          id: printConfigRevisionId,
-          quality: "STANDARD",
-          infillPercent: 20,
-          layerHeightMicrometers: 200,
-          settings: {},
-        },
-      });
+    await prisma.quoteSession.update({
+      where: { id: request.quoteSessionId! },
+      data: { status: "CANCELLED" },
     });
-    const issued = await quotes.issueOffer(
-      operator,
-      scopeId,
-      {
-        summary: "Storage confirmation race offer",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
-        priceListId: priceList.id,
-        contractTotalMinor: 110_000,
-        taxRegime: "NON_VAT_PAYER",
-        vatRateBasisPoints: 0,
-        netAmountMinor: 110_000,
-        vatAmountMinor: 0,
-        depositMinor: 33_000,
-        termsSnapshot,
-        inputSnapshot: {},
-        deliveryDestination: {
-          providerEndpointId: "storage-race-endpoint",
-          endpointType: "DELIVERY",
-          addressSnapshot: { country: "CZ" },
-          capabilitySnapshot: { carrier: "test" },
-        },
-        shipmentPlans: [
-          {
-            category: "STANDARD",
-            plannedVolumeCubicMm: 1,
-            plannedWeightMilligrams: 1,
-            shippingAmountMinor: 0,
-            packagingAmountMinor: 0,
-            handlingAmountMinor: 0,
-            packingUnits: [{ quoteItemOrdinal: 0, quantityOrdinal: 1 }],
-          },
-        ],
-        paymentPolicy: {
-          deposit: {
-            feeRateBasisPoints: 0,
-            feeFixedMinor: 0,
-            providerConfig: { mode: "provider-neutral" },
-          },
-          balance: {
-            feeRateBasisPoints: 0,
-            feeFixedMinor: 0,
-            providerConfig: { mode: "provider-neutral" },
-          },
-        },
-        items: [
-          {
-            kind: "MODEL",
-            sourceModelFileId: modelFileId,
-            modelGeometryId,
-            printConfigRevisionId,
-            material: "PLA",
-          },
-        ],
-        components: [
-          {
-            kind: "ITEM_PRODUCTION",
-            quoteItemOrdinal: 0,
-            amountMinor: 80_000,
-          },
-          {
-            kind: "ITEM_QUANTITY",
-            quoteItemOrdinal: 0,
-            amountMinor: 20_000,
-          },
-          {
-            kind: "ITEM_POSTPROCESSING",
-            quoteItemOrdinal: 0,
-            amountMinor: 10_000,
-          },
-        ],
-      },
-      `storage-terminal-issue-${randomUUID()}`,
-    );
-    await quotes.rejectOffer(
-      issued.quoteId,
-      { version: issued.version, termsRevision: issued.termsRevision },
-      `Bearer ${issued.offerToken}`,
-      `storage-terminal-reject-${randomUUID()}`,
-    );
 
     const confirmed = await apiJson(
       `storage/uploads/${initiated.body.uploadId}/confirm`,

@@ -23,12 +23,14 @@ process.env.TAVEN_S3_ACCESS_KEY_ID ??= "taven";
 process.env.TAVEN_S3_SECRET_ACCESS_KEY ??= "taven-local-only";
 process.env.TAVEN_S3_FORCE_PATH_STYLE ??= "true";
 process.env.TAVEN_BINDING_QUOTE_FLOWS_ENABLED = "true";
+process.env.TAVEN_QUOTE_PHOTO_UPLOADS_ENABLED = "true";
 
 describe("assisted request model preparation", () => {
   let app: NestExpressApplication;
   let prisma: PrismaService;
   let baseUrl: URL;
   let requestId: string;
+  let requestToken: string;
   let operatorId: string;
   let operatorCookie: string;
   let csrf: string;
@@ -90,6 +92,7 @@ describe("assisted request model preparation", () => {
       `assisted-create-${randomUUID()}`,
     );
     requestId = request.requestId;
+    requestToken = request.requestToken;
   }, 30_000);
 
   afterAll(async () => {
@@ -197,6 +200,37 @@ describe("assisted request model preparation", () => {
         requestId_modelFileId: { requestId, modelFileId: upload.assetId },
       },
     });
+    const [queue, page, requestDetail] = await Promise.all([
+      api<Array<{ requestId: string; attachedModelFileIds: string[] }>>(
+        "admin/quote-requests?status=NEW",
+        { headers: operatorHeaders() },
+      ),
+      api<{
+        items: Array<{ requestId: string; attachedModelFileIds: string[] }>;
+      }>("admin/quote-requests/page?status=NEW&limit=100", {
+        headers: operatorHeaders(),
+      }),
+      api<{ attachedModelFileIds: string[] }>(
+        `admin/quote-requests/${requestId}`,
+        { headers: operatorHeaders() },
+      ),
+    ]);
+    expect(queue.response.status).toBe(200);
+    expect(page.response.status).toBe(200);
+    expect(requestDetail.response.status).toBe(200);
+    expect(queue.body).toContainEqual(
+      expect.objectContaining({
+        requestId,
+        attachedModelFileIds: [upload.assetId],
+      }),
+    );
+    expect(page.body.items).toContainEqual(
+      expect.objectContaining({
+        requestId,
+        attachedModelFileIds: [upload.assetId],
+      }),
+    );
+    expect(requestDetail.body.attachedModelFileIds).toEqual([upload.assetId]);
     const dispatch = await prisma.outboxMessage.findFirstOrThrow({
       where: {
         aggregateId: attached.inspectionJobId,
@@ -778,18 +812,20 @@ describe("assisted request model preparation", () => {
         { grossAmountMinor: 77_000 },
       ],
     });
-    const issued = await api<{ quoteId: string; offerToken: string }>(
-      `admin/quote-requests/${requestId}/offers`,
-      {
-        method: "POST",
-        headers: {
-          ...operatorHeaders(true),
-          "content-type": "application/json",
-          "idempotency-key": `issue-${randomUUID()}`,
-        },
-        body: JSON.stringify(refreshedOffer),
+    const issued = await api<{
+      quoteId: string;
+      offerToken: string;
+      version: number;
+      termsRevision: string;
+    }>(`admin/quote-requests/${requestId}/offers`, {
+      method: "POST",
+      headers: {
+        ...operatorHeaders(true),
+        "content-type": "application/json",
+        "idempotency-key": `issue-${randomUUID()}`,
       },
-    );
+      body: JSON.stringify(refreshedOffer),
+    });
     expect(issued.response.status).toBe(201);
     const pinned = await prisma.quoteItem.findFirstOrThrow({
       where: { quoteId: issued.body.quoteId },
@@ -807,6 +843,66 @@ describe("assisted request model preparation", () => {
       acceptedOrderId: null,
     });
     expect(detail.body).not.toHaveProperty("offerToken");
+
+    const photoBytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const pendingPhoto = await api<{
+      uploadId: string;
+      assetId: string;
+      accessToken: string;
+      uploadUrl: string;
+      requiredHeaders: Record<string, string>;
+    }>("storage/uploads/photos", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${requestToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        kind: "QUOTE_REFERENCE",
+        scopeKind: "QUOTE_REQUEST",
+        scopeId: requestId,
+        originalFilename: "late-reference.png",
+        contentType: "image/png",
+        sizeBytes: photoBytes.byteLength,
+        sha256: sha256(photoBytes),
+      }),
+    });
+    expect(pendingPhoto.response.status).toBe(201);
+    expect(
+      (
+        await fetch(pendingPhoto.body.uploadUrl, {
+          method: "PUT",
+          headers: pendingPhoto.body.requiredHeaders,
+          body: Buffer.from(photoBytes),
+        })
+      ).status,
+    ).toBe(200);
+    const rejected = await api(`offers/${issued.body.quoteId}/reject`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${issued.body.offerToken}`,
+        "content-type": "application/json",
+        "idempotency-key": `reject-${randomUUID()}`,
+      },
+      body: JSON.stringify({
+        version: issued.body.version,
+        termsRevision: issued.body.termsRevision,
+      }),
+    });
+    expect(rejected.response.status).toBe(200);
+    const lateConfirmation = await api(
+      `storage/uploads/${pendingPhoto.body.uploadId}/confirm`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${pendingPhoto.body.accessToken}` },
+      },
+    );
+    expect(lateConfirmation.response.status).toBe(410);
+    expect(
+      await prisma.photoAsset.findUnique({
+        where: { id: pendingPhoto.body.assetId },
+      }),
+    ).toBeNull();
   }, 20_000);
 });
 
