@@ -589,9 +589,11 @@ async function activatePrice(id: string): Promise<void> {
     error.value = errorMessage(cause);
     if (cause instanceof OperatorRequestError && cause.status === 409) {
       activationIntent = null;
+      selection.value = null;
       await refresh();
-      error.value =
-        "Výběr ceníku se změnil v jiném okně. Zkontrolujte aktuální verzi a potvrďte změnu znovu.";
+      error.value = selection.value
+        ? `Výběr ceníku se změnil v jiném okně. Zkontrolujte aktuální verzi a potvrďte změnu znovu.${error.value ? ` ${error.value}` : ""}`
+        : `Výběr ceníku se změnil v jiném okně. Obnovení aktuálního výběru selhalo; před další publikací obnovte katalog. ${error.value}`;
     }
   } finally {
     busy.value = false;

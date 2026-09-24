@@ -51,6 +51,7 @@ type CatalogState = {
   createdPriceRevisions?: string[];
   includeSecondReference?: boolean;
   refreshFailsAfterActivation?: boolean;
+  failNextPolicyRead?: boolean;
   postHeaders: { csrf?: string; key?: string }[];
 };
 
@@ -64,6 +65,14 @@ async function mockCatalog(page: Page, state: CatalogState): Promise<void> {
       method === "GET" &&
       path.endsWith("/commercial-policy-selections/CZK")
     ) {
+      if (state.failNextPolicyRead) {
+        state.failNextPolicyRead = false;
+        await route.fulfill({
+          status: 503,
+          json: { message: "policy read failed" },
+        });
+        return;
+      }
       await route.fulfill({
         json: {
           currency: "CZK",
@@ -500,6 +509,44 @@ test("a confirmed price activation cannot be repeated after a read outage", asyn
   );
   await expect(activate).toBeDisabled();
   expect(state.postedVersions).toEqual([1]);
+});
+
+test("a stale price conflict blocks publication until policy refresh succeeds", async ({
+  page,
+}) => {
+  const state: CatalogState = {
+    version: 1,
+    selectedPriceId: priceId,
+    feed: [],
+    postedVersions: [],
+    postHeaders: [],
+  };
+  await mockSession(page);
+  await mockCatalog(page, state);
+  page.on("dialog", (dialog) => void dialog.accept());
+  await page.goto("/katalog");
+  await page.getByLabel("Důvod publikace").fill("Nová revize");
+  state.version = 2;
+  state.selectedPriceId = nextPriceId;
+  state.failNextPolicyRead = true;
+  const activate = page
+    .getByRole("button", { name: "Potvrdit pro nové vazby" })
+    .nth(1);
+  await activate.click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Obnovení aktuálního výběru selhalo",
+  );
+  await expect(activate).toBeDisabled();
+  expect(state.postedVersions).toEqual([1]);
+  await page
+    .getByRole("button", { name: "Obnovit katalog a upozornění" })
+    .click();
+  await expect(
+    page.getByText("Aktuálně vybraná verze: 2", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Potvrdit pro nové vazby" }).nth(0),
+  ).toBeEnabled();
 });
 
 test("two tabs require a fresh deliberate publication after a stale selection", async ({

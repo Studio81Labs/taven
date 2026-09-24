@@ -26,6 +26,7 @@ const inventoryCursor = ref<string | null>(null);
 const calibrationCursor = ref<string | null>(null);
 const capabilityCursor = ref<string | null>(null);
 const inventory = ref<S["InventoryDetailDto"] | null>(null);
+const selectedInventoryId = ref("");
 const currentReceipt = computed(() => {
   const receipts = inventory.value?.receipts ?? [];
   const superseded = new Set(receipts.map((item) => item.supersedesReceiptId));
@@ -120,10 +121,10 @@ async function refresh(): Promise<void> {
     calibrationCursor.value = calibrationData.nextCursor ?? null;
     capabilities.value = capabilityData.items;
     capabilityCursor.value = capabilityData.nextCursor ?? null;
-    if (inventory.value) await inspectInventory(inventory.value.id);
+    if (selectedInventoryId.value)
+      await inspectInventory(selectedInventoryId.value);
     if (availabilityMachineId.value && !availabilityDirty.value)
       await inspectAvailability("skip-dirty");
-    if (!error.value) inventoryRefreshRequired.value = false;
   } catch (cause) {
     error.value = errorMessage(cause);
   } finally {
@@ -202,8 +203,13 @@ async function inspectInventory(id: string): Promise<void> {
         params: { path: { nodeId: nodeId.value, id } },
       }),
     );
-    if (generation !== inventoryReadGeneration) return;
+    if (
+      generation !== inventoryReadGeneration ||
+      id !== selectedInventoryId.value
+    )
+      return;
     inventory.value = detail;
+    inventoryRefreshRequired.value = false;
     if (form.value !== "receipt" && form.value !== "correction") {
       vendor.value = detail.vendor;
       priceNumerator.value = detail.priceMinorUnitsNumerator;
@@ -211,13 +217,17 @@ async function inspectInventory(id: string): Promise<void> {
       supersedesReceiptId.value = detail.receipts.at(-1)?.id ?? "";
     }
   } catch (cause) {
-    if (generation === inventoryReadGeneration)
+    if (
+      generation === inventoryReadGeneration &&
+      id === selectedInventoryId.value
+    )
       error.value = errorMessage(cause);
   }
 }
 
 function selectInventory(id: string): void {
   form.value = "";
+  selectedInventoryId.value = id;
   void inspectInventory(id);
 }
 
@@ -323,12 +333,14 @@ async function run<Body>(
   busy.value = true;
   error.value = "";
   success.value = "";
-  const hadInventoryDetail = inventory.value !== null;
   let writeConfirmed = false;
   try {
     await journal.submit(action, body, write);
     writeConfirmed = true;
-    if (hadInventoryDetail) inventoryRefreshRequired.value = true;
+    if (selectedInventoryId.value) {
+      inventoryRefreshRequired.value = true;
+      ++inventoryReadGeneration;
+    }
     form.value = "";
     success.value = message;
     await refresh();
@@ -790,7 +802,12 @@ onMounted(() => void refresh());
       >
         Další stroje
       </button>
-      <button v-if="canWrite" type="button" @click="form = 'machine'">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="busy || loading"
+        @click="form = 'machine'"
+      >
         Registrovat stroj
       </button>
     </section>
@@ -919,7 +936,12 @@ onMounted(() => void refresh());
       >
         Další kalibrace
       </button>
-      <button v-if="canWrite" type="button" @click="form = 'calibration'">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="busy || loading"
+        @click="form = 'calibration'"
+      >
         Nová kalibrace
       </button>
     </section>
@@ -951,7 +973,12 @@ onMounted(() => void refresh());
       >
         Další šarže
       </button>
-      <button v-if="canWrite" type="button" @click="openReceipt">
+      <button
+        v-if="canWrite"
+        type="button"
+        :disabled="busy || loading"
+        @click="openReceipt"
+      >
         Přijmout novou šarži
       </button>
     </section>
@@ -1042,10 +1069,16 @@ onMounted(() => void refresh());
           <button
             v-if="inventory.receiptCoverage === 'UNKNOWN'"
             type="button"
+            :disabled="busy || loading"
             @click="openLegacyReceipt"
           >
             Doplnit počáteční doklad</button
-          ><button v-if="currentReceipt" type="button" @click="openCorrection">
+          ><button
+            v-if="currentReceipt"
+            type="button"
+            :disabled="busy || loading"
+            @click="openCorrection"
+          >
             Opravit doklad
           </button>
         </div>

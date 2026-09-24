@@ -349,6 +349,7 @@ test("a confirmed receipt closes its form when the following read fails", async 
   const machineId = "00000000-0000-0000-0000-000000000003";
   let failReads = false;
   let receiptPosts = 0;
+  let releaseReceipt: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
     route.fulfill({
       json: {
@@ -373,6 +374,9 @@ test("a confirmed receipt closes its form when the following read fails", async 
       path.endsWith("/inventory-receipts")
     ) {
       receiptPosts += 1;
+      await new Promise<void>((resolve) => {
+        releaseReceipt = resolve;
+      });
       failReads = true;
       await route.fulfill({ json: { id: "new-receipt" } });
     } else if (failReads) {
@@ -412,6 +416,17 @@ test("a confirmed receipt closes its form when the following read fails", async 
     .getByRole("textbox", { name: /Jednotková cena čitatel/ })
     .fill("2");
   await page.getByRole("button", { name: "Zapsat", exact: true }).click();
+  await expect.poll(() => Boolean(releaseReceipt)).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "Registrovat stroj" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Nová kalibrace" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Přijmout novou šarži" }),
+  ).toBeDisabled();
+  releaseReceipt?.();
   await expect(page.locator(".form-success")).toContainText("Nová šarže");
   await expect(page.getByRole("alert")).toContainText(
     "Zápis byl potvrzen, ale obnovení přehledu selhalo",
@@ -433,6 +448,10 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
   let releaseAdjustment: (() => void) | undefined;
   let releaseOtherDetail: (() => void) | undefined;
   let delayOtherDetail = true;
+  let holdNextOtherDetail = false;
+  let releaseStaleOtherDetail: (() => void) | undefined;
+  let holdFreshOtherDetail = false;
+  let releaseFreshOtherDetail: (() => void) | undefined;
   let holdNextFirstDetail = false;
   let releaseStaleInventory: (() => void) | undefined;
   await page.route("**/admin/auth/session", (route) =>
@@ -459,10 +478,22 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
       await new Promise<void>((resolve) => {
         releaseAdjustment = resolve;
       });
-      failReads = true;
+      if (adjustmentPosts === 1) failReads = true;
       return route.fulfill({ json: { id: inventoryId } });
     }
     if (path.endsWith(`/inventories/${otherInventoryId}`)) {
+      const stale = holdNextOtherDetail;
+      if (stale) {
+        holdNextOtherDetail = false;
+        await new Promise<void>((resolve) => {
+          releaseStaleOtherDetail = resolve;
+        });
+      } else if (holdFreshOtherDetail && adjustmentPosts === 2) {
+        holdFreshOtherDetail = false;
+        await new Promise<void>((resolve) => {
+          releaseFreshOtherDetail = resolve;
+        });
+      }
       if (delayOtherDetail) {
         delayOtherDetail = false;
         await new Promise<void>((resolve) => {
@@ -475,7 +506,7 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
           nodeId,
           machineId: "machine",
           sku: "PETG-blue",
-          vendor: "Vendor",
+          vendor: adjustmentPosts === 2 && !stale ? "Updated vendor" : "Vendor",
           currency: "CZK",
           priceMinorUnitsNumerator: "2",
           priceMinorUnitsDenominator: "1000",
@@ -567,14 +598,40 @@ test("a confirmed adjustment cannot be repeated until inventory detail refreshes
     "Zápis byl potvrzen, ale obnovení přehledu selhalo",
   );
   releaseOtherDetail?.();
-  await expect(
-    page.getByRole("heading", { name: "Šarže PETG-blue" }),
-  ).toBeVisible();
-  await expect(adjust).toBeDisabled();
+  await expect(adjust).toHaveCount(0);
   expect(adjustmentPosts).toBe(1);
   failReads = false;
   await page.getByRole("button", { name: "Obnovit zdroje" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Šarže PETG-blue" }),
+  ).toBeVisible();
   await expect(adjust).toBeEnabled();
+  releaseAdjustment = undefined;
+  holdNextOtherDetail = true;
+  holdFreshOtherDetail = true;
+  await adjust.click();
+  await expect.poll(() => Boolean(releaseAdjustment)).toBe(true);
+  await page
+    .getByRole("button", { name: "Detail a rychlé změny" })
+    .nth(1)
+    .click();
+  await expect.poll(() => Boolean(releaseStaleOtherDetail)).toBe(true);
+  releaseAdjustment?.();
+  await expect.poll(() => Boolean(releaseFreshOtherDetail)).toBe(true);
+  await expect(adjust).toHaveCount(0);
+  releaseFreshOtherDetail?.();
+  await expect(adjust).toBeEnabled();
+  const staleOtherResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/inventories/${otherInventoryId}`) &&
+      response.status() === 200,
+  );
+  releaseStaleOtherDetail?.();
+  await staleOtherResponse;
+  await expect(
+    page.getByText("Updated vendor", { exact: false }),
+  ).toBeVisible();
+  expect(adjustmentPosts).toBe(2);
   holdNextFirstDetail = true;
   await page
     .getByRole("button", { name: "Detail a rychlé změny" })
