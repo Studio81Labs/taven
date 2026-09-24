@@ -90,6 +90,7 @@ export class OperatorQuoteModelsService {
     if (!selection)
       throw new ConflictException("Commercial policy selection is unavailable");
     const tax = parseSellerTaxPolicy(selection.priceList.parameters);
+    const deliverySelector = this.delivery.selectionPolicy();
     return {
       models,
       printConfigs: printConfigs.map((config) => ({
@@ -115,6 +116,19 @@ export class OperatorQuoteModelsService {
         ),
       },
       deliveryOptions: [...this.delivery.configuredOptions()],
+      deliverySelector: {
+        mode: deliverySelector.mode,
+        available: deliverySelector.available,
+        allowedEndpointTypes: [...deliverySelector.allowedEndpointTypes],
+        ...(deliverySelector.widget
+          ? {
+              widget: {
+                accountId: deliverySelector.widget.accountId,
+                options: deliverySelector.widget.options,
+              },
+            }
+          : {}),
+      },
     };
   }
 

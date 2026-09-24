@@ -782,6 +782,11 @@ describe("assisted request model preparation", () => {
         } | null;
       };
       referenceProfiles: Array<{ id: string }>;
+      deliverySelector: {
+        mode: string;
+        available: boolean;
+        allowedEndpointTypes: string[];
+      };
     }>(`admin/quote-requests/${requestId}/composer`, {
       headers: operatorHeaders(),
     });
@@ -790,6 +795,11 @@ describe("assisted request model preparation", () => {
       expect.objectContaining({ id: selection.id, geometryReady: true }),
     ]);
     expect(composer.body.policy.selectionVersion).toBeGreaterThan(0);
+    expect(composer.body.deliverySelector).toMatchObject({
+      mode: "CONFIGURED",
+      available: true,
+      allowedEndpointTypes: ["pickup_point"],
+    });
     expect(composer.body.referenceProfiles).toContainEqual(
       expect.objectContaining({ id: profileId }),
     );

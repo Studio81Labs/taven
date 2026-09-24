@@ -69,6 +69,12 @@ describe("OpenAPI artifact", () => {
               required?: boolean;
             }>;
           };
+          get?: {
+            parameters?: Array<{
+              name: string;
+              schema?: Record<string, unknown>;
+            }>;
+          };
         }
       >;
       components: {
@@ -122,6 +128,31 @@ describe("OpenAPI artifact", () => {
       type: "integer",
       maximum: 1_000,
     });
+    expect(schemas.QuoteComposerChoicesDto?.required).toContain(
+      "deliverySelector",
+    );
+    expect(
+      schemas.QuoteComposerChoicesDto?.properties?.deliverySelector,
+    ).toMatchObject({
+      $ref: "#/components/schemas/AutomaticQuoteDeliverySelectorDto",
+    });
+    expect(
+      schemas.PrepareQuoteRequestReferenceDto?.properties?.quantity,
+    ).toMatchObject({ maximum: 1_000 });
+    expect(
+      schemas.PrepareQuoteRequestReferenceDto?.properties?.partsPerPlate,
+    ).toMatchObject({ maximum: 1_000 });
+    const statusParameters =
+      contract.paths["/admin/quote-requests/{requestId}/references/status"]?.get
+        ?.parameters;
+    for (const name of ["quantity", "partsPerPlate"]) {
+      expect(statusParameters).toContainEqual(
+        expect.objectContaining({
+          name,
+          schema: expect.objectContaining({ maximum: 1_000 }),
+        }),
+      );
+    }
     expect(schemas.CreateQuoteRequestDto?.properties?.purpose).toMatchObject({
       pattern: "\\S",
     });

@@ -5088,6 +5088,7 @@ export interface components {
         };
         QuoteComposerChoicesDto: {
             deliveryOptions: components["schemas"]["QuoteComposerDeliveryOptionDto"][];
+            deliverySelector: components["schemas"]["AutomaticQuoteDeliverySelectorDto"];
             models: components["schemas"]["QuoteRequestModelsDto"];
             policy: components["schemas"]["QuoteComposerPolicyDto"];
             printConfigs: components["schemas"]["QuoteComposerPrintConfigDto"][];

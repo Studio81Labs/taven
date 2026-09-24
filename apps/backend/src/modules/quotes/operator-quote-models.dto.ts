@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { AutomaticQuoteDeliverySelectorDto } from "../automatic-quotes/automatic-quotes.dto";
 
 export class ImportQuoteRequestModelDto {
   @ApiProperty({ type: String, format: "uuid" })
@@ -108,10 +109,10 @@ export class PrepareQuoteRequestReferenceDto {
   @ApiProperty({ type: String, format: "uuid" })
   referenceProfileId!: string;
 
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 1_000 })
   quantity!: number;
 
-  @ApiProperty({ type: "integer", minimum: 1 })
+  @ApiProperty({ type: "integer", minimum: 1, maximum: 1_000 })
   partsPerPlate!: number;
 }
 
@@ -216,4 +217,6 @@ export class QuoteComposerChoicesDto {
   policy!: QuoteComposerPolicyDto;
   @ApiProperty({ type: [QuoteComposerDeliveryOptionDto] })
   deliveryOptions!: QuoteComposerDeliveryOptionDto[];
+  @ApiProperty({ type: AutomaticQuoteDeliverySelectorDto })
+  deliverySelector!: AutomaticQuoteDeliverySelectorDto;
 }

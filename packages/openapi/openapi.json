@@ -9080,6 +9080,7 @@
       "PrepareQuoteRequestReferenceDto": {
         "properties": {
           "partsPerPlate": {
+            "maximum": 1000,
             "minimum": 1,
             "type": "integer"
           },
@@ -9088,6 +9089,7 @@
             "type": "string"
           },
           "quantity": {
+            "maximum": 1000,
             "minimum": 1,
             "type": "integer"
           },
@@ -9831,6 +9833,9 @@
             },
             "type": "array"
           },
+          "deliverySelector": {
+            "$ref": "#/components/schemas/AutomaticQuoteDeliverySelectorDto"
+          },
           "models": {
             "$ref": "#/components/schemas/QuoteRequestModelsDto"
           },
@@ -9855,7 +9860,8 @@
           "printConfigs",
           "referenceProfiles",
           "policy",
-          "deliveryOptions"
+          "deliveryOptions",
+          "deliverySelector"
         ],
         "type": "object"
       },
@@ -19529,6 +19535,7 @@
             "name": "partsPerPlate",
             "required": true,
             "schema": {
+              "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }
@@ -19538,6 +19545,7 @@
             "name": "quantity",
             "required": true,
             "schema": {
+              "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }

@@ -464,8 +464,13 @@ export class OperatorQuoteRequestsController {
   @ApiQuery({ name: "selectionId", type: String, format: "uuid" })
   @ApiQuery({ name: "printConfigRevisionId", type: String, format: "uuid" })
   @ApiQuery({ name: "referenceProfileId", type: String, format: "uuid" })
-  @ApiQuery({ name: "quantity", type: "integer", minimum: 1 })
-  @ApiQuery({ name: "partsPerPlate", type: "integer", minimum: 1 })
+  @ApiQuery({ name: "quantity", type: "integer", minimum: 1, maximum: 1_000 })
+  @ApiQuery({
+    name: "partsPerPlate",
+    type: "integer",
+    minimum: 1,
+    maximum: 1_000,
+  })
   @ApiOkResponse({ type: QuoteRequestReferencePreparationDto })
   referenceStatus(
     @CurrentOperator() operator: OperatorContext,
