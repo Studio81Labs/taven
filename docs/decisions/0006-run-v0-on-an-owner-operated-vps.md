@@ -3,6 +3,15 @@
 - **Status:** accepted
 - **Date:** 2026-08-31
 
+**2026-09-24 amendments:** [ADR 0026](0026-pin-silo-for-test-object-storage.md)
+selects pinned Silo for fresh local/CI state; [ADR 0027](0027-require-atomic-object-creation.md)
+also selects it for the v0 live store because Garage does not enforce atomic
+conditional creation. Garage is unsupported for live writes. The Garage/MinIO
+runtime and backup passages below record the original decision and are
+superseded where they conflict with ADR 0027. Issue #252 owns the production
+Silo configuration, security assessment and recovery drill; none is qualified
+by this documentation amendment.
+
 ## Context
 
 Taven must remain viable as a low-volume hobby service. The product constraint

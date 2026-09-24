@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths: &backend-paths
       - "apps/backend/**"
+      - "apps/slicer-worker/src/object-store*"
+      - "apps/slicer-worker/package.json"
       - "infra/coolify/retention-grants.sql"
       - "packages/core/**"
       - "packages/slicer-contracts/**"
@@ -90,22 +92,24 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Start MinIO test storage
+      - name: Start Silo S3 test storage
         run: |
-          docker run --detach --name taven-minio-test --publish 9000:9000 \
+          docker run --detach --name taven-minio-test --publish 127.0.0.1:9000:9000 \
             --env MINIO_ROOT_USER="$TAVEN_S3_ACCESS_KEY_ID" \
             --env MINIO_ROOT_PASSWORD="$TAVEN_S3_SECRET_ACCESS_KEY" \
-            quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            --env MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3000 \
+            docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46 \
             server /data
           for attempt in $(seq 1 30); do
-            curl --fail --silent http://127.0.0.1:9000/minio/health/live && break
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live; then break; fi
             if [ "$attempt" -eq 30 ]; then exit 1; fi
             sleep 1
           done
-          docker run --rm --network host --entrypoint /bin/sh \
-            quay.io/minio/mc:latest@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727 \
-            -c "mc alias set local '$TAVEN_S3_ENDPOINT' '$TAVEN_S3_ACCESS_KEY_ID' '$TAVEN_S3_SECRET_ACCESS_KEY' && mc mb --ignore-existing 'local/$TAVEN_S3_BUCKET'"
+          docker exec taven-minio-test mcli alias set local \
+            http://127.0.0.1:9000 "$TAVEN_S3_ACCESS_KEY_ID" "$TAVEN_S3_SECRET_ACCESS_KEY"
+          docker exec taven-minio-test mcli mb "local/$TAVEN_S3_BUCKET"
       - run: pnpm -C apps/backend db:generate
       - run: pnpm db:migrate:deploy
       - run: pnpm -C apps/backend db:seed
       - run: pnpm backend:test:e2e
+      - run: pnpm -C apps/slicer-worker test:storage:integration
