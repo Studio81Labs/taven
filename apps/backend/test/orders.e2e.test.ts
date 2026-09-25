@@ -620,34 +620,6 @@ async function createFreshReplacementCandidate(
       endsAt: new Date(intervalStartsAt.getTime() + duration),
     };
   });
-  await prisma.candidateResourceEstimate.create({
-    data: {
-      id: candidateId,
-      nodeId: source.nodeId,
-      estimateKey: `replacement-candidate:${candidateId}`,
-      modelGeometryId: source.modelGeometryId,
-      primarySliceResultId: source.primarySliceResultId,
-      tailSliceResultId: source.tailSliceResultId,
-      printConfigRevisionId: source.printConfigRevisionId,
-      machineProfileId: source.machineProfileId,
-      machineCalibrationId: source.machineCalibrationId,
-      machineId: source.machineId,
-      machineAvailabilityRevisionId: source.machineAvailabilityRevisionId,
-      machineAvailabilitySelectionVersion:
-        source.machineAvailabilitySelectionVersion,
-      inventoryId: source.inventoryId,
-      shipmentPlanId: source.shipmentPlanId,
-      arrangementRevisionId: source.arrangementRevisionId,
-      quantity: source.quantity,
-      partsPerPlate: source.partsPerPlate,
-      requiredMaterialMilligrams: source.requiredMaterialMilligrams,
-      requiredMachineSeconds: source.requiredMachineSeconds,
-      resourceSnapshot: { dispatchJobId },
-      calculatedAt,
-      expiresAt: new Date(calculatedAt.getTime() + 4 * 60 * 60 * 1_000),
-      capacityIntervals: { create: intervals },
-    },
-  });
   let sourceJobId = fixture.productions[index]!.jobId;
   for (;;) {
     const successor = await prisma.job.findFirst({
@@ -734,6 +706,41 @@ async function createFreshReplacementCandidate(
       operatorSessionId: recoveryOperator.sessionId,
       idempotencyRecordId: idempotencyRecord.id,
       reason: "fixture recovery candidate",
+    },
+  });
+  const candidateClock = await pool.query<{ observed_at: Date }>(
+    "SELECT clock_timestamp() AS observed_at",
+  );
+  const candidateCalculatedAt = candidateClock.rows[0]?.observed_at;
+  if (!candidateCalculatedAt) throw new Error("database clock is unavailable");
+  await prisma.candidateResourceEstimate.create({
+    data: {
+      id: candidateId,
+      nodeId: source.nodeId,
+      estimateKey: `replacement-candidate:${candidateId}`,
+      modelGeometryId: source.modelGeometryId,
+      primarySliceResultId: source.primarySliceResultId,
+      tailSliceResultId: source.tailSliceResultId,
+      printConfigRevisionId: source.printConfigRevisionId,
+      machineProfileId: source.machineProfileId,
+      machineCalibrationId: source.machineCalibrationId,
+      machineId: source.machineId,
+      machineAvailabilityRevisionId: source.machineAvailabilityRevisionId,
+      machineAvailabilitySelectionVersion:
+        source.machineAvailabilitySelectionVersion,
+      inventoryId: source.inventoryId,
+      shipmentPlanId: source.shipmentPlanId,
+      arrangementRevisionId: source.arrangementRevisionId,
+      quantity: source.quantity,
+      partsPerPlate: source.partsPerPlate,
+      requiredMaterialMilligrams: source.requiredMaterialMilligrams,
+      requiredMachineSeconds: source.requiredMachineSeconds,
+      resourceSnapshot: { dispatchJobId },
+      calculatedAt: candidateCalculatedAt,
+      expiresAt: new Date(
+        candidateCalculatedAt.getTime() + 4 * 60 * 60 * 1_000,
+      ),
+      capacityIntervals: { create: intervals },
     },
   });
   const outboxMessageId = await seedCandidateReceipt(
