@@ -54,8 +54,10 @@ Each directory above contains `screen.png` and `code.html`. System references ar
 ## Interpretation
 
 The implementation plan reconciles this package with the current product brief,
-identity, decisions and actual API. Screenshots establish visual direction, not
-permission to change domain rules. In particular, QC is view-only, shipping uses
+identity, decisions and actual API. The numbered screenshots are the hard visual
+reference, not alternate mock variants or permission to change domain rules.
+The plan documents necessary factual and contract-driven deviations. In
+particular, QC is view-only, shipping uses
 the Czech Packeta widget, and configuration retains infill. The primary logo is
 Plex Mono `TAVEN.` / compact `TV.`. Use the repository's corrected accessible ink
 and warning colors.

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { get } from "node:http";
+import { chromium } from "@playwright/test";
 
 const port = 4173;
 const origin = `http://127.0.0.1:${port}`;
@@ -37,6 +38,9 @@ const preview = spawn(process.execPath, [".output/server/index.mjs"], {
     NUXT_API_BASE_URL: apiOrigin,
     NUXT_PUBLIC_API_BASE_URL: apiOrigin,
     NUXT_PUBLIC_SITE_URL: origin,
+    // Audit the indexable production presentation against a local fixture API.
+    // Normal development/staging builds remain noindex and default-closed.
+    NUXT_PUBLIC_DEPLOYMENT_ENVIRONMENT: "production",
   },
   stdio: ["ignore", "ignore", "pipe"],
 });
@@ -49,6 +53,7 @@ try {
   await waitForApi();
   await waitForPreview();
 
+  const failures = [];
   for (const mode of ["mobile", "desktop"]) {
     const report = await runLighthouse(mode);
     const scores = Object.fromEntries(
@@ -58,8 +63,8 @@ try {
           throw new Error(`Lighthouse did not return a ${category} score.`);
         }
         if (score < minimum && enforceBudgets) {
-          throw new Error(
-            `${mode} ${category} score ${Math.round(score * 100)} is below ${Math.round(minimum * 100)}.`,
+          failures.push(
+            `${mode} ${category} score ${Math.round(score * 100)} is below ${Math.round(minimum * 100)}`,
           );
         }
         if (score < minimum && !enforceBudgets) {
@@ -70,7 +75,40 @@ try {
         return [category, Math.round(score * 100)];
       }),
     );
-    process.stdout.write(`${mode}: ${JSON.stringify(scores)}\n`);
+    const chromeVersion =
+      report.environment.hostUserAgent.match(/Chrome\/([\d.]+)/)?.[1] ??
+      "unknown";
+    const metrics = Object.fromEntries(
+      [
+        "first-contentful-paint",
+        "largest-contentful-paint",
+        "total-blocking-time",
+        "cumulative-layout-shift",
+        "speed-index",
+      ].map((name) => [name, report.audits[name]?.displayValue ?? "n/a"]),
+    );
+    process.stdout.write(
+      `${mode}: ${JSON.stringify({ scores, metrics, chromeVersion, lighthouseVersion: report.lighthouseVersion, throttlingMethod: report.configSettings.throttlingMethod })}\n`,
+    );
+    if (process.env.TAVEN_LIGHTHOUSE_DIAGNOSTICS === "true") {
+      const diagnostics = Object.entries(report.audits)
+        .filter(([, audit]) => audit.score !== null && audit.score < 0.9)
+        .map(([name, audit]) => ({
+          name,
+          score: audit.score,
+          displayValue: audit.displayValue,
+          title: audit.title,
+        }));
+      process.stdout.write(
+        `${mode} diagnostics: ${JSON.stringify(diagnostics)}\n`,
+      );
+      process.stdout.write(
+        `${mode} render blocking: ${JSON.stringify(report.audits["render-blocking-insight"]?.details)}\n`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Lighthouse budgets failed: ${failures.join("; ")}.`);
   }
 } finally {
   preview.kill("SIGTERM");
@@ -152,7 +190,10 @@ async function runLighthouse(mode) {
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      env: { ...process.env, CHROME_PATH: chromium.executablePath() },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");

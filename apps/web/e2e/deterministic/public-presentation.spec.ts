@@ -93,17 +93,21 @@ test.describe("public presentation and legal reading", () => {
 
   test("public routes remain readable and accessible at design viewports", async ({
     page,
-  }) => {
+  }, testInfo) => {
+    const routes = [
+      ["/", "01-landing"],
+      ["/jak-to-funguje", "02-process"],
+      ["/cenik", "03-pricing"],
+      ["/ukazky", "04-examples-empty"],
+      ["/poptavka", "06-assisted"],
+      ["/kontakt", "07-contact"],
+      ["/vop", "16-terms"],
+      ["/reklamace", "17-complaints"],
+      ["/ochrana-soukromi", "18-privacy"],
+    ] as const;
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      for (const route of [
-        "/",
-        "/jak-to-funguje",
-        "/cenik",
-        "/kontakt",
-        "/ukazky",
-        "/vop",
-      ]) {
+      for (const [route, screen] of routes) {
         await page.goto(route);
         const overflow = await page.evaluate(
           () =>
@@ -111,6 +115,12 @@ test.describe("public presentation and legal reading", () => {
             document.documentElement.clientWidth,
         );
         expect(overflow, `${route} at ${width}px`).toBeLessThanOrEqual(0);
+        if (width !== 320) {
+          await testInfo.attach(`${screen}-${width}`, {
+            body: await page.screenshot({ fullPage: true }),
+            contentType: "image/png",
+          });
+        }
       }
     }
 
