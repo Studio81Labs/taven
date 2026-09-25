@@ -1,0 +1,445 @@
+{
+  "archive": "stitch_taven_design_system.zip",
+  "archiveSha256": "b6678ec24f068e856d4f6105fc19856aef6d5e578d08b059872416733ac23aaf",
+  "source": "Owner attachment 2026-09-25; reference material only",
+  "files": [
+    {
+      "path": "stitch_taven_design_system/08_konfigur_tor_taven/code.html",
+      "bytes": 36962,
+      "sha256": "925cc5c38cf00d2efa1284905d9acc33775df52bebea2fb7fffceaa2dac222ea"
+    },
+    {
+      "path": "stitch_taven_design_system/08_konfigur_tor_taven/screen.png",
+      "bytes": 331358,
+      "sha256": "8c43ab955696cd07297eca199e5dedbc5e2e27bad65871b61e9f0ac5e0c1a0c2",
+      "width": 1280,
+      "height": 1339
+    },
+    {
+      "path": "stitch_taven_design_system/17_reklamace_taven/code.html",
+      "bytes": 31486,
+      "sha256": "2d4d2654a049b4fcd780060dcdf433d227b7d1a91281376b7bb368e76720a9a5"
+    },
+    {
+      "path": "stitch_taven_design_system/17_reklamace_taven/screen.png",
+      "bytes": 462055,
+      "sha256": "36ae3d4b4aa5c12feab0ec7b52f5732e281533996b6cf70e59527a456cc4e43a",
+      "width": 1041,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/06_potrebuji_model.md",
+      "bytes": 1425,
+      "sha256": "43ade6c72d8dec0d1a422c47db255133815c4bd5925231d91c54b0a26ef9574a"
+    },
+    {
+      "path": "stitch_taven_design_system/09_checkout_taven/code.html",
+      "bytes": 32583,
+      "sha256": "c2a4b4e22c9b69418b8b43bf4f3dca51cf733fc51128bfed16bbb0fda1808133"
+    },
+    {
+      "path": "stitch_taven_design_system/09_checkout_taven/screen.png",
+      "bytes": 391773,
+      "sha256": "127818b75968ef37e09ef0b326ee9773e115d0daf4550241075d0e2092d9a9f7",
+      "width": 1541,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/16_vop_taven/code.html",
+      "bytes": 33829,
+      "sha256": "ce99592352bb4b4f5e6fca10b29bb22f314ee7367195b1ff6309f55efd42b9c1"
+    },
+    {
+      "path": "stitch_taven_design_system/16_vop_taven/screen.png",
+      "bytes": 276657,
+      "sha256": "624ee12d955c8316b1ec159f4ab788cff35da3524bdc06ecdd77a06c9a95ad97",
+      "width": 576,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/03_cenik.md",
+      "bytes": 1576,
+      "sha256": "f331488f2a4a0b9a002f51b6195030e9495ecc2fbc0e045ea25942bdd328584c"
+    },
+    {
+      "path": "stitch_taven_design_system/12_p_ihl_en_taven/code.html",
+      "bytes": 19922,
+      "sha256": "88986ab09a3b3613bc26fcaed8692bb5f7192e5182ed9e63dc35be07747becd7"
+    },
+    {
+      "path": "stitch_taven_design_system/12_p_ihl_en_taven/screen.png",
+      "bytes": 380644,
+      "sha256": "f08c958cce6299d09995571687d532762e6055aff70415d3a6efbabc08d56ca2",
+      "width": 1600,
+      "height": 1460
+    },
+    {
+      "path": "stitch_taven_design_system/18_ochrana_soukrom_taven_1/code.html",
+      "bytes": 37687,
+      "sha256": "bd19c7bcd930ca9006a693294c90837ad5ebba29a06618659e2e4e354a197321"
+    },
+    {
+      "path": "stitch_taven_design_system/18_ochrana_soukrom_taven_1/screen.png",
+      "bytes": 520389,
+      "sha256": "68703e627cc436245b72a8074c70b82e4ee84b296e4fab5166235d68fcf7290a",
+      "width": 756,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/14_moje_zak_zky_taven/code.html",
+      "bytes": 34796,
+      "sha256": "01d43283276bd77e719cbba73a5c1ec4dc3b52df3bf23cf7cc21eb355b49b1c1"
+    },
+    {
+      "path": "stitch_taven_design_system/14_moje_zak_zky_taven/screen.png",
+      "bytes": 446444,
+      "sha256": "38c3c545f3199ce7f429bca4c1cd8742be504f0adfdbc88b371a4da61484a92b",
+      "width": 1236,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/10_prijato.md",
+      "bytes": 963,
+      "sha256": "32f3b84c8de24d68bd7c0bc4a3e52bed00ff190a83682cbda98fd319d235ddf2"
+    },
+    {
+      "path": "stitch_taven_design_system/02_jak_to_funguje_taven/code.html",
+      "bytes": 35050,
+      "sha256": "50042acfc1b3a809d28afdb486c45ee1d707f886570d20df87a596471f661ba3"
+    },
+    {
+      "path": "stitch_taven_design_system/02_jak_to_funguje_taven/screen.png",
+      "bytes": 378640,
+      "sha256": "9315aad409cfdc09894c3421a0eace418f543099e15aa26ae51a6a4ef0c49a07",
+      "width": 780,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/20_logo.md_1.md",
+      "bytes": 1022,
+      "sha256": "fd245e86bb56f43a5719142c4687c4d923dbe5dd281d3cb092df65a340b5093f"
+    },
+    {
+      "path": "stitch_taven_design_system/05_ukazka_detail.md",
+      "bytes": 945,
+      "sha256": "dfddffa83897ff2183188e0c8dddf15a5ab651d720a8c22605d2bfb65ade066d"
+    },
+    {
+      "path": "stitch_taven_design_system/18_soukromi.md_1.md",
+      "bytes": 1456,
+      "sha256": "94ffda43e567309cb7d91d3ca15ace2449552ef84053e23b4216590a43009aca"
+    },
+    {
+      "path": "stitch_taven_design_system/11_sledovani.md",
+      "bytes": 1530,
+      "sha256": "52fea9eb6cdd1437eb4ab6f2cb52790c9af58323b0dfe69089fd94eaa317a43c"
+    },
+    {
+      "path": "stitch_taven_design_system/10_p_ijato_taven/code.html",
+      "bytes": 22905,
+      "sha256": "614340b33f9f032d47563d3e4886b31fb8134980b73bf8826a8ef6f743a1e2ac"
+    },
+    {
+      "path": "stitch_taven_design_system/10_p_ijato_taven/screen.png",
+      "bytes": 455379,
+      "sha256": "8de3f3be76a67d0345258bc957ce7ddbae4c9ab35d63ec0399422a6caff578da",
+      "width": 1600,
+      "height": 1554
+    },
+    {
+      "path": "stitch_taven_design_system/taven_komponentov_knihovna_json.json",
+      "bytes": 16831,
+      "sha256": "4562746c115f4b296f7c0e51db3ce1fa66598fd40232736081af0b5a2153d8e3"
+    },
+    {
+      "path": "stitch_taven_design_system/05_detail_uk_zky_d_0142_taven/code.html",
+      "bytes": 38322,
+      "sha256": "09e7e1ca2a57acde87009a82601ffca39393b262bc59f782d1314edd615bacaf"
+    },
+    {
+      "path": "stitch_taven_design_system/05_detail_uk_zky_d_0142_taven/screen.png",
+      "bytes": 547901,
+      "sha256": "56090787cedf3ccc76e0636c62c2bbf90fb8f291453dc7264ec321c24d1673c5",
+      "width": 1001,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/03_cen_k_taven/code.html",
+      "bytes": 36428,
+      "sha256": "d8a3b564e3720efa193b3da2f269a1046c4c062a5d2b6bf9196c83f7ca300c2e"
+    },
+    {
+      "path": "stitch_taven_design_system/03_cen_k_taven/screen.png",
+      "bytes": 391087,
+      "sha256": "b48f810942110fd78f96e738c624df434ba53234783bab515ad0fbffaa767fb7",
+      "width": 814,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/06_pot_ebuji_model_taven/code.html",
+      "bytes": 34932,
+      "sha256": "fe9cef081446e52a9ce017ca7b7f1511ef665e52cfe95d6f0961733619bcc107"
+    },
+    {
+      "path": "stitch_taven_design_system/06_pot_ebuji_model_taven/screen.png",
+      "bytes": 306766,
+      "sha256": "20ea1f379101f7252ebf2a7e160040c96eec90dd14246e94f3e0289463aaf02e",
+      "width": 666,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/15_nastaveni.md",
+      "bytes": 693,
+      "sha256": "fd2a699c987c840d2542c8dbf925824dd8d5abc8829bb979b8d369c43923c1fa"
+    },
+    {
+      "path": "stitch_taven_design_system/design.md",
+      "bytes": 9741,
+      "sha256": "6fc57b4ea4a26c3607cc328807714f00f92f7ac26dc1f55c0424229584a6f8fd"
+    },
+    {
+      "path": "stitch_taven_design_system/18_ochrana_soukrom_taven_2/code.html",
+      "bytes": 34370,
+      "sha256": "6b23fb2911a12a0bfa9b4e9d2f1aa2eb211ebba67ad428038f35c2fe091d1db8"
+    },
+    {
+      "path": "stitch_taven_design_system/18_ochrana_soukrom_taven_2/screen.png",
+      "bytes": 319016,
+      "sha256": "6d2cb2813b8f4a4fb14d97a45cadd659ae1b540859ea6bba54d95e38917a08a3",
+      "width": 546,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/14_moje_zakazky.md",
+      "bytes": 1343,
+      "sha256": "0c6cae0831ae3cb9d6e16add743e37b7dc6a3bd6a3f2746a636b949280b8ec5b"
+    },
+    {
+      "path": "stitch_taven_design_system/01_landing.md",
+      "bytes": 1926,
+      "sha256": "e72668c59c0e86e6a19639be744d0fcc4dbf75e142fa17eaad330c66c85106a9"
+    },
+    {
+      "path": "stitch_taven_design_system/16_vop.md",
+      "bytes": 1342,
+      "sha256": "cae8546381c4021e9b06b23c65857fc518d70697eb122aef72832da96d4e0293"
+    },
+    {
+      "path": "stitch_taven_design_system/21_tokeny_a_komponenty_taven/code.html",
+      "bytes": 56554,
+      "sha256": "2ad3dcffe90b33877c8a3d8bac0846ecec8f50d185e2c38cd94777408a964389"
+    },
+    {
+      "path": "stitch_taven_design_system/21_tokeny_a_komponenty_taven/screen.png",
+      "bytes": 304112,
+      "sha256": "9eb71f85f4c0213c3c7aa5deebef4c887e1627d3eed15aa68d1cacdf494366dc",
+      "width": 533,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/07_kontakt_taven/code.html",
+      "bytes": 23892,
+      "sha256": "60377fa24ab321c7d120bfaf58bc08327d1b53dc5bab79919fe745f5c45cce8e"
+    },
+    {
+      "path": "stitch_taven_design_system/07_kontakt_taven/screen.png",
+      "bytes": 429686,
+      "sha256": "92c2ea43e3f264a5447717477734d754526a4d05f77b8fbd6e7c1a6ccf364584",
+      "width": 1273,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/12_prihlaseni.md",
+      "bytes": 874,
+      "sha256": "47b2ea207644bd98705685e2abadf39dee002bb08f7a8bfd509978eef96befef"
+    },
+    {
+      "path": "stitch_taven_design_system/20_logo_taven/code.html",
+      "bytes": 46260,
+      "sha256": "79bb4d2f3636f23610d4c70e66e94e41a543bdf653e993a60a23da460dbaffec"
+    },
+    {
+      "path": "stitch_taven_design_system/20_logo_taven/screen.png",
+      "bytes": 335889,
+      "sha256": "f0985cf3c14d594b58fbb0d0e2e342e1b6010c0cf66b8d044c829b0ae776e055",
+      "width": 600,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/readme.md",
+      "bytes": 1614,
+      "sha256": "3456e14beeed76dbc8dc99335a139c91608af3f556e9641498aaf486737b0a29"
+    },
+    {
+      "path": "stitch_taven_design_system/01_landing_taven/code.html",
+      "bytes": 48269,
+      "sha256": "627320fcb47676dd21bc9cc90be57c6c789302edbde568c134778875a97538d7"
+    },
+    {
+      "path": "stitch_taven_design_system/01_landing_taven/screen.png",
+      "bytes": 339959,
+      "sha256": "1aaf3fbe6cc5b6c4e46718d95daaa703ae8873489fe78b262539f55fbf25de5f",
+      "width": 583,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/09_checkout.md",
+      "bytes": 1156,
+      "sha256": "4b2d3a4f6b56db7e4911a5cac2fcb69048f1572a7a0863d72a0ae9f3085ca855"
+    },
+    {
+      "path": "stitch_taven_design_system/11_sledov_n_zak_zky_taven/code.html",
+      "bytes": 33913,
+      "sha256": "973d13662ddb6312123be83e85a50af2f309b336e87db1d1e97646d6a7b2320a"
+    },
+    {
+      "path": "stitch_taven_design_system/11_sledov_n_zak_zky_taven/screen.png",
+      "bytes": 569055,
+      "sha256": "0d3cc9e60441d595cdffec45b702558ac6cb19ee8541e00a5c94e3011eec4fd7",
+      "width": 1199,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/extracted_text_from_https_github.com_studio81labs_taven.md",
+      "bytes": 18808,
+      "sha256": "d7261ba7f00ffb64f19845f565d7bbe91991ae6640286edfe27b1349b24522b8"
+    },
+    {
+      "path": "stitch_taven_design_system/04_ukazky.md",
+      "bytes": 1110,
+      "sha256": "5b9ab1a8f3298bb7bc48aff2bb81a4927d9ba33e74c839c805fe741b546a075c"
+    },
+    {
+      "path": "stitch_taven_design_system/07_kontakt.md",
+      "bytes": 1052,
+      "sha256": "526ef1add25692631f7a3f8ff7d8871ae399c87bf436f84720689bd1965d29f5"
+    },
+    {
+      "path": "stitch_taven_design_system/04_uk_zky_taven/code.html",
+      "bytes": 47732,
+      "sha256": "4fd5057b042bc3feda57786c6f2f5a447b2a6d4ce617f17c5362b8662911c8cc"
+    },
+    {
+      "path": "stitch_taven_design_system/04_uk_zky_taven/screen.png",
+      "bytes": 521912,
+      "sha256": "02e043dd39ae2e479736a723e6e3520ea611db69b13319dcdf95efcf1cec4460",
+      "width": 767,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/17_reklamace.md",
+      "bytes": 1613,
+      "sha256": "f58960220ef8bb700ede064290d9174a8d7b7316cc4e5a8abf95cab9fda1a216"
+    },
+    {
+      "path": "stitch_taven_design_system/19_responzivn_taven/code.html",
+      "bytes": 48095,
+      "sha256": "c9605d4adeca28be506b9e3d23d3b5587119db6552d583d5fe8695699a5419e5"
+    },
+    {
+      "path": "stitch_taven_design_system/19_responzivn_taven/screen.png",
+      "bytes": 337526,
+      "sha256": "7e2830f4ea03ec2999b749c49e8a4903fd61ec70599ac53791f52ce3c615003a",
+      "width": 597,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/08_konfigurator.md",
+      "bytes": 2886,
+      "sha256": "9b592867b3728a340e2a734ad145cc69a7146860da24453173d9abb471285af7"
+    },
+    {
+      "path": "stitch_taven_design_system/15_nastaven_taven/code.html",
+      "bytes": 22328,
+      "sha256": "060e2fcf160e28bdd675a8b004c9056ab5b84416504b454795894aed312f1612"
+    },
+    {
+      "path": "stitch_taven_design_system/15_nastaven_taven/screen.png",
+      "bytes": 486991,
+      "sha256": "96202ba7ff6727342fb23b577669c38780c33741dffbeacdd2be2fa81ec4dc95",
+      "width": 1540,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/22_dialogy_mod_ln_okna_a_notifikace_taven/code.html",
+      "bytes": 32313,
+      "sha256": "f15c9dd4470c59dd3891d1b9ea2abb5a87deaed954908854133c20166c9d550c"
+    },
+    {
+      "path": "stitch_taven_design_system/22_dialogy_mod_ln_okna_a_notifikace_taven/screen.png",
+      "bytes": 469686,
+      "sha256": "b969933ea7ffea85d1ac9a492bcb1dfa0be2bcaad07374f09774577f9445ec00",
+      "width": 941,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/19_responzivne.md_1.md",
+      "bytes": 1636,
+      "sha256": "f9493d8c1ce7575c9db3fd02958afe106edaa600428f917b1f0e1f6aceaa32b9"
+    },
+    {
+      "path": "stitch_taven_design_system/19_responzivne.md_2.md",
+      "bytes": 1377,
+      "sha256": "7c56367f80f4909ae59bb03a27526e4d3ed7be1514f76475f8657ee64cf2b424"
+    },
+    {
+      "path": "stitch_taven_design_system/21_tokeny.md_1.md",
+      "bytes": 1972,
+      "sha256": "66d62225240734f69bb7e49999f5b9dd068d75af93da3536c50b01642a9b0b58"
+    },
+    {
+      "path": "stitch_taven_design_system/02_jak_to_funguje.md",
+      "bytes": 1753,
+      "sha256": "ed4f3b5a3bee69941f0af62fb85ffd4daf74cb3c279f43d9c72c95b848e4975e"
+    },
+    {
+      "path": "stitch_taven_design_system/13_aktivace.md",
+      "bytes": 925,
+      "sha256": "e946ad40f0698000e529b2e4398f4f2b6cffc455e63577ae7f4e019d53f50ed0"
+    },
+    {
+      "path": "stitch_taven_design_system/20_logo.md_2.md",
+      "bytes": 1254,
+      "sha256": "9a7a21ea787b54a295cd49ebb4f81ce56643857fb3bb3a4d77df5fb035b16a26"
+    },
+    {
+      "path": "stitch_taven_design_system/21_tokeny.md_2.md",
+      "bytes": 1365,
+      "sha256": "2c243874c84711672b60c59d97a2c4a3e238a8af27d92487392f9400d68ef151"
+    },
+    {
+      "path": "stitch_taven_design_system/taven_logo/code.html",
+      "bytes": 624,
+      "sha256": "389e8cac572c2fbbc816cd406bc9435763b9e0c523313f93d6a412533a67e804"
+    },
+    {
+      "path": "stitch_taven_design_system/taven_logo/screen.png",
+      "bytes": 6960,
+      "sha256": "7e420d6f55de8260fb0b3ffe59265a7806f19066d823c9ff26c97ab72197c09a",
+      "width": 560,
+      "height": 96
+    },
+    {
+      "path": "stitch_taven_design_system/18_soukromi.md_2.md",
+      "bytes": 2182,
+      "sha256": "ddc1e6a1e3464928740711bf9d076fd5f7c0389d13682430ad2d2be6fc184e56"
+    },
+    {
+      "path": "stitch_taven_design_system/13_aktivace_tu_taven/code.html",
+      "bytes": 24736,
+      "sha256": "d7edd8a97fb59f14f0d71cc8535f967cee91dac604459aec9ee48ad420176a63"
+    },
+    {
+      "path": "stitch_taven_design_system/13_aktivace_tu_taven/screen.png",
+      "bytes": 524966,
+      "sha256": "4156b68a417e30ede9381f36dc6a09652589c84bbe69cc76f46c83a6a516ab5a",
+      "width": 1425,
+      "height": 1600
+    },
+    {
+      "path": "stitch_taven_design_system/taven_precision_blueprint/DESIGN.md",
+      "bytes": 13588,
+      "sha256": "dff83b4be57e3b2e75e0c606430760851a3f6173f0a761e50ecd914d0cce0a3e"
+    }
+  ]
+}
