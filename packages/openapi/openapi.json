@@ -12166,6 +12166,29 @@
         ],
         "type": "object"
       },
+      "RefundProviderResultCommandResultDto": {
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RefundProviderResultPayloadDto"
+          },
+          "status": {
+            "enum": [
+              "REFUND_PROVIDER_RESULT_RECORDED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "status",
+          "result"
+        ],
+        "type": "object"
+      },
       "RefundProviderResultDto": {
         "properties": {
           "amountMinor": {
@@ -12254,6 +12277,39 @@
           "occurredAt",
           "reason",
           "finalOutcomeConfirmed"
+        ],
+        "type": "object"
+      },
+      "RefundProviderResultPayloadDto": {
+        "properties": {
+          "blockingCode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "paymentStatus": {
+            "type": "string"
+          },
+          "providerResultEventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "recorded": {
+            "type": "boolean"
+          },
+          "refundStatus": {
+            "type": "string"
+          },
+          "refundTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refundTransactionId",
+          "providerResultEventId",
+          "recorded",
+          "refundStatus",
+          "paymentStatus"
         ],
         "type": "object"
       },
@@ -12433,6 +12489,29 @@
         ],
         "type": "object"
       },
+      "RetryRefundCommandResultDto": {
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RetryRefundPayloadDto"
+          },
+          "status": {
+            "enum": [
+              "REFUND_RETRY_PENDING"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "status",
+          "result"
+        ],
+        "type": "object"
+      },
       "RetryRefundDto": {
         "properties": {
           "expectedFailureProviderEventId": {
@@ -12448,6 +12527,37 @@
         "required": [
           "expectedFailureProviderEventId",
           "reason"
+        ],
+        "type": "object"
+      },
+      "RetryRefundPayloadDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "failureProviderEventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "refundTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sourceRefundTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceRefundTransactionId",
+          "refundTransactionId",
+          "failureProviderEventId",
+          "amountMinor",
+          "currency"
         ],
         "type": "object"
       },
@@ -19869,7 +19979,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                  "$ref": "#/components/schemas/RefundProviderResultCommandResultDto"
                 }
               }
             },
@@ -19950,7 +20060,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FulfilmentCommandResultDto"
+                  "$ref": "#/components/schemas/RetryRefundCommandResultDto"
                 }
               }
             },

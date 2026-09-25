@@ -6000,6 +6000,13 @@ export interface components {
             pendingOrSuspendedRefunds: number;
             succeededRefunds: components["schemas"]["MetricMoneyDto"];
         };
+        RefundProviderResultCommandResultDto: {
+            /** Format: uuid */
+            orderId: string;
+            result: components["schemas"]["RefundProviderResultPayloadDto"];
+            /** @enum {string} */
+            status: "REFUND_PROVIDER_RESULT_RECORDED";
+        };
         RefundProviderResultDto: {
             amountMinor: string;
             currency: string;
@@ -6020,6 +6027,16 @@ export interface components {
             providerRefundReference?: string;
             reason: string;
             requestReference: string;
+        };
+        RefundProviderResultPayloadDto: {
+            blockingCode?: string | null;
+            paymentStatus: string;
+            /** Format: uuid */
+            providerResultEventId: string;
+            recorded: boolean;
+            refundStatus: string;
+            /** Format: uuid */
+            refundTransactionId: string;
         };
         RegisterMachineDto: {
             code: string;
@@ -6059,10 +6076,27 @@ export interface components {
             reason: string;
             windows: components["schemas"]["MachineAvailabilityWindowDto"][];
         };
+        RetryRefundCommandResultDto: {
+            /** Format: uuid */
+            orderId: string;
+            result: components["schemas"]["RetryRefundPayloadDto"];
+            /** @enum {string} */
+            status: "REFUND_RETRY_PENDING";
+        };
         RetryRefundDto: {
             /** Format: uuid */
             expectedFailureProviderEventId: string;
             reason: string;
+        };
+        RetryRefundPayloadDto: {
+            amountMinor: string;
+            currency: string;
+            /** Format: uuid */
+            failureProviderEventId: string;
+            /** Format: uuid */
+            refundTransactionId: string;
+            /** Format: uuid */
+            sourceRefundTransactionId: string;
         };
         SelectAutomaticQuoteDestinationDto: {
             endpointType: string;
@@ -9503,7 +9537,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                    "application/json": components["schemas"]["RefundProviderResultCommandResultDto"];
                 };
             };
             /** @description Refund evidence or expected state is stale or ineligible */
@@ -9541,7 +9575,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FulfilmentCommandResultDto"];
+                    "application/json": components["schemas"]["RetryRefundCommandResultDto"];
                 };
             };
             /** @description Failure evidence or refund obligation is not retryable */

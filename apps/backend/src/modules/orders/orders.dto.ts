@@ -358,6 +358,65 @@ export class FulfilmentCommandResultDto {
   result!: Record<string, unknown>;
 }
 
+export class RefundProviderResultPayloadDto {
+  @ApiProperty(UUID)
+  refundTransactionId!: string;
+
+  @ApiProperty(UUID)
+  providerResultEventId!: string;
+
+  @ApiProperty({ type: Boolean })
+  recorded!: boolean;
+
+  @ApiProperty({ type: String })
+  refundStatus!: string;
+
+  @ApiProperty({ type: String })
+  paymentStatus!: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  blockingCode!: string | null;
+}
+
+export class RefundProviderResultCommandResultDto {
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty({ type: String, enum: ["REFUND_PROVIDER_RESULT_RECORDED"] })
+  status!: "REFUND_PROVIDER_RESULT_RECORDED";
+
+  @ApiProperty({ type: RefundProviderResultPayloadDto })
+  result!: RefundProviderResultPayloadDto;
+}
+
+export class RetryRefundPayloadDto {
+  @ApiProperty(UUID)
+  sourceRefundTransactionId!: string;
+
+  @ApiProperty(UUID)
+  refundTransactionId!: string;
+
+  @ApiProperty(UUID)
+  failureProviderEventId!: string;
+
+  @ApiProperty(INTEGER_STRING)
+  amountMinor!: string;
+
+  @ApiProperty({ type: String })
+  currency!: string;
+}
+
+export class RetryRefundCommandResultDto {
+  @ApiProperty(UUID)
+  orderId!: string;
+
+  @ApiProperty({ type: String, enum: ["REFUND_RETRY_PENDING"] })
+  status!: "REFUND_RETRY_PENDING";
+
+  @ApiProperty({ type: RetryRefundPayloadDto })
+  result!: RetryRefundPayloadDto;
+}
+
 export class FulfilmentPhaseDto {
   @ApiProperty(UUID)
   id!: string;

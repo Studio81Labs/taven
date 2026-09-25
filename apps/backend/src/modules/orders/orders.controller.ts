@@ -44,7 +44,9 @@ import {
   RejectClaimDto,
   RefundDto,
   RefundProviderResultDto,
+  RefundProviderResultCommandResultDto,
   RetryRefundDto,
+  RetryRefundCommandResultDto,
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
@@ -581,7 +583,7 @@ export class OrdersController {
   @ApiConflictResponse({
     description: "Refund evidence or expected state is stale or ineligible",
   })
-  @ApiOkResponse({ type: FulfilmentCommandResultDto })
+  @ApiOkResponse({ type: RefundProviderResultCommandResultDto })
   recordRefundProviderResult(
     @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
@@ -611,7 +613,7 @@ export class OrdersController {
   @ApiConflictResponse({
     description: "Failure evidence or refund obligation is not retryable",
   })
-  @ApiOkResponse({ type: FulfilmentCommandResultDto })
+  @ApiOkResponse({ type: RetryRefundCommandResultDto })
   retryRefund(
     @CurrentOperator() operator: OperatorContext,
     @Param("orderId") orderId: string,
