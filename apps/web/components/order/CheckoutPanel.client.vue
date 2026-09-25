@@ -1124,6 +1124,24 @@ function compactBilling(
           <dt>Doručení</dt>
           <dd>{{ selectedDestination?.label || "Místo není vybráno" }}</dd>
         </div>
+        <template v-if="bindingPrice?.taxRegime === 'VAT_PAYER'">
+          <div class="checkout-summary__tax-start">
+            <dt>Cena bez DPH</dt>
+            <dd class="mono">
+              {{
+                formatMoney(bindingPrice.netAmountMinor, bindingPrice.currency)
+              }}
+            </dd>
+          </div>
+          <div>
+            <dt>DPH {{ bindingPrice.vatRateBasisPoints / 100 }} %</dt>
+            <dd class="mono">
+              {{
+                formatMoney(bindingPrice.vatAmountMinor, bindingPrice.currency)
+              }}
+            </dd>
+          </div>
+        </template>
       </dl>
       <div class="checkout-summary__total">
         <div>

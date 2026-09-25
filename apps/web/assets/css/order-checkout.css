@@ -265,6 +265,12 @@
   overflow-wrap: anywhere;
 }
 
+.checkout-summary__breakdown .checkout-summary__tax-start {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+}
+
 .checkout-summary__total {
   display: flex;
   align-items: center;

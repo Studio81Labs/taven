@@ -277,6 +277,19 @@ test.describe("Accessibility and Responsive Viewports", () => {
     await expect(
       page.getByRole("button", { name: /Objednat a zaplatit/i }),
     ).toHaveCount(1);
+    const taxBreakdown = page.locator(".checkout-summary__breakdown");
+    const netAmount = taxBreakdown.locator(".checkout-summary__tax-start");
+    await expect(netAmount.locator("dt")).toHaveText("Cena bez DPH");
+    await expect(netAmount.locator("dd")).toHaveText(
+      /[\d\s\u00a0]+,\d{2}\s*Kč/,
+    );
+    const vatAmount = taxBreakdown.locator(
+      ".checkout-summary__tax-start + div",
+    );
+    await expect(vatAmount.locator("dt")).toHaveText("DPH 21 %");
+    await expect(vatAmount.locator("dd")).toHaveText(
+      /[\d\s\u00a0]+,\d{2}\s*Kč/,
+    );
 
     const scan = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
