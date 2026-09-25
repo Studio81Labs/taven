@@ -1244,6 +1244,12 @@ export class OrdersService {
         await this.lockRecoveryCandidateResources(tx, [
           body.candidateResourceEstimateId,
         ]);
+        await this.assertRecoveryInventoryMatchesSource(tx, [
+          {
+            sourceJobId,
+            candidateResourceEstimateId: body.candidateResourceEstimateId,
+          },
+        ]);
         const now = await databaseNow(tx);
         if (request.deadlineAt <= now)
           throw new ConflictException(
@@ -3404,6 +3410,7 @@ export class OrdersService {
             ({ candidateResourceEstimateId }) => candidateResourceEstimateId,
           ),
         );
+        await this.assertRecoveryInventoryMatchesSource(tx, replacements);
         const now = await databaseNow(tx);
         const commandDigest = createHash("sha256")
           .update(`${claimId}\0${requestedPlanKey ?? key ?? "claim-reprint"}`)
@@ -7158,6 +7165,36 @@ export class OrdersService {
       WHERE candidate_resource_estimate_id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
       ORDER BY node_id, id FOR UPDATE
     `;
+  }
+
+  private async assertRecoveryInventoryMatchesSource(
+    tx: Transaction,
+    replacements: Array<{
+      sourceJobId: string;
+      candidateResourceEstimateId: string;
+    }>,
+  ): Promise<void> {
+    for (const { sourceJobId, candidateResourceEstimateId } of replacements) {
+      const rows = await tx.$queryRaw<Array<{ matches: boolean }>>`
+        SELECT COALESCE(bool_and(
+          item.material = inventory.material
+          AND (item.color IS NULL OR item.color IS NOT DISTINCT FROM inventory.color)
+        ), false) AS matches
+        FROM jobs source_job
+        JOIN phase_resource_plan_slots source_slot
+          ON source_slot.phase_resource_plan_job_id = source_job.phase_resource_plan_job_id
+        JOIN fulfilment_slots slot ON slot.id = source_slot.fulfilment_slot_id
+        JOIN order_items item ON item.id = slot.order_item_id
+        JOIN candidate_resource_estimates candidate
+          ON candidate.id = ${candidateResourceEstimateId}::uuid
+        JOIN inventories inventory ON inventory.id = candidate.inventory_id
+        WHERE source_job.id = ${sourceJobId}::uuid
+      `;
+      if (!rows[0]?.matches)
+        throw new ConflictException(
+          "Recovery candidate inventory no longer matches source material and color",
+        );
+    }
   }
 
   private async assertRecoveryCandidateProvenance(

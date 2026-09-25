@@ -3423,6 +3423,17 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     expect(recolored.items.every(({ selectable }) => !selectable)).toBe(true);
     expect(recolored.items[0]?.blockingCodes).toContain("RESOURCE_CHANGED");
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        {
+          candidateResourceEstimateId:
+            recolored.items[0]!.candidateResourceEstimateId,
+        },
+        `recolored-replacement:${randomUUID()}`,
+      ),
+    ).rejects.toThrow(/inventory no longer matches source material and color/);
     await prisma.inventory.update({
       where: { id: fixture.foundation.inventoryId },
       data: { color: originalInventory.color },
@@ -3618,6 +3629,36 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     const selected = choices.items.find(({ selectable }) => selectable);
     expect(selected).toBeDefined();
+    const originalColor = (
+      await prisma.inventory.findUniqueOrThrow({
+        where: { id: selected!.inventoryId },
+        select: { color: true },
+      })
+    ).color;
+    await prisma.inventory.update({
+      where: { id: selected!.inventoryId },
+      data: { color: "changed-before-reprint" },
+    });
+    await expect(
+      orders.createClaimReprint(
+        orderId,
+        claim.id,
+        {
+          replacements: [
+            {
+              sourceJobId,
+              candidateResourceEstimateId:
+                selected!.candidateResourceEstimateId,
+            },
+          ],
+        },
+        `recolored-reprint:${randomUUID()}`,
+      ),
+    ).rejects.toThrow(/inventory no longer matches source material and color/);
+    await prisma.inventory.update({
+      where: { id: selected!.inventoryId },
+      data: { color: originalColor },
+    });
     const reprint = await orders.createClaimReprint(
       orderId,
       claim.id,

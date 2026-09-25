@@ -719,20 +719,13 @@ export class RecoveryCandidatePreparationService {
         select: { id: true },
       });
       const contextValid = await this.contextMatches(tx, row);
-      const items = (
-        await Promise.all(
-          page.map((mapping) =>
-            this.choiceForDispatch(
-              tx,
-              mapping.outboxMessageId,
-              mapping.sourceJobId,
-              current?.id === preparationId,
-              contextValid,
-              now,
-            ),
-          ),
-        )
-      ).filter((item): item is RecoveryCandidateChoiceDto => item !== null);
+      const items = await this.choicesForDispatches(
+        tx,
+        page,
+        current?.id === preparationId,
+        contextValid,
+        now,
+      );
       return {
         items,
         ...(mappings.length > limit
@@ -742,74 +735,99 @@ export class RecoveryCandidatePreparationService {
     });
   }
 
-  private async choiceForDispatch(
+  private async choicesForDispatches(
     tx: Transaction,
-    outboxMessageId: string,
-    sourceJobId: string,
+    mappings: Array<{ outboxMessageId: string; sourceJobId: string }>,
     latest: boolean,
     contextValid: boolean,
     now: Date,
-  ): Promise<RecoveryCandidateChoiceDto | null> {
-    const terminal = await tx.candidateEstimateTerminalResult.findUnique({
-      where: { outboxMessageId },
+  ): Promise<RecoveryCandidateChoiceDto[]> {
+    if (!mappings.length) return [];
+    const outboxMessageIds = mappings.map(
+      ({ outboxMessageId }) => outboxMessageId,
+    );
+    const terminals = await tx.candidateEstimateTerminalResult.findMany({
+      where: {
+        outboxMessageId: { in: outboxMessageIds },
+        outcome: "SUCCEEDED",
+      },
     });
-    if (
-      terminal?.outcome !== "SUCCEEDED" ||
-      !terminal.candidateResourceEstimateId
-    )
-      return null;
-    const candidate = await tx.candidateResourceEstimate.findUnique({
-      where: { id: terminal.candidateResourceEstimateId },
+    const terminalByOutbox = new Map(
+      terminals.map((terminal) => [terminal.outboxMessageId, terminal]),
+    );
+    const candidates = await tx.candidateResourceEstimate.findMany({
+      where: {
+        id: {
+          in: terminals.flatMap(({ candidateResourceEstimateId }) =>
+            candidateResourceEstimateId ? [candidateResourceEstimateId] : [],
+          ),
+        },
+      },
       include: {
         capacityIntervals: { orderBy: { intervalIndex: "asc" } },
         inventory: true,
       },
     });
-    if (!candidate) return null;
-    const currentResources = await this.eligibleOutboxIds(tx, [
-      outboxMessageId,
-    ]);
-    const blockers = [
-      ...(!latest ? ["PREPARATION_SUPERSEDED"] : []),
-      ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
-      ...(candidate.expiresAt.getTime() <= now.getTime() + 15 * 60_000
-        ? ["CANDIDATE_EXPIRED"]
-        : []),
-      ...(candidate.capacityIntervals.length === 0 ||
-      candidate.capacityIntervals.some(
-        ({ startsAt, endsAt }) => startsAt <= now || endsAt <= startsAt,
-      )
-        ? ["SCHEDULE_STALE"]
-        : []),
-      ...(candidate.inventory.status !== "AVAILABLE"
-        ? ["INVENTORY_UNAVAILABLE"]
-        : []),
-      ...(!currentResources.has(outboxMessageId) ? ["RESOURCE_CHANGED"] : []),
-    ];
-    return {
-      candidateResourceEstimateId: candidate.id,
-      sourceJobId,
-      machineId: candidate.machineId,
-      machineProfileId: candidate.machineProfileId,
-      machineCalibrationId: candidate.machineCalibrationId,
-      inventoryId: candidate.inventoryId,
-      printConfigRevisionId: candidate.printConfigRevisionId,
-      material: candidate.inventory.material,
-      color: candidate.inventory.color,
-      quantity: candidate.quantity,
-      partsPerPlate: candidate.partsPerPlate,
-      requiredMaterialMilligrams:
-        candidate.requiredMaterialMilligrams.toString(),
-      requiredMachineSeconds: candidate.requiredMachineSeconds.toString(),
-      intervals: candidate.capacityIntervals.map(({ startsAt, endsAt }) => ({
-        startsAt: startsAt.toISOString(),
-        endsAt: endsAt.toISOString(),
-      })),
-      calculatedAt: candidate.calculatedAt.toISOString(),
-      expiresAt: candidate.expiresAt.toISOString(),
-      selectable: blockers.length === 0,
-      blockingCodes: blockers,
-    };
+    const candidateById = new Map(
+      candidates.map((candidate) => [candidate.id, candidate]),
+    );
+    const eligibleOutboxIds = await this.eligibleOutboxIds(
+      tx,
+      outboxMessageIds,
+    );
+    return mappings.flatMap((mapping) => {
+      const terminal = terminalByOutbox.get(mapping.outboxMessageId);
+      if (!terminal?.candidateResourceEstimateId) return [];
+      const candidate = candidateById.get(terminal.candidateResourceEstimateId);
+      if (!candidate) return [];
+      const blockers = [
+        ...(!latest ? ["PREPARATION_SUPERSEDED"] : []),
+        ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
+        ...(candidate.expiresAt.getTime() <= now.getTime() + 15 * 60_000
+          ? ["CANDIDATE_EXPIRED"]
+          : []),
+        ...(candidate.capacityIntervals.length === 0 ||
+        candidate.capacityIntervals.some(
+          ({ startsAt, endsAt }) => startsAt <= now || endsAt <= startsAt,
+        )
+          ? ["SCHEDULE_STALE"]
+          : []),
+        ...(candidate.inventory.status !== "AVAILABLE"
+          ? ["INVENTORY_UNAVAILABLE"]
+          : []),
+        ...(!eligibleOutboxIds.has(mapping.outboxMessageId)
+          ? ["RESOURCE_CHANGED"]
+          : []),
+      ];
+      return [
+        {
+          candidateResourceEstimateId: candidate.id,
+          sourceJobId: mapping.sourceJobId,
+          machineId: candidate.machineId,
+          machineProfileId: candidate.machineProfileId,
+          machineCalibrationId: candidate.machineCalibrationId,
+          inventoryId: candidate.inventoryId,
+          printConfigRevisionId: candidate.printConfigRevisionId,
+          material: candidate.inventory.material,
+          color: candidate.inventory.color,
+          quantity: candidate.quantity,
+          partsPerPlate: candidate.partsPerPlate,
+          requiredMaterialMilligrams:
+            candidate.requiredMaterialMilligrams.toString(),
+          requiredMachineSeconds: candidate.requiredMachineSeconds.toString(),
+          intervals: candidate.capacityIntervals.map(
+            ({ startsAt, endsAt }) => ({
+              startsAt: startsAt.toISOString(),
+              endsAt: endsAt.toISOString(),
+            }),
+          ),
+          calculatedAt: candidate.calculatedAt.toISOString(),
+          expiresAt: candidate.expiresAt.toISOString(),
+          selectable: blockers.length === 0,
+          blockingCodes: blockers,
+        },
+      ];
+    });
   }
 
   private async eligibleOutboxIds(
