@@ -1457,8 +1457,11 @@ export class RecoveryCandidatePreparationService {
       incidentEvidenceId = evidence.id;
       claimId = claim.id;
     }
-    const sources = await Promise.all(
-      sourceJobIds.map((id) => this.sourceForJob(tx, orderId, id, nodeId)),
+    const sources = await this.sourcesForJobs(
+      tx,
+      orderId,
+      sourceJobIds,
+      nodeId,
     );
     if (expectedClaimSlotIds) {
       const actual = sources.flatMap(({ slotIds }) => slotIds).sort();
@@ -1537,14 +1540,14 @@ export class RecoveryCandidatePreparationService {
     };
   }
 
-  private async sourceForJob(
+  private async sourcesForJobs(
     tx: Transaction,
     orderId: string,
-    jobId: string,
+    jobIds: string[],
     nodeId: string,
-  ): Promise<Source> {
-    const job = await tx.job.findFirst({
-      where: { id: jobId, orderId, nodeId },
+  ): Promise<Source[]> {
+    const jobs = await tx.job.findMany({
+      where: { id: { in: jobIds }, orderId, nodeId },
       include: {
         phaseResourcePlanJob: {
           include: {
@@ -1557,22 +1560,26 @@ export class RecoveryCandidatePreparationService {
         },
       },
     });
-    if (!job || !job.phaseResourcePlanJob.slots.length)
-      throw new ConflictException(
-        "Recovery source Job has no frozen slot partition",
+    const jobsById = new Map(jobs.map((job) => [job.id, job]));
+    const sourceRows = jobIds.map((jobId) => {
+      const job = jobsById.get(jobId);
+      if (!job || !job.phaseResourcePlanJob.slots.length)
+        throw new ConflictException(
+          "Recovery source Job has no frozen slot partition",
+        );
+      const planJob = job.phaseResourcePlanJob;
+      const candidate = planJob.candidateResourceEstimate;
+      const itemIds = new Set(
+        planJob.slots.map(({ fulfilmentSlot }) => fulfilmentSlot.orderItemId),
       );
-    const planJob = job.phaseResourcePlanJob;
-    const candidate = planJob.candidateResourceEstimate;
-    const itemIds = new Set(
-      planJob.slots.map(({ fulfilmentSlot }) => fulfilmentSlot.orderItemId),
-    );
-    if (itemIds.size !== 1 || planJob.slots.length !== candidate.quantity)
-      throw new ConflictException(
-        "Recovery source Job has an unsupported slot partition",
-      );
-    const itemId = [...itemIds][0]!;
-    const item = await tx.orderItem.findFirst({
-      where: { id: itemId, orderId },
+      if (itemIds.size !== 1 || planJob.slots.length !== candidate.quantity)
+        throw new ConflictException(
+          "Recovery source Job has an unsupported slot partition",
+        );
+      return { jobId, job, planJob, candidate, itemId: [...itemIds][0]! };
+    });
+    const items = await tx.orderItem.findMany({
+      where: { id: { in: sourceRows.map(({ itemId }) => itemId) }, orderId },
       include: {
         sourceModelFile: true,
         modelGeometry: true,
@@ -1583,138 +1590,161 @@ export class RecoveryCandidatePreparationService {
         },
       },
     });
-    if (
-      !item ||
-      item.modelGeometryId !== candidate.modelGeometryId ||
-      item.printConfigRevisionId !== candidate.printConfigRevisionId ||
-      item.sourceModelFile.deletedAt ||
-      item.modelGeometry.deletedAt ||
-      (item.sourceModelFile.retentionHold === "NONE" &&
-        item.sourceModelFile.sourceDeleteAfter <= (await databaseNow(tx)))
-    )
-      throw new GoneException(
-        "Trusted recovery source geometry is unavailable",
-      );
+    const itemsById = new Map(items.map((item) => [item.id, item]));
     const order = await tx.order.findUnique({
       where: { id: orderId },
       include: { individualOrigin: { include: { quote: true } } },
     });
     if (!order) throw new NotFoundException("Order was not found");
-    const originalReceipt = await tx.candidateEstimateTerminalResult.findUnique(
-      {
-        where: { candidateResourceEstimateId: candidate.id },
-        include: { outboxMessage: true },
+    const receipts = await tx.candidateEstimateTerminalResult.findMany({
+      where: {
+        candidateResourceEstimateId: {
+          in: sourceRows.map(({ candidate }) => candidate.id),
+        },
       },
-    );
-    const originalPayload = originalReceipt?.outboxMessage.payload as
-      Record<string, unknown> | undefined;
-    const { CandidateEstimateJobSchema } =
-      await import("@taven/slicer-contracts");
-    const originalJob =
-      originalReceipt?.outcome === "SUCCEEDED"
-        ? CandidateEstimateJobSchema.safeParse(originalPayload?.job)
-        : null;
-    const original = originalJob?.success ? originalJob.data.input : null;
-    const originalGeometry = original?.geometry;
-    if (
-      !originalGeometry ||
-      originalGeometry.sourceModelFileId !== item.sourceModelFileId ||
-      originalGeometry.sourceContentSha256 !==
-        item.sourceModelFile.contentHash ||
-      originalGeometry.modelGeometryId !== item.modelGeometryId ||
-      originalGeometry.geometrySha256 !== item.modelGeometry.geometryHash ||
-      original?.printConfig.revisionId !== item.printConfigRevisionId ||
-      originalPayload?.nodeId !== job.nodeId ||
-      originalPayload?.inventoryId !== candidate.inventoryId ||
-      original?.machineId !== candidate.machineId ||
-      original?.machineProfile.revisionId !== candidate.machineProfileId ||
-      original?.machineCalibration.revisionId !==
-        candidate.machineCalibrationId ||
-      original?.arrangementRevision.revisionId !==
-        candidate.arrangementRevisionId ||
-      original.partsPerPlate !== candidate.partsPerPlate ||
-      original.quantity !== candidate.quantity ||
-      original.shipmentPlanId !== job.shipmentPlanId
-    )
-      throw new ConflictException("Accepted source dispatch is unavailable");
-    const quoteItem = item.individualSource?.quoteItem;
-    const individual = order.individualOrigin;
-    const selection = quoteItem?.modelSelection;
-    const acceptedProfile = await tx.machineProfile.findUnique({
-      where: { id: candidate.machineProfileId },
-      select: { referenceProfileId: true },
+      include: { outboxMessage: true },
     });
-    if (!acceptedProfile)
-      throw new ConflictException("Accepted source profile is unavailable");
-    const referenceProfileId =
-      item.primaryReferenceSliceResult?.referenceProfileId ??
-      acceptedProfile.referenceProfileId;
-    if (referenceProfileId !== acceptedProfile.referenceProfileId)
-      throw new ConflictException("Accepted source profile has changed");
-    let frozenSelection: FrozenCandidateSource | null = null;
-    if (individual) {
-      if (
-        quoteItem?.quoteId === individual.quoteId &&
-        selection &&
-        selection.requestId === individual.quote.quoteRequestId &&
-        selection.modelFileId === item.sourceModelFileId &&
-        selection.modelGeometryId === item.modelGeometryId &&
-        selection.sourceContentSha256 === item.sourceModelFile.contentHash &&
-        quoteItem.printConfigRevisionId === item.printConfigRevisionId &&
-        quoteItem.primaryReferenceSliceResultId ===
-          item.primaryReferenceSliceResultId &&
-        quoteItem.quantity === item.quantity
-      ) {
-        frozenSelection = {
-          referenceProfileId,
-          bodyIds: selection.bodyIds,
-          selectionSha256: selection.selectionSha256,
-        };
-      }
-    } else {
-      frozenSelection = {
-        referenceProfileId,
-        bodyIds: originalGeometry.bodyIds,
-        selectionSha256: originalGeometry.selectionSha256,
-      };
-    }
-    if (
-      frozenSelection &&
-      (frozenSelection.selectionSha256 !== originalGeometry.selectionSha256 ||
-        frozenSelection.bodyIds.length !== originalGeometry.bodyIds.length ||
-        frozenSelection.bodyIds.some(
-          (id, index) => id !== originalGeometry.bodyIds[index],
-        ))
-    )
-      throw new ConflictException(
-        "Accepted source selection does not match its dispatch",
-      );
-    if (!frozenSelection)
-      throw new ConflictException(
-        "Accepted source body selection is unavailable",
-      );
-    const slotIds = planJob.slots.map(
-      ({ fulfilmentSlotId }) => fulfilmentSlotId,
+    const receiptsByCandidateId = new Map(
+      receipts.map((receipt) => [receipt.candidateResourceEstimateId, receipt]),
+    );
+    const profiles = await tx.machineProfile.findMany({
+      where: {
+        id: {
+          in: sourceRows.map(({ candidate }) => candidate.machineProfileId),
+        },
+      },
+      select: { id: true, referenceProfileId: true },
+    });
+    const profilesById = new Map(
+      profiles.map((profile) => [profile.id, profile]),
     );
     const fingerprintRows = await tx.$queryRaw<
-      Array<{ fingerprint: string | null }>
+      Array<{ jobId: string; fingerprint: string | null }>
     >`
-      SELECT taven_recovery_source_fingerprint(${jobId}::uuid) AS fingerprint
+      SELECT job.id AS "jobId", taven_recovery_source_fingerprint(job.id) AS fingerprint
+      FROM jobs job
+      WHERE job.id IN (${Prisma.join(jobIds.map((id) => Prisma.sql`${id}::uuid`))})
     `;
-    const fingerprint = fingerprintRows[0]?.fingerprint;
-    if (!fingerprint)
-      throw new ConflictException("Recovery source fingerprint is unavailable");
-    return {
-      jobId,
-      nodeId,
-      orderPhaseId: job.orderPhaseId,
-      shipmentPlanId: job.shipmentPlanId,
-      item,
-      selection: frozenSelection,
-      slotIds,
-      quantity: candidate.quantity,
-      fingerprint,
-      sourceCandidateId: candidate.id,
-    };
+    const fingerprintsByJobId = new Map(
+      fingerprintRows.map(({ jobId, fingerprint }) => [jobId, fingerprint]),
+    );
+    const observedAt = await databaseNow(tx);
+    const { CandidateEstimateJobSchema } =
+      await import("@taven/slicer-contracts");
+    return sourceRows.map(({ jobId, job, planJob, candidate, itemId }) => {
+      const item = itemsById.get(itemId);
+      if (
+        !item ||
+        item.modelGeometryId !== candidate.modelGeometryId ||
+        item.printConfigRevisionId !== candidate.printConfigRevisionId ||
+        item.sourceModelFile.deletedAt ||
+        item.modelGeometry.deletedAt ||
+        (item.sourceModelFile.retentionHold === "NONE" &&
+          item.sourceModelFile.sourceDeleteAfter <= observedAt)
+      )
+        throw new GoneException(
+          "Trusted recovery source geometry is unavailable",
+        );
+      const originalReceipt = receiptsByCandidateId.get(candidate.id);
+      const originalPayload = originalReceipt?.outboxMessage.payload as
+        Record<string, unknown> | undefined;
+      const originalJob =
+        originalReceipt?.outcome === "SUCCEEDED"
+          ? CandidateEstimateJobSchema.safeParse(originalPayload?.job)
+          : null;
+      const original = originalJob?.success ? originalJob.data.input : null;
+      const originalGeometry = original?.geometry;
+      if (
+        !originalGeometry ||
+        originalGeometry.sourceModelFileId !== item.sourceModelFileId ||
+        originalGeometry.sourceContentSha256 !==
+          item.sourceModelFile.contentHash ||
+        originalGeometry.modelGeometryId !== item.modelGeometryId ||
+        originalGeometry.geometrySha256 !== item.modelGeometry.geometryHash ||
+        original?.printConfig.revisionId !== item.printConfigRevisionId ||
+        originalPayload?.nodeId !== job.nodeId ||
+        originalPayload?.inventoryId !== candidate.inventoryId ||
+        original?.machineId !== candidate.machineId ||
+        original?.machineProfile.revisionId !== candidate.machineProfileId ||
+        original?.machineCalibration.revisionId !==
+          candidate.machineCalibrationId ||
+        original?.arrangementRevision.revisionId !==
+          candidate.arrangementRevisionId ||
+        original.partsPerPlate !== candidate.partsPerPlate ||
+        original.quantity !== candidate.quantity ||
+        original.shipmentPlanId !== job.shipmentPlanId
+      )
+        throw new ConflictException("Accepted source dispatch is unavailable");
+      const quoteItem = item.individualSource?.quoteItem;
+      const individual = order.individualOrigin;
+      const selection = quoteItem?.modelSelection;
+      const acceptedProfile = profilesById.get(candidate.machineProfileId);
+      if (!acceptedProfile)
+        throw new ConflictException("Accepted source profile is unavailable");
+      const referenceProfileId =
+        item.primaryReferenceSliceResult?.referenceProfileId ??
+        acceptedProfile.referenceProfileId;
+      if (referenceProfileId !== acceptedProfile.referenceProfileId)
+        throw new ConflictException("Accepted source profile has changed");
+      let frozenSelection: FrozenCandidateSource | null = null;
+      if (individual) {
+        if (
+          quoteItem?.quoteId === individual.quoteId &&
+          selection &&
+          selection.requestId === individual.quote.quoteRequestId &&
+          selection.modelFileId === item.sourceModelFileId &&
+          selection.modelGeometryId === item.modelGeometryId &&
+          selection.sourceContentSha256 === item.sourceModelFile.contentHash &&
+          quoteItem.printConfigRevisionId === item.printConfigRevisionId &&
+          quoteItem.primaryReferenceSliceResultId ===
+            item.primaryReferenceSliceResultId &&
+          quoteItem.quantity === item.quantity
+        ) {
+          frozenSelection = {
+            referenceProfileId,
+            bodyIds: selection.bodyIds,
+            selectionSha256: selection.selectionSha256,
+          };
+        }
+      } else {
+        frozenSelection = {
+          referenceProfileId,
+          bodyIds: originalGeometry.bodyIds,
+          selectionSha256: originalGeometry.selectionSha256,
+        };
+      }
+      if (
+        frozenSelection &&
+        (frozenSelection.selectionSha256 !== originalGeometry.selectionSha256 ||
+          frozenSelection.bodyIds.length !== originalGeometry.bodyIds.length ||
+          frozenSelection.bodyIds.some(
+            (id, index) => id !== originalGeometry.bodyIds[index],
+          ))
+      )
+        throw new ConflictException(
+          "Accepted source selection does not match its dispatch",
+        );
+      if (!frozenSelection)
+        throw new ConflictException(
+          "Accepted source body selection is unavailable",
+        );
+      const fingerprint = fingerprintsByJobId.get(jobId);
+      if (!fingerprint)
+        throw new ConflictException(
+          "Recovery source fingerprint is unavailable",
+        );
+      return {
+        jobId,
+        nodeId,
+        orderPhaseId: job.orderPhaseId,
+        shipmentPlanId: job.shipmentPlanId,
+        item,
+        selection: frozenSelection,
+        slotIds: planJob.slots.map(({ fulfilmentSlotId }) => fulfilmentSlotId),
+        quantity: candidate.quantity,
+        fingerprint,
+        sourceCandidateId: candidate.id,
+      };
+    });
   }
 }
