@@ -327,26 +327,30 @@ export class RecoveryCandidatePreparationService {
           attempt: 1,
           input: option.input,
         });
-        try {
-          dispatches.push({
-            source,
-            option,
-            prepared: await this.candidates.prepareDispatch({
-              nodeId,
-              inventoryId: option.inventoryId,
-              job,
-            }),
-          });
-        } catch (error) {
-          if (error instanceof ResourceNotFoundError)
-            throw new ConflictException("RECOVERY_RESOURCE_CHANGED");
-          if (error instanceof SlicerProfileSnapshotUnavailableError)
-            throw new ServiceUnavailableException(
-              "RECOVERY_SNAPSHOT_UNAVAILABLE",
-            );
-          throw error;
-        }
+        dispatches.push({
+          source,
+          option,
+          prepared: {
+            nodeId,
+            inventoryId: option.inventoryId,
+            job,
+          },
+        });
       }
+    }
+    try {
+      const prepared = await this.candidates.prepareDispatchBatch(
+        dispatches.map((dispatch) => dispatch.prepared),
+      );
+      prepared.forEach((value, index) => {
+        dispatches[index]!.prepared = value;
+      });
+    } catch (error) {
+      if (error instanceof ResourceNotFoundError)
+        throw new ConflictException("RECOVERY_RESOURCE_CHANGED");
+      if (error instanceof SlicerProfileSnapshotUnavailableError)
+        throw new ServiceUnavailableException("RECOVERY_SNAPSHOT_UNAVAILABLE");
+      throw error;
     }
 
     return this.prisma.$transaction(

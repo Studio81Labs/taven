@@ -297,6 +297,38 @@ export class CandidateEstimateService {
     return { ...input, job };
   }
 
+  async prepareDispatchBatch(
+    inputs: readonly CandidateEstimateDispatch[],
+  ): Promise<CandidateEstimateDispatch[]> {
+    const { CandidateEstimateJobSchema } =
+      await import("@taven/slicer-contracts");
+    const prepared = inputs.map((input) => {
+      if (input.availableAt !== undefined) {
+        assertValidDate(input.availableAt, "availableAt");
+      }
+      let job: CandidateEstimateJob;
+      try {
+        job = CandidateEstimateJobSchema.parse(input.job);
+      } catch (error) {
+        throw new ResourceValidationError(
+          `candidate estimate job is invalid: ${errorMessage(error)}`,
+        );
+      }
+      return { ...input, job };
+    });
+    try {
+      await this.snapshots.ensureCandidateJobSnapshotsBatch(
+        prepared.map(({ job }) => job),
+      );
+    } catch (error) {
+      if (error instanceof SlicerProfileSnapshotMismatchError) {
+        throw new ResourceNotFoundError(error.message);
+      }
+      throw error;
+    }
+    return prepared;
+  }
+
   /** Stage an exact dispatch in the caller's transaction with its owner. */
   async stageDispatch(
     transaction: Prisma.TransactionClient,

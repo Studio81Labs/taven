@@ -113,6 +113,42 @@ async function operatorForRecoveryTest(
   return operator;
 }
 
+function recoveryReplayData(
+  preparation: {
+    kind: string;
+    orderId: string;
+    targetId: string;
+    replacementRequestId: string | null;
+    predecessorShipmentId: string | null;
+    reason: string;
+  },
+  idempotencyKey = randomUUID(),
+) {
+  const { kind, orderId, targetId, reason } = preparation;
+  return {
+    namespace: `recovery:${orderId}:${createHash("sha256")
+      .update(JSON.stringify({ kind, targetId }))
+      .digest("hex")
+      .slice(0, 24)}`,
+    idempotencyKey,
+    requestFingerprint: createHash("sha256")
+      .update(
+        JSON.stringify({
+          kind,
+          orderId,
+          targetId,
+          expectedId:
+            kind === "JOB_REPLACEMENT"
+              ? preparation.replacementRequestId
+              : preparation.predecessorShipmentId,
+          reason,
+        }),
+      )
+      .digest("hex"),
+    expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+  };
+}
+
 function legacyOrdersClient(
   service: OrdersService,
   operatorId: string,
@@ -704,12 +740,23 @@ async function createFreshReplacementCandidate(
   });
   const idempotencyRecord = await prisma.idempotencyRecord.create({
     data: {
-      namespace: `fixture-recovery:${targetId}`,
+      namespace: `recovery:${sourceJob.orderId}:${createHash("sha256")
+        .update(JSON.stringify({ kind, targetId }))
+        .digest("hex")
+        .slice(0, 24)}`,
       idempotencyKey: `fixture:${candidateId}`,
       requestFingerprint: createHash("sha256")
-        .update(candidateId)
+        .update(
+          JSON.stringify({
+            kind,
+            orderId: sourceJob.orderId,
+            targetId,
+            expectedId: request?.id ?? predecessorShipmentId,
+            reason: "fixture recovery candidate",
+          }),
+        )
         .digest("hex"),
-      expiresAt: new Date(calculatedAt.getTime() + 30 * 86400_000),
+      expiresAt: new Date("9999-12-31T00:00:00.000Z"),
     },
   });
   const recoveryOperator = await operatorForRecoveryTest(
@@ -3332,14 +3379,65 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(accepted.requestedAt).toBe(
       persistedPreparation.requestedAt.toISOString(),
     );
+    const wrongReplay = await prisma.idempotencyRecord.create({
+      data: {
+        ...recoveryReplayData(persistedPreparation),
+        namespace: `unrelated:${randomUUID()}`,
+      },
+    });
+    await expect(
+      prisma.recoveryCandidatePreparation.create({
+        data: {
+          ...persistedPreparation,
+          id: randomUUID(),
+          generation: persistedPreparation.generation + 1,
+          idempotencyRecordId: wrongReplay.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery preparation idempotency record is invalid/);
+    const wrongFingerprint = await prisma.idempotencyRecord.create({
+      data: {
+        ...recoveryReplayData(persistedPreparation),
+        requestFingerprint: "a".repeat(64),
+      },
+    });
+    await expect(
+      prisma.recoveryCandidatePreparation.create({
+        data: {
+          ...persistedPreparation,
+          id: randomUUID(),
+          generation: persistedPreparation.generation + 1,
+          idempotencyRecordId: wrongFingerprint.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery preparation idempotency record is invalid/);
+    const revokedOperator = await operatorForRecoveryTest(
+      testOperatorId,
+      nodeId,
+    );
+    await prisma.operatorSession.update({
+      where: { id: revokedOperator.sessionId },
+      data: { revokedAt: new Date() },
+    });
+    const replayForRevoked = await prisma.idempotencyRecord.create({
+      data: recoveryReplayData(persistedPreparation),
+    });
+    await expect(
+      prisma.recoveryCandidatePreparation.create({
+        data: {
+          ...persistedPreparation,
+          id: randomUUID(),
+          generation: persistedPreparation.generation + 1,
+          operatorSessionId: revokedOperator.sessionId,
+          idempotencyRecordId: replayForRevoked.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery preparation operator session is invalid/);
     await expect(
       prisma.$transaction(async (tx) => {
         const replay = await tx.idempotencyRecord.create({
           data: {
-            namespace: `backdate-probe:${randomUUID()}`,
-            idempotencyKey: randomUUID(),
-            requestFingerprint: "a".repeat(64),
-            expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+            ...recoveryReplayData(persistedPreparation),
           },
         });
         const direct = await tx.recoveryCandidatePreparation.create({
@@ -3832,10 +3930,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma.$transaction(async (tx) => {
         const replay = await tx.idempotencyRecord.create({
           data: {
-            namespace: `history-generation-gap:${randomUUID()}`,
-            idempotencyKey: randomUUID(),
-            requestFingerprint: "a".repeat(64),
-            expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+            ...recoveryReplayData(first),
           },
         });
         await tx.recoveryCandidatePreparation.create({
@@ -3851,10 +3946,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     for (const generation of [2, 3]) {
       const replay = await prisma.idempotencyRecord.create({
         data: {
-          namespace: `history-context:${randomUUID()}`,
-          idempotencyKey: randomUUID(),
-          requestFingerprint: "a".repeat(64),
-          expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+          ...recoveryReplayData(first),
         },
       });
       await prisma.recoveryCandidatePreparation.create({
@@ -4099,10 +4191,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         });
         const replay = await tx.idempotencyRecord.create({
           data: {
-            namespace: `resolved-slot-probe:${randomUUID()}`,
-            idempotencyKey: randomUUID(),
-            requestFingerprint: "b".repeat(64),
-            expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+            ...recoveryReplayData(persistedClaimPreparation),
           },
         });
         await tx.recoveryCandidatePreparation.create({
@@ -5732,10 +5821,10 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         });
         const replay = await tx.idempotencyRecord.create({
           data: {
-            namespace: `invalid-leaf-request:${randomUUID()}`,
-            idempotencyKey: randomUUID(),
-            requestFingerprint: "c".repeat(64),
-            expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+            ...recoveryReplayData({
+              ...firstStoredPreparation,
+              predecessorShipmentId: firstShipmentId,
+            }),
           },
         });
         await tx.recoveryCandidatePreparation.create({

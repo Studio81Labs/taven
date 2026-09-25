@@ -158,15 +158,44 @@ BEGIN
   END IF;
   -- The creation instant is database-owned even for direct SQL inserts.
   NEW.requested_at := clock_timestamp();
-  -- Sessions may later be pruned, so validate attribution on insert without
-  -- retaining a foreign key that would block session cleanup.
+  -- Lock both authentication rows so a concurrent revoke or credential reset
+  -- cannot commit between this check and the preparation transaction.
   IF NOT EXISTS (
     SELECT 1 FROM operator_sessions operator_session
+    JOIN operator_identities operator ON operator.id = operator_session.operator_id
     WHERE operator_session.id = NEW.operator_session_id
       AND operator_session.operator_id = NEW.operator_id
+      AND operator_session.revoked_at IS NULL
+      AND operator_session.absolute_expires_at > clock_timestamp()
+      AND operator_session.last_seen_at + interval '30 minutes' > clock_timestamp()
+      AND operator.active
+      AND operator_session.credential_version = operator.credential_version
+    FOR SHARE OF operator_session, operator
   ) THEN
     RAISE EXCEPTION 'recovery preparation operator session is invalid'
       USING ERRCODE = '23514', CONSTRAINT = 'recovery_preparation_operator_session_check';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM idempotency_records record
+    WHERE record.id = NEW.idempotency_record_id
+      AND record.namespace = 'recovery:' || NEW.order_id::text || ':' ||
+        left(encode(digest(format('{"kind":%s,"targetId":%s}',
+          to_json(NEW.kind::text)::text, to_json(NEW.target_id)::text),
+          'sha256'), 'hex'), 24)
+      AND record.request_fingerprint = encode(digest(format(
+        '{"kind":%s,"orderId":%s,"targetId":%s,"expectedId":%s,"reason":%s}',
+        to_json(NEW.kind::text)::text, to_json(NEW.order_id)::text,
+        to_json(NEW.target_id)::text,
+        to_json(CASE WHEN NEW.kind = 'JOB_REPLACEMENT'
+          THEN NEW.replacement_request_id ELSE NEW.predecessor_shipment_id END)::text,
+        to_json(NEW.reason)::text), 'sha256'), 'hex')
+      AND record.generation = 1
+      AND record.status = 'PROCESSING'
+      AND record.response_status_code IS NULL AND record.response_body IS NULL
+      AND record.expires_at >= '9999-12-31 00:00:00+00'::timestamptz
+  ) THEN
+    RAISE EXCEPTION 'recovery preparation idempotency record is invalid'
+      USING ERRCODE = '23514', CONSTRAINT = 'recovery_preparation_idempotency_check';
   END IF;
   IF NEW.kind = 'JOB_REPLACEMENT' THEN
     IF NOT EXISTS (
@@ -481,7 +510,40 @@ BEGIN
         AND preparation.predecessor_shipment_id = (
           SELECT replaces_shipment_id FROM shipments WHERE id = (
             SELECT replacement_shipment_id FROM claim_slot_resolutions
-            WHERE replacement_request_id = request.id LIMIT 1)) )
+            WHERE replacement_request_id = request.id LIMIT 1))
+        AND EXISTS (
+          SELECT 1 FROM shipments successor
+          WHERE successor.replaces_shipment_id = preparation.predecessor_shipment_id
+            AND successor.reprint_claim_id = preparation.claim_id
+            AND (SELECT array_agg(resolution.fulfilment_slot_id ORDER BY resolution.fulfilment_slot_id)
+                 FROM claim_slot_resolutions resolution
+                 WHERE resolution.claim_id = preparation.claim_id)
+              IS NOT DISTINCT FROM
+                (SELECT array_agg(slot.fulfilment_slot_id ORDER BY slot.fulfilment_slot_id)
+                 FROM shipment_plan_fulfilment_slots slot
+                 WHERE slot.shipment_plan_id = preparation.shipment_plan_id)
+            AND NOT EXISTS (
+              SELECT 1 FROM jobs source
+              JOIN phase_resource_plan_slots source_slot
+                ON source_slot.phase_resource_plan_job_id = source.phase_resource_plan_job_id
+              WHERE source.id = ANY(preparation.source_job_ids)
+                AND NOT EXISTS (
+                  SELECT 1 FROM replacement_requests completed
+                  JOIN jobs replacement ON replacement.id = completed.replacement_job_id
+                    AND replacement.replaces_job_id = source.id
+                  JOIN claim_slot_resolutions resolution
+                    ON resolution.replacement_request_id = completed.id
+                    AND resolution.fulfilment_slot_id = source_slot.fulfilment_slot_id
+                  WHERE completed.source_job_id = source.id
+                    AND completed.claim_id = preparation.claim_id
+                    AND completed.reason = 'SHIPMENT_LOST'
+                    AND completed.status = 'JOB_CREATED'
+                    AND resolution.claim_id = preparation.claim_id
+                    AND resolution.status = 'REPLACEMENT_PENDING'
+                    AND resolution.replacement_shipment_id = successor.id
+                )
+            )
+        ) )
     )
     AND preparation.generation = (
       SELECT max(current_preparation.generation)
