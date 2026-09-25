@@ -352,12 +352,16 @@ export class RecoveryCandidatePreparationService {
     return this.prisma.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${namespace}:${key}`}, 0))::text`;
-        for (const dispatchKey of dispatches
+        const dispatchKeys = dispatches
           .map(({ prepared }) => prepared.job.idempotencyKey)
-          .sort()) {
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${dispatchKey}, 0))::text`;
-        }
-        for (const objectKey of [
+          .sort();
+        if (dispatchKeys.length)
+          await tx.$queryRaw`
+          SELECT pg_advisory_xact_lock(hashtextextended(lock_key, 0))::text
+          FROM (SELECT unnest(ARRAY[${Prisma.join(dispatchKeys)}]::text[]) AS lock_key
+                ORDER BY lock_key) ordered_keys
+        `;
+        const objectKeys = [
           ...new Set(
             dispatches.flatMap(({ prepared }) =>
               prepared.job.input.occupancySliceTargets.map(
@@ -365,9 +369,13 @@ export class RecoveryCandidatePreparationService {
               ),
             ),
           ),
-        ].sort()) {
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${objectKey}, 1))::text`;
-        }
+        ].sort();
+        if (objectKeys.length)
+          await tx.$queryRaw`
+          SELECT pg_advisory_xact_lock(hashtextextended(lock_key, 1))::text
+          FROM (SELECT unnest(ARRAY[${Prisma.join(objectKeys)}]::text[]) AS lock_key
+                ORDER BY lock_key) ordered_keys
+        `;
         await assertOperationalOrderScope(tx, orderId, nodeId);
         await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
         const prior = await tx.idempotencyRecord.findFirst({
@@ -509,34 +517,35 @@ export class RecoveryCandidatePreparationService {
           requestedAt: created.requestedAt.toISOString(),
           statusPath: `/admin/orders/${orderId}/fulfilment/${kind === RecoveryCandidatePreparationKind.JOB_REPLACEMENT ? `jobs/${targetId}/replacement-preparations` : `claims/${targetId}/reprint-preparations`}/${preparationId}`,
         };
-        for (const { source, prepared } of dispatches) {
-          let staged: Awaited<
-            ReturnType<CandidateEstimateService["stageDispatch"]>
-          >;
-          try {
-            staged = await this.candidates.stageDispatch(tx, prepared);
-          } catch (error) {
-            if (
-              error instanceof ResourceNotFoundError ||
-              error instanceof ResourceConflictError
-            )
-              throw new ConflictException("RECOVERY_RESOURCE_CHANGED");
-            throw error;
-          }
-          await tx.recoveryCandidateDispatch.create({
-            data: {
-              preparationId,
-              nodeId,
-              orderId,
-              orderPhaseId: scope.orderPhaseId,
-              shipmentPlanId: scope.shipmentPlanId,
-              sourceJobId: source.jobId,
-              sourceFingerprint: source.fingerprint,
-              dispatchJobId: staged.job.jobId,
-              outboxMessageId: staged.outboxMessageId,
-            },
-          });
+        let staged: Awaited<
+          ReturnType<CandidateEstimateService["stageFreshRecoveryDispatches"]>
+        >;
+        try {
+          staged = await this.candidates.stageFreshRecoveryDispatches(
+            tx,
+            dispatches.map(({ prepared }) => prepared),
+          );
+        } catch (error) {
+          if (
+            error instanceof ResourceNotFoundError ||
+            error instanceof ResourceConflictError
+          )
+            throw new ConflictException("RECOVERY_RESOURCE_CHANGED");
+          throw error;
         }
+        await tx.recoveryCandidateDispatch.createMany({
+          data: dispatches.map(({ source }, index) => ({
+            preparationId,
+            nodeId,
+            orderId,
+            orderPhaseId: scope.orderPhaseId,
+            shipmentPlanId: scope.shipmentPlanId,
+            sourceJobId: source.jobId,
+            sourceFingerprint: source.fingerprint,
+            dispatchJobId: staged[index]!.job.jobId,
+            outboxMessageId: staged[index]!.outboxMessageId,
+          })),
+        });
         await this.audit.recordOperator(tx, operator, {
           eventType: "recovery.candidate_preparation_requested",
           orderId,
@@ -592,14 +601,15 @@ export class RecoveryCandidatePreparationService {
       { table: "inventories", ids: resources.map((row) => row.inventoryId) },
     ];
     for (const { table, ids } of lockSets) {
-      for (const id of [...new Set(ids)].sort()) {
-        // Table names are fixed locally; values remain bound parameters.
-        const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-          `SELECT id FROM ${table} WHERE id = $1::uuid FOR UPDATE`,
-          id,
-        );
-        if (!rows[0]) throw new ConflictException("RECOVERY_RESOURCE_CHANGED");
-      }
+      const sorted = [...new Set(ids)].sort();
+      if (!sorted.length) continue;
+      // Table names are fixed locally; values remain bound parameters.
+      const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+        `SELECT id FROM ${table} WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+        sorted,
+      );
+      if (rows.length !== sorted.length)
+        throw new ConflictException("RECOVERY_RESOURCE_CHANGED");
     }
     for (const { source, option } of dispatches) {
       const valid = await tx.$queryRaw<Array<{ eligible: boolean }>>`

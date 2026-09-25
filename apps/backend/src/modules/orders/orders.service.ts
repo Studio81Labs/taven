@@ -340,7 +340,12 @@ export class OrdersService {
           },
           select: { id: true, payoutAmount: true, payoutCurrency: true },
         });
-        await this.enqueueProductionSlice(tx, orderId, jobId);
+        await this.enqueueProductionSlice(
+          tx,
+          orderId,
+          jobId,
+          job.replacesJobId,
+        );
         return result(orderId, "JOB_ACCEPTED", accepted);
       },
     );
@@ -350,6 +355,7 @@ export class OrdersService {
     transaction: Transaction,
     orderId: string,
     jobId: string,
+    recoverySourceJobId: string | null,
   ): Promise<void> {
     const automaticOrigin = await transaction.automaticOrderOrigin.findUnique({
       where: { orderId },
@@ -387,6 +393,7 @@ export class OrdersService {
         machineCalibration: { select: { id: true, settings: true } },
         phaseResourcePlanJob: {
           select: {
+            candidateResourceEstimateId: true,
             candidateResourceEstimate: {
               select: {
                 modelGeometry: {
@@ -418,6 +425,16 @@ export class OrdersService {
 
     const candidate =
       reservation.phaseResourcePlanJob.candidateResourceEstimate;
+    if (recoverySourceJobId) {
+      await this.lockRecoverySourceFiles(transaction, [recoverySourceJobId]);
+      await this.assertRecoverySourceRetention(transaction, [
+        {
+          sourceJobId: recoverySourceJobId,
+          candidateResourceEstimateId:
+            reservation.phaseResourcePlanJob.candidateResourceEstimateId,
+        },
+      ]);
+    }
     const draftItems = automaticOrigin
       ? await transaction.automaticQuoteItemDraft.findMany({
           where: {
@@ -1244,8 +1261,15 @@ export class OrdersService {
             },
           ],
         });
+        await this.lockRecoverySourceFiles(tx, [sourceJobId]);
         await this.lockRecoveryCandidateResources(tx, [
           body.candidateResourceEstimateId,
+        ]);
+        await this.assertRecoverySourceRetention(tx, [
+          {
+            sourceJobId,
+            candidateResourceEstimateId: body.candidateResourceEstimateId,
+          },
         ]);
         await this.assertRecoveryInventoryMatchesSource(tx, [
           {
@@ -3407,12 +3431,14 @@ export class OrdersService {
           expectedContextId: predecessor.id,
           replacements,
         });
+        await this.lockRecoverySourceFiles(tx, sourceJobIds);
         await this.lockRecoveryCandidateResources(
           tx,
           replacements.map(
             ({ candidateResourceEstimateId }) => candidateResourceEstimateId,
           ),
         );
+        await this.assertRecoverySourceRetention(tx, replacements);
         await this.assertRecoveryInventoryMatchesSource(tx, replacements);
         const now = await databaseNow(tx);
         const commandDigest = createHash("sha256")
@@ -7123,6 +7149,77 @@ export class OrdersService {
         fulfilmentSlotId: allocation.targetId,
         amountMinor: allocation.amount.minorUnits,
       }));
+  }
+
+  private async lockRecoverySourceFiles(
+    tx: Transaction,
+    sourceJobIds: string[],
+  ): Promise<void> {
+    const sources = await tx.$queryRaw<
+      Array<{ source_job_id: string; source_model_file_id: string }>
+    >`
+      SELECT source_job.id AS source_job_id,
+             item.source_model_file_id
+      FROM jobs source_job
+      JOIN phase_resource_plan_slots source_slot
+        ON source_slot.phase_resource_plan_job_id = source_job.phase_resource_plan_job_id
+      JOIN fulfilment_slots slot ON slot.id = source_slot.fulfilment_slot_id
+      JOIN order_items item ON item.id = slot.order_item_id
+      WHERE source_job.id IN (${Prisma.join(sourceJobIds.map((id) => Prisma.sql`${id}::uuid`))})
+    `;
+    if (
+      sourceJobIds.some(
+        (id) => !sources.some((source) => source.source_job_id === id),
+      )
+    )
+      throw new ConflictException("Recovery source selection is incomplete");
+    const fileIds = [
+      ...new Set(sources.map((source) => source.source_model_file_id)),
+    ].sort();
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM model_files
+      WHERE id IN (${Prisma.join(fileIds.map((id) => Prisma.sql`${id}::uuid`))})
+      ORDER BY id FOR UPDATE
+    `;
+    if (locked.length !== fileIds.length)
+      throw new ConflictException("Recovery source is unavailable");
+  }
+
+  private async assertRecoverySourceRetention(
+    tx: Transaction,
+    replacements: Array<{
+      sourceJobId: string;
+      candidateResourceEstimateId: string;
+    }>,
+  ): Promise<void> {
+    for (const { sourceJobId, candidateResourceEstimateId } of replacements) {
+      const rows = await tx.$queryRaw<Array<{ retained: boolean }>>`
+        SELECT COALESCE(bool_and(
+          source.deleted_at IS NULL
+          AND (
+            source.retention_hold <> 'NONE'
+            OR source.source_delete_after >= horizon.ends_at
+          )
+        ), false) AS retained
+        FROM jobs source_job
+        JOIN phase_resource_plan_slots source_slot
+          ON source_slot.phase_resource_plan_job_id = source_job.phase_resource_plan_job_id
+        JOIN fulfilment_slots slot ON slot.id = source_slot.fulfilment_slot_id
+        JOIN order_items item ON item.id = slot.order_item_id
+        JOIN model_files source ON source.id = item.source_model_file_id
+        CROSS JOIN (
+          SELECT max(ends_at) AS ends_at
+          FROM candidate_capacity_intervals
+          WHERE candidate_resource_estimate_id = ${candidateResourceEstimateId}::uuid
+        ) horizon
+        WHERE source_job.id = ${sourceJobId}::uuid
+          AND horizon.ends_at IS NOT NULL
+      `;
+      if (!rows[0]?.retained)
+        throw new ConflictException(
+          "Recovery source is not retained through the production horizon",
+        );
+    }
   }
 
   private async lockRecoveryCandidateResources(

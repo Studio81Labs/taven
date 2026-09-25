@@ -381,67 +381,7 @@ export class CandidateEstimateService {
           ON CONFLICT (id) DO NOTHING
         `;
 
-    const resource = await transaction.$queryRaw<Array<{ exists: boolean }>>`
-          SELECT EXISTS (
-            SELECT 1
-            FROM inventories inventory
-            JOIN machines machine
-              ON machine.id = inventory.machine_id
-             AND machine.node_id = inventory.node_id
-            JOIN nodes node
-              ON node.id = machine.node_id
-            JOIN machine_profiles profile
-              ON profile.id = ${job.input.machineProfile.revisionId}::uuid
-             AND profile.machine_capability_id = machine.machine_capability_id
-            JOIN machine_calibrations calibration
-              ON calibration.id = ${job.input.machineCalibration.revisionId}::uuid
-             AND calibration.node_id = machine.node_id
-             AND calibration.machine_id = machine.id
-            JOIN arrangement_revisions arrangement_revision
-              ON arrangement_revision.id = ${job.input.arrangementRevision.revisionId}::uuid
-            JOIN print_config_revisions config
-              ON config.id = ${job.input.printConfig.revisionId}::uuid
-            JOIN model_geometries geometry
-              ON geometry.id = ${job.input.geometry.modelGeometryId}::uuid
-            JOIN model_files source
-              ON source.id = geometry.source_model_file_id
-            JOIN shipment_plans shipment_plan
-              ON shipment_plan.id = ${job.input.shipmentPlanId}::uuid
-            WHERE inventory.id = ${input.inventoryId}::uuid
-              AND inventory.node_id = ${input.nodeId}::uuid
-              AND machine.id = ${job.input.machineId}::uuid
-              AND node.active
-              AND machine.status = 'ACTIVE'
-              AND inventory.status = 'AVAILABLE'
-              AND profile.state = 'ACTIVE'
-              AND calibration.state = 'ACTIVE'
-              AND profile.nozzle_diameter_micrometers = machine.installed_nozzle_micrometers
-              AND profile.material = inventory.material
-              AND profile.quality = config.quality
-              AND profile.slicer_engine = ${job.input.machineProfile.slicerEngine}
-              AND profile.slicer_version = ${job.input.machineProfile.slicerVersion}
-              AND geometry.source_model_file_id = ${job.input.geometry.sourceModelFileId}::uuid
-              AND geometry.canonical_object_key = ${job.input.geometry.canonicalObjectKey}
-              AND geometry.geometry_hash = ${job.input.geometry.geometrySha256}
-              AND geometry.deleted_at IS NULL
-              AND source.content_hash = ${job.input.geometry.sourceContentSha256}
-              AND source.deleted_at IS NULL
-              AND (
-                    source.retention_hold <> 'NONE'
-                    OR source.source_delete_after > clock_timestamp()
-                  )
-              AND taven_geometry_fits_machine_capability(
-                    geometry.id,
-                    machine.machine_capability_id
-                  )
-              AND arrangement_revision.content_sha256 = ${job.input.arrangementRevision.contentSha256}
-          ) AS exists
-        `;
-    if (!resource[0]?.exists) {
-      throw new ResourceNotFoundError(
-        "candidate dispatch resources do not match persisted revisions",
-      );
-    }
+    await this.assertDispatchResources(transaction, [input]);
     await this.lockCandidateArtifactKeys(
       transaction,
       job.input.occupancySliceTargets.map(
@@ -460,6 +400,144 @@ export class CandidateEstimateService {
       },
     });
     return { job, outboxMessageId: outbox.id };
+  }
+
+  /** Stage fresh, prevalidated recovery attempts under the caller's dispatch and artifact locks. */
+  async stageFreshRecoveryDispatches(
+    transaction: Prisma.TransactionClient,
+    dispatches: CandidateEstimateDispatch[],
+  ): Promise<Array<{ job: CandidateEstimateJob; outboxMessageId: string }>> {
+    if (dispatches.length === 0) return [];
+    const { slicingDispatchAttemptKey } =
+      await import("@taven/slicer-contracts");
+    const keys = dispatches.map(({ job }) =>
+      slicingDispatchAttemptKey(job.idempotencyKey, job.attempt),
+    );
+    if (
+      dispatches.some(({ job }) => job.attempt !== 1) ||
+      new Set(keys).size !== keys.length ||
+      new Set(dispatches.map(({ job }) => job.jobId)).size !== dispatches.length
+    ) {
+      throw new ResourceConflictError(
+        "fresh recovery dispatch identities must be unique attempt-one jobs",
+      );
+    }
+    const existing = await transaction.outboxMessage.findFirst({
+      where: { deduplicationKey: { in: keys } },
+      select: { id: true },
+    });
+    if (existing)
+      throw new ResourceConflictError("fresh recovery dispatch already exists");
+
+    await transaction.arrangementRevision.createMany({
+      data: dispatches.map(({ job }) => ({
+        id: job.input.arrangementRevision.revisionId,
+        contentSha256: job.input.arrangementRevision.contentSha256,
+      })),
+      skipDuplicates: true,
+    });
+    await this.assertDispatchResources(transaction, dispatches);
+    const rows = await transaction.outboxMessage.createManyAndReturn({
+      data: dispatches.map((input, index) => ({
+        deduplicationKey: keys[index]!,
+        aggregateType: "CandidateEstimateDispatch",
+        aggregateId: input.job.jobId,
+        messageType: CANDIDATE_DISPATCH_TYPE,
+        schemaVersion: CANDIDATE_SCHEMA_VERSION,
+        payload: {
+          nodeId: input.nodeId,
+          inventoryId: input.inventoryId,
+          job: input.job,
+        } as unknown as Prisma.InputJsonObject,
+        ...(input.availableAt ? { availableAt: input.availableAt } : {}),
+      })),
+      select: { id: true, aggregateId: true },
+    });
+    if (rows.length !== dispatches.length)
+      throw new ResourceConflictError(
+        "recovery dispatch staging is incomplete",
+      );
+    const ids = new Map(rows.map(({ aggregateId, id }) => [aggregateId, id]));
+    return dispatches.map(({ job }) => ({
+      job,
+      outboxMessageId: ids.get(job.jobId)!,
+    }));
+  }
+
+  private async assertDispatchResources(
+    transaction: Prisma.TransactionClient,
+    dispatches: CandidateEstimateDispatch[],
+  ): Promise<void> {
+    const requests = dispatches.map(({ nodeId, inventoryId, job }) => ({
+      jobId: job.jobId,
+      nodeId,
+      inventoryId,
+      machineId: job.input.machineId,
+      profileId: job.input.machineProfile.revisionId,
+      calibrationId: job.input.machineCalibration.revisionId,
+      arrangementId: job.input.arrangementRevision.revisionId,
+      arrangementHash: job.input.arrangementRevision.contentSha256,
+      configId: job.input.printConfig.revisionId,
+      geometryId: job.input.geometry.modelGeometryId,
+      sourceId: job.input.geometry.sourceModelFileId,
+      sourceHash: job.input.geometry.sourceContentSha256,
+      canonicalKey: job.input.geometry.canonicalObjectKey,
+      geometryHash: job.input.geometry.geometrySha256,
+      shipmentPlanId: job.input.shipmentPlanId,
+      slicerEngine: job.input.machineProfile.slicerEngine,
+      slicerVersion: job.input.machineProfile.slicerVersion,
+    }));
+    const invalid = await transaction.$queryRaw<Array<{ job_id: string }>>`
+      WITH requested AS (
+        SELECT * FROM jsonb_to_recordset(${JSON.stringify(requests)}::jsonb) AS row(
+          "jobId" uuid, "nodeId" uuid, "inventoryId" uuid, "machineId" uuid,
+          "profileId" uuid, "calibrationId" uuid, "arrangementId" uuid,
+          "arrangementHash" text, "configId" uuid, "geometryId" uuid,
+          "sourceId" uuid, "sourceHash" text, "canonicalKey" text,
+          "geometryHash" text, "shipmentPlanId" uuid,
+          "slicerEngine" text, "slicerVersion" text
+        )
+      )
+      SELECT requested."jobId" AS job_id FROM requested
+      WHERE NOT EXISTS (
+        SELECT 1 FROM inventories inventory
+        JOIN machines machine ON machine.id = inventory.machine_id
+          AND machine.node_id = inventory.node_id
+        JOIN nodes node ON node.id = machine.node_id
+        JOIN machine_profiles profile ON profile.id = requested."profileId"
+          AND profile.machine_capability_id = machine.machine_capability_id
+        JOIN machine_calibrations calibration ON calibration.id = requested."calibrationId"
+          AND calibration.node_id = machine.node_id AND calibration.machine_id = machine.id
+        JOIN arrangement_revisions arrangement ON arrangement.id = requested."arrangementId"
+        JOIN print_config_revisions config ON config.id = requested."configId"
+        JOIN model_geometries geometry ON geometry.id = requested."geometryId"
+        JOIN model_files source ON source.id = geometry.source_model_file_id
+        JOIN shipment_plans shipment_plan ON shipment_plan.id = requested."shipmentPlanId"
+        WHERE inventory.id = requested."inventoryId"
+          AND inventory.node_id = requested."nodeId"
+          AND machine.id = requested."machineId"
+          AND node.active AND machine.status = 'ACTIVE'
+          AND inventory.status = 'AVAILABLE'
+          AND profile.state = 'ACTIVE' AND calibration.state = 'ACTIVE'
+          AND profile.nozzle_diameter_micrometers = machine.installed_nozzle_micrometers
+          AND profile.material = inventory.material AND profile.quality = config.quality
+          AND profile.slicer_engine = requested."slicerEngine"
+          AND profile.slicer_version = requested."slicerVersion"
+          AND geometry.source_model_file_id = requested."sourceId"
+          AND geometry.canonical_object_key = requested."canonicalKey"
+          AND geometry.geometry_hash = requested."geometryHash"
+          AND geometry.deleted_at IS NULL
+          AND source.content_hash = requested."sourceHash"
+          AND source.deleted_at IS NULL
+          AND (source.retention_hold <> 'NONE' OR source.source_delete_after > clock_timestamp())
+          AND taven_geometry_fits_machine_capability(geometry.id, machine.machine_capability_id)
+          AND arrangement.content_sha256 = requested."arrangementHash"
+      )
+    `;
+    if (invalid.length)
+      throw new ResourceNotFoundError(
+        "candidate dispatch resources do not match persisted revisions",
+      );
   }
 
   /** Persists the exact queue dispatch before it can be published. */

@@ -3678,6 +3678,98 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     ).resolves.toEqual(accepted);
   }, 90_000);
 
+  it("stages and replays the full 256-dispatch recovery preparation atomically", async () => {
+    const fixture = await preparePaidOrder("recovery-dispatch-batch");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "batch-source-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "batch-source-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const frozenInputs = new FrozenOrderCandidateInputService(prisma);
+    const enumerate = frozenInputs.enumerate.bind(frozenInputs);
+    let dispatchCount = 256;
+    vi.spyOn(frozenInputs, "enumerate").mockImplementation(async (input) => {
+      const options = await enumerate(input);
+      expect(options.length).toBeGreaterThan(0);
+      return Array.from({ length: dispatchCount }, () => options[0]!);
+    });
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      new CandidateEstimateService(prisma, snapshots),
+      frozenInputs,
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const body = {
+      expectedReplacementRequestId: request.id,
+      reason: "prepare the supported maximum of scoped recovery dispatches",
+    };
+    const key = `batch-preparation:${randomUUID()}`;
+    const accepted = await preparation.prepareReplacement(
+      operator,
+      orderId,
+      sourceJobId,
+      body,
+      key,
+    );
+    const mappings = await prisma.recoveryCandidateDispatch.findMany({
+      where: { preparationId: accepted.preparationId },
+    });
+    expect(mappings).toHaveLength(256);
+    const outbox = await prisma.outboxMessage.findMany({
+      where: {
+        id: { in: mappings.map(({ outboxMessageId }) => outboxMessageId) },
+      },
+      select: { id: true, aggregateId: true, payload: true },
+    });
+    expect(outbox).toHaveLength(256);
+    const outboxById = new Map(outbox.map((message) => [message.id, message]));
+    for (const mapping of mappings) {
+      const message = outboxById.get(mapping.outboxMessageId)!;
+      expect(message.aggregateId).toBe(mapping.dispatchJobId);
+      expect((message.payload as { job: { jobId: string } }).job.jobId).toBe(
+        mapping.dispatchJobId,
+      );
+    }
+    await expect(
+      preparation.prepareReplacement(operator, orderId, sourceJobId, body, key),
+    ).resolves.toEqual(accepted);
+    dispatchCount = 257;
+    await expect(
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        body,
+        `batch-overflow:${randomUUID()}`,
+      ),
+    ).rejects.toThrow("RECOVERY_PREPARATION_LIMIT");
+    expect(
+      await prisma.recoveryCandidateDispatch.count({
+        where: { preparationId: accepted.preparationId },
+      }),
+    ).toBe(256);
+  }, 120_000);
+
   it("resolves shared recovery context once for a history page", async () => {
     const fixture = await preparePaidOrder("preparation-history-context");
     const { orderId, nodeId } = fixture.foundation;
