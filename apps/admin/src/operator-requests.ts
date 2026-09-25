@@ -59,6 +59,13 @@ export function errorMessage(error: unknown): string {
     : "Požadavek se nepodařilo dokončit. Ověřte aktuální stav.";
 }
 
+export function isUncertainCommandOutcome(error: unknown): boolean {
+  return (
+    !(error instanceof OperatorRequestError) ||
+    (error.status >= 500 && error.status < 600)
+  );
+}
+
 export class CommandJournal {
   private readonly intents = new Map<string, CommandIntent<unknown, unknown>>();
 
