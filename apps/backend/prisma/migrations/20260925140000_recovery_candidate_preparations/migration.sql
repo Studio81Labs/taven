@@ -123,6 +123,14 @@ LANGUAGE plpgsql AS $$
 DECLARE
   source_count integer;
 BEGIN
+  -- Match the application order lock before assigning an immutable generation.
+  PERFORM 1 FROM orders WHERE id = NEW.order_id FOR UPDATE;
+  IF NEW.generation IS DISTINCT FROM
+     COALESCE((SELECT max(generation) FROM recovery_candidate_preparations
+               WHERE kind = NEW.kind AND target_id = NEW.target_id), 0) + 1 THEN
+    RAISE EXCEPTION 'recovery preparation generation is not sequential'
+      USING ERRCODE = '23514', CONSTRAINT = 'recovery_preparation_generation_sequence_check';
+  END IF;
   -- The creation instant is database-owned even for direct SQL inserts.
   NEW.requested_at := clock_timestamp();
   -- Sessions may later be pruned, so validate attribution on insert without

@@ -123,6 +123,42 @@ function sha(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function isPreparationScopeViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as {
+    message?: unknown;
+    meta?: {
+      constraint?: unknown;
+      driverAdapterError?: {
+        message?: unknown;
+        cause?: {
+          message?: unknown;
+          originalMessage?: unknown;
+          constraint?: unknown;
+          originalConstraint?: unknown;
+        };
+      };
+    };
+  };
+  const adapter = record.meta?.driverAdapterError;
+  const identifiers = [
+    record.message,
+    record.meta?.constraint,
+    adapter?.message,
+    adapter?.cause?.message,
+    adapter?.cause?.originalMessage,
+    adapter?.cause?.constraint,
+    adapter?.cause?.originalConstraint,
+  ];
+  return identifiers.some(
+    (value) =>
+      typeof value === "string" &&
+      (value.includes("recovery_preparation_scope_check") ||
+        value.includes("replacement preparation scope is invalid") ||
+        value.includes("claim preparation scope is invalid")),
+  );
+}
+
 function pageLimit(value?: string): number {
   if (value === undefined) return 50;
   if (!/^[1-9][0-9]*$/.test(value) || Number(value) > 100)
@@ -408,6 +444,19 @@ export class RecoveryCandidatePreparationService {
             throw new ConflictException("PREPARATION_IN_PROGRESS");
         }
         await this.lockAndCheckResources(tx, dispatches, current);
+        if (
+          kind === RecoveryCandidatePreparationKind.JOB_REPLACEMENT &&
+          !(await tx.replacementRequest.findFirst({
+            where: {
+              id: expectedId,
+              status: ReplacementRequestStatus.OPEN,
+              deadlineAt: { gt: await databaseNow(tx) },
+            },
+            select: { id: true },
+          }))
+        ) {
+          throw new ConflictException("Replacement request is stale or closed");
+        }
         const generation = (latest?.generation ?? 0) + 1;
         const record = await tx.idempotencyRecord.create({
           data: {
@@ -418,29 +467,39 @@ export class RecoveryCandidatePreparationService {
             expiresAt: IMMUTABLE_REPLAY_EXPIRY,
           },
         });
-        const created = await tx.recoveryCandidatePreparation.create({
-          data: {
-            id: preparationId,
-            nodeId,
-            orderId,
-            orderPhaseId: scope.orderPhaseId,
-            shipmentPlanId: scope.shipmentPlanId,
-            kind,
-            targetId,
-            sourceJobId: scope.sourceJobId,
-            replacementRequestId: scope.replacementRequestId,
-            claimId: scope.claimId,
-            predecessorShipmentId: scope.predecessorShipmentId,
-            incidentEvidenceId: scope.incidentEvidenceId,
-            generation,
-            sourceJobIds: scope.sources.map(({ jobId }) => jobId),
-            sourceScopeFingerprint: scope.fingerprint,
-            operatorId: operator.operatorId,
-            operatorSessionId: operator.sessionId,
-            idempotencyRecordId: record.id,
-            reason,
-          },
-        });
+        let created: RecoveryCandidatePreparation;
+        try {
+          created = await tx.recoveryCandidatePreparation.create({
+            data: {
+              id: preparationId,
+              nodeId,
+              orderId,
+              orderPhaseId: scope.orderPhaseId,
+              shipmentPlanId: scope.shipmentPlanId,
+              kind,
+              targetId,
+              sourceJobId: scope.sourceJobId,
+              replacementRequestId: scope.replacementRequestId,
+              claimId: scope.claimId,
+              predecessorShipmentId: scope.predecessorShipmentId,
+              incidentEvidenceId: scope.incidentEvidenceId,
+              generation,
+              sourceJobIds: scope.sources.map(({ jobId }) => jobId),
+              sourceScopeFingerprint: scope.fingerprint,
+              operatorId: operator.operatorId,
+              operatorSessionId: operator.sessionId,
+              idempotencyRecordId: record.id,
+              reason,
+            },
+          });
+        } catch (error) {
+          if (isPreparationScopeViolation(error)) {
+            throw new ConflictException(
+              "Recovery context changed during preparation",
+            );
+          }
+          throw error;
+        }
         const acknowledgement: RecoveryCandidatePreparationAcceptedDto = {
           preparationId,
           kind,
