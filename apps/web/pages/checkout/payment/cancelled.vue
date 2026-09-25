@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ layout: "public" });
+definePageMeta({ layout: false });
 
 usePublicPageMeta({
   path: "/checkout/payment/cancelled",

@@ -158,7 +158,7 @@ test.describe("Automatic estimate concurrency", () => {
         .click();
       await expect(page).toHaveURL(/\/objednavka/);
 
-      const price = page.locator(".price-summary .total-price");
+      const price = page.locator(".checkout-summary__total strong");
       const qualityChoices = page.getByRole("group", { name: /Kvalita/ });
       const qualityNames = {
         DRAFT: "Rychlá",
@@ -194,6 +194,8 @@ test.describe("Automatic estimate concurrency", () => {
           "597,20",
         ],
       ] as const) {
+        const edit = page.getByRole("button", { name: "Upravit konfiguraci" });
+        if (await edit.isVisible()) await edit.click();
         const qualityRadio = qualityChoices.getByRole("radio", {
           name: qualityNames[quality],
         });
@@ -226,7 +228,9 @@ test.describe("Automatic estimate concurrency", () => {
           bindingMinor,
         );
         await expect(price).toContainText(visiblePrice);
-        await expect(qualityRadio).toBeChecked();
+        await expect(page.locator(".checkout-summary__items")).toContainText(
+          qualityNames[quality],
+        );
       }
 
       releaseBaseline();

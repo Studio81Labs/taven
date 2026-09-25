@@ -160,7 +160,7 @@ test.describe("Accessibility and Responsive Viewports", () => {
       page.getByRole("heading", { name: "Dokončení objednávky" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("group", { name: "Kontakt a fakturační údaje" }),
+      page.getByRole("group", { name: "02 Kontaktní údaje" }),
     ).toBeVisible();
     await expect(page.getByLabel("Jméno kontaktní osoby")).toBeVisible();
 
@@ -248,6 +248,67 @@ test.describe("Accessibility and Responsive Viewports", () => {
     await page.keyboard.press("Enter");
     await expect(
       page.getByRole("heading", { name: "Testovací platební brána" }),
+    ).toBeVisible();
+  });
+
+  test("checkout design keeps real quote and consent reachable at key widths", async ({
+    page,
+  }, testInfo) => {
+    await page.goto("/");
+    await page.locator('input[type="file"]').setInputFiles(cubePath);
+    await page
+      .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
+      .click();
+    await page
+      .getByRole("button", { name: "Ověřit dopravu a závaznou cenu" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Shrnutí zakázky / TAV-2026-TEST" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("group", { name: "02 Kontaktní údaje" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("group", { name: "03 Způsob platby" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("group", { name: "04 Potvrzení a souhlasy" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Objednat a zaplatit/i }),
+    ).toHaveCount(1);
+
+    const scan = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    expect(
+      scan.violations.filter(
+        (violation) =>
+          violation.impact === "critical" || violation.impact === "serious",
+      ),
+    ).toEqual([]);
+
+    for (const width of [1440, 768, 390, 375, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        ),
+      ).toBe(false);
+      await testInfo.attach(`checkout-${width}`, {
+        body: await page.screenshot({ fullPage: true }),
+        contentType: "image/png",
+      });
+    }
+    await page.getByRole("button", { name: "Upravit konfiguraci" }).click();
+    await expect(
+      page.getByRole("button", { name: "Uložit a přepočítat" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Zpět k platbě" }).click();
+    await expect(
+      page.getByRole("button", { name: /Objednat a zaplatit/i }),
     ).toBeVisible();
   });
 });

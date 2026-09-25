@@ -63,6 +63,7 @@ const expressRequested = ref(false);
 const localError = ref<string>();
 const saving = ref(false);
 const pickerSelectionPending = ref(false);
+const editingCheckout = ref(false);
 const configurationLocked = computed(() => props.pending || saving.value);
 const isPacketaSelector = computed(
   () => props.quote.deliverySelector?.mode === "PACKETA",
@@ -74,6 +75,12 @@ watch(
     if (props.quote.bindingQuote) void recordObservation("quote.viewed");
   },
   { immediate: true },
+);
+watch(
+  () => props.quote.phase,
+  (phase) => {
+    if (phase !== "CHECKOUT_READY") editingCheckout.value = false;
+  },
 );
 
 async function recordObservation(
@@ -386,7 +393,10 @@ async function saveConfiguration(): Promise<void> {
     const configuration = commands.filter((command) => command !== undefined);
     replaced = await props.onReplaceConfiguration(configuration);
     if (!replaced) return;
-    await props.onPrepare();
+    const prepared = await props.onPrepare();
+    if (prepared && props.quote.phase === "CHECKOUT_READY") {
+      editingCheckout.value = false;
+    }
   } finally {
     saving.value = false;
     if (replaced) initializeDrafts();
@@ -545,8 +555,18 @@ function quantityPrice(choice: {
 </script>
 
 <template>
-  <section class="configurator" aria-labelledby="configurator-title">
-    <header class="configurator-heading">
+  <section
+    class="configurator"
+    :aria-labelledby="
+      quote.phase === 'CHECKOUT_READY' && !editingCheckout
+        ? 'checkout-title'
+        : 'configurator-title'
+    "
+  >
+    <header
+      v-if="quote.phase !== 'CHECKOUT_READY' || editingCheckout"
+      class="configurator-heading"
+    >
       <div class="configurator-heading__title">
         <span class="configurator-heading__mark" aria-hidden="true" />
         <h2 id="configurator-title">Konfigurace / cena</h2>
@@ -558,6 +578,14 @@ function quantityPrice(choice: {
           {{ new Date(quote.expiresAt).toLocaleString("cs-CZ") }}
         </span>
       </p>
+      <button
+        v-if="editingCheckout"
+        class="text-button"
+        type="button"
+        @click="editingCheckout = false"
+      >
+        Zpět k platbě
+      </button>
     </header>
 
     <div
@@ -568,7 +596,12 @@ function quantityPrice(choice: {
       <p>Zakázku převezmeme individuálně, bez neověřeného odhadu ceny.</p>
     </div>
 
-    <template v-else-if="needsConfiguration">
+    <template
+      v-else-if="
+        needsConfiguration &&
+        (quote.phase !== 'CHECKOUT_READY' || editingCheckout)
+      "
+    >
       <section class="configurator-section" aria-labelledby="grouping-title">
         <div class="configurator-section-heading">
           <div>
@@ -819,7 +852,11 @@ function quantityPrice(choice: {
     </template>
 
     <section
-      v-if="!quote.configurationEditable && quote.items.length > 0"
+      v-if="
+        quote.phase !== 'CHECKOUT_READY' &&
+        !quote.configurationEditable &&
+        quote.items.length > 0
+      "
       class="configurator-section"
       aria-labelledby="saved-configuration-title"
     >
@@ -946,9 +983,9 @@ function quantityPrice(choice: {
 
     <section
       v-if="
-        (destinationReselectionRequired && !quote.checkoutEvidenceAccepted) ||
-        quote.phase === 'DESTINATION_REQUIRED' ||
-        (quote.phase === 'CHECKOUT_READY' && !quote.checkoutEvidenceAccepted)
+        quote.phase !== 'CHECKOUT_READY' &&
+        ((destinationReselectionRequired && !quote.checkoutEvidenceAccepted) ||
+          quote.phase === 'DESTINATION_REQUIRED')
       "
       class="configurator-section"
     >
@@ -957,15 +994,9 @@ function quantityPrice(choice: {
         {{
           destinationReselectionRequired
             ? "Znovu ověřte místo doručení"
-            : quote.phase === "CHECKOUT_READY"
-              ? "Změnit místo doručení"
-              : "Vyberte ověřené místo doručení."
+            : "Vyberte ověřené místo doručení."
         }}
       </h3>
-      <p v-if="quote.phase === 'CHECKOUT_READY'">
-        Změna místa zruší současnou závaznou cenu a rezervaci. Novou cenu před
-        platbou znovu výslovně zkontrolujete.
-      </p>
       <OrderDeliveryPointPicker
         v-if="isPacketaSelector && quote.deliverySelector?.widget"
         :account-id="quote.deliverySelector.widget.accountId"
@@ -998,35 +1029,123 @@ function quantityPrice(choice: {
         v-if="!isPacketaSelector"
         class="primary-button"
         type="button"
-        :disabled="
-          !selectedDeliveryOption ||
-          pending ||
-          saving ||
-          (quote.phase === 'CHECKOUT_READY' &&
-            !destinationReselectionRequired &&
-            !selectedDestinationChanged)
-        "
+        :disabled="!selectedDeliveryOption || pending || saving"
         @click="submitDestination"
       >
         {{
           destinationReselectionRequired
             ? "Znovu ověřit místo"
-            : quote.phase === "CHECKOUT_READY"
-              ? "Přepočítat s jiným místem"
-              : "Ověřit dopravu a závaznou cenu"
+            : "Ověřit dopravu a závaznou cenu"
         }}
       </button>
     </section>
 
     <OrderCheckoutPanel
-      v-if="quote.phase === 'CHECKOUT_READY'"
+      v-if="quote.phase === 'CHECKOUT_READY' && !editingCheckout"
       :on-refresh="onRefresh"
       :on-restart="onRestart"
       :quote="quote"
-    />
+    >
+      <template #delivery>
+        <section
+          class="checkout-card checkout-delivery"
+          aria-labelledby="checkout-delivery-title"
+        >
+          <div class="checkout-card__heading">
+            <span class="checkout-card__index mono">01</span>
+            <h3 id="checkout-delivery-title">Kam to poslat</h3>
+          </div>
+          <p v-if="quote.checkoutEvidenceAccepted">
+            Přijaté místo doručení:
+            {{ quote.selectedDeliveryDestination?.label }}. U této objednávky už
+            místo ani přijaté právní znění neměníme.
+          </p>
+          <p v-else-if="destinationReselectionRequired">
+            Znovu ověřte místo doručení před vytvořením nové závazné ceny.
+          </p>
+          <p v-else>
+            {{
+              quote.selectedDeliveryDestination?.label
+                ? `Vybrané místo: ${quote.selectedDeliveryDestination.label}.`
+                : "Místo zatím není vybráno."
+            }}
+            Změna místa zruší současnou závaznou cenu a rezervaci; novou cenu
+            před platbou znovu zkontrolujete.
+          </p>
+          <OrderDeliveryPointPicker
+            v-if="
+              !quote.checkoutEvidenceAccepted &&
+              isPacketaSelector &&
+              quote.deliverySelector?.widget
+            "
+            :account-id="quote.deliverySelector.widget.accountId"
+            :disabled="configurationLocked"
+            :on-select="selectPacketaDestination"
+            :options="quote.deliverySelector.widget.options"
+            :selected-label="quote.selectedDeliveryDestination?.label"
+          />
+          <label v-else-if="!quote.checkoutEvidenceAccepted" class="wide-field">
+            <span>Způsob a místo</span>
+            <select
+              v-model="selectedDestination"
+              :disabled="configurationLocked"
+            >
+              <option
+                v-for="option in quote.deliveryOptions"
+                :key="deliveryIdentity(option)"
+                :value="deliveryIdentity(option)"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
+          <label
+            v-if="!quote.checkoutEvidenceAccepted && isExpressVisible(quote)"
+            class="fit-sensitive"
+          >
+            <input
+              v-model="expressRequested"
+              :disabled="configurationLocked"
+              type="checkbox"
+            />
+            <span>Expresní výroba pro celou objednávku</span>
+          </label>
+          <button
+            v-if="!quote.checkoutEvidenceAccepted && !isPacketaSelector"
+            class="secondary-button"
+            type="button"
+            :disabled="
+              !selectedDeliveryOption ||
+              pending ||
+              saving ||
+              (!destinationReselectionRequired && !selectedDestinationChanged)
+            "
+            @click="submitDestination"
+          >
+            {{
+              destinationReselectionRequired
+                ? "Znovu ověřit místo"
+                : "Přepočítat s jiným místem"
+            }}
+          </button>
+        </section>
+      </template>
+      <template #edit>
+        <button
+          v-if="quote.configurationEditable && !quote.checkoutEvidenceAccepted"
+          class="text-button"
+          type="button"
+          @click="editingCheckout = true"
+        >
+          Upravit konfiguraci
+        </button>
+      </template>
+    </OrderCheckoutPanel>
 
     <section
-      v-if="currentPrice"
+      v-if="
+        currentPrice && (quote.phase !== 'CHECKOUT_READY' || editingCheckout)
+      "
       class="price-summary"
       aria-labelledby="price-title"
     >

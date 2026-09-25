@@ -17,6 +17,8 @@ import {
 } from "../../utils/checkout-session-storage";
 import {
   formatMoney,
+  priceLabel,
+  visiblePriceComponents,
   type QuoteSession,
 } from "../../utils/automatic-quote-configurator";
 import {
@@ -261,6 +263,32 @@ watch(
   },
 );
 const bindingPrice = computed(() => props.quote.bindingQuote ?? null);
+const priceComponents = computed(() =>
+  visiblePriceComponents(bindingPrice.value?.components ?? []),
+);
+function itemDescription(modelFileId: string): string {
+  const index = props.quote.modelFiles.findIndex(
+    (file) => file.modelFileId === modelFileId,
+  );
+  const format = props.quote.modelFiles[index]?.format;
+  return `Soubor ${index + 1} · ${format === "THREE_MF" ? "3MF" : (format ?? "model")}`;
+}
+function colorLabel(value: string | null | undefined): string {
+  if (!value) return "Bez určení barvy";
+  return (
+    {
+      BLACK: "Černá",
+      GRAPHITE: "Grafitová",
+      ORANGE: "Oranžová",
+      WHITE: "Bílá",
+    }[value.toUpperCase()] ?? value
+  );
+}
+function qualityLabel(value: string): string {
+  return (
+    { DRAFT: "Rychlá", FINE: "Jemná", STANDARD: "Standardní" }[value] ?? value
+  );
+}
 const selectedDestination = computed(
   () => props.quote.selectedDeliveryDestination ?? null,
 );
@@ -637,450 +665,505 @@ function compactBilling(
 
 <template>
   <section
-    class="mt-8 border border-[#d9d9d2] bg-white p-5 sm:p-8"
+    class="checkout-layout"
     aria-labelledby="checkout-title"
     :aria-busy="loading || submitting"
   >
-    <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-      04 — objednání a platba
-    </p>
-    <h3 id="checkout-title" class="mt-2 text-2xl font-semibold">
-      Dokončení objednávky
-    </h3>
+    <div class="checkout-layout__form-column">
+      <slot name="delivery" />
+      <h2 id="checkout-title" class="visually-hidden">Dokončení objednávky</h2>
 
-    <div class="mt-6 grid gap-3 bg-[#efefea] p-4 text-sm sm:grid-cols-3">
-      <div>
-        <p class="text-[#66675f]">Reference</p>
-        <p class="mt-1 font-mono font-semibold">{{ quote.publicReference }}</p>
-      </div>
-      <div>
-        <p class="text-[#66675f]">Doručení</p>
-        <p class="mt-1 font-semibold">
-          {{ selectedDestination?.label || "Chybí výběr" }}
+      <div
+        v-if="payment"
+        class="mt-6 border-l-4 p-5"
+        :class="
+          paymentPresentation?.tone === 'success'
+            ? 'border-[#1b44e8] bg-[#eef1ff]'
+            : paymentPresentation?.tone === 'failure'
+              ? 'border-[#b4441a] bg-[#fff4ef]'
+              : 'border-[#925b10] bg-[#fff8eb]'
+        "
+        aria-live="polite"
+      >
+        <p class="font-mono text-xs tracking-wider uppercase">
+          {{ paymentPresentation?.label }}
         </p>
-      </div>
-      <div>
-        <p class="text-[#66675f]">Konečná cena</p>
-        <p class="mt-1 font-mono font-semibold">
-          {{
-            bindingPrice?.totalMinor == null
-              ? "Chybí"
-              : formatMoney(bindingPrice.totalMinor, bindingPrice.currency)
-          }}
+        <h4 class="mt-2 text-xl font-semibold">
+          {{ paymentPresentation?.title }}
+        </h4>
+        <p class="mt-2 text-[#54554c]">
+          {{ paymentPresentation?.description }}
         </p>
-      </div>
-    </div>
-
-    <div
-      v-if="payment"
-      class="mt-6 border-l-4 p-5"
-      :class="
-        paymentPresentation?.tone === 'success'
-          ? 'border-[#1b44e8] bg-[#eef1ff]'
-          : paymentPresentation?.tone === 'failure'
-            ? 'border-[#b4441a] bg-[#fff4ef]'
-            : 'border-[#925b10] bg-[#fff8eb]'
-      "
-      aria-live="polite"
-    >
-      <p class="font-mono text-xs tracking-wider uppercase">
-        {{ paymentPresentation?.label }}
-      </p>
-      <h4 class="mt-2 text-xl font-semibold">
-        {{ paymentPresentation?.title }}
-      </h4>
-      <p class="mt-2 text-[#54554c]">
-        {{ paymentPresentation?.description }}
-      </p>
-      <div class="mt-5 flex flex-wrap gap-3">
-        <button
-          v-if="openPayment && (payment.checkoutUrl || command?.checkoutUrl)"
-          class="min-h-11 bg-[#1b44e8] px-5 font-semibold text-white"
-          type="button"
-          @click="continueFromPayment(payment)"
-        >
-          Pokračovat k platbě
-        </button>
-        <button
-          v-if="openPayment"
-          class="min-h-11 border border-[#1a1a16] px-5 font-semibold disabled:opacity-50"
-          type="button"
-          :disabled="cancelling"
-          @click="cancelPayment"
-        >
-          {{ cancelling ? "Rušíme…" : "Zrušit platební pokus" }}
-        </button>
-        <button
-          v-if="restartMode === 'PAYMENT'"
-          class="min-h-11 bg-[#1b44e8] px-5 font-semibold text-white"
-          type="button"
-          @click="startNewAttempt"
-        >
-          Zvolit nový platební pokus
-        </button>
-        <button
-          v-if="restartMode === 'QUOTE'"
-          class="min-h-11 bg-[#1b44e8] px-5 font-semibold text-white"
-          type="button"
-          @click="onRestart"
-        >
-          Začít novou kalkulaci
-        </button>
-        <button
-          class="min-h-11 px-2 font-semibold underline decoration-2 underline-offset-4"
-          type="button"
-          @click="refreshPayment"
-        >
-          Načíst ověřený stav
-        </button>
-      </div>
-    </div>
-
-    <div
-      v-else-if="loading"
-      class="mt-6 border-l-4 border-[#925b10] bg-[#fff8eb] p-5"
-      role="status"
-    >
-      Ověřujeme dostupnost plateb a schválených dokumentů…
-    </div>
-
-    <div
-      v-else-if="!approvedDocuments && !retryMode"
-      class="mt-6 border-l-4 border-[#925b10] bg-[#fff8eb] p-5"
-      role="status"
-    >
-      <h4 class="font-semibold">Objednávku zatím nelze zaplatit.</h4>
-      <p class="mt-2 text-sm leading-6 text-[#54554c]">
-        Platební krok zůstává vypnutý, dokud nejsou na serveru i webu zveřejněna
-        stejná schválená znění obchodních podmínek a reklamačního řádu. Aktuální
-        návrhy jsou pouze podklady k dokončení systému.
-      </p>
-      <div class="mt-3 flex flex-wrap gap-4 text-sm">
-        <NuxtLink class="underline" :to="legalDocuments.terms.path">
-          Návrh VOP
-        </NuxtLink>
-        <NuxtLink class="underline" :to="legalDocuments.claims.path">
-          Návrh reklamačního řádu
-        </NuxtLink>
-      </div>
-    </div>
-
-    <form
-      v-else
-      ref="form"
-      class="mt-7 grid gap-7"
-      @submit.prevent="submitCheckout"
-    >
-      <fieldset class="grid gap-4">
-        <legend class="text-lg font-semibold">
-          Kontakt a fakturační údaje
-        </legend>
-        <p class="text-sm text-[#66675f]">
-          Účet ani telefon nevyžadujeme. Potvrzení odešleme elektronicky.
-        </p>
-        <div class="grid gap-4 sm:grid-cols-2">
-          <label class="grid gap-1 text-sm"
-            >Jméno kontaktní osoby<input
-              v-model="draft.fullName"
-              class="min-h-11 border border-[#b8b8b0] px-3"
-              maxlength="200"
-              required
-          /></label>
-          <label class="grid gap-1 text-sm"
-            >E-mail<input
-              v-model="draft.email"
-              class="min-h-11 border border-[#b8b8b0] px-3"
-              maxlength="320"
-              required
-              type="email"
-          /></label>
-          <label class="grid gap-1 text-sm"
-            >Fakturační jméno nebo název<input
-              v-model="draft.billing.name"
-              class="min-h-11 border border-[#b8b8b0] px-3"
-              maxlength="200"
-              required
-          /></label>
-          <label class="grid gap-1 text-sm"
-            >Ulice a číslo<input
-              v-model="draft.billing.addressLine1"
-              class="min-h-11 border border-[#b8b8b0] px-3"
-              maxlength="200"
-              required
-          /></label>
-          <label class="grid gap-1 text-sm"
-            >Doplnění adresy (volitelné)<input
-              v-model="draft.billing.addressLine2"
-              class="min-h-11 border border-[#b8b8b0] px-3"
-              maxlength="200"
-          /></label>
-          <label class="grid gap-1 text-sm"
-            >Město<input
-              v-model="draft.billing.city"
-              class="min-h-11 border border-[#b8b8b0] px-3"
-              maxlength="100"
-              required
-          /></label>
-          <label class="grid gap-1 text-sm"
-            >PSČ<input
-              v-model="draft.billing.postalCode"
-              class="min-h-11 border border-[#b8b8b0] px-3"
-              maxlength="20"
-              required
-          /></label>
-          <label class="grid gap-1 text-sm"
-            >Země<select
-              v-model="draft.billing.countryCode"
-              class="min-h-11 border border-[#b8b8b0] bg-white px-3"
-              required
-            >
-              <option value="CZ">Česká republika</option>
-              <option value="SK">Slovensko</option>
-            </select></label
+        <div class="mt-5 flex flex-wrap gap-3">
+          <button
+            v-if="openPayment && (payment.checkoutUrl || command?.checkoutUrl)"
+            class="min-h-11 bg-[#1b44e8] px-5 font-semibold text-white"
+            type="button"
+            @click="continueFromPayment(payment)"
           >
+            Pokračovat k platbě
+          </button>
+          <button
+            v-if="openPayment"
+            class="min-h-11 border border-[#1a1a16] px-5 font-semibold disabled:opacity-50"
+            type="button"
+            :disabled="cancelling"
+            @click="cancelPayment"
+          >
+            {{ cancelling ? "Rušíme…" : "Zrušit platební pokus" }}
+          </button>
+          <button
+            v-if="restartMode === 'PAYMENT'"
+            class="min-h-11 bg-[#1b44e8] px-5 font-semibold text-white"
+            type="button"
+            @click="startNewAttempt"
+          >
+            Zvolit nový platební pokus
+          </button>
+          <button
+            v-if="restartMode === 'QUOTE'"
+            class="min-h-11 bg-[#1b44e8] px-5 font-semibold text-white"
+            type="button"
+            @click="onRestart"
+          >
+            Začít novou kalkulaci
+          </button>
+          <button
+            class="min-h-11 px-2 font-semibold underline decoration-2 underline-offset-4"
+            type="button"
+            @click="refreshPayment"
+          >
+            Načíst ověřený stav
+          </button>
         </div>
-        <details class="border border-[#d9d9d2] p-4">
-          <summary class="cursor-pointer font-semibold">
-            Firemní údaje (volitelné)
-          </summary>
-          <div class="mt-4 grid gap-4 sm:grid-cols-3">
+      </div>
+
+      <div
+        v-else-if="loading"
+        class="mt-6 border-l-4 border-[#925b10] bg-[#fff8eb] p-5"
+        role="status"
+      >
+        Ověřujeme dostupnost plateb a schválených dokumentů…
+      </div>
+
+      <div
+        v-else-if="!approvedDocuments && !retryMode"
+        class="mt-6 border-l-4 border-[#925b10] bg-[#fff8eb] p-5"
+        role="status"
+      >
+        <h4 class="font-semibold">Objednávku zatím nelze zaplatit.</h4>
+        <p class="mt-2 text-sm leading-6 text-[#54554c]">
+          Platební krok zůstává vypnutý, dokud nejsou na serveru i webu
+          zveřejněna stejná schválená znění obchodních podmínek a reklamačního
+          řádu. Aktuální návrhy jsou pouze podklady k dokončení systému.
+        </p>
+        <div class="mt-3 flex flex-wrap gap-4 text-sm">
+          <NuxtLink class="underline" :to="legalDocuments.terms.path">
+            Návrh VOP
+          </NuxtLink>
+          <NuxtLink class="underline" :to="legalDocuments.claims.path">
+            Návrh reklamačního řádu
+          </NuxtLink>
+        </div>
+      </div>
+
+      <form
+        v-else
+        id="checkout-payment-form"
+        ref="form"
+        class="checkout-form"
+        @submit.prevent="submitCheckout"
+      >
+        <fieldset class="checkout-card checkout-form__contact">
+          <legend class="checkout-card__legend">
+            <span class="checkout-card__index mono">02</span>
+            Kontaktní údaje
+          </legend>
+          <p class="text-sm text-[#66675f]">
+            Účet ani telefon nevyžadujeme. Potvrzení odešleme elektronicky.
+          </p>
+          <div class="grid gap-4 sm:grid-cols-2">
             <label class="grid gap-1 text-sm"
-              >Název firmy<input
-                v-model="draft.billing.companyName"
+              >Jméno kontaktní osoby<input
+                v-model="draft.fullName"
+                class="min-h-11 border border-[#b8b8b0] px-3"
+                maxlength="200"
+                required
+            /></label>
+            <label class="grid gap-1 text-sm"
+              >E-mail<input
+                v-model="draft.email"
+                class="min-h-11 border border-[#b8b8b0] px-3"
+                maxlength="320"
+                required
+                type="email"
+            /></label>
+            <label class="grid gap-1 text-sm"
+              >Fakturační jméno nebo název<input
+                v-model="draft.billing.name"
+                class="min-h-11 border border-[#b8b8b0] px-3"
+                maxlength="200"
+                required
+            /></label>
+            <label class="grid gap-1 text-sm"
+              >Ulice a číslo<input
+                v-model="draft.billing.addressLine1"
+                class="min-h-11 border border-[#b8b8b0] px-3"
+                maxlength="200"
+                required
+            /></label>
+            <label class="grid gap-1 text-sm"
+              >Doplnění adresy (volitelné)<input
+                v-model="draft.billing.addressLine2"
                 class="min-h-11 border border-[#b8b8b0] px-3"
                 maxlength="200"
             /></label>
             <label class="grid gap-1 text-sm"
-              >IČ<input
-                v-model="draft.billing.companyId"
+              >Město<input
+                v-model="draft.billing.city"
                 class="min-h-11 border border-[#b8b8b0] px-3"
-                maxlength="50"
+                maxlength="100"
+                required
             /></label>
             <label class="grid gap-1 text-sm"
-              >DIČ<input
-                v-model="draft.billing.vatId"
+              >PSČ<input
+                v-model="draft.billing.postalCode"
                 class="min-h-11 border border-[#b8b8b0] px-3"
-                maxlength="50"
+                maxlength="20"
+                required
             /></label>
+            <label class="grid gap-1 text-sm"
+              >Země<select
+                v-model="draft.billing.countryCode"
+                class="min-h-11 border border-[#b8b8b0] bg-white px-3"
+                required
+              >
+                <option value="CZ">Česká republika</option>
+                <option value="SK">Slovensko</option>
+              </select></label
+            >
           </div>
-        </details>
-      </fieldset>
+          <details class="border border-[#d9d9d2] p-4">
+            <summary class="cursor-pointer font-semibold">
+              Firemní údaje (volitelné)
+            </summary>
+            <div class="mt-4 grid gap-4 sm:grid-cols-3">
+              <label class="grid gap-1 text-sm"
+                >Název firmy<input
+                  v-model="draft.billing.companyName"
+                  class="min-h-11 border border-[#b8b8b0] px-3"
+                  maxlength="200"
+              /></label>
+              <label class="grid gap-1 text-sm"
+                >IČ<input
+                  v-model="draft.billing.companyId"
+                  class="min-h-11 border border-[#b8b8b0] px-3"
+                  maxlength="50"
+              /></label>
+              <label class="grid gap-1 text-sm"
+                >DIČ<input
+                  v-model="draft.billing.vatId"
+                  class="min-h-11 border border-[#b8b8b0] px-3"
+                  maxlength="50"
+              /></label>
+            </div>
+          </details>
+        </fieldset>
 
-      <fieldset class="grid gap-3">
-        <legend class="text-lg font-semibold">Způsob platby</legend>
-        <label
-          v-for="method in paymentMethods"
-          :key="method"
-          class="flex min-h-11 items-center gap-3 border border-[#d9d9d2] px-4"
-        >
-          <input v-model="draft.method" type="radio" :value="method" />
-          {{
-            method === "CARD" ? "Platební karta" : "Bankovní tlačítko / převod"
-          }}
-        </label>
-      </fieldset>
+        <fieldset class="checkout-card checkout-form__methods">
+          <legend class="checkout-card__legend">
+            <span class="checkout-card__index mono">03</span>
+            Způsob platby
+          </legend>
+          <label
+            v-for="method in paymentMethods"
+            :key="method"
+            class="checkout-method"
+            :class="{ 'checkout-method--selected': draft.method === method }"
+          >
+            <input v-model="draft.method" type="radio" :value="method" />
+            {{
+              method === "CARD"
+                ? "Platební karta"
+                : "Bankovní tlačítko / převod"
+            }}
+          </label>
+        </fieldset>
 
-      <fieldset class="grid gap-4">
-        <legend class="text-lg font-semibold">Potvrzení</legend>
-        <p
-          v-if="retryMode && retryEvidence"
-          class="text-sm leading-6 text-[#54554c]"
-        >
-          Opakujete neúspěšný platební pokus s dříve zaznamenaným zněním VOP ({{
-            retryEvidence.termsRevision
-          }}) a reklamačního řádu ({{ retryEvidence.claimPolicyRevision }}).
-          <NuxtLink
-            v-if="hasHistoricalRevision(retryEvidence.terms.contentHash)"
-            class="underline"
-            :to="
-              legalRevisionLink(
-                'terms',
-                retryEvidence.terms.revision,
-                retryEvidence.terms.contentHash,
-              )
-            "
-            >Zobrazit VOP</NuxtLink
+        <fieldset class="checkout-card checkout-form__legal">
+          <legend class="checkout-card__legend">
+            <span class="checkout-card__index mono">04</span>
+            Potvrzení a souhlasy
+          </legend>
+          <p
+            v-if="retryMode && retryEvidence"
+            class="text-sm leading-6 text-[#54554c]"
           >
-          <span v-else>Historické znění VOP už není k dispozici</span>
-          a
-          <NuxtLink
-            v-if="hasHistoricalRevision(retryEvidence.claims.contentHash)"
-            class="underline"
-            :to="
-              legalRevisionLink(
-                'claims',
-                retryEvidence.claims.revision,
-                retryEvidence.claims.contentHash,
-              )
-            "
-            >reklamační řád</NuxtLink
-          >
-          <span v-else
-            >historické znění reklamačního řádu už není k dispozici</span
-          >. Reklamační lhůta je {{ retryEvidence.claimWindowDays }} dní.
-          <template v-if="retryEvidence.withdrawalExceptionAcknowledged">
-            Výjimku z odstoupení jste při přijetí nabídky výslovně potvrdil/a.
-          </template>
-          <template v-else>
-            Výjimku z odstoupení jste při přijetí nabídky nepotvrdil/a.
-          </template>
-          <template v-if="retryEvidence.photoPublicationConsent">
-            Souhlas s pořízením a zveřejněním fotografií zůstává součástí
-            přijaté nabídky podle
+            Opakujete neúspěšný platební pokus s dříve zaznamenaným zněním VOP
+            ({{ retryEvidence.termsRevision }}) a reklamačního řádu ({{
+              retryEvidence.claimPolicyRevision
+            }}).
             <NuxtLink
-              v-if="
-                retryEvidence.photoConsent &&
-                hasHistoricalRevision(retryEvidence.photoConsent.contentHash)
-              "
+              v-if="hasHistoricalRevision(retryEvidence.terms.contentHash)"
               class="underline"
               :to="
                 legalRevisionLink(
-                  'photoConsent',
-                  retryEvidence.photoConsent.revision,
-                  retryEvidence.photoConsent.contentHash,
+                  'terms',
+                  retryEvidence.terms.revision,
+                  retryEvidence.terms.contentHash,
                 )
               "
-              >pravidel fotografování ({{
-                retryEvidence.photoConsentRevision
-              }})</NuxtLink
+              >Zobrazit VOP</NuxtLink
             >
-            <span v-else>historické znění pravidel už není k dispozici</span>.
-          </template>
-          <template v-else>
-            Souhlas s pořízením a zveřejněním fotografií jste neudělil/a.
-          </template>
-          Tento záznam neměníme ani jej znovu nepotvrzujete.
-        </p>
-        <p
-          v-else-if="retryMode"
-          class="border-l-4 border-[#925b10] bg-[#fff8eb] p-4 text-sm leading-6"
-        >
-          Dříve zaznamenané právní souhlasy zůstávají součástí této objednávky a
-          tento krok je pouze pro opakování platby. Ověřený kontext opakování se
-          momentálně nepodařilo načíst, proto nelze souhlasy znovu měnit ani
-          opakovaný pokus o platbu bezpečně odeslat.
-        </p>
-        <template v-else>
-          <label class="flex items-start gap-3 text-sm leading-6"
-            ><input
-              v-model="draft.acceptTerms"
-              class="mt-1"
-              required
-              type="checkbox"
-            /><span
-              >Souhlasím s
+            <span v-else>Historické znění VOP už není k dispozici</span>
+            a
+            <NuxtLink
+              v-if="hasHistoricalRevision(retryEvidence.claims.contentHash)"
+              class="underline"
+              :to="
+                legalRevisionLink(
+                  'claims',
+                  retryEvidence.claims.revision,
+                  retryEvidence.claims.contentHash,
+                )
+              "
+              >reklamační řád</NuxtLink
+            >
+            <span v-else
+              >historické znění reklamačního řádu už není k dispozici</span
+            >. Reklamační lhůta je {{ retryEvidence.claimWindowDays }} dní.
+            <template v-if="retryEvidence.withdrawalExceptionAcknowledged">
+              Výjimku z odstoupení jste při přijetí nabídky výslovně potvrdil/a.
+            </template>
+            <template v-else>
+              Výjimku z odstoupení jste při přijetí nabídky nepotvrdil/a.
+            </template>
+            <template v-if="retryEvidence.photoPublicationConsent">
+              Souhlas s pořízením a zveřejněním fotografií zůstává součástí
+              přijaté nabídky podle
               <NuxtLink
-                class="underline"
-                :to="
-                  legalRevisionLink(
-                    'terms',
-                    approvedDocuments?.termsRevision,
-                    availability?.documents.terms.contentHash,
-                  )
+                v-if="
+                  retryEvidence.photoConsent &&
+                  hasHistoricalRevision(retryEvidence.photoConsent.contentHash)
                 "
-                >VOP</NuxtLink
-              >
-              ve znění {{ approvedDocuments?.termsRevision }}.</span
-            ></label
-          >
-          <label class="flex items-start gap-3 text-sm leading-6"
-            ><input
-              v-model="draft.acceptClaimPolicy"
-              class="mt-1"
-              required
-              type="checkbox"
-            /><span
-              >Seznámil/a jsem se s
-              <NuxtLink
-                class="underline"
-                :to="
-                  legalRevisionLink(
-                    'claims',
-                    approvedDocuments?.claimPolicyRevision,
-                    availability?.documents.claims.contentHash,
-                  )
-                "
-                >reklamačním řádem</NuxtLink
-              >
-              ve znění {{ approvedDocuments?.claimPolicyRevision }}.</span
-            ></label
-          >
-          <label class="flex items-start gap-3 text-sm leading-6"
-            ><input
-              v-model="draft.acknowledgeWithdrawalException"
-              class="mt-1"
-              required
-              type="checkbox"
-            /><span
-              >Beru na vědomí, že výrobek je zhotoven podle mých požadavků a
-              může se na něj vztahovat zákonná výjimka z práva odstoupit do 14
-              dnů. Práva z vadného plnění tím nejsou dotčena.</span
-            ></label
-          >
-          <label
-            class="flex items-start gap-3 text-sm leading-6"
-            :class="
-              !approvedDocuments?.photoConsentRevision && 'text-[#777870]'
-            "
-            ><input
-              v-model="draft.photoPublicationConsent"
-              class="mt-1"
-              type="checkbox"
-              :disabled="!approvedDocuments?.photoConsentRevision"
-            /><span
-              >Dobrovolně souhlasím s pořízením a zveřejněním fotografií
-              výsledku podle
-              <NuxtLink
                 class="underline"
                 :to="
                   legalRevisionLink(
                     'photoConsent',
-                    approvedDocuments?.photoConsentRevision,
-                    availability?.documents.photoConsent.contentHash,
+                    retryEvidence.photoConsent.revision,
+                    retryEvidence.photoConsent.contentHash,
                   )
                 "
-                >pravidel fotografování</NuxtLink
-              >.
-              <span v-if="!approvedDocuments?.photoConsentRevision"
-                >Tato volba čeká na schválené znění.</span
-              ></span
-            ></label
+                >pravidel fotografování ({{
+                  retryEvidence.photoConsentRevision
+                }})</NuxtLink
+              >
+              <span v-else>historické znění pravidel už není k dispozici</span>.
+            </template>
+            <template v-else>
+              Souhlas s pořízením a zveřejněním fotografií jste neudělil/a.
+            </template>
+            Tento záznam neměníme ani jej znovu nepotvrzujete.
+          </p>
+          <p
+            v-else-if="retryMode"
+            class="border-l-4 border-[#925b10] bg-[#fff8eb] p-4 text-sm leading-6"
           >
-        </template>
-      </fieldset>
+            Dříve zaznamenané právní souhlasy zůstávají součástí této objednávky
+            a tento krok je pouze pro opakování platby. Ověřený kontext
+            opakování se momentálně nepodařilo načíst, proto nelze souhlasy
+            znovu měnit ani opakovaný pokus o platbu bezpečně odeslat.
+          </p>
+          <template v-else>
+            <label class="flex items-start gap-3 text-sm leading-6"
+              ><input
+                v-model="draft.acceptTerms"
+                class="mt-1"
+                required
+                type="checkbox"
+              /><span
+                >Souhlasím s
+                <NuxtLink
+                  class="underline"
+                  :to="
+                    legalRevisionLink(
+                      'terms',
+                      approvedDocuments?.termsRevision,
+                      availability?.documents.terms.contentHash,
+                    )
+                  "
+                  >VOP</NuxtLink
+                >
+                ve znění {{ approvedDocuments?.termsRevision }}.</span
+              ></label
+            >
+            <label class="flex items-start gap-3 text-sm leading-6"
+              ><input
+                v-model="draft.acceptClaimPolicy"
+                class="mt-1"
+                required
+                type="checkbox"
+              /><span
+                >Seznámil/a jsem se s
+                <NuxtLink
+                  class="underline"
+                  :to="
+                    legalRevisionLink(
+                      'claims',
+                      approvedDocuments?.claimPolicyRevision,
+                      availability?.documents.claims.contentHash,
+                    )
+                  "
+                  >reklamačním řádem</NuxtLink
+                >
+                ve znění {{ approvedDocuments?.claimPolicyRevision }}.</span
+              ></label
+            >
+            <label class="flex items-start gap-3 text-sm leading-6"
+              ><input
+                v-model="draft.acknowledgeWithdrawalException"
+                class="mt-1"
+                required
+                type="checkbox"
+              /><span
+                >Beru na vědomí, že výrobek je zhotoven podle mých požadavků a
+                může se na něj vztahovat zákonná výjimka z práva odstoupit do 14
+                dnů. Práva z vadného plnění tím nejsou dotčena.</span
+              ></label
+            >
+            <label
+              class="flex items-start gap-3 text-sm leading-6"
+              :class="
+                !approvedDocuments?.photoConsentRevision && 'text-[#777870]'
+              "
+              ><input
+                v-model="draft.photoPublicationConsent"
+                class="mt-1"
+                type="checkbox"
+                :disabled="!approvedDocuments?.photoConsentRevision"
+              /><span
+                >Dobrovolně souhlasím s pořízením a zveřejněním fotografií
+                výsledku podle
+                <NuxtLink
+                  class="underline"
+                  :to="
+                    legalRevisionLink(
+                      'photoConsent',
+                      approvedDocuments?.photoConsentRevision,
+                      availability?.documents.photoConsent.contentHash,
+                    )
+                  "
+                  >pravidel fotografování</NuxtLink
+                >.
+                <span v-if="!approvedDocuments?.photoConsentRevision"
+                  >Tato volba čeká na schválené znění.</span
+                ></span
+              ></label
+            >
+          </template>
+        </fieldset>
+
+        <p
+          v-if="errorMessage"
+          class="border-l-4 border-[#b4441a] bg-[#fff4ef] p-4 text-sm"
+          role="alert"
+        >
+          {{ errorMessage }}
+        </p>
+      </form>
 
       <p
-        v-if="errorMessage"
-        class="border-l-4 border-[#b4441a] bg-[#fff4ef] p-4 text-sm"
+        v-if="errorMessage && (!approvedDocuments || payment)"
+        class="mt-4 border-l-4 border-[#b4441a] bg-[#fff4ef] p-4 text-sm"
         role="alert"
       >
         {{ errorMessage }}
       </p>
-      <button
-        class="min-h-12 bg-[#1b44e8] px-6 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-        type="submit"
-        :disabled="!canSubmit"
-      >
-        {{
-          submitting
-            ? "Zakládáme platbu…"
-            : redirecting
-              ? "Přesměrováváme…"
-              : `Objednat a zaplatit ${bindingPrice?.totalMinor == null ? "" : formatMoney(bindingPrice.totalMinor, bindingPrice.currency)}`
-        }}
-      </button>
-      <p class="text-xs leading-5 text-[#66675f]">
-        Úspěch zobrazíme až po ověřeném potvrzení platby backendem. Samotný
-        návrat od poskytovatele objednávku nepotvrzuje.
-      </p>
-    </form>
+    </div>
 
-    <p
-      v-if="errorMessage && (!approvedDocuments || payment)"
-      class="mt-4 border-l-4 border-[#b4441a] bg-[#fff4ef] p-4 text-sm"
-      role="alert"
-    >
-      {{ errorMessage }}
-    </p>
+    <aside class="checkout-summary" aria-labelledby="checkout-summary-title">
+      <header class="checkout-summary__heading">
+        <div>
+          <p class="eyebrow">SPECIFIKACE DÍLŮ</p>
+          <h3 id="checkout-summary-title">
+            Shrnutí zakázky / {{ quote.publicReference }}
+          </h3>
+        </div>
+        <span class="checkout-summary__count mono"
+          >{{ quote.items.length }}
+          {{ quote.items.length === 1 ? "položka" : "položky" }}</span
+        >
+      </header>
+      <ul class="checkout-summary__items">
+        <li v-for="item in quote.items" :key="item.id">
+          <p class="eyebrow">
+            POLOŽKA {{ String(item.ordinal + 1).padStart(2, "0") }}
+          </p>
+          <strong>{{ itemDescription(item.modelFileId) }}</strong>
+          <p>
+            {{ item.material }} · {{ colorLabel(item.color) }} ·
+            {{ qualityLabel(item.quality) }} · {{ item.quantity }} ks
+          </p>
+          <small v-if="item.fitSensitive">Přesně lícující díl</small>
+        </li>
+      </ul>
+      <div class="checkout-summary__edit"><slot name="edit" /></div>
+      <dl class="checkout-summary__breakdown">
+        <div v-for="component in priceComponents" :key="component.id">
+          <dt>
+            {{ priceLabel(component)
+            }}<span v-if="component.itemOrdinal != null">
+              · položka {{ component.itemOrdinal + 1 }}</span
+            >
+          </dt>
+          <dd class="mono">
+            {{ formatMoney(component.amountMinor, bindingPrice!.currency) }}
+          </dd>
+        </div>
+        <div class="checkout-summary__delivery">
+          <dt>Doručení</dt>
+          <dd>{{ selectedDestination?.label || "Místo není vybráno" }}</dd>
+        </div>
+      </dl>
+      <div class="checkout-summary__total">
+        <div>
+          <p class="eyebrow">KONEČNÁ ZÁVAZNÁ CENA</p>
+          <small v-if="bindingPrice?.taxRegime === 'NON_VAT_PAYER'"
+            >Provozovatel není plátcem DPH</small
+          >
+          <small v-else-if="bindingPrice?.taxRegime === 'VAT_PAYER'"
+            >Včetně DPH {{ bindingPrice.vatRateBasisPoints / 100 }} %</small
+          >
+        </div>
+        <strong class="mono">{{
+          bindingPrice?.totalMinor == null
+            ? "Čeká na ověření"
+            : formatMoney(bindingPrice.totalMinor, bindingPrice.currency)
+        }}</strong>
+      </div>
+      <div class="checkout-summary__action">
+        <button
+          v-if="!payment && !loading && (approvedDocuments || retryMode)"
+          class="primary-button"
+          form="checkout-payment-form"
+          type="submit"
+          :disabled="!canSubmit"
+        >
+          {{
+            submitting
+              ? "Zakládáme platbu…"
+              : redirecting
+                ? "Přesměrováváme…"
+                : `Objednat a zaplatit ${bindingPrice?.totalMinor == null ? "" : formatMoney(bindingPrice.totalMinor, bindingPrice.currency)}`
+          }}
+        </button>
+        <p>
+          Úspěch zobrazíme až po potvrzení platby serverem. Samotný návrat od
+          poskytovatele objednávku nepotvrzuje.
+        </p>
+      </div>
+    </aside>
   </section>
 </template>
+
+<style src="../../assets/css/order-checkout.css"></style>

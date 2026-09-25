@@ -49,7 +49,7 @@ test.describe("Rendered configuration and delivery", () => {
     const prepared = await prepareResponse;
     expect(prepared.status()).toBe(200);
     expect((await prepared.json()).bindingQuote.totalMinor).toBe(148900);
-    await expect(page.locator(".price-summary .total-price")).toContainText(
+    await expect(page.locator(".checkout-summary__total strong")).toContainText(
       "1 489,00",
     );
   });
@@ -117,7 +117,7 @@ test.describe("Rendered configuration and delivery", () => {
     await expect(
       page.getByRole("heading", { name: "Dokončení objednávky" }),
     ).toBeVisible();
-    await expect(page.locator(".price-summary .total-price")).toContainText(
+    await expect(page.locator(".checkout-summary__total strong")).toContainText(
       "439,00",
     );
     const state = await request.get("http://127.0.0.1:4175/__test/state");
@@ -137,7 +137,7 @@ test.describe("Rendered configuration and delivery", () => {
       .click();
     const initialPrepared = await (await initialPrepareResponse).json();
     expect(initialPrepared.bindingQuote.totalMinor).toBe(43900);
-    await expect(page.locator(".price-summary .total-price")).toContainText(
+    await expect(page.locator(".checkout-summary__total strong")).toContainText(
       "439,00",
     );
 
@@ -187,7 +187,7 @@ test.describe("Rendered configuration and delivery", () => {
         ]),
       },
     });
-    await expect(page.locator(".price-summary .total-price")).toContainText(
+    await expect(page.locator(".checkout-summary__total strong")).toContainText(
       "469,00",
     );
     await expect(
@@ -270,7 +270,7 @@ test("Packeta picker ignores cancelled and stale callbacks, then requotes the se
     endpointType: "pickup_point",
     providerEndpointId: "packeta-2",
   });
-  await expect(page.locator(".price-summary .total-price")).toContainText(
+  await expect(page.locator(".checkout-summary__total strong")).toContainText(
     "469,00",
   );
   await expect(
@@ -294,7 +294,7 @@ test("Packeta picker ignores cancelled and stale callbacks, then requotes the se
     checkoutReady: false,
     bindingQuote: null,
   });
-  await expect(page.locator(".price-summary .total-price")).toContainText(
+  await expect(page.locator(".checkout-summary__total strong")).toContainText(
     "439,00",
   );
   expect(destinationRequests).toBe(2);

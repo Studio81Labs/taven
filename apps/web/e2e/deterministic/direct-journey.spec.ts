@@ -237,7 +237,7 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
       page.getByRole("heading", { name: "Dokončení objednávky" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("group", { name: "Kontakt a fakturační údaje" }),
+      page.getByRole("group", { name: "02 Kontaktní údaje" }),
     ).toBeVisible();
 
     // 9. Fill checkout form

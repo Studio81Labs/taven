@@ -1,4 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 async function createSeededSessionAndPayment(request: any) {
   const sessRes = await request.post(
@@ -46,6 +47,45 @@ async function createSeededSessionAndPayment(request: any) {
   return { session, payment };
 }
 
+async function storePaymentReturnHandoff(
+  page: Page,
+  session: {
+    sessionId: string;
+    sessionToken: string;
+    publicReference: string;
+    expiresAt: string;
+  },
+  payment: { paymentId: string },
+): Promise<void> {
+  await page.goto("/");
+  await page.evaluate(
+    ({ sess, pay }) => {
+      window.sessionStorage.setItem(
+        "taven:automatic-quote-session:v1",
+        JSON.stringify({
+          sessionId: sess.sessionId,
+          sessionToken: sess.sessionToken,
+          filename: "cube.stl",
+          publicReference: sess.publicReference,
+          expiresAt: sess.expiresAt,
+        }),
+      );
+      window.sessionStorage.setItem(
+        "taven:checkout-session:v1",
+        JSON.stringify({
+          sessionId: sess.sessionId,
+          command: {
+            paymentId: pay.paymentId,
+            idempotencyKey: `key-${pay.paymentId}-visual`,
+            requestFingerprint: "fingerprint-visual",
+          },
+        }),
+      );
+    },
+    { sess: session, pay: payment },
+  );
+}
+
 test.describe("Payment Outcomes & Session Protection", () => {
   test.beforeEach(async ({ request }) => {
     await request.post("http://127.0.0.1:4175/__test/reset");
@@ -53,7 +93,8 @@ test.describe("Payment Outcomes & Session Protection", () => {
 
   test("direct navigation to payment return without stored session fails closed", async ({
     page,
-  }) => {
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(
       "/checkout/payment/success?paymentId=00000000-0000-4000-8000-000000000123&sessionId=00000000-0000-4000-8000-000000000456",
     );
@@ -64,6 +105,15 @@ test.describe("Payment Outcomes & Session Protection", () => {
       ),
     ).toBeVisible();
     await expect(page.getByText("Platba byla potvrzena.")).not.toBeVisible();
+    await testInfo.attach("payment-unavailable-1440", {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: "image/png",
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await testInfo.attach("payment-unavailable-390", {
+      body: await page.screenshot({ fullPage: true }),
+      contentType: "image/png",
+    });
   });
 
   test("direct navigation with mismatched session ID in storage fails closed", async ({
@@ -836,4 +886,86 @@ test.describe("Payment Outcomes & Session Protection", () => {
     );
     expect(conflictRes.status()).toBe(409);
   });
+});
+
+const paymentVisualOutcomes = [
+  { status: "CREATED", title: "Čekáme na potvrzení platby." },
+  { status: "PENDING", title: "Čekáme na potvrzení platby." },
+  { status: "CAPTURED", title: "Platba byla potvrzena." },
+  { status: "FAILED", title: "Platba nebyla dokončena." },
+  { status: "VOIDED", title: "Platební pokus byl zrušen." },
+  { status: "REFUND_PENDING", title: "Platbu vracíme." },
+  { status: "PARTIALLY_REFUNDED", title: "Platbu vracíme." },
+  { status: "REFUNDED", title: "Vrácení platby bylo dokončeno." },
+] as const;
+
+test.describe("Payment result visual states", () => {
+  test.beforeEach(async ({ request }) => {
+    await request.post("http://127.0.0.1:4175/__test/reset");
+  });
+
+  for (const { status, title } of paymentVisualOutcomes) {
+    test(`${status} uses verified server truth across desktop and mobile`, async ({
+      page,
+      request,
+    }, testInfo) => {
+      const { session, payment } = await createSeededSessionAndPayment(request);
+      await storePaymentReturnHandoff(page, session, payment);
+      await request.post("http://127.0.0.1:4175/__test/state", {
+        data: { paymentOutcome: status },
+      });
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(
+        `/checkout/payment/success?paymentId=${payment.paymentId}&sessionId=${session.sessionId}`,
+      );
+      await expect(
+        page.getByRole("heading", { name: title, level: 1 }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(`Reference ${session.publicReference}`),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "Tato stránka neprokazuje zahájení výroby, odeslání e-mailu ani stav doručení.",
+        ),
+      ).toBeVisible();
+      if (status !== "CAPTURED") {
+        await expect(page.getByText("PLATBA PŘIJATA")).toHaveCount(0);
+      }
+      if (status === "CAPTURED" || status === "FAILED") {
+        const scan = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        expect(
+          scan.violations.filter(
+            (violation) =>
+              violation.impact === "critical" || violation.impact === "serious",
+          ),
+        ).toEqual([]);
+      }
+      await testInfo.attach(`payment-${status}-1440`, {
+        body: await page.screenshot({ fullPage: true }),
+        contentType: "image/png",
+      });
+      if (status === "CAPTURED") {
+        await page.setViewportSize({ width: 768, height: 900 });
+        await testInfo.attach("payment-CAPTURED-768", {
+          body: await page.screenshot({ fullPage: true }),
+          contentType: "image/png",
+        });
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        ),
+      ).toBe(false);
+      await testInfo.attach(`payment-${status}-390`, {
+        body: await page.screenshot({ fullPage: true }),
+        contentType: "image/png",
+      });
+    });
+  }
 });
