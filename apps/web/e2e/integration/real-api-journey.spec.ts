@@ -295,7 +295,7 @@ test.describe("Real API Integration Journey", () => {
       await proceed.click();
       await expect(page).toHaveURL(/\/objednavka/, { timeout: 120_000 });
       await expect(
-        page.getByRole("heading", { name: "Nastavte výrobu.", level: 2 }),
+        page.getByRole("heading", { name: "Konfigurace / cena", level: 2 }),
       ).toBeVisible();
 
       if (completePayment) {
@@ -655,9 +655,7 @@ test.describe("Real API Integration Journey", () => {
       has: page.getByText("POLOŽKA 2", { exact: true }),
     });
     await firstItem.getByRole("spinbutton", { name: "Jiné" }).fill("30");
-    await secondItem
-      .getByRole("combobox", { name: "Materiál" })
-      .selectOption("PLA");
+    await secondItem.getByRole("radio", { name: "PLA" }).check();
     await secondItem.getByRole("spinbutton", { name: "Jiné" }).fill("30");
     const configurationResponse = page.waitForResponse(
       (response) =>

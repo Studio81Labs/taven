@@ -69,7 +69,7 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
 
     await expect(page).toHaveURL(/\/objednavka/);
     await expect(
-      page.getByRole("heading", { name: "Nastavte výrobu.", level: 2 }),
+      page.getByRole("heading", { name: "Konfigurace / cena", level: 2 }),
     ).toBeVisible();
     expect(createdSessions).toBe(1);
   });
@@ -204,21 +204,26 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     // 5. Arrive at /objednavka
     await expect(page).toHaveURL(/\/objednavka/);
     await expect(
-      page.getByRole("heading", { name: "Nastavte výrobu.", level: 2 }),
+      page.getByRole("img", { name: /Otočný náhled modelu/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Konfigurace / cena", level: 2 }),
     ).toBeVisible();
 
-    // 6. Verify configurable qualities (Rychlá = DRAFT, Standardní = STANDARD, Jemná = FINE)
-    const qualitySelect = page.getByRole("combobox", { name: "Kvalita" });
-    await expect(qualitySelect).toBeVisible();
-    await expect(qualitySelect.locator('option[value="DRAFT"]')).toHaveText(
-      "Rychlá",
-    );
-    await expect(qualitySelect.locator('option[value="STANDARD"]')).toHaveText(
-      "Standardní",
-    );
-    await expect(qualitySelect.locator('option[value="FINE"]')).toHaveText(
-      "Jemná",
-    );
+    // 6. Verify the server-backed quality choices in the design's card layout.
+    await expect(
+      page.locator('.application-shell__steps [aria-current="step"]'),
+    ).toContainText("02 KONFIGURACE");
+    const qualityChoices = page.getByRole("group", { name: /Kvalita/ });
+    await expect(
+      qualityChoices.getByRole("radio", { name: "Rychlá" }),
+    ).toBeVisible();
+    await expect(
+      qualityChoices.getByRole("radio", { name: "Standardní" }),
+    ).toBeChecked();
+    await expect(
+      qualityChoices.getByRole("radio", { name: "Jemná" }),
+    ).toBeVisible();
 
     // 7. Select delivery destination and verify binding price
     const verifyDeliveryBtn = page.getByRole("button", {

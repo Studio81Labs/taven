@@ -282,7 +282,9 @@ test.describe("Assisted Quote Journey", () => {
       page.getByRole("heading", { name: "Potvrďte zjištěná rizika." }),
     ).toBeVisible();
     await expect(
-      page.getByText("Testovací riziko tisku vyžaduje potvrzení."),
+      page
+        .getByRole("region", { name: "NÁLEZY K MODELU" })
+        .getByText("Testovací riziko tisku vyžaduje potvrzení."),
     ).toBeVisible();
 
     const declinedResponse = page.waitForResponse(

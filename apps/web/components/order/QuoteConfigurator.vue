@@ -315,10 +315,18 @@ function changeOption(
   field: ConfigurationField,
   event: Event,
 ): void {
-  const draft = draftFor(ordinal);
-  if (!draft) return;
   const raw = (event.currentTarget as HTMLSelectElement).value;
   const value = field === "color" && raw === "__none__" ? null : raw;
+  chooseOption(ordinal, field, value);
+}
+
+function chooseOption(
+  ordinal: number,
+  field: ConfigurationField,
+  value: string | null,
+): void {
+  const draft = draftFor(ordinal);
+  if (!draft) return;
   const option = selectConfigurationOption(
     optionsFor(draft),
     draft.option,
@@ -505,7 +513,25 @@ function infillLabel(value: string): string {
 }
 
 function colorLabel(value: string | null | undefined): string {
-  return value ?? "Bez určení barvy";
+  if (!value) return "Bez určení barvy";
+  const labels: Record<string, string> = {
+    BLACK: "Černá",
+    GRAPHITE: "Grafitová",
+    ORANGE: "Oranžová",
+    WHITE: "Bílá",
+  };
+  return labels[value.trim().toUpperCase()] ?? value;
+}
+
+function colorSwatch(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const swatches: Record<string, string> = {
+    BLACK: "#1a1a1a",
+    GRAPHITE: "#656966",
+    ORANGE: "#bf5029",
+    WHITE: "#ffffff",
+  };
+  return swatches[value.trim().toUpperCase()];
 }
 
 function quantityPrice(choice: {
@@ -521,13 +547,16 @@ function quantityPrice(choice: {
 <template>
   <section class="configurator" aria-labelledby="configurator-title">
     <header class="configurator-heading">
-      <div>
-        <p class="eyebrow">02 / KONFIGURACE</p>
-        <h2 id="configurator-title">Nastavte výrobu.</h2>
+      <div class="configurator-heading__title">
+        <span class="configurator-heading__mark" aria-hidden="true" />
+        <h2 id="configurator-title">Konfigurace / cena</h2>
       </div>
       <p class="quote-version mono">
-        Revize {{ quote.configurationRevision }} · platí do
-        {{ new Date(quote.expiresAt).toLocaleString("cs-CZ") }}
+        <span>{{ quote.publicReference }}</span>
+        <span>
+          Revize {{ quote.configurationRevision }} · platí do
+          {{ new Date(quote.expiresAt).toLocaleString("cs-CZ") }}
+        </span>
       </p>
     </header>
 
@@ -629,57 +658,75 @@ function quantityPrice(choice: {
           <span class="mono">{{ group.bodyIds.join(", ") }}</span>
         </div>
 
-        <div v-if="draftFor(group.ordinal)" class="option-grid">
-          <label>
-            <span>Materiál</span>
-            <select
-              :value="draftFor(group.ordinal)!.option.material"
-              :disabled="configurationLocked"
-              @change="changeOption(group.ordinal, 'material', $event)"
-            >
-              <option
+        <div v-if="draftFor(group.ordinal)" class="configuration-choices">
+          <fieldset class="configuration-choice configuration-choice--material">
+            <legend>01 / Materiál</legend>
+            <div class="configuration-choice__options">
+              <label
                 v-for="value in optionValues(group.ordinal, 'material')"
                 :key="value ?? '__none__'"
-                :value="value ?? '__none__'"
               >
-                {{ value }}
-              </option>
-            </select>
-          </label>
-          <label>
-            <span>Barva</span>
-            <select
-              :value="draftFor(group.ordinal)!.option.color ?? '__none__'"
-              :disabled="configurationLocked"
-              @change="changeOption(group.ordinal, 'color', $event)"
-            >
-              <option
+                <input
+                  :name="`material-${group.ordinal}`"
+                  type="radio"
+                  :value="value ?? '__none__'"
+                  :checked="draftFor(group.ordinal)!.option.material === value"
+                  :disabled="configurationLocked"
+                  @change="chooseOption(group.ordinal, 'material', value)"
+                />
+                <strong>{{ value }}</strong>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset class="configuration-choice configuration-choice--color">
+            <legend>02 / Barva</legend>
+            <div class="configuration-choice__options">
+              <label
                 v-for="value in optionValues(group.ordinal, 'color')"
                 :key="value ?? '__none__'"
-                :value="value ?? '__none__'"
               >
-                {{ colorLabel(value) }}
-              </option>
-            </select>
-          </label>
-          <label>
-            <span>Kvalita</span>
-            <select
-              :value="draftFor(group.ordinal)!.option.quality"
-              :disabled="configurationLocked"
-              @change="changeOption(group.ordinal, 'quality', $event)"
-            >
-              <option
+                <input
+                  :name="`color-${group.ordinal}`"
+                  type="radio"
+                  :value="value ?? '__none__'"
+                  :checked="draftFor(group.ordinal)!.option.color === value"
+                  :disabled="configurationLocked"
+                  @change="chooseOption(group.ordinal, 'color', value)"
+                />
+                <span
+                  class="configuration-choice__color-mark"
+                  :style="
+                    colorSwatch(value)
+                      ? { backgroundColor: colorSwatch(value) }
+                      : undefined
+                  "
+                  aria-hidden="true"
+                />
+                <strong>{{ colorLabel(value) }}</strong>
+              </label>
+            </div>
+          </fieldset>
+          <fieldset class="configuration-choice configuration-choice--quality">
+            <legend>03 / Kvalita</legend>
+            <div class="configuration-choice__options">
+              <label
                 v-for="value in optionValues(group.ordinal, 'quality')"
                 :key="value ?? '__none__'"
-                :value="value ?? '__none__'"
               >
-                {{ qualityLabel(value ?? "") }}
-              </option>
-            </select>
-          </label>
-          <label>
-            <span>Výplň</span>
+                <input
+                  :name="`quality-${group.ordinal}`"
+                  type="radio"
+                  :value="value ?? '__none__'"
+                  :checked="draftFor(group.ordinal)!.option.quality === value"
+                  :disabled="configurationLocked"
+                  @change="chooseOption(group.ordinal, 'quality', value)"
+                />
+                <strong>{{ qualityLabel(value ?? "") }}</strong>
+              </label>
+            </div>
+          </fieldset>
+          <label class="configuration-choice configuration-choice--infill">
+            <span>04 / Výplň</span>
             <select
               :value="draftFor(group.ordinal)!.option.infillPreset"
               :disabled="configurationLocked"
@@ -694,6 +741,9 @@ function quantityPrice(choice: {
               </option>
             </select>
           </label>
+          <p class="configuration-choices__note">
+            Změny voleb se v ceně projeví až po uložení a přepočtu.
+          </p>
         </div>
 
         <fieldset v-if="draftFor(group.ordinal)" class="quantity-fieldset">

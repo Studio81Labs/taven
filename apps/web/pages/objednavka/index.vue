@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import ApplicationShell from "../../components/application/ApplicationShell.vue";
+import { formatMoney } from "../../utils/automatic-quote-configurator";
 import { formatFileSize } from "../../utils/model-file";
 import {
   loadOrCreateHandoffIssuanceKey,
@@ -60,9 +61,24 @@ const showConfigurator = computed(
     (phase.value === "complete" ||
       (phase.value === "inspecting" && quote.value!.items.length > 0)),
 );
+const showModelPreview = computed(
+  () =>
+    Boolean(geometry.value) &&
+    ["ready", "uploading", "inspecting", "complete"].includes(phase.value),
+);
+const preflightFindings = computed(
+  () =>
+    quote.value?.items.flatMap((item) =>
+      item.findings.map((finding) => ({
+        ...finding,
+        itemOrdinal: item.ordinal,
+      })),
+    ) ?? [],
+);
 const activeProcessStep = computed(() => {
   if (!quote.value) return 1;
   if (quote.value.phase === "CHECKOUT_READY") return 4;
+  if (quote.value.configurationEditable) return 2;
   if (
     quote.value.phase === "DESTINATION_REQUIRED" ||
     quote.value.phase === "ELIGIBILITY_PENDING"
@@ -81,7 +97,14 @@ const itemSummary = computed(() => {
   const count = quote.value?.items.length ?? 0;
   if (count === 0) return undefined;
   const noun = count === 1 ? "POLOŽKA" : count < 5 ? "POLOŽKY" : "POLOŽEK";
-  return `OBJ. / ${String(count).padStart(2, "0")} ${noun}`;
+  const price = quote.value?.bindingQuote ?? quote.value?.roughEstimate;
+  const amount =
+    price?.totalMinor == null
+      ? undefined
+      : formatMoney(price.totalMinor, price.currency);
+  return amount
+    ? `OBJ. / ${String(count).padStart(2, "0")} / ${price?.kind === "BINDING" ? "" : "OD "}${amount}`
+    : `OBJ. / ${String(count).padStart(2, "0")} ${noun}`;
 });
 
 const pipeline = computed(() => {
@@ -263,11 +286,18 @@ function inspectionLabel(status: string | undefined): string {
   >
     <template #workspace>
       <section
-        class="order-workspace"
+        class="order-workspace order-workspace--quote"
         :aria-labelledby="
-          showConfigurator ? 'configurator-title' : 'upload-title'
+          showConfigurator ? 'model-workspace-title' : 'upload-title'
         "
       >
+        <h1
+          v-if="showConfigurator"
+          id="model-workspace-title"
+          class="visually-hidden"
+        >
+          Model a kontrola geometrie
+        </h1>
         <div v-if="!showConfigurator" class="section-heading">
           <p class="eyebrow">
             {{ addingModel ? "DALŠÍ SOUBOR" : "01 / SOUBOR" }}
@@ -344,8 +374,16 @@ function inspectionLabel(status: string | undefined): string {
             </div>
           </div>
 
-          <template v-if="phase === 'ready' || phase === 'uploading'">
-            <div v-if="geometry" class="preview-frame">
+          <template v-if="showModelPreview && geometry">
+            <div class="preview-frame">
+              <div class="preview-frame__label mono">
+                <span>VÝKRES / NÁHLED MODELU</span>
+                <span>
+                  {{ geometry.objectCount }}
+                  {{ geometry.objectCount === 1 ? "TĚLESO" : "TĚLESA" }}
+                  · {{ geometry.triangleCount.toLocaleString("cs-CZ") }} PLOCH
+                </span>
+              </div>
               <ClientOnly>
                 <LazyOrderModelPreview :geometry="geometry" />
                 <template #fallback>
@@ -354,13 +392,14 @@ function inspectionLabel(status: string | undefined): string {
                   </div>
                 </template>
               </ClientOnly>
-            </div>
-            <div v-else class="preview-fallback">
-              <p>{{ previewMessage }}</p>
+              <div class="preview-frame__measurements mono" aria-hidden="true">
+                <span>X: {{ millimeters(geometry.dimensions.width) }}</span>
+                <span>Y: {{ millimeters(geometry.dimensions.depth) }}</span>
+                <span>Z: {{ millimeters(geometry.dimensions.height) }}</span>
+              </div>
             </div>
             <p class="visually-hidden">{{ previewDescription }}</p>
-
-            <dl v-if="geometry" class="geometry-metrics">
+            <dl class="geometry-metrics">
               <div>
                 <dt>Rozměry X × Y × Z</dt>
                 <dd class="mono">
@@ -386,7 +425,25 @@ function inspectionLabel(status: string | undefined): string {
                 </dd>
               </div>
             </dl>
+          </template>
+          <div
+            v-else-if="
+              (phase === 'ready' ||
+                phase === 'uploading' ||
+                showConfigurator) &&
+              !geometry
+            "
+            class="preview-fallback"
+          >
+            <p>
+              {{
+                previewMessage ??
+                "Místní náhled souboru není k dispozici. Stav zakázky lze dál bezpečně zkontrolovat."
+              }}
+            </p>
+          </div>
 
+          <template v-if="phase === 'ready' || phase === 'uploading'">
             <div class="estimate-note">
               <strong>Orientační geometrický odhad</strong>
               <p>
@@ -453,20 +510,31 @@ function inspectionLabel(status: string | undefined): string {
             </div>
           </div>
 
-          <OrderQuoteConfigurator
-            v-if="showConfigurator && quote"
-            :command-error="commandError"
-            :destination-reselection-required="destinationReselectionRequired"
-            :on-decide-risk="decideRisk"
-            :on-prepare="prepareQuote"
-            :on-refresh="refreshQuote"
-            :on-replace-configuration="replaceConfiguration"
-            :on-restart="chooseAnotherFile"
-            :on-select-destination="selectDestination"
-            :on-set-express="setExpress"
-            :pending="commandPending"
-            :quote="quote"
-          />
+          <section
+            v-if="showConfigurator && quote?.items.length"
+            class="model-preflight"
+            aria-labelledby="preflight-title"
+          >
+            <div class="model-preflight__heading mono">
+              <h2 id="preflight-title">NÁLEZY K MODELU</h2>
+              <span>{{ preflightFindings.length }} / ZJIŠTĚNÍ</span>
+            </div>
+            <p v-if="preflightFindings.length === 0">
+              K této konfiguraci nejsou hlášeny nálezy vyžadující rozhodnutí.
+            </p>
+            <ul v-else>
+              <li v-for="finding in preflightFindings" :key="finding.id">
+                <span
+                  class="mono"
+                  :class="`model-preflight__severity--${finding.severity.toLowerCase()}`"
+                >
+                  {{ finding.severity === "BLOCKING" ? "NELZE" : "KONTROLA" }}
+                  · POLOŽKA {{ finding.itemOrdinal + 1 }}
+                </span>
+                <p>{{ finding.message }}</p>
+              </li>
+            </ul>
+          </section>
 
           <div
             v-if="showConfigurator && quote?.configurationEditable"
@@ -574,46 +642,69 @@ function inspectionLabel(status: string | undefined): string {
     </template>
 
     <template #context>
-      <aside class="process-context" aria-labelledby="process-title">
-        <div>
-          <p class="eyebrow">PRŮBĚH</p>
-          <h2 id="process-title">Od modelu k výrobě</h2>
-        </div>
-        <ol class="pipeline-list">
-          <li
-            v-for="(item, index) in pipeline"
-            :key="item.label"
-            :class="item.status"
-          >
-            <span class="pipeline-index mono">{{
-              String(index + 1).padStart(2, "0")
-            }}</span>
-            <span>{{ item.label }}</span>
-            <span class="pipeline-status">
-              {{
-                item.status === "done"
-                  ? "hotovo"
-                  : item.status === "active"
-                    ? "probíhá"
-                    : "čeká"
-              }}
-            </span>
-          </li>
-        </ol>
-        <div class="context-note">
-          <p class="eyebrow">SOUKROMÍ A OBNOVA</p>
-          <p>
-            Prohlížeč si neponechává data modelu. Ukládá jen dočasnou referenci
-            v aktuální kartě, aby šlo po obnovení stránky navázat.
-          </p>
-        </div>
-        <div class="context-note">
-          <p class="eyebrow">PODPOROVANÉ SOUBORY</p>
-          <p>STL a jednovrstvý, nebarvený 3MF do 100 MiB.</p>
-        </div>
+      <aside
+        class="process-context order-context"
+        :class="{ 'order-context--configurator': showConfigurator }"
+        :aria-labelledby="
+          showConfigurator ? 'configurator-title' : 'process-title'
+        "
+      >
+        <OrderQuoteConfigurator
+          v-if="showConfigurator && quote"
+          :command-error="commandError"
+          :destination-reselection-required="destinationReselectionRequired"
+          :on-decide-risk="decideRisk"
+          :on-prepare="prepareQuote"
+          :on-refresh="refreshQuote"
+          :on-replace-configuration="replaceConfiguration"
+          :on-restart="chooseAnotherFile"
+          :on-select-destination="selectDestination"
+          :on-set-express="setExpress"
+          :pending="commandPending"
+          :quote="quote"
+        />
+        <template v-else>
+          <div>
+            <p class="eyebrow">PRŮBĚH</p>
+            <h2 id="process-title">Od modelu k výrobě</h2>
+          </div>
+          <ol class="pipeline-list">
+            <li
+              v-for="(item, index) in pipeline"
+              :key="item.label"
+              :class="item.status"
+            >
+              <span class="pipeline-index mono">{{
+                String(index + 1).padStart(2, "0")
+              }}</span>
+              <span>{{ item.label }}</span>
+              <span class="pipeline-status">
+                {{
+                  item.status === "done"
+                    ? "hotovo"
+                    : item.status === "active"
+                      ? "probíhá"
+                      : "čeká"
+                }}
+              </span>
+            </li>
+          </ol>
+          <div class="context-note">
+            <p class="eyebrow">SOUKROMÍ A OBNOVA</p>
+            <p>
+              Po obnovení stránky neuchováváme soubor ani jeho místní náhled. V
+              aktuální kartě zůstává jen dočasná reference pro navázání.
+            </p>
+          </div>
+          <div class="context-note">
+            <p class="eyebrow">PODPOROVANÉ SOUBORY</p>
+            <p>STL a jednovrstvý, nebarvený 3MF do 100 MiB.</p>
+          </div>
+        </template>
       </aside>
     </template>
   </ApplicationShell>
 </template>
 
 <style src="../../assets/css/application.css"></style>
+<style src="../../assets/css/order-configurator.css"></style>
