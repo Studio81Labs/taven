@@ -13,6 +13,7 @@ const props = defineProps<{
 
 const selectedCategory = ref<string | null>(null);
 const selectedItemId = ref<string | null>(null);
+const failedImageKeys = ref<Set<string>>(new Set());
 const categories = computed(() => portfolioCategories(props.items));
 const visibleItems = computed(() =>
   visiblePortfolioItems(props.items, selectedCategory.value),
@@ -24,6 +25,18 @@ const selectedItem = computed(
 function selectCategory(category: string | null): void {
   selectedCategory.value = category;
   selectedItemId.value = null;
+}
+
+function imageKey(item: PortfolioItem): string {
+  return `${item.id}:${item.image.src}`;
+}
+
+function imageUnavailable(item: PortfolioItem): boolean {
+  return !item.image.src.trim() || failedImageKeys.value.has(imageKey(item));
+}
+
+function markImageUnavailable(item: PortfolioItem): void {
+  failedImageKeys.value = new Set([...failedImageKeys.value, imageKey(item)]);
 }
 </script>
 
@@ -70,7 +83,23 @@ function selectCategory(category: string | null): void {
         :key="item.id"
         class="portfolio-card"
       >
-        <img :src="item.image.src" :alt="item.image.alt" loading="lazy" />
+        <div
+          v-if="imageUnavailable(item)"
+          class="portfolio-image-fallback"
+          role="img"
+          :aria-label="`Fotografie ukázky ${item.title} není dostupná`"
+        >
+          Fotografie není dostupná
+        </div>
+        <img
+          v-else
+          :src="item.image.src"
+          :alt="item.image.alt"
+          :width="item.image.width"
+          :height="item.image.height"
+          loading="lazy"
+          @error="markImageUnavailable(item)"
+        />
         <div class="portfolio-card__body">
           <p class="public-page__index">
             {{ item.category }} / {{ item.material }}
@@ -98,7 +127,22 @@ function selectCategory(category: string | null): void {
       class="portfolio-detail"
       aria-label="Detail ukázky"
     >
-      <img :src="selectedItem.image.src" :alt="selectedItem.image.alt" />
+      <div
+        v-if="imageUnavailable(selectedItem)"
+        class="portfolio-image-fallback"
+        role="img"
+        :aria-label="`Fotografie ukázky ${selectedItem.title} není dostupná`"
+      >
+        Fotografie není dostupná
+      </div>
+      <img
+        v-else
+        :src="selectedItem.image.src"
+        :alt="selectedItem.image.alt"
+        :width="selectedItem.image.width"
+        :height="selectedItem.image.height"
+        @error="markImageUnavailable(selectedItem)"
+      />
       <div>
         <p class="public-page__index">
           {{ selectedItem.category }} / {{ selectedItem.material }}

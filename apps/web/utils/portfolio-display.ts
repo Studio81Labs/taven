@@ -4,7 +4,7 @@ export interface PortfolioItem {
   category: string;
   material: string;
   description: string;
-  image: { src: string; alt: string };
+  image: { src: string; alt: string; width: number; height: number };
 }
 
 export function portfolioCategories(items: readonly PortfolioItem[]): string[] {

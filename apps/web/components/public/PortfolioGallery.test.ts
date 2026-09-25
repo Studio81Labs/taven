@@ -14,6 +14,8 @@ const fixtureItems: PortfolioItem[] = [
     image: {
       src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />",
       alt: "Testovací geometrie A",
+      width: 800,
+      height: 600,
     },
   },
   {
@@ -25,6 +27,8 @@ const fixtureItems: PortfolioItem[] = [
     image: {
       src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />",
       alt: "Testovací geometrie B",
+      width: 800,
+      height: 600,
     },
   },
 ];
@@ -54,6 +58,7 @@ describe("PortfolioGallery presentation", () => {
         .findAll(".portfolio-card img")
         .map((image) => image.attributes("alt")),
     ).toEqual(["Testovací geometrie A", "Testovací geometrie B"]);
+    expect(wrapper.get(".portfolio-card img").attributes("width")).toBe("800");
 
     await wrapper
       .get(".portfolio-filters button:nth-child(2)")
@@ -75,5 +80,33 @@ describe("PortfolioGallery presentation", () => {
       .get(".portfolio-filters button:nth-child(1)")
       .trigger("click");
     expect(wrapper.findAll(".portfolio-card")).toHaveLength(2);
+  });
+
+  it("replaces missing and failed images in cards and detail without hiding metadata", async () => {
+    const wrapper = mount(PortfolioGallery, {
+      props: {
+        items: [
+          fixtureItems[0]!,
+          {
+            ...fixtureItems[1]!,
+            image: { ...fixtureItems[1]!.image, src: "" },
+          },
+        ],
+      },
+    });
+    expect(wrapper.findAll(".portfolio-image-fallback")).toHaveLength(1);
+    expect(wrapper.text()).toContain("Fixture B");
+
+    await wrapper.get(".portfolio-card img").trigger("error");
+    expect(wrapper.findAll(".portfolio-image-fallback")).toHaveLength(2);
+    expect(wrapper.text()).toContain("Fixture A");
+
+    await wrapper.get(".portfolio-card button").trigger("click");
+    expect(wrapper.get(".portfolio-detail h2").text()).toBe("Fixture A");
+    expect(
+      wrapper
+        .get(".portfolio-detail .portfolio-image-fallback")
+        .attributes("aria-label"),
+    ).toContain("Fixture A");
   });
 });

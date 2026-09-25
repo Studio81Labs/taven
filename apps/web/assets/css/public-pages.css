@@ -333,7 +333,7 @@
 
 .portfolio-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
 }
 
@@ -343,11 +343,22 @@
   background: var(--surface);
 }
 
-.portfolio-card img {
+.portfolio-card img,
+.portfolio-card .portfolio-image-fallback {
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
   background: var(--surface-2);
+}
+
+.portfolio-image-fallback {
+  display: grid;
+  place-items: center;
+  border-bottom: 1px solid var(--rule);
+  padding: 24px;
+  color: var(--ink-2);
+  font: 12px/20px var(--taven-font-mono);
+  text-align: center;
 }
 
 .portfolio-card__body {
@@ -376,7 +387,8 @@
   padding: 24px;
 }
 
-.portfolio-detail img {
+.portfolio-detail img,
+.portfolio-detail .portfolio-image-fallback {
   width: 100%;
   aspect-ratio: 16 / 10;
   object-fit: cover;
@@ -609,6 +621,10 @@
 
   .legal-sheet__toc {
     position: static;
+  }
+
+  .portfolio-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
