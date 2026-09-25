@@ -37,6 +37,35 @@ test.describe("public presentation and legal reading", () => {
     await expect(page.locator(".pricing-factors > li")).toHaveCount(7);
     await page.goto("/kontakt");
     await expect(page.locator(".contact-card")).toHaveCount(3);
+    await expect(page.locator(".contact-card--primary")).toContainText(
+      "veřejnou referenci zakázky",
+    );
+    await expect(
+      page.locator(".contact-bottom").getByRole("link", {
+        name: "Přejít k nahrání modelu",
+      }),
+    ).toHaveAttribute("href", "/objednavka");
+  });
+
+  test("functional public metadata stays readable at narrow widths", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 900 });
+    for (const [route, selector] of [
+      ["/", ".sheet-utility"],
+      ["/jak-to-funguje", ".process-ledger__index"],
+      ["/cenik", ".pricing-factors li > div"],
+      ["/kontakt", ".contact-cards__foot"],
+    ]) {
+      await page.goto(route);
+      const size = await page
+        .locator(selector)
+        .first()
+        .evaluate((element) =>
+          Number.parseFloat(getComputedStyle(element).fontSize),
+        );
+      expect(size, `${route} ${selector}`).toBeGreaterThanOrEqual(12);
+    }
   });
 
   test("legal contents navigate to exact rendered sections while draft remains unavailable", async ({

@@ -52,6 +52,17 @@ test.describe("Normal default-closed build", () => {
     ).toBeVisible();
     expect(automaticSessionCreates).toBe(0);
 
+    await page.goto("/kontakt");
+    await expect(page.locator(".contact-bottom .public-action")).toHaveText(
+      "Kalkulace čeká na schválení",
+    );
+    await expect(
+      page.locator(".contact-bottom .public-action"),
+    ).toHaveAttribute("aria-disabled", "true");
+    await expect(
+      page.locator('.contact-bottom a[href="/objednavka"]'),
+    ).toHaveCount(0);
+
     await page.goto("/vop");
     await expect(
       page.getByText("NÁVRH — NEPLATÍ / NEPOUŽÍVAT V PRODUKCI"),

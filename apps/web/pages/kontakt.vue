@@ -3,6 +3,7 @@ import { publicSite } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
 const contacts = usePublicContacts();
+const automaticQuoteEnabled = useAutomaticQuoteEnabled();
 
 usePublicPageMeta({
   path: "/kontakt",
@@ -34,8 +35,8 @@ usePublicPageMeta({
           <p class="public-page__index">CELA 01 / DOTAZ K ZAKÁZCE</p>
           <h2>Běžící zakázka</h2>
           <p>
-            Potřebuješ se zeptat na stav, doručení nebo změnu? Uveď číslo své
-            objednávky z potvrzovacího e-mailu.
+            Potřebuješ se zeptat na stav, doručení nebo změnu? Uveď veřejnou
+            referenci zakázky z objednávky nebo stránky po platbě, pokud ji máš.
           </p>
           <div class="contact-card__action">
             <span>ZÁKAZNICKÝ KONTAKT</span
@@ -126,8 +127,14 @@ usePublicPageMeta({
     </div>
     <div class="contact-bottom">
       <span>VEŘEJNÝ KONTAKT · {{ publicSite.seller.legalName }}</span
-      ><NuxtLink class="public-action" to="/objednavka" no-prefetch
+      ><NuxtLink
+        v-if="automaticQuoteEnabled"
+        class="public-action"
+        to="/objednavka"
+        no-prefetch
         >Přejít k nahrání modelu</NuxtLink
+      ><span v-else class="public-action" aria-disabled="true"
+        >Kalkulace čeká na schválení</span
       >
     </div>
   </article>
