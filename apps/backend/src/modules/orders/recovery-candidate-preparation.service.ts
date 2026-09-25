@@ -98,8 +98,8 @@ function validUuid(value: string, name: string): string {
   return value.toLowerCase();
 }
 
-function requiredReason(value: string): string {
-  const reason = value?.trim();
+function requiredReason(value: unknown): string {
+  const reason = typeof value === "string" ? value.trim() : "";
   if (!reason || reason.length > 1000)
     throw new BadRequestException("reason is invalid");
   return reason;
@@ -887,6 +887,7 @@ export class RecoveryCandidatePreparationService {
     row: RecoveryCandidatePreparation,
   ): Promise<RecoveryCandidatePreparationDetailDto> {
     const now = await databaseNow(tx);
+    const expired = now.getTime() >= row.requestedAt.getTime() + 30 * 60_000;
     const latest = await tx.recoveryCandidatePreparation.findFirst({
       where: { kind: row.kind, targetId: row.targetId },
       orderBy: { generation: "desc" },
@@ -972,7 +973,7 @@ export class RecoveryCandidatePreparationService {
           blockingCodes: selectableCount
             ? []
             : pendingCount
-              ? ["PREPARING"]
+              ? [expired ? "PREPARATION_EXPIRED" : "PREPARING"]
               : ["NO_ELIGIBLE_CANDIDATE"],
         };
       }),
@@ -988,6 +989,7 @@ export class RecoveryCandidatePreparationService {
     const blockers = [
       ...(latest?.id !== row.id ? ["PREPARATION_SUPERSEDED"] : []),
       ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
+      ...(expired && pendingCount ? ["PREPARATION_EXPIRED"] : []),
       ...(!sourceRows.every(({ selectableCount }) => selectableCount > 0) &&
       !pendingCount
         ? ["INCOMPLETE_COVERAGE"]
@@ -1000,10 +1002,10 @@ export class RecoveryCandidatePreparationService {
           ? "BLOCKED"
           : sourceRows.every(({ selectableCount }) => selectableCount > 0)
             ? "CANDIDATES_AVAILABLE"
-            : pendingCount
-              ? "PREPARING"
-              : now.getTime() >= row.requestedAt.getTime() + 30 * 60_000
-                ? "EXPIRED"
+            : expired
+              ? "EXPIRED"
+              : pendingCount
+                ? "PREPARING"
                 : "BLOCKED";
     const accepted: RecoveryCandidatePreparationAcceptedDto = {
       preparationId: row.id,
@@ -1027,9 +1029,10 @@ export class RecoveryCandidatePreparationService {
       pendingCount,
       failedCount,
       blockingCodes: blockers,
-      nextRefreshAt: pendingCount
-        ? new Date(row.requestedAt.getTime() + 30 * 60_000).toISOString()
-        : null,
+      nextRefreshAt:
+        pendingCount && !expired
+          ? new Date(row.requestedAt.getTime() + 30 * 60_000).toISOString()
+          : null,
     };
   }
 

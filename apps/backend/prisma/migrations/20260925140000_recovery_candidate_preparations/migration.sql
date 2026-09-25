@@ -16,7 +16,7 @@ CREATE TABLE "recovery_candidate_preparations" (
     "predecessor_shipment_id" UUID,
     "incident_evidence_id" UUID,
     "generation" INTEGER NOT NULL,
-    "source_job_ids" UUID[],
+    "source_job_ids" UUID[] NOT NULL,
     "source_scope_fingerprint" VARCHAR(64) NOT NULL,
     "requested_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "operator_id" UUID NOT NULL,

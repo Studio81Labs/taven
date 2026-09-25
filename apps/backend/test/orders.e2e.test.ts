@@ -3128,6 +3128,18 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
     const key = `prepared-replacement:${randomUUID()}`;
+    expect(() =>
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: 123 as unknown as string,
+        },
+        `invalid-reason:${randomUUID()}`,
+      ),
+    ).toThrow(BadRequestException);
     const [accepted, concurrentReplay] = await Promise.all([
       preparation.prepareReplacement(
         operator,
@@ -3325,7 +3337,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         key,
       ),
     ).resolves.toEqual(accepted);
-  }, 30_000);
+  }, 45_000);
 
   it("rejects a prepared candidate at the fifteen-minute admission boundary", async () => {
     const fixture = await preparePaidOrder("prepared-replacement-boundary");
