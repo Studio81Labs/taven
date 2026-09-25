@@ -93,8 +93,9 @@ type Scope = {
   expressRequested: boolean;
 };
 
-function validUuid(value: string, name: string): string {
-  if (!UUID.test(value)) throw new BadRequestException(`${name} is invalid`);
+function validUuid(value: unknown, name: string): string {
+  if (typeof value !== "string" || !UUID.test(value))
+    throw new BadRequestException(`${name} is invalid`);
   return value.toLowerCase();
 }
 
@@ -618,7 +619,7 @@ export class RecoveryCandidatePreparationService {
       });
       const page = rows.slice(0, limit);
       return {
-        items: await Promise.all(page.map((row) => this.project(tx, row))),
+        items: await this.projectBatch(tx, page),
         ...(rows.length > limit
           ? { nextCursor: nextCursor(page.at(-1)!.id, filter) }
           : {}),
@@ -651,7 +652,7 @@ export class RecoveryCandidatePreparationService {
       });
       if (!row)
         throw new NotFoundException("Recovery preparation was not found");
-      return this.project(tx, row);
+      return (await this.projectBatch(tx, [row]))[0]!;
     });
   }
 
@@ -757,10 +758,65 @@ export class RecoveryCandidatePreparationService {
       },
     });
     if (!candidate) return null;
-    const currentResources = await tx.$queryRaw<Array<{ eligible: boolean }>>`
-      SELECT EXISTS (
-        SELECT 1
-        FROM candidate_resource_estimates estimate
+    const currentResources = await this.eligibleOutboxIds(tx, [
+      outboxMessageId,
+    ]);
+    const blockers = [
+      ...(!latest ? ["PREPARATION_SUPERSEDED"] : []),
+      ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
+      ...(candidate.expiresAt.getTime() <= now.getTime() + 15 * 60_000
+        ? ["CANDIDATE_EXPIRED"]
+        : []),
+      ...(candidate.capacityIntervals.length === 0 ||
+      candidate.capacityIntervals.some(
+        ({ startsAt, endsAt }) => startsAt <= now || endsAt <= startsAt,
+      )
+        ? ["SCHEDULE_STALE"]
+        : []),
+      ...(candidate.inventory.status !== "AVAILABLE"
+        ? ["INVENTORY_UNAVAILABLE"]
+        : []),
+      ...(!currentResources.has(outboxMessageId) ? ["RESOURCE_CHANGED"] : []),
+    ];
+    return {
+      candidateResourceEstimateId: candidate.id,
+      sourceJobId,
+      machineId: candidate.machineId,
+      machineProfileId: candidate.machineProfileId,
+      machineCalibrationId: candidate.machineCalibrationId,
+      inventoryId: candidate.inventoryId,
+      printConfigRevisionId: candidate.printConfigRevisionId,
+      material: candidate.inventory.material,
+      color: candidate.inventory.color,
+      quantity: candidate.quantity,
+      partsPerPlate: candidate.partsPerPlate,
+      requiredMaterialMilligrams:
+        candidate.requiredMaterialMilligrams.toString(),
+      requiredMachineSeconds: candidate.requiredMachineSeconds.toString(),
+      intervals: candidate.capacityIntervals.map(({ startsAt, endsAt }) => ({
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+      })),
+      calculatedAt: candidate.calculatedAt.toISOString(),
+      expiresAt: candidate.expiresAt.toISOString(),
+      selectable: blockers.length === 0,
+      blockingCodes: blockers,
+    };
+  }
+
+  private async eligibleOutboxIds(
+    tx: Transaction,
+    outboxMessageIds: string[],
+  ): Promise<Set<string>> {
+    if (!outboxMessageIds.length) return new Set();
+    const rows = await tx.$queryRaw<Array<{ outboxMessageId: string }>>`
+      SELECT dispatch.outbox_message_id AS "outboxMessageId"
+        FROM recovery_candidate_dispatches dispatch
+        JOIN candidate_estimate_terminal_results terminal
+          ON terminal.outbox_message_id = dispatch.outbox_message_id
+          AND terminal.outcome = 'SUCCEEDED'
+        JOIN candidate_resource_estimates estimate
+          ON estimate.id = terminal.candidate_resource_estimate_id
         JOIN shipment_plans plan ON plan.id = estimate.shipment_plan_id
         JOIN order_price_bindings binding ON binding.id = plan.order_price_binding_id
         JOIN price_snapshots snapshot ON snapshot.id = binding.price_snapshot_id
@@ -796,15 +852,14 @@ export class RecoveryCandidatePreparationService {
           AND geometry.deleted_at IS NULL
         JOIN model_files source ON source.id = geometry.source_model_file_id
           AND source.deleted_at IS NULL
-        WHERE estimate.id = ${candidate.id}::uuid
+        WHERE dispatch.outbox_message_id = ANY(${outboxMessageIds}::uuid[])
           AND EXISTS (
-            SELECT 1 FROM recovery_candidate_dispatches dispatch
-            JOIN jobs source_job ON source_job.id = dispatch.source_job_id
+            SELECT 1 FROM jobs source_job
             JOIN phase_resource_plan_slots source_slot
               ON source_slot.phase_resource_plan_job_id = source_job.phase_resource_plan_job_id
             JOIN fulfilment_slots slot ON slot.id = source_slot.fulfilment_slot_id
             JOIN order_items item ON item.id = slot.order_item_id
-            WHERE dispatch.outbox_message_id = ${outboxMessageId}::uuid
+            WHERE source_job.id = dispatch.source_job_id
               AND item.material = inventory.material
               AND (item.color IS NULL OR item.color = inventory.color)
           )
@@ -837,100 +892,114 @@ export class RecoveryCandidatePreparationService {
               AND reserved.starts_at < interval.ends_at
               AND reserved.ends_at > interval.starts_at
             WHERE interval.candidate_resource_estimate_id = estimate.id)
-      ) AS eligible
     `;
-    const blockers = [
-      ...(!latest ? ["PREPARATION_SUPERSEDED"] : []),
-      ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
-      ...(candidate.expiresAt.getTime() <= now.getTime() + 15 * 60_000
-        ? ["CANDIDATE_EXPIRED"]
-        : []),
-      ...(candidate.capacityIntervals.length === 0 ||
-      candidate.capacityIntervals.some(
-        ({ startsAt, endsAt }) => startsAt <= now || endsAt <= startsAt,
-      )
-        ? ["SCHEDULE_STALE"]
-        : []),
-      ...(candidate.inventory.status !== "AVAILABLE"
-        ? ["INVENTORY_UNAVAILABLE"]
-        : []),
-      ...(!currentResources[0]?.eligible ? ["RESOURCE_CHANGED"] : []),
-    ];
-    return {
-      candidateResourceEstimateId: candidate.id,
-      sourceJobId,
-      machineId: candidate.machineId,
-      machineProfileId: candidate.machineProfileId,
-      machineCalibrationId: candidate.machineCalibrationId,
-      inventoryId: candidate.inventoryId,
-      printConfigRevisionId: candidate.printConfigRevisionId,
-      material: candidate.inventory.material,
-      color: candidate.inventory.color,
-      quantity: candidate.quantity,
-      partsPerPlate: candidate.partsPerPlate,
-      requiredMaterialMilligrams:
-        candidate.requiredMaterialMilligrams.toString(),
-      requiredMachineSeconds: candidate.requiredMachineSeconds.toString(),
-      intervals: candidate.capacityIntervals.map(({ startsAt, endsAt }) => ({
-        startsAt: startsAt.toISOString(),
-        endsAt: endsAt.toISOString(),
-      })),
-      calculatedAt: candidate.calculatedAt.toISOString(),
-      expiresAt: candidate.expiresAt.toISOString(),
-      selectable: blockers.length === 0,
-      blockingCodes: blockers,
-    };
+    return new Set(rows.map(({ outboxMessageId }) => outboxMessageId));
   }
 
-  private async project(
+  private async projectBatch(
     tx: Transaction,
-    row: RecoveryCandidatePreparation,
-  ): Promise<RecoveryCandidatePreparationDetailDto> {
+    rows: RecoveryCandidatePreparation[],
+  ): Promise<RecoveryCandidatePreparationDetailDto[]> {
+    if (!rows.length) return [];
     const now = await databaseNow(tx);
-    const expired = now.getTime() >= row.requestedAt.getTime() + 30 * 60_000;
     const latest = await tx.recoveryCandidatePreparation.findFirst({
-      where: { kind: row.kind, targetId: row.targetId },
+      where: { kind: rows[0]!.kind, targetId: rows[0]!.targetId },
       orderBy: { generation: "desc" },
       select: { id: true },
     });
     const mappings = await tx.recoveryCandidateDispatch.findMany({
-      where: { preparationId: row.id },
+      where: { preparationId: { in: rows.map(({ id }) => id) } },
     });
+    const outboxMessageIds = mappings.map(
+      ({ outboxMessageId }) => outboxMessageId,
+    );
     const terminals = await tx.candidateEstimateTerminalResult.findMany({
-      where: {
-        outboxMessageId: {
-          in: mappings.map(({ outboxMessageId }) => outboxMessageId),
-        },
-      },
+      where: { outboxMessageId: { in: outboxMessageIds } },
     });
     const byOutbox = new Map(
       terminals.map((terminal) => [terminal.outboxMessageId, terminal]),
     );
-    const contextValid = await this.contextMatches(tx, row);
     const deadLetterIds = new Set(
       (
         await tx.outboxMessage.findMany({
           where: {
             aggregateType: "SlicingDispatchDeadLetter",
-            aggregateId: {
-              in: mappings.map(({ outboxMessageId }) => outboxMessageId),
-            },
+            aggregateId: { in: outboxMessageIds },
           },
           select: { aggregateId: true },
         })
       ).map(({ aggregateId }) => aggregateId),
     );
-    const sourceRows = await Promise.all(
-      row.sourceJobIds.map(async (sourceJobId) => {
-        const slots = await tx.phaseResourcePlanSlot.findMany({
-          where: {
-            phaseResourcePlanJob: { jobs: { some: { id: sourceJobId } } },
-          },
-          select: { fulfilmentSlotId: true },
-          orderBy: { fulfilmentSlotId: "asc" },
-        });
+    const sourceJobIds = [
+      ...new Set(rows.flatMap(({ sourceJobIds }) => sourceJobIds)),
+    ];
+    const sourceJobs = await tx.job.findMany({
+      where: { id: { in: sourceJobIds } },
+      select: { id: true, phaseResourcePlanJobId: true },
+    });
+    const slots = await tx.phaseResourcePlanSlot.findMany({
+      where: {
+        phaseResourcePlanJobId: {
+          in: sourceJobs.map(
+            ({ phaseResourcePlanJobId }) => phaseResourcePlanJobId,
+          ),
+        },
+      },
+      select: { phaseResourcePlanJobId: true, fulfilmentSlotId: true },
+      orderBy: { fulfilmentSlotId: "asc" },
+    });
+    const slotsByPlanJob = new Map<string, string[]>();
+    for (const slot of slots) {
+      const ids = slotsByPlanJob.get(slot.phaseResourcePlanJobId) ?? [];
+      ids.push(slot.fulfilmentSlotId);
+      slotsByPlanJob.set(slot.phaseResourcePlanJobId, ids);
+    }
+    const slotsBySourceJob = new Map(
+      sourceJobs.map(({ id, phaseResourcePlanJobId }) => [
+        id,
+        slotsByPlanJob.get(phaseResourcePlanJobId) ?? [],
+      ]),
+    );
+    const latestMappings = mappings.filter(
+      ({ preparationId, outboxMessageId }) =>
+        preparationId === latest?.id &&
+        byOutbox.get(outboxMessageId)?.outcome === "SUCCEEDED",
+    );
+    const latestCandidates = await tx.candidateResourceEstimate.findMany({
+      where: {
+        id: {
+          in: latestMappings.flatMap(({ outboxMessageId }) => {
+            const id =
+              byOutbox.get(outboxMessageId)?.candidateResourceEstimateId;
+            return id ? [id] : [];
+          }),
+        },
+      },
+      include: { capacityIntervals: true, inventory: true },
+    });
+    const candidateById = new Map(
+      latestCandidates.map((candidate) => [candidate.id, candidate]),
+    );
+    const eligibleOutboxIds = await this.eligibleOutboxIds(
+      tx,
+      latestMappings.map(({ outboxMessageId }) => outboxMessageId),
+    );
+    const contextValidByPreparation = new Map(
+      await Promise.all(
+        rows.map(
+          async (row) => [row.id, await this.contextMatches(tx, row)] as const,
+        ),
+      ),
+    );
+    return rows.map((row) => {
+      const expired = now.getTime() >= row.requestedAt.getTime() + 30 * 60_000;
+      const contextValid = contextValidByPreparation.get(row.id) ?? false;
+      const sourceRows = row.sourceJobIds.map((sourceJobId) => {
+        const fulfilmentSlotIds = slotsBySourceJob.get(sourceJobId) ?? [];
         const sourceDispatches = mappings.filter(
-          (mapping) => mapping.sourceJobId === sourceJobId,
+          (mapping) =>
+            mapping.preparationId === row.id &&
+            mapping.sourceJobId === sourceJobId,
         );
         const pendingCount = sourceDispatches.filter(
           (mapping) =>
@@ -942,31 +1011,35 @@ export class RecoveryCandidatePreparationService {
             byOutbox.get(mapping.outboxMessageId)?.outcome === "FAILED" ||
             deadLetterIds.has(mapping.outboxMessageId),
         ).length;
-        const successful = sourceDispatches.filter(
-          (mapping) =>
-            byOutbox.get(mapping.outboxMessageId)?.outcome === "SUCCEEDED",
-        );
-        const selectable = await Promise.all(
-          successful.map((mapping) =>
-            this.choiceForDispatch(
-              tx,
-              mapping.outboxMessageId,
-              sourceJobId,
-              latest?.id === row.id,
-              contextValid,
-              now,
-            ),
-          ),
-        );
-        const selectableCount = selectable.filter(
-          (choice) => choice?.selectable,
-        ).length;
+        const selectableCount =
+          row.id === latest?.id && contextValid
+            ? sourceDispatches.filter((mapping) => {
+                const terminal = byOutbox.get(mapping.outboxMessageId);
+                if (
+                  terminal?.outcome !== "SUCCEEDED" ||
+                  !terminal.candidateResourceEstimateId
+                )
+                  return false;
+                const candidate = candidateById.get(
+                  terminal.candidateResourceEstimateId,
+                );
+                return (
+                  !!candidate &&
+                  eligibleOutboxIds.has(mapping.outboxMessageId) &&
+                  candidate.expiresAt.getTime() > now.getTime() + 15 * 60_000 &&
+                  candidate.capacityIntervals.length > 0 &&
+                  candidate.capacityIntervals.every(
+                    ({ startsAt, endsAt }) =>
+                      startsAt > now && endsAt > startsAt,
+                  ) &&
+                  candidate.inventory.status === "AVAILABLE"
+                );
+              }).length
+            : 0;
         return {
           sourceJobId,
-          fulfilmentSlotIds: slots.map(
-            ({ fulfilmentSlotId }) => fulfilmentSlotId,
-          ),
-          quantity: slots.length,
+          fulfilmentSlotIds,
+          quantity: fulfilmentSlotIds.length,
           pendingCount,
           failedCount,
           selectableCount,
@@ -976,64 +1049,66 @@ export class RecoveryCandidatePreparationService {
               ? [expired ? "PREPARATION_EXPIRED" : "PREPARING"]
               : ["NO_ELIGIBLE_CANDIDATE"],
         };
-      }),
-    );
-    const pendingCount = sourceRows.reduce(
-      (sum, source) => sum + source.pendingCount,
-      0,
-    );
-    const failedCount = sourceRows.reduce(
-      (sum, source) => sum + source.failedCount,
-      0,
-    );
-    const blockers = [
-      ...(latest?.id !== row.id ? ["PREPARATION_SUPERSEDED"] : []),
-      ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
-      ...(expired && pendingCount ? ["PREPARATION_EXPIRED"] : []),
-      ...(!sourceRows.every(({ selectableCount }) => selectableCount > 0) &&
-      !pendingCount
-        ? ["INCOMPLETE_COVERAGE"]
-        : []),
-    ];
-    const status =
-      latest?.id !== row.id
-        ? "SUPERSEDED"
-        : !contextValid
-          ? "BLOCKED"
-          : sourceRows.every(({ selectableCount }) => selectableCount > 0)
-            ? "CANDIDATES_AVAILABLE"
-            : expired
-              ? "EXPIRED"
-              : pendingCount
-                ? "PREPARING"
-                : "BLOCKED";
-    const accepted: RecoveryCandidatePreparationAcceptedDto = {
-      preparationId: row.id,
-      kind: row.kind,
-      orderId: row.orderId,
-      targetId: row.targetId,
-      generation: row.generation,
-      requestedAt: row.requestedAt.toISOString(),
-      statusPath: `/admin/orders/${row.orderId}/fulfilment/${row.kind === RecoveryCandidatePreparationKind.JOB_REPLACEMENT ? `jobs/${row.targetId}/replacement-preparations` : `claims/${row.targetId}/reprint-preparations`}/${row.id}`,
-    };
-    return {
-      ...accepted,
-      replacementRequestId: row.replacementRequestId,
-      claimId: row.claimId,
-      predecessorShipmentId: row.predecessorShipmentId,
-      incidentEvidenceId: row.incidentEvidenceId,
-      sourceJobIds: row.sourceJobIds,
-      status,
-      sources: sourceRows,
-      dispatchCount: mappings.length,
-      pendingCount,
-      failedCount,
-      blockingCodes: blockers,
-      nextRefreshAt:
-        pendingCount && !expired
-          ? new Date(row.requestedAt.getTime() + 30 * 60_000).toISOString()
-          : null,
-    };
+      });
+      const pendingCount = sourceRows.reduce(
+        (sum, source) => sum + source.pendingCount,
+        0,
+      );
+      const failedCount = sourceRows.reduce(
+        (sum, source) => sum + source.failedCount,
+        0,
+      );
+      const blockers = [
+        ...(latest?.id !== row.id ? ["PREPARATION_SUPERSEDED"] : []),
+        ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
+        ...(expired && pendingCount ? ["PREPARATION_EXPIRED"] : []),
+        ...(!sourceRows.every(({ selectableCount }) => selectableCount > 0) &&
+        !pendingCount
+          ? ["INCOMPLETE_COVERAGE"]
+          : []),
+      ];
+      const status =
+        latest?.id !== row.id
+          ? "SUPERSEDED"
+          : !contextValid
+            ? "BLOCKED"
+            : sourceRows.every(({ selectableCount }) => selectableCount > 0)
+              ? "CANDIDATES_AVAILABLE"
+              : expired
+                ? "EXPIRED"
+                : pendingCount
+                  ? "PREPARING"
+                  : "BLOCKED";
+      const accepted: RecoveryCandidatePreparationAcceptedDto = {
+        preparationId: row.id,
+        kind: row.kind,
+        orderId: row.orderId,
+        targetId: row.targetId,
+        generation: row.generation,
+        requestedAt: row.requestedAt.toISOString(),
+        statusPath: `/admin/orders/${row.orderId}/fulfilment/${row.kind === RecoveryCandidatePreparationKind.JOB_REPLACEMENT ? `jobs/${row.targetId}/replacement-preparations` : `claims/${row.targetId}/reprint-preparations`}/${row.id}`,
+      };
+      return {
+        ...accepted,
+        replacementRequestId: row.replacementRequestId,
+        claimId: row.claimId,
+        predecessorShipmentId: row.predecessorShipmentId,
+        incidentEvidenceId: row.incidentEvidenceId,
+        sourceJobIds: row.sourceJobIds,
+        status,
+        sources: sourceRows,
+        dispatchCount: mappings.filter(
+          ({ preparationId }) => preparationId === row.id,
+        ).length,
+        pendingCount,
+        failedCount,
+        blockingCodes: blockers,
+        nextRefreshAt:
+          pendingCount && !expired
+            ? new Date(row.requestedAt.getTime() + 30 * 60_000).toISOString()
+            : null,
+      };
+    });
   }
 
   private async contextMatches(

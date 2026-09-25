@@ -3120,10 +3120,47 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       putImmutableObject: async () => undefined,
     } as unknown as ObjectStorage);
     const candidates = new CandidateEstimateService(prisma, snapshots);
+    let fullyReservedInputInjected = false;
+    const frozenInputPrisma = {
+      machineProfile: {
+        findMany: async (
+          args: Parameters<typeof prisma.machineProfile.findMany>[0],
+        ) => {
+          const profiles = (await prisma.machineProfile.findMany(
+            args,
+          )) as unknown as Array<{
+            machineCapability: {
+              machines: Array<{
+                inventories: Array<{
+                  id: string;
+                  remainingMilligrams: bigint;
+                  reservedMilligrams: bigint;
+                }>;
+              }>;
+            };
+          }>;
+          for (const profile of profiles) {
+            for (const machine of profile.machineCapability.machines) {
+              const inventory = machine.inventories[0];
+              if (!inventory) continue;
+              machine.inventories.unshift({
+                ...inventory,
+                id: randomUUID(),
+                remainingMilligrams: 100n,
+                reservedMilligrams: 100n,
+              });
+              fullyReservedInputInjected = true;
+            }
+          }
+          return profiles;
+        },
+      },
+      arrangementRevision: prisma.arrangementRevision,
+    } as unknown as PrismaService;
     const preparation = new RecoveryCandidatePreparationService(
       prisma,
       candidates,
-      new FrozenOrderCandidateInputService(prisma),
+      new FrozenOrderCandidateInputService(frozenInputPrisma),
       new AuditService(prisma),
     );
     const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
@@ -3138,6 +3175,18 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
           reason: 123 as unknown as string,
         },
         `invalid-reason:${randomUUID()}`,
+      ),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: [request.id] as unknown as string,
+          reason: "reject a repeated identifier field",
+        },
+        `invalid-request-id:${randomUUID()}`,
       ),
     ).toThrow(BadRequestException);
     const [accepted, concurrentReplay] = await Promise.all([
@@ -3178,6 +3227,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const mappings = await prisma.recoveryCandidateDispatch.findMany({
       where: { preparationId: accepted.preparationId },
     });
+    expect(fullyReservedInputInjected).toBe(true);
     expect(mappings.length).toBeGreaterThan(0);
     expect(
       (
@@ -5048,6 +5098,21 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     expect(secondPreparation.generation).toBe(firstPreparation.generation + 1);
     await ingestPreparedCandidates(candidates, secondPreparation.preparationId);
+    const preparations = await preparation.list(
+      operator,
+      orderId,
+      "LOST_CLAIM_REPRINT",
+      claim.id,
+      {},
+    );
+    expect(preparations.items.map(({ status }) => status)).toEqual([
+      "CANDIDATES_AVAILABLE",
+      "SUPERSEDED",
+    ]);
+    expect(preparations.items[0]?.sources[0]?.selectableCount).toBeGreaterThan(
+      0,
+    );
+    expect(preparations.items[1]?.sources[0]?.selectableCount).toBe(0);
     const secondChoices = await preparation.choices(
       operator,
       orderId,

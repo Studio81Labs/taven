@@ -187,6 +187,8 @@ export class FrozenOrderCandidateInputService {
         const calibration = machine.calibrations[0];
         if (!calibration) continue;
         for (const inventory of machine.inventories) {
+          if (inventory.remainingMilligrams <= inventory.reservedMilligrams)
+            continue;
           for (const partsPerPlate of plateCapacities) {
             const identity = [
               item.id,
