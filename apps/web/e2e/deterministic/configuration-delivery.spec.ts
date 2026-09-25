@@ -54,6 +54,34 @@ test.describe("Rendered configuration and delivery", () => {
     );
   });
 
+  test("keeps a five-digit binding total inside narrow checkout cards", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.getByRole("spinbutton", { name: "Jiné" }).fill("30");
+    await page.getByRole("button", { name: "Uložit a přepočítat" }).click();
+    const total = page.locator(".checkout-summary__total strong");
+    await expect(total).toContainText(/10[\s\u00a0]589,00/);
+    for (const width of [320, 375, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const card = await page.locator(".checkout-summary").boundingBox();
+      const amount = await total.boundingBox();
+      expect(card).not.toBeNull();
+      expect(amount).not.toBeNull();
+      expect(amount!.x).toBeGreaterThanOrEqual(card!.x);
+      expect(amount!.x + amount!.width).toBeLessThanOrEqual(
+        card!.x + card!.width,
+      );
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        ),
+      ).toBe(false);
+    }
+  });
+
   test("offers standard production after the requested express plan fails", async ({
     page,
     request,

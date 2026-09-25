@@ -338,6 +338,17 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .checkout-summary__total {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .checkout-summary__total strong {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .checkout-summary__action {
     position: sticky;
     z-index: 2;
