@@ -125,7 +125,14 @@ test.describe("Accessibility and Responsive Viewports", () => {
     const purposeField = page.getByRole("textbox", { name: "Účel dílu" });
     await expect(purposeField).toBeFocused();
 
-    // Press Tab to navigate to width dimension input
+    // The photo picker follows the description in both visual and keyboard order.
+    await page.keyboard.press("Tab");
+    const photoPicker = page.locator(
+      '.assisted-photo-picker input[type="file"]',
+    );
+    await expect(photoPicker).toBeFocused();
+
+    // Dimensions follow the optional reference photographs.
     await page.keyboard.press("Tab");
     const widthField = page.getByLabel("Šířka X (mm)");
     await expect(widthField).toBeFocused();

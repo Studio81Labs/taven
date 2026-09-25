@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
-import ApplicationShell from "../../components/application/ApplicationShell.vue";
 import { legalDocuments } from "../../content/public-site";
 import { useLegalAvailability } from "../../composables/useLegalAvailability";
 import { usePublicLegalDocument } from "../../composables/usePublicLegalDocument";
@@ -19,17 +18,61 @@ import {
 import { getSessionStorage } from "../../utils/quote-session-storage";
 
 type CreateQuoteRequest = components["schemas"]["CreateQuoteRequestDto"];
-const assistedSteps = [
-  { index: "01", label: "POPIS" },
-  { index: "02", label: "POSOUZENÍ" },
-  { index: "03", label: "NABÍDKA" },
+
+definePageMeta({ layout: "public" });
+
+const capabilities = [
+  {
+    index: "01",
+    title: "Poškozený plastový díl",
+    detail:
+      "Fotografie, účel a rozměry pomohou určit, zda má smysl připravit náhradní díl.",
+  },
+  {
+    index: "02",
+    title: "Jednoduchý náhradní díl",
+    detail: "Popiš funkci a prostředí použití; proveditelnost posoudí člověk.",
+  },
+  {
+    index: "03",
+    title: "Držák, konzole, podložka",
+    detail: "Přilož orientační náčrt a rozměry důležitých ploch.",
+  },
+  {
+    index: "04",
+    title: "Díl podle rozměrů",
+    detail:
+      "Uveď známé míry a návaznosti na další součásti. Neznámé hodnoty nech prázdné.",
+  },
+  {
+    index: "05",
+    title: "Úprava existujícího modelu",
+    detail:
+      "Popiš potřebnou úpravu; možnosti a potřebné podklady ověříme individuálně.",
+  },
+] as const;
+
+const requestStages = [
+  {
+    index: "01",
+    title: "Podklady",
+    detail: "Popis, rozměry a dostupné fotografie",
+  },
+  { index: "02", title: "Posouzení", detail: "Kontrola zadání člověkem" },
+  {
+    index: "03",
+    title: "Nabídka",
+    detail: "Individuální návrh ceny a podmínek",
+  },
+  { index: "04", title: "Model", detail: "Příprava jen po domluvě" },
+  { index: "05", title: "Tisk", detail: "Výroba až po schválení nabídky" },
 ] as const;
 
 usePublicPageMeta({
   path: "/poptavka",
   title: "Individuální poptávka",
   description:
-    "Poptávka individuálního 3D tisku s bezpečnými referenčními fotografiemi a odpovědí do 24 pracovních hodin.",
+    "Individuální poptávka 3D modelu a tisku podle popisu, rozměrů a referenčních fotografií.",
   noindex: true,
 });
 
@@ -78,6 +121,7 @@ const contactPhone = ref("");
 const privacyAcknowledged = ref(false);
 const photoPublicationConsent = ref(false);
 const photoInput = ref<HTMLInputElement>();
+const photoDragging = ref(false);
 
 const {
   activePhotoName,
@@ -204,6 +248,11 @@ function onPhotoChange(event: Event): void {
   input.value = "";
 }
 
+function onPhotoDrop(event: DragEvent): void {
+  photoDragging.value = false;
+  addPhotos(event.dataTransfer?.files ?? null);
+}
+
 function addPhotos(files: FileList | null): void {
   if (!files || photoFieldsLocked.value) return;
   selectionError.value = undefined;
@@ -313,369 +362,412 @@ function isPositiveDimension(value: number | ""): value is number {
 </script>
 
 <template>
-  <ApplicationShell
-    :steps="assistedSteps"
-    :active-step="1"
-    navigation-label="Cesta individuální poptávky"
-  >
-    <template #workspace>
-      <section class="order-workspace" aria-labelledby="request-title">
-        <div class="section-heading">
-          <p class="eyebrow">INDIVIDUÁLNÍ NABÍDKA</p>
-          <h1 id="request-title">Popište, co potřebujete vyrobit.</h1>
+  <div class="application-page assisted-page">
+    <div class="sheet-utility sheet-utility--inset">
+      <span>LIST 04 / POTŘEBUJI MODEL</span>
+      <span>INDIVIDUÁLNÍ POSOUZENÍ · BEZ AUTOMATICKÉ CENY</span>
+    </div>
+    <header class="assisted-hero" aria-labelledby="request-title">
+      <div>
+        <p class="public-page__index">DÍLENSKÁ REKONSTRUKCE A NÁVRH</p>
+        <h1 id="request-title">Nemáš model? Pošli fotku nebo náčrt.</h1>
+        <p>
+          Popiš, k čemu díl slouží, přidej známé rozměry a dostupné fotografie.
+          Zadání posoudí člověk; samotná poptávka není objednávkou ani
+          automatickou kalkulací.
+        </p>
+        <div class="assisted-hero__note">
+          Fotografie s pravítkem nebo jiným předmětem známé velikosti pomáhají
+          odhadnout měřítko. Nenahradí přesné zadání tam, kde na rozměrech
+          záleží.
+        </div>
+      </div>
+      <aside class="assisted-hero__aside">
+        <p class="public-page__index">JAK TATO CESTA FUNGUJE</p>
+        <p>
+          Technik nejprve ověří, zda zadání umíme zpracovat a jaké podklady
+          chybí. Individuální nabídku dostaneš bezpečným odkazem e-mailem.
+        </p>
+        <strong>BEZ ZÁVAZNÉ CENY PŘED POSOUZENÍM</strong>
+        <p>Účet k odeslání poptávky nepotřebuješ.</p>
+      </aside>
+    </header>
+
+    <section class="assisted-capabilities" aria-labelledby="capabilities-title">
+      <div class="sheet-section-heading">
+        <div>
+          <span>01</span>
+          <h2 id="capabilities-title">CO MŮŽEME POSOUDIT</h2>
+        </div>
+        <p>PROVEDITELNOST URČÍ AŽ KONKRÉTNÍ ZADÁNÍ</p>
+      </div>
+      <ol>
+        <li v-for="item in capabilities" :key="item.index">
+          <span>MOŽNOST {{ item.index }}</span>
+          <h3>{{ item.title }}</h3>
+          <p>{{ item.detail }}</p>
+        </li>
+      </ol>
+      <p class="assisted-capabilities__limit">
+        Nelze slíbit výrobu z každé fotografie. Složité tvary, bezpečnostní díly
+        a přesná uložení mohou potřebovat další podklady nebo jiné řešení.
+      </p>
+    </section>
+
+    <section class="assisted-process" aria-labelledby="request-process-title">
+      <div class="sheet-section-heading">
+        <div>
+          <span>02</span>
+          <h2 id="request-process-title">OD NÁČRTU K VÝROBĚ</h2>
+        </div>
+        <p>DALŠÍ KROKY ZÁVISÍ NA SCHVÁLENÉ NABÍDCE</p>
+      </div>
+      <ol>
+        <li v-for="stage in requestStages" :key="stage.index">
+          <span>{{ stage.index }} / KROK</span>
+          <h3>{{ stage.title }}</h3>
+          <p>{{ stage.detail }}</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="assisted-form-area" aria-labelledby="request-form-title">
+      <header class="assisted-form-heading">
+        <p class="public-page__index">FORMULÁŘ / POPIS · PODKLADY · KONTAKT</p>
+        <h2 id="request-form-title">Popište, co potřebujete vyrobit.</h2>
+        <p>
+          Vyplň známé údaje. Neznámé rozměry nech prázdné; nic neplatíš při
+          odeslání poptávky.
+        </p>
+      </header>
+
+      <div v-if="phase === 'success' && created" class="request-card">
+        <div class="result-state success-state" role="status">
+          <p class="state-code mono">POPTÁVKA ULOŽENA</p>
+          <h2>Děkujeme. Podklady předáme k lidskému posouzení.</h2>
           <p>
-            Odpovíme do 24 hodin v pracovní dny. Nevzniká tím automatická cena
-            ani objednávka a nepotřebujete účet.
+            Odpověď pošleme na uvedený e-mail nejpozději
+            <strong>{{ formattedSla }}</strong
+            >. Nabídka přijde jako bezpečný odkaz bez registrace.
           </p>
+          <p class="reference mono">Reference {{ created.publicReference }}</p>
+          <NuxtLink
+            v-if="automaticQuoteEnabled"
+            class="secondary-button"
+            to="/objednavka"
+          >
+            Zpět k přímé kalkulaci
+          </NuxtLink>
+          <span v-else class="secondary-button" aria-disabled="true">
+            Přímá kalkulace čeká na schválení
+          </span>
+        </div>
+      </div>
+
+      <form
+        v-else
+        class="request-card assisted-form"
+        @submit.prevent="submitRequest"
+      >
+        <div class="context-banner">
+          <p class="eyebrow">KONTEXT POPTÁVKY</p>
+          <p>{{ prefill.note }}</p>
         </div>
 
-        <div v-if="phase === 'success' && created" class="request-card">
-          <div class="result-state success-state" role="status">
-            <p class="state-code mono">POPTÁVKA ULOŽENA</p>
-            <h2>Děkujeme. Podklady předáme k lidskému posouzení.</h2>
-            <p>
-              Odpověď pošleme na uvedený e-mail nejpozději
-              <strong>{{ formattedSla }}</strong
-              >. Nabídka přijde jako bezpečný odkaz bez registrace.
-            </p>
-            <p class="reference mono">
-              Reference {{ created.publicReference }}
-            </p>
-            <NuxtLink
-              v-if="automaticQuoteEnabled"
-              class="secondary-button"
-              to="/objednavka"
+        <fieldset :disabled="requestFieldsLocked">
+          <legend>Zakázka</legend>
+          <label class="form-field wide-form-field">
+            <span>Co potřebujete vyrobit? *</span>
+            <textarea
+              v-model="description"
+              minlength="10"
+              maxlength="10000"
+              rows="6"
+              required
+              aria-describedby="description-help"
+            />
+            <small id="description-help">
+              Uveďte počet kusů, požadované provedení a co je pro výsledek
+              důležité. Nezadávejte citlivé údaje, které k posouzení
+              nepotřebujeme.
+            </small>
+          </label>
+          <label class="form-field wide-form-field">
+            <span>Účel dílu</span>
+            <textarea
+              v-model="purpose"
+              maxlength="2000"
+              rows="3"
+              placeholder="Například náhradní držák do interiéru"
+            />
+          </label>
+        </fieldset>
+
+        <fieldset :disabled="photoFieldsLocked">
+          <legend>Referenční fotografie</legend>
+          <p class="field-guidance">
+            Pokud má díl vzniknout podle předlohy, vyfoťte ji ze tří stran s
+            pravítkem nebo jiným předmětem známé velikosti. Přijímáme JPG, PNG a
+            WebP do 20 MiB za soubor.
+          </p>
+          <label
+            class="assisted-photo-picker"
+            :class="photoDragging ? 'assisted-photo-picker--dragging' : ''"
+            @dragenter.prevent="photoDragging = true"
+            @dragleave.prevent="photoDragging = false"
+            @dragover.prevent
+            @drop.prevent="onPhotoDrop"
+          >
+            <input
+              ref="photoInput"
+              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+              class="visually-hidden"
+              multiple
+              type="file"
+              @change="onPhotoChange"
+            />
+            <span aria-hidden="true">⇧</span>
+            <strong>Přidej referenční fotografie</strong>
+            <span>Přetáhni je sem nebo klikni a vyber z počítače</span>
+            <small>JPG · PNG · WebP / 20 MiB za soubor</small>
+          </label>
+          <ul v-if="selectedPhotos.length" class="attachment-list">
+            <li
+              v-for="(photo, index) in selectedPhotos"
+              :key="`${photo.name}:${photo.lastModified}`"
             >
-              Zpět k přímé kalkulaci
-            </NuxtLink>
-            <span v-else class="secondary-button" aria-disabled="true">
-              Přímá kalkulace čeká na schválení
+              <span>
+                <strong>{{ photo.name }}</strong>
+                <small class="mono">{{ formatFileSize(photo.size) }}</small>
+              </span>
+              <button
+                class="text-button"
+                type="button"
+                :disabled="requestFieldsLocked && photo !== rejectedPhoto"
+                @click="removePhoto(index)"
+              >
+                Odebrat
+              </button>
+            </li>
+          </ul>
+          <p v-if="selectionError" class="inline-error" role="alert">
+            {{ selectionError }}
+          </p>
+        </fieldset>
+
+        <fieldset :disabled="requestFieldsLocked">
+          <legend>Rozměry a termín</legend>
+          <p class="field-guidance">
+            Zadejte známé maximální rozměry. Neznámou hodnotu nechte prázdnou.
+          </p>
+          <div class="dimension-grid">
+            <label class="form-field">
+              <span>Šířka X (mm)</span>
+              <input v-model="widthMm" min="0.01" step="0.01" type="number" />
+            </label>
+            <label class="form-field">
+              <span>Hloubka Y (mm)</span>
+              <input v-model="depthMm" min="0.01" step="0.01" type="number" />
+            </label>
+            <label class="form-field">
+              <span>Výška Z (mm)</span>
+              <input v-model="heightMm" min="0.01" step="0.01" type="number" />
+            </label>
+          </div>
+          <label class="form-field date-field">
+            <span>Požadovaný termín</span>
+            <input v-model="requestedDate" :min="minimumDate" type="date" />
+            <small>Termín potvrdíme až v individuální nabídce.</small>
+          </label>
+        </fieldset>
+
+        <fieldset :disabled="requestFieldsLocked">
+          <legend>Kontakt</legend>
+          <div class="contact-grid">
+            <label class="form-field">
+              <span>Jméno *</span>
+              <input
+                v-model="contactName"
+                maxlength="200"
+                required
+                autocomplete="name"
+              />
+            </label>
+            <label class="form-field">
+              <span>E-mail *</span>
+              <input
+                v-model="contactEmail"
+                maxlength="320"
+                required
+                type="email"
+                autocomplete="email"
+              />
+            </label>
+            <label class="form-field">
+              <span>Telefon</span>
+              <input
+                v-model="contactPhone"
+                maxlength="50"
+                type="tel"
+                autocomplete="tel"
+              />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="privacy-fieldset" :disabled="requestFieldsLocked">
+          <legend>Soukromí</legend>
+          <label class="consent-row">
+            <input
+              v-model="privacyAcknowledged"
+              required
+              type="checkbox"
+              :disabled="!privacyNoticeEffective"
+            />
+            <span>
+              Beru na vědomí, že kontaktní údaje a podklady použijeme k
+              posouzení poptávky a komunikaci o nabídce podle
+              <NuxtLink class="underline" :to="privacyDocumentLink"
+                >zásad zpracování osobních údajů</NuxtLink
+              >. Fotografie dostanou při nahrání vlastní termín smazání. *
+              <template v-if="!privacyNoticeEffective">
+                Formulář lze odeslat až po zveřejnění účinných zásad.
+              </template>
+            </span>
+          </label>
+          <label class="consent-row">
+            <input
+              v-model="photoPublicationConsent"
+              type="checkbox"
+              :disabled="!photoConsentEffective"
+            />
+            <span>
+              Souhlasím s případným zveřejněním výsledných fotografií jako
+              ukázky práce podle
+              <NuxtLink class="underline" :to="photoConsentDocumentLink"
+                >pravidel fotografování</NuxtLink
+              >. Tento souhlas je nepovinný a lze jej odmítnout.
+              <template v-if="!photoConsentEffective">
+                Čeká na schválené znění.
+              </template>
+            </span>
+          </label>
+        </fieldset>
+
+        <div
+          v-if="legalVerificationRetryable && !requestFieldsLocked"
+          class="request-error"
+          role="status"
+        >
+          <p>Aktuální právní dokumenty se nepodařilo ověřit.</p>
+          <button
+            class="text-button"
+            type="button"
+            @click="refreshLegalAvailability"
+          >
+            Zkusit načíst dokumenty znovu
+          </button>
+        </div>
+
+        <div
+          v-if="phase === 'creating' || phase === 'uploading'"
+          class="upload-progress request-progress"
+          aria-live="polite"
+        >
+          <div class="progress-copy">
+            <span>
+              {{
+                phase === "creating"
+                  ? "Ukládáme poptávku"
+                  : `Nahráváme ${activePhotoName ?? "přílohy"}`
+              }}
+            </span>
+            <span v-if="phase === 'uploading'" class="mono">
+              {{ uploadProgress }} %
             </span>
           </div>
+          <progress
+            v-if="phase === 'uploading'"
+            :value="uploadProgress"
+            max="100"
+          >
+            {{ uploadProgress }} %
+          </progress>
+          <button class="text-button" type="button" @click="cancel">
+            Pozastavit odesílání
+          </button>
         </div>
 
-        <form
-          v-else
-          class="request-card assisted-form"
-          @submit.prevent="submitRequest"
-        >
-          <div class="context-banner">
-            <p class="eyebrow">KONTEXT POPTÁVKY</p>
-            <p>{{ prefill.note }}</p>
-          </div>
-
-          <fieldset :disabled="requestFieldsLocked">
-            <legend>Zakázka</legend>
-            <label class="form-field wide-form-field">
-              <span>Co potřebujete vyrobit? *</span>
-              <textarea
-                v-model="description"
-                minlength="10"
-                maxlength="10000"
-                rows="6"
-                required
-                aria-describedby="description-help"
-              />
-              <small id="description-help">
-                Uveďte počet kusů, požadované provedení a co je pro výsledek
-                důležité. Nezadávejte citlivé údaje, které k posouzení
-                nepotřebujeme.
-              </small>
-            </label>
-            <label class="form-field wide-form-field">
-              <span>Účel dílu</span>
-              <textarea
-                v-model="purpose"
-                maxlength="2000"
-                rows="3"
-                placeholder="Například náhradní držák do interiéru"
-              />
-            </label>
-          </fieldset>
-
-          <fieldset :disabled="requestFieldsLocked">
-            <legend>Rozměry a termín</legend>
-            <p class="field-guidance">
-              Zadejte známé maximální rozměry. Neznámou hodnotu nechte prázdnou.
-            </p>
-            <div class="dimension-grid">
-              <label class="form-field">
-                <span>Šířka X (mm)</span>
-                <input v-model="widthMm" min="0.01" step="0.01" type="number" />
-              </label>
-              <label class="form-field">
-                <span>Hloubka Y (mm)</span>
-                <input v-model="depthMm" min="0.01" step="0.01" type="number" />
-              </label>
-              <label class="form-field">
-                <span>Výška Z (mm)</span>
-                <input
-                  v-model="heightMm"
-                  min="0.01"
-                  step="0.01"
-                  type="number"
-                />
-              </label>
-            </div>
-            <label class="form-field date-field">
-              <span>Požadovaný termín</span>
-              <input v-model="requestedDate" :min="minimumDate" type="date" />
-              <small>Termín potvrdíme až v individuální nabídce.</small>
-            </label>
-          </fieldset>
-
-          <fieldset :disabled="photoFieldsLocked">
-            <legend>Referenční fotografie</legend>
-            <p class="field-guidance">
-              Pokud má díl vzniknout podle předlohy, vyfoťte ji ze tří stran s
-              pravítkem nebo jiným předmětem známé velikosti. Přijímáme JPG, PNG
-              a WebP do 20 MiB za soubor.
-            </p>
-            <label class="photo-picker secondary-button">
-              <input
-                ref="photoInput"
-                accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-                class="visually-hidden"
-                multiple
-                type="file"
-                @change="onPhotoChange"
-              />
-              Přidat fotografie
-            </label>
-            <ul v-if="selectedPhotos.length" class="attachment-list">
-              <li
-                v-for="(photo, index) in selectedPhotos"
-                :key="`${photo.name}:${photo.lastModified}`"
-              >
-                <span>
-                  <strong>{{ photo.name }}</strong>
-                  <small class="mono">{{ formatFileSize(photo.size) }}</small>
-                </span>
-                <button
-                  class="text-button"
-                  type="button"
-                  :disabled="requestFieldsLocked && photo !== rejectedPhoto"
-                  @click="removePhoto(index)"
-                >
-                  Odebrat
-                </button>
-              </li>
-            </ul>
-            <p v-if="selectionError" class="inline-error" role="alert">
-              {{ selectionError }}
-            </p>
-          </fieldset>
-
-          <fieldset :disabled="requestFieldsLocked">
-            <legend>Kontakt</legend>
-            <div class="contact-grid">
-              <label class="form-field">
-                <span>Jméno *</span>
-                <input
-                  v-model="contactName"
-                  maxlength="200"
-                  required
-                  autocomplete="name"
-                />
-              </label>
-              <label class="form-field">
-                <span>E-mail *</span>
-                <input
-                  v-model="contactEmail"
-                  maxlength="320"
-                  required
-                  type="email"
-                  autocomplete="email"
-                />
-              </label>
-              <label class="form-field">
-                <span>Telefon</span>
-                <input
-                  v-model="contactPhone"
-                  maxlength="50"
-                  type="tel"
-                  autocomplete="tel"
-                />
-              </label>
-            </div>
-          </fieldset>
-
-          <fieldset class="privacy-fieldset" :disabled="requestFieldsLocked">
-            <legend>Soukromí</legend>
-            <label class="consent-row">
-              <input
-                v-model="privacyAcknowledged"
-                required
-                type="checkbox"
-                :disabled="!privacyNoticeEffective"
-              />
-              <span>
-                Beru na vědomí, že kontaktní údaje a podklady použijeme k
-                posouzení poptávky a komunikaci o nabídce podle
-                <NuxtLink class="underline" :to="privacyDocumentLink"
-                  >zásad zpracování osobních údajů</NuxtLink
-                >. Fotografie dostanou při nahrání vlastní termín smazání. *
-                <template v-if="!privacyNoticeEffective">
-                  Formulář lze odeslat až po zveřejnění účinných zásad.
-                </template>
-              </span>
-            </label>
-            <label class="consent-row">
-              <input
-                v-model="photoPublicationConsent"
-                type="checkbox"
-                :disabled="!photoConsentEffective"
-              />
-              <span>
-                Souhlasím s případným zveřejněním výsledných fotografií jako
-                ukázky práce podle
-                <NuxtLink class="underline" :to="photoConsentDocumentLink"
-                  >pravidel fotografování</NuxtLink
-                >. Tento souhlas je nepovinný a lze jej odmítnout.
-                <template v-if="!photoConsentEffective">
-                  Čeká na schválené znění.
-                </template>
-              </span>
-            </label>
-          </fieldset>
-
-          <div
-            v-if="legalVerificationRetryable && !requestFieldsLocked"
-            class="request-error"
-            role="status"
+        <div v-if="phase === 'error'" class="request-error" role="alert">
+          <p class="state-code mono">
+            {{ created ? "PŘÍLOHY ČEKAJÍ" : "POPTÁVKA ČEKÁ" }}
+          </p>
+          <h2>
+            {{
+              created
+                ? `Poptávka ${created.publicReference} je uložená.`
+                : "Odeslání se zatím nedokončilo."
+            }}
+          </h2>
+          <p>{{ errorMessage }}</p>
+          <p v-if="attachmentsEditable && activePhotoName" class="mono">
+            Opravte přílohu: {{ activePhotoName }}
+          </p>
+          <button
+            v-if="attachmentsEditable"
+            class="primary-button"
+            type="submit"
+            :disabled="Boolean(selectionError)"
           >
-            <p>Aktuální právní dokumenty se nepodařilo ověřit.</p>
-            <button
-              class="text-button"
-              type="button"
-              @click="refreshLegalAvailability"
-            >
-              Zkusit načíst dokumenty znovu
-            </button>
-          </div>
-
-          <div
-            v-if="phase === 'creating' || phase === 'uploading'"
-            class="upload-progress request-progress"
-            aria-live="polite"
+            Odeslat opravené přílohy
+          </button>
+          <button
+            v-else-if="submitted"
+            class="primary-button"
+            type="button"
+            @click="retry"
           >
-            <div class="progress-copy">
-              <span>
-                {{
-                  phase === "creating"
-                    ? "Ukládáme poptávku"
-                    : `Nahráváme ${activePhotoName ?? "přílohy"}`
-                }}
-              </span>
-              <span v-if="phase === 'uploading'" class="mono">
-                {{ uploadProgress }} %
-              </span>
-            </div>
-            <progress
-              v-if="phase === 'uploading'"
-              :value="uploadProgress"
-              max="100"
-            >
-              {{ uploadProgress }} %
-            </progress>
-            <button class="text-button" type="button" @click="cancel">
-              Pozastavit odesílání
-            </button>
-          </div>
-
-          <div v-if="phase === 'error'" class="request-error" role="alert">
-            <p class="state-code mono">
-              {{ created ? "PŘÍLOHY ČEKAJÍ" : "POPTÁVKA ČEKÁ" }}
-            </p>
-            <h2>
-              {{
-                created
-                  ? `Poptávka ${created.publicReference} je uložená.`
-                  : "Odeslání se zatím nedokončilo."
-              }}
-            </h2>
-            <p>{{ errorMessage }}</p>
-            <p v-if="attachmentsEditable && activePhotoName" class="mono">
-              Opravte přílohu: {{ activePhotoName }}
-            </p>
-            <button
-              v-if="attachmentsEditable"
-              class="primary-button"
-              type="submit"
-              :disabled="Boolean(selectionError)"
-            >
-              Odeslat opravené přílohy
-            </button>
-            <button
-              v-else-if="submitted"
-              class="primary-button"
-              type="button"
-              @click="retry"
-            >
-              Zkusit stejný požadavek znovu
-            </button>
-            <button v-else class="primary-button" type="submit">
-              Opravit a znovu odeslat
-            </button>
-          </div>
-
-          <div v-else class="form-actions">
-            <button
-              class="primary-button"
-              type="submit"
-              :disabled="!canSubmit || pending"
-            >
-              Odeslat k lidskému posouzení
-            </button>
-            <p>
-              Odesláním nevzniká cenový příslib. Nabídku dostanete e-mailem po
-              kontrole podkladů.
-            </p>
-          </div>
-        </form>
-      </section>
-    </template>
-
-    <template #context>
-      <aside class="process-context" aria-labelledby="assisted-process-title">
-        <div>
-          <p class="eyebrow">CO BUDE NÁSLEDOVAT</p>
-          <h2 id="assisted-process-title">Jedna poptávka, lidská odpověď.</h2>
+            Zkusit stejný požadavek znovu
+          </button>
+          <button v-else class="primary-button" type="submit">
+            Opravit a znovu odeslat
+          </button>
         </div>
-        <ol class="pipeline-list assisted-steps">
-          <li class="active">
-            <span class="pipeline-index mono">01</span>
-            <span>Popis a podklady</span>
-            <span class="pipeline-status">teď</span>
-          </li>
-          <li>
-            <span class="pipeline-index mono">02</span>
-            <span>Technické posouzení</span>
-            <span class="pipeline-status">do 24 h</span>
-          </li>
-          <li>
-            <span class="pipeline-index mono">03</span>
-            <span>Tokenizovaná nabídka</span>
-            <span class="pipeline-status">e-mailem</span>
-          </li>
-        </ol>
-        <div class="context-note">
-          <p class="eyebrow">BEZ ÚČTU A CHATU</p>
+
+        <div v-else class="form-actions">
+          <button
+            class="primary-button"
+            type="submit"
+            :disabled="!canSubmit || pending"
+          >
+            Odeslat k lidskému posouzení
+          </button>
           <p>
-            Komunikace pokračuje e-mailem. Nabídka má bezpečný jednorázový
-            odkaz; nevytváříme profil ani zprávový portál.
+            Odesláním nevzniká cenový příslib. Nabídku dostanete e-mailem po
+            kontrole podkladů.
           </p>
         </div>
-        <div class="context-note">
-          <p class="eyebrow">CITLIVÉ PODKLADY</p>
-          <p>
-            Neposílejte obchodní tajemství, která nepotřebujeme. Požadavek na
-            mlčenlivost uveďte přímo v popisu před předáním dalších podkladů.
-          </p>
-        </div>
-      </aside>
-    </template>
-  </ApplicationShell>
+      </form>
+    </section>
+    <aside
+      class="assisted-afterword"
+      aria-label="Důležité informace k poptávce"
+    >
+      <div>
+        <span>BEZ ÚČTU</span>
+        <p>Komunikace pokračuje e-mailem přes bezpečný odkaz k nabídce.</p>
+      </div>
+      <div>
+        <span>BEZ AUTOMATICKÉ CENY</span>
+        <p>Výroba ani platba nezačíná samotným odesláním zadání.</p>
+      </div>
+      <div>
+        <span>CITLIVÉ PODKLADY</span>
+        <p>Neposílej údaje, které k posouzení nepotřebujeme.</p>
+      </div>
+    </aside>
+  </div>
 </template>
 
 <style src="../../assets/css/application.css"></style>
+<style src="../../assets/css/assisted-request.css"></style>
