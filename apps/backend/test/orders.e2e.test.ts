@@ -648,6 +648,7 @@ async function createFreshReplacementCandidate(
   fixture: FulfilmentFixture,
   index: number,
   scopeFingerprintOverride?: string,
+  predatePreparation = false,
 ): Promise<string> {
   const source = await prisma.candidateResourceEstimate.findUniqueOrThrow({
     where: { id: fixture.productions[index]!.candidateResourceEstimateId },
@@ -793,7 +794,9 @@ async function createFreshReplacementCandidate(
   const candidateClock = await pool.query<{ observed_at: Date }>(
     "SELECT clock_timestamp() AS observed_at",
   );
-  const candidateCalculatedAt = candidateClock.rows[0]?.observed_at;
+  const candidateCalculatedAt = predatePreparation
+    ? new Date(preparation.requestedAt.getTime() - 1_000)
+    : candidateClock.rows[0]?.observed_at;
   if (!candidateCalculatedAt) throw new Error("database clock is unavailable");
   await prisma.candidateResourceEstimate.create({
     data: {
@@ -3228,6 +3231,70 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(
       await prisma.job.count({ where: { replacesJobId: sourceJobId } }),
     ).toBe(0);
+  }, 15_000);
+
+  it("does not advertise a candidate calculated before its recovery preparation", async () => {
+    const fixture = await preparePaidOrder("recovery-predated-candidate");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "predated-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "predated-failure",
+    );
+    const candidateResourceEstimateId = await createFreshReplacementCandidate(
+      fixture,
+      0,
+      undefined,
+      true,
+    );
+    const preparation =
+      await prisma.recoveryCandidatePreparation.findFirstOrThrow({
+        where: { kind: "JOB_REPLACEMENT", targetId: sourceJobId },
+        orderBy: { generation: "desc" },
+      });
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const reads = recoveryPreparationService();
+    const detail = await reads.detail(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      preparation.id,
+    );
+    expect(detail.status).toBe("BLOCKED");
+    expect(detail.sources[0]?.selectableCount).toBe(0);
+    const choices = await reads.choices(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      preparation.id,
+      { sourceJobId },
+    );
+    expect(choices.items).toContainEqual(
+      expect.objectContaining({
+        candidateResourceEstimateId,
+        selectable: false,
+        blockingCodes: expect.arrayContaining([
+          "CANDIDATE_PREDATES_PREPARATION",
+        ]),
+      }),
+    );
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        { candidateResourceEstimateId },
+        "predated-create",
+      ),
+    ).rejects.toThrow("Selected recovery candidate predates its preparation");
   }, 15_000);
 
   it("rejects preparation when the operator session is revoked during preflight", async () => {

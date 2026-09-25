@@ -851,6 +851,7 @@ export class RecoveryCandidatePreparationService {
         current?.id === preparationId,
         contextValid,
         now,
+        row.requestedAt,
       );
       return {
         items,
@@ -867,6 +868,7 @@ export class RecoveryCandidatePreparationService {
     latest: boolean,
     contextValid: boolean,
     now: Date,
+    requestedAt: Date,
   ): Promise<RecoveryCandidateChoiceDto[]> {
     if (!mappings.length) return [];
     const outboxMessageIds = mappings.map(
@@ -909,6 +911,9 @@ export class RecoveryCandidatePreparationService {
       const blockers = [
         ...(!latest ? ["PREPARATION_SUPERSEDED"] : []),
         ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
+        ...(candidate.calculatedAt < requestedAt
+          ? ["CANDIDATE_PREDATES_PREPARATION"]
+          : []),
         ...(candidate.expiresAt.getTime() <= now.getTime() + 15 * 60_000
           ? ["CANDIDATE_EXPIRED"]
           : []),
@@ -1191,6 +1196,7 @@ export class RecoveryCandidatePreparationService {
                 );
                 return (
                   !!candidate &&
+                  candidate.calculatedAt >= row.requestedAt &&
                   eligibleOutboxIds.has(mapping.outboxMessageId) &&
                   candidate.expiresAt.getTime() > now.getTime() + 15 * 60_000 &&
                   candidate.capacityIntervals.length > 0 &&
