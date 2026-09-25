@@ -49,6 +49,8 @@ jobs:
       - run: pnpm web:build
       - name: Install Playwright browsers
         run: pnpm -C apps/web exec playwright install chromium --with-deps
+      - name: Enforce production-indexable homepage Lighthouse budgets
+        run: TAVEN_LIGHTHOUSE_ENFORCE_BUDGETS=true pnpm -C apps/web exec node scripts/lighthouse.mjs
       - name: Verify independently launched normal default-closed build
         run: |
           set -euo pipefail
@@ -76,6 +78,14 @@ jobs:
             pnpm -C apps/web exec playwright test e2e/integration/default-closed-normal-build.spec.ts --project=integration
       - name: Run browser integration tests
         run: pnpm web:test:e2e
+      - name: Preserve deterministic design screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-deterministic-design-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/web/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
 
   real-api-browser:
     name: "web: isolated real API browser checkout"
