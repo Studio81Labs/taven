@@ -118,6 +118,31 @@ RETURNS text LANGUAGE sql STABLE AS $$
   GROUP BY job.id, plan_job.id, candidate.id;
 $$;
 
+-- Match the compact JSON.stringify payload used for the immutable scope hash.
+-- Every value is an enum, UUID or hexadecimal digest, so formatting cannot
+-- introduce JSON escaping differences. Canonical source order is Job ID order.
+CREATE FUNCTION taven_recovery_scope_fingerprint(p recovery_candidate_preparations)
+RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT CASE WHEN count(*) = cardinality(p.source_job_ids)
+                   AND count(fingerprint) = count(*)
+    THEN encode(digest(format(
+      '{"kind":%s,"targetId":%s,"replacementRequestId":%s,"predecessorShipmentId":%s,"incidentEvidenceId":%s,"sources":[%s]}',
+      to_json(p.kind::text)::text,
+      to_json(p.target_id)::text,
+      coalesce(to_json(p.replacement_request_id)::text, 'null'),
+      coalesce(to_json(p.predecessor_shipment_id)::text, 'null'),
+      coalesce(to_json(p.incident_evidence_id)::text, 'null'),
+      string_agg(format('{"jobId":%s,"fingerprint":%s}',
+        to_json(job_id)::text, to_json(fingerprint)::text), ',' ORDER BY job_id)
+    ), 'sha256'), 'hex')
+  END
+  FROM (
+    SELECT source_id AS job_id,
+           taven_recovery_source_fingerprint(source_id) AS fingerprint
+    FROM unnest(p.source_job_ids) AS source(source_id)
+  ) sources;
+$$;
+
 CREATE FUNCTION taven_validate_recovery_preparation_insert() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -424,6 +449,7 @@ BEGIN
   JOIN candidate_resource_estimates candidate ON candidate.id = terminal.candidate_resource_estimate_id
   WHERE dispatch.source_job_id = NEW.replaces_job_id
     AND dispatch.source_fingerprint = taven_recovery_source_fingerprint(NEW.replaces_job_id)
+    AND preparation.source_scope_fingerprint = taven_recovery_scope_fingerprint(preparation)
     AND terminal.outcome = 'SUCCEEDED'
     AND candidate.id = selected_candidate_id
     AND (

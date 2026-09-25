@@ -3154,6 +3154,18 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       0,
       "f".repeat(64),
     );
+    const forged = await prisma.$queryRaw<
+      Array<{ stored: string; calculated: string | null }>
+    >`
+      SELECT preparation.source_scope_fingerprint AS stored,
+             taven_recovery_scope_fingerprint(preparation) AS calculated
+      FROM recovery_candidate_preparations preparation
+      WHERE preparation.kind = 'JOB_REPLACEMENT'
+        AND preparation.target_id = ${sourceJobId}::uuid
+      ORDER BY preparation.generation DESC LIMIT 1
+    `;
+    expect(forged[0]?.calculated).toBeTruthy();
+    expect(forged[0]?.stored).not.toBe(forged[0]?.calculated);
     await expect(
       orders.createReplacement(
         orderId,
@@ -4220,6 +4232,15 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       },
       `prepared-two-job:${randomUUID()}`,
     );
+    const currentHash = await prisma.$queryRaw<
+      Array<{ stored: string; calculated: string | null }>
+    >`
+      SELECT preparation.source_scope_fingerprint AS stored,
+             taven_recovery_scope_fingerprint(preparation) AS calculated
+      FROM recovery_candidate_preparations preparation
+      WHERE preparation.id = ${accepted.preparationId}::uuid
+    `;
+    expect(currentHash[0]?.calculated).toBe(currentHash[0]?.stored);
     await ingestPreparedCandidates(candidates, accepted.preparationId);
     const detail = await preparation.detail(
       operator,
