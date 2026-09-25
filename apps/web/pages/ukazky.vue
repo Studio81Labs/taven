@@ -14,18 +14,28 @@ usePublicPageMeta({
 </script>
 
 <template>
-  <article class="public-page">
+  <article class="public-page public-page--portfolio">
+    <div class="sheet-utility sheet-utility--inset">
+      <span>LIST 03 / UKÁZKY</span><span>REGISTR SKUTEČNÝCH DÍLŮ</span>
+    </div>
     <header class="public-page__intro">
       <div>
-        <p class="public-page__index">Portfolio / 01</p>
-        <h1>Ukázky vlastních výtisků</h1>
+        <p class="public-page__index">ARCHIV / OVĚŘENÉ REALIZACE</p>
+        <h1>Registr vyrobených dílů.</h1>
       </div>
       <p>
-        Zde budou jen skutečné fotografie výtisků, které můžeme zveřejnit.
-        Obecné ilustrační fotografie ani cizí výrobky nepoužíváme.
+        Vlastní výtisky a fotografie zveřejníme až po ověření práv a podkladů.
+        Návrhové záznamy nenahrazují skutečnou výrobu.
       </p>
     </header>
     <section class="public-section" aria-label="Ukázky výtisků">
+      <div class="sheet-section-heading">
+        <div>
+          <span>REGISTR</span>
+          <h2>VEŘEJNÉ ZÁZNAMY</h2>
+        </div>
+        <p>{{ publicSite.portfolio.items.length }} SCHVÁLENÝCH ZÁZNAMŮ</p>
+      </div>
       <PublicPortfolioGallery :items="publicSite.portfolio.items" />
     </section>
   </article>

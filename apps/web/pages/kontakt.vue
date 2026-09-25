@@ -2,7 +2,6 @@
 import { publicSite } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
-
 const contacts = usePublicContacts();
 
 usePublicPageMeta({
@@ -16,59 +15,120 @@ usePublicPageMeta({
 </script>
 
 <template>
-  <article class="public-page">
-    <header class="public-page__intro">
-      <div>
-        <p class="public-page__index">Kontakt / 01</p>
-        <h1>Popište nám svůj díl</h1>
-      </div>
+  <article class="public-page public-page--contact">
+    <div class="sheet-utility sheet-utility--inset">
+      <span>LIST 05 / KONTAKT</span
+      ><span>ADRESÁŘ KOMUNIKACE A PROVOZOVATEL</span>
+    </div>
+    <header class="contact-intro">
+      <p class="public-page__index">PŘÍMÝ KONTAKT / PODLE TYPU DOTAZU</p>
+      <h1>KONTAKT / TAVEN — Napiš nám.</h1>
       <p>
-        Pro dotaz k nestandardnímu tisku použijte strukturovanou individuální
-        poptávku. Pro ostatní zákaznické dotazy napište na
-        <a :href="contacts.customer.href">{{ contacts.customer.email }}</a
-        >. Komunikaci vedeme elektronicky; veřejnou telefonní linku nepoužíváme.
+        Pro dotazy k zakázce použij číslo objednávky. Nestandardní zadání pošli
+        individuální poptávkou; ostatní zákaznické dotazy vyřídíme e-mailem.
       </p>
     </header>
-    <NuxtLink class="public-action mt-8" to="/poptavka" no-prefetch>
-      Otevřít individuální poptávku
-    </NuxtLink>
-
-    <section class="public-section" aria-labelledby="operator-title">
-      <p class="public-section__index">Provozovatel / 02</p>
-      <h2 id="operator-title">Provozovatel služby</h2>
-      <div class="public-operator mt-6">
-        <div>
-          <address>
-            <strong class="font-semibold text-[#1a1a16]">
-              {{ publicSite.seller.legalName }} </strong
-            ><br />
-            <template v-for="line in publicSite.seller.address" :key="line">
-              {{ line }}<br />
-            </template>
-            IČ {{ publicSite.seller.companyId }}<br />
-            DIČ {{ publicSite.seller.vatId }}<br />
-            <a
-              class="underline decoration-[#6e6f66] underline-offset-4 hover:decoration-[#1b44e8] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
-              :href="contacts.customer.href"
-              >{{ contacts.customer.email }}</a
-            >
-          </address>
-        </div>
-        <div>
-          <p class="mt-0 max-w-2xl text-sm leading-6 text-[#66675f]">
-            Právní a privacy dotazy:
-            <a
-              class="underline decoration-[#6e6f66] underline-offset-4 hover:decoration-[#1b44e8] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
-              :href="contacts.dataController.href"
-              >{{ contacts.dataController.email }}</a
-            >.
+    <div class="contact-layout">
+      <div class="contact-cards">
+        <section class="contact-card contact-card--primary">
+          <p class="public-page__index">CELA 01 / DOTAZ K ZAKÁZCE</p>
+          <h2>Běžící zakázka</h2>
+          <p>
+            Potřebuješ se zeptat na stav, doručení nebo změnu? Uveď číslo své
+            objednávky z potvrzovacího e-mailu.
           </p>
-          <p class="mt-5 max-w-2xl text-sm leading-6 text-[#66675f]">
-            Sídlo společnosti není veřejným výdejním místem ani adresou dílny.
-            Osobní odběr není součástí současné služby.
+          <div class="contact-card__action">
+            <span>ZÁKAZNICKÝ KONTAKT</span
+            ><a :href="contacts.customer.href">{{ contacts.customer.email }}</a>
+          </div>
+        </section>
+        <section class="contact-card">
+          <p class="public-page__index">CELA 02 / OBECNÝ DOTAZ</p>
+          <h2>Před objednáním</h2>
+          <p>
+            Na materiál, dostupné možnosti nebo postup se zeptej přes zákaznický
+            kontakt. Bez hotového modelu je vhodná individuální poptávka.
           </p>
+          <div class="contact-card__action">
+            <span>ZÁKAZNICKÝ KONTAKT</span
+            ><a :href="contacts.customer.href">{{ contacts.customer.email }}</a>
+          </div>
+        </section>
+        <section class="contact-card">
+          <p class="public-page__index">CELA 03 / INDIVIDUÁLNÍ ZADÁNÍ</p>
+          <h2>Nemáš 3D model?</h2>
+          <p>
+            Popiš účel, rozměry a přilož dostupné podklady. Zadání posoudí
+            člověk; automatická cena touto cestou nevzniká.
+          </p>
+          <NuxtLink class="public-link" to="/poptavka" no-prefetch
+            >Otevřít individuální poptávku ↗</NuxtLink
+          >
+        </section>
+        <div class="contact-cards__foot">
+          U DOTAZU K ZAKÁZCE UVEĎ ČÍSLO OBJEDNÁVKY · KOMUNIKACE PROBÍHÁ
+          ELEKTRONICKY
         </div>
       </div>
-    </section>
+      <aside class="contact-operator">
+        <div class="contact-operator__identity">
+          <p class="public-page__index">PRÁVNÍ SUBJEKT A IDENTIFIKACE</p>
+          <dl>
+            <div>
+              <dt>Společnost</dt>
+              <dd>{{ publicSite.seller.legalName }}</dd>
+            </div>
+            <div>
+              <dt>IČ</dt>
+              <dd>{{ publicSite.seller.companyId }}</dd>
+            </div>
+            <div>
+              <dt>DIČ</dt>
+              <dd>{{ publicSite.seller.vatId }}</dd>
+            </div>
+            <div>
+              <dt>Sídlo</dt>
+              <dd>{{ publicSite.seller.address.join(", ") }}</dd>
+            </div>
+            <div>
+              <dt>Zákaznický kontakt</dt>
+              <dd>
+                <a :href="contacts.customer.href">{{
+                  contacts.customer.email
+                }}</a>
+              </dd>
+            </div>
+            <div>
+              <dt>Právní a privacy dotazy</dt>
+              <dd>
+                <a :href="contacts.dataController.href">{{
+                  contacts.dataController.email
+                }}</a>
+              </dd>
+            </div>
+          </dl>
+          <div class="contact-operator__notice">
+            <strong>UPOZORNĚNÍ PROVOZU</strong>
+            <p>
+              Sídlo společnosti není veřejným výdejním místem ani adresou dílny.
+              Osobní odběr není součástí současné služby.
+            </p>
+          </div>
+        </div>
+        <div class="contact-operator__secondary">
+          <p class="public-page__index">DORUČENÍ</p>
+          <p>
+            Dostupné možnosti a jejich aktuální cenu vybereš při objednávce před
+            platbou.
+          </p>
+        </div>
+      </aside>
+    </div>
+    <div class="contact-bottom">
+      <span>VEŘEJNÝ KONTAKT · {{ publicSite.seller.legalName }}</span
+      ><NuxtLink class="public-action" to="/objednavka" no-prefetch
+        >Přejít k nahrání modelu</NuxtLink
+      >
+    </div>
   </article>
 </template>

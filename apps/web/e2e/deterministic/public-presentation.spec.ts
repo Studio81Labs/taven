@@ -18,6 +18,27 @@ test.describe("public presentation and legal reading", () => {
     await expect(page.locator("main img")).toHaveCount(0);
   });
 
+  test("numbered design layouts preserve their desktop composition", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    const upload = await page.locator(".landing-hero__upload").boundingBox();
+    const sidebar = await page.locator(".landing-hero__side").boundingBox();
+    expect(upload).not.toBeNull();
+    expect(sidebar).not.toBeNull();
+    expect(upload!.x + upload!.width).toBeLessThan(sidebar!.x);
+    await expect(page.locator(".landing-step-grid > li")).toHaveCount(3);
+    await expect(page.locator(".landing-responsibility > li")).toHaveCount(4);
+
+    await page.goto("/jak-to-funguje");
+    await expect(page.locator(".process-ledger > li")).toHaveCount(7);
+    await page.goto("/cenik");
+    await expect(page.locator(".pricing-factors > li")).toHaveCount(7);
+    await page.goto("/kontakt");
+    await expect(page.locator(".contact-card")).toHaveCount(3);
+  });
+
   test("legal contents navigate to exact rendered sections while draft remains unavailable", async ({
     page,
     request,
@@ -44,7 +65,7 @@ test.describe("public presentation and legal reading", () => {
   test("public routes remain readable and accessible at design viewports", async ({
     page,
   }) => {
-    for (const width of [390, 768, 1440]) {
+    for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       for (const route of [
         "/",

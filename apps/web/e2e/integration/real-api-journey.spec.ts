@@ -42,7 +42,7 @@ async function prepareSandboxCheckout(
 ) {
   await page.goto("/");
   const fileChooserPromise = page.waitForEvent("filechooser");
-  await page.getByText("Přetáhni soubor sem").click();
+  await page.getByText("Přetáhni sem svůj 3D model").click();
   await (await fileChooserPromise).setFiles(FIXTURE_PATH);
   const proceed = page.getByRole("button", {
     name: "Nahrát a pokračovat ke konfiguraci",
@@ -269,7 +269,7 @@ test.describe("Real API Integration Journey", () => {
     ).toBeVisible();
 
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     const fileChooser = await fileChooserPromise;
     await fileChooser.setFiles(FIXTURE_PATH);
 

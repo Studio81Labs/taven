@@ -97,17 +97,11 @@ function currency(value: number, code: string): string {
 </script>
 
 <template>
-  <div
-    class="border border-[#1a1a16] bg-[#efefea] p-5 shadow-[8px_8px_0_#d9d9d2] sm:p-7"
-  >
+  <div class="hero-upload">
     <label
       v-if="phase === 'idle'"
-      class="flex min-h-64 cursor-pointer flex-col items-center justify-center border-2 border-dashed px-5 py-10 text-center transition-colors focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-[#1b44e8]"
-      :class="
-        isDragging
-          ? 'border-[#1b44e8] bg-white'
-          : 'border-[#6e6f66] bg-[#efefea] hover:border-[#1b44e8] hover:bg-white'
-      "
+      class="hero-upload__dropzone"
+      :class="isDragging ? 'hero-upload__dropzone--dragging' : ''"
       @dragenter.prevent="isDragging = true"
       @dragleave.prevent="isDragging = false"
       @dragover.prevent
@@ -120,12 +114,17 @@ function currency(value: number, code: string): string {
         type="file"
         @change="onFileChange"
       />
-      <span class="font-mono text-sm font-semibold text-[#1b44e8]">
-        STL / 3MF
-      </span>
-      <strong class="mt-5 text-xl">Přetáhni soubor sem</strong>
-      <span class="mt-2 text-[#54554c]">nebo ho vyber z počítače</span>
-      <span class="mt-6 font-mono text-xs text-[#66675f]">nejvýše 100 MiB</span>
+      <span class="hero-upload__header"
+        ><span>POS: X0 Y0</span><span>MAX 100 MiB</span></span
+      >
+      <span class="hero-upload__icon" aria-hidden="true">⇧</span>
+      <strong>Přetáhni sem svůj 3D model</strong>
+      <span>anebo klikni a vyber soubor z disku počítače</span>
+      <span class="hero-upload__button" aria-hidden="true">VYBRAT Z DISKU</span>
+      <span class="hero-upload__footer"
+        ><span>PODPOROVANÉ FORMÁTY: STL · PODPOROVANÉ 3MF</span
+        ><span>MAX 100 MiB</span></span
+      >
     </label>
 
     <div
@@ -363,7 +362,10 @@ function currency(value: number, code: string): string {
       Výběrem souboru spustíš jeho místní kontrolu. Bezpečné nahrání potvrdíš po
       ověření formátu a rozměrů.
     </p>
-    <p class="mt-2 text-sm leading-6 text-[#54554c]">
+    <p
+      v-if="!automaticQuoteEnabled"
+      class="mt-2 text-sm leading-6 text-[#54554c]"
+    >
       Automatickou kalkulaci i hrubý odhad zveřejníme až ze schválených cenových
       vstupů. Soubor zatím můžeš bezpečně zkontrolovat jen v prohlížeči.
     </p>

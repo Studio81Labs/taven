@@ -46,7 +46,7 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
 
     await page.goto("/");
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     await (await fileChooserPromise).setFiles(FIXTURE_PATH);
     await page
       .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
@@ -80,7 +80,7 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
   }) => {
     await page.goto("/");
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     await (await fileChooserPromise).setFiles(FIXTURE_PATH);
     await page
       .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
@@ -186,7 +186,7 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
 
     // 2. Select STL model via file chooser
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     const fileChooser = await fileChooserPromise;
     await fileChooser.setFiles(FIXTURE_PATH);
 
@@ -281,7 +281,7 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
   }) => {
     await page.goto("/");
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     await (await fileChooserPromise).setFiles(FIXTURE_PATH);
     await page
       .getByRole("button", { name: "Nahrát a pokračovat ke konfiguraci" })
@@ -381,7 +381,7 @@ test.describe("Direct Customer Journey (End-to-End)", () => {
     // 1. Visit homepage and upload model
     await page.goto("/");
     const fileChooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     const fileChooser = await fileChooserPromise;
     await fileChooser.setFiles(FIXTURE_PATH);
 
