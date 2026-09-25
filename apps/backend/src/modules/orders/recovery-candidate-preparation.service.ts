@@ -1067,6 +1067,25 @@ export class RecoveryCandidatePreparationService {
     const mappings = await tx.recoveryCandidateDispatch.findMany({
       where: { preparationId: { in: rows.map(({ id }) => id) } },
     });
+    const mappingsByPreparation = new Map<
+      string,
+      Map<string, typeof mappings>
+    >();
+    const dispatchCountByPreparation = new Map<string, number>();
+    for (const mapping of mappings) {
+      let bySource = mappingsByPreparation.get(mapping.preparationId);
+      if (!bySource) {
+        bySource = new Map();
+        mappingsByPreparation.set(mapping.preparationId, bySource);
+      }
+      const sourceDispatches = bySource.get(mapping.sourceJobId) ?? [];
+      sourceDispatches.push(mapping);
+      bySource.set(mapping.sourceJobId, sourceDispatches);
+      dispatchCountByPreparation.set(
+        mapping.preparationId,
+        (dispatchCountByPreparation.get(mapping.preparationId) ?? 0) + 1,
+      );
+    }
     const outboxMessageIds = mappings.map(
       ({ outboxMessageId }) => outboxMessageId,
     );
@@ -1167,11 +1186,8 @@ export class RecoveryCandidatePreparationService {
       const contextValid = contextValidByPreparation.get(row.id) ?? false;
       const sourceRows = row.sourceJobIds.map((sourceJobId) => {
         const fulfilmentSlotIds = slotsBySourceJob.get(sourceJobId) ?? [];
-        const sourceDispatches = mappings.filter(
-          (mapping) =>
-            mapping.preparationId === row.id &&
-            mapping.sourceJobId === sourceJobId,
-        );
+        const sourceDispatches =
+          mappingsByPreparation.get(row.id)?.get(sourceJobId) ?? [];
         const pendingCount = sourceDispatches.filter(
           (mapping) =>
             !byOutbox.has(mapping.outboxMessageId) &&
@@ -1258,9 +1274,7 @@ export class RecoveryCandidatePreparationService {
         sourceJobIds: row.sourceJobIds,
         status: availability.status,
         sources: sourceRows,
-        dispatchCount: mappings.filter(
-          ({ preparationId }) => preparationId === row.id,
-        ).length,
+        dispatchCount: dispatchCountByPreparation.get(row.id) ?? 0,
         pendingCount,
         failedCount,
         blockingCodes: availability.blockingCodes,
