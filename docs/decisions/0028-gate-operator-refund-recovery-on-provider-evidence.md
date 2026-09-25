@@ -2,7 +2,7 @@
 
 - **Status:** accepted; implementation and validation required
 - **Date:** 2026-09-24
-- **Authority:** escalation #254, Epic #10 revision 7, orchestration #186
+- **Authority:** escalations #254/#258, Epic #10 revision 8, orchestration #186
 - **Implementation:** #256 / P6a-R, between #34/P6a (PR #255) and P6b
 - **Inspected baseline:** main `8aa1839a`, P6a operational-contracts worktree
 - **Refines:** ADR 0003 refund retry/late-receipt execution, ADR 0007 payment port
@@ -246,3 +246,153 @@ graphs or automatic double-success repair exceed the smallest correct v0 change.
 - [Comgate Merchant API refund contract](https://apidoc.comgate.cz/en/api/rest/#tag/refund)
 - [ADR 0003](0003-core-transaction-boundaries.md)
 - [Implementation #256](https://github.com/Studio81Labs/taven/issues/256)
+
+## Null-intent late-capture states — resolution #258 (2026-09-25)
+
+Inspected main `91d6245c`, PR #257 head `f2b95144`, its real cancellation/intent
+race regression, the original capture and refund SQL guards, and specification
+§3.3. The intent response can arrive after cancellation: `providerIntentId`
+legitimately remains null while an authenticated late capture supplies immutable
+`providerCaptureId`, amount/time and a full compensation root. The command's
+persisted provider transaction locator is not permission to backfill the missing
+intent identity.
+
+The common receipt applicator's aggregate calculation is correct for this case.
+The same evidence-then-retry contract applies when an intent-bearing late capture
+has a prior PAYMENT_FAILED event: the older blanket prohibition on returning
+REFUND_PENDING to CAPTURED also conflicts with the explicit two-command recovery.
+Replace that prohibition with the exact compensation/failure guards below;
+do not force an automatic retry in the evidence-recording command.
+
+| Final refund-set facts                                                  | Payment state    | Outstanding compensation                              |
+| ----------------------------------------------------------------------- | ---------------- | ----------------------------------------------------- |
+| Root has selected final failure; no active/suspended attempt or success | `CAPTURED`       | Full captured amount; failure receipt retained        |
+| One replacement is pending, or a receipt race is suspended              | `REFUND_PENDING` | Unresolved; apply existing one-edge incident rules    |
+| Full compensation succeeds, with no active/suspended incident           | `REFUNDED`       | Zero                                                  |
+| Replacement definitively fails, with no source success or active work   | `CAPTURED`       | Full amount; retry limit reached, escalation required |
+
+`CAPTURED` describes retained captured funds, not a valid checkout or a completed
+order. Preserve `captureAuthorized = false`, the immutable cutoff/capture
+identity, the compensation root and every receipt/claim. Never reopen an order,
+phase or resource reservation; never activate production, create a paid-conversion
+observation, count these funds as ordinary settlement consideration or change
+an immutable settlement. Terminal order badges still show compensation due.
+
+### Narrow database amendment
+
+Add a **new forward migration after PR #257's existing migrations**. Extend
+`payments_provider_intent_identity_check`'s existing null-intent post-capture
+exception to **CAPTURED and REFUNDED as well as REFUND_PENDING**. Do not remove the
+check or permit null intent for ordinary PENDING payments. This decision adds no
+null-intent PARTIALLY_REFUNDED route: this compensation refunds the entire capture.
+Keep ordinary intent-bearing partial-refund behavior unchanged.
+
+A nonempty capture ID alone is insufficient. Enforce the null-intent captured
+states in SQL with row checks plus a deferred cross-row constraint guard (or
+reuse an equivalent existing guard where it proves every condition):
+
+- Nonblank immutable capture ID, positive captured amount, captured timestamp,
+  closed authorization and nonnull cutoff; capture is on/after cutoff, subject
+  to the existing amount/time rules.
+- Exact immutable `PAYMENT_CAPTURED` event: same payment/provider/transaction,
+  null refund scope, matching captured amount/currency and `verified_at` equal to `captured_at`; retain the existing authenticated/verified timestamp and event
+  scope checks. A refund receipt or operator attestation cannot substitute for
+  an authenticated capture event.
+- Persisted full root `LATE_CAPTURE_COMPENSATION` refund for this same
+  payment/provider/captured amount, with its existing scope and immutable
+  lineage. A fabricated capture string without capture/root evidence cannot
+  commit. Check final transaction state, so receipt → payment → root creation
+  in the legitimate atomic capture path remains possible.
+- Preserve `taven_validate_payment_refund_status` and captured-budget guards:
+  pending means actual PENDING/SUSPENDED work, full refunded means the exact
+  successful total and no suspended incident. No fabricated pending attempt.
+
+The existing financial envelope serializes Payment/refund work. Do not add a
+late lower-rank lock, network I/O, bypass flag or new lock rank. Retain receipt
+and financial-identity immutability so checked evidence cannot later be removed
+or changed. Direct inserts/updates must not bypass the invariant.
+
+For the adjacent **intent-bearing failed-source** case, narrowly refine
+`payment_failed_late_capture_refund_retry_check` and core
+`requireExactRefundFailureRollback`: permit REFUND_PENDING → CAPTURED after
+selected final REFUND_FAILED evidence with zero successful and no active or
+suspended refunds. Require the exact immutable late capture, full compensation
+root/outstanding obligation and unchanged closed cutoff; retain the prior exact
+PAYMENT_FAILED evidence. A failed root or the one failed replacement must keep
+its verified result and lineage. This explicitly supersedes only the blanket
+ban on that refund-failure rollback, not the failed-source capture guard.
+
+Retain FAILED → REFUND_PENDING authentication/failure/capture provenance,
+refund-success reversal restrictions, receipt chronology, all amount/identity
+checks and suspended/double-success rules. Operator recording still cannot
+reverse a successful refund. The adjustment is in the same applicator/financial
+PR because leaving the old blanket ban would make #256's approved two-command
+late-compensation recovery unusable for another existing origin of the same
+obligation. No new general failed-payment activation route is authorized.
+
+### Commands, reads, compatibility and rollout
+
+Keep the existing provider-results/retry DTOs and enum values. Their
+`providerIntentId` field denotes the verified provider transaction locator for
+this compensation case, not a newly assigned Payment field. Resolve it from the
+exact attempt's immutable outbox command plus matching capture evidence; retain
+request reference, payment/refund/provider/amount/currency checks, including the
+capture timestamp/null refund scope. Copy the same proven locator into the one
+replacement command. Missing/conflicting provenance blocks the command; no
+client-selected fallback, provider switch or invented capture/intent identity.
+Share equivalent checks between action/read projection and execution.
+
+`COMPENSATION_DUE`, unresolved-refund and completion barriers follow the retained
+obligation/receipts, not CAPTURED alone. A failed root becomes eligible for the
+existing one guarded retry; a failed child remains an incident. Read/command
+results must not claim successful payment or refund merely from a state name.
+Ordinary refunds, failed-source capture authentication, cutoff, settlement
+closure and ADR0003 suspended/double-success behavior remain unchanged; only
+the exact failed-refund rollback prohibition is refined above.
+
+No table, enum, public route or queue version is added. Preserve completed
+idempotent responses and historical fingerprints. Drain financial writers and
+dispatchers, preflight existing null-intent captured rows against the evidence
+guard, apply the additive migration and compatible backend, validate, then
+resume consumers. Do not manufacture evidence or alter old migrations/receipts.
+Invalid retained data stops rollout for a scoped repair decision. Rollback must
+not restore the old constraint over newly valid rows: stop affected admissions
+and roll forward. No data backfill or live transfer is authorized.
+
+### Required proof and handoff
+
+Continue **#256 / P6a-R / existing PR #257**, preserving its independent
+cancellation-scope fix. No new issue, parallel group or PR boundary is needed.
+Include this amendment, forward SQL, relevant producer/read/guard changes and
+regressions in that financial-contract PR before #34/P6b.
+
+- Extend the real in-flight intent/cancellation regression through authenticated
+  capture → selected final failure/CAPTURED → one retry/REFUND_PENDING → real
+  result/REFUNDED. Assert intent stays null, locator/history stay exact and
+  unpaid barriers survive the failure. Also prove direct successful compensation
+  without a retry; a fix tested only through retry creation is incomplete.
+- Test failed replacement/disabled third transfer; duplicate results, same-key
+  replay and two retry keys; source success before/after claimed replacement,
+  suspended replacement failure and double-success receipt ordering. Preserve
+  the ordinary cancellation post-void-handoff denial regression.
+- Force deferred checks at commit. Reject null-intent ordinary PENDING/CAPTURED
+  without compensation, missing/foreign/mismatched capture evidence, altered
+  cutoff/identity, incomplete root, fabricated pending state and false REFUNDED
+  totals. Negative fixtures may use direct SQL; positive proof uses real
+  commands/provider fixtures. No live provider transfer.
+- Cover affected FULL/DEPOSIT/BALANCE paths across automatic and individual
+  origins, including an intent-bearing PAYMENT_FAILED → late capture → refund
+  failure → explicit retry → refund success case. Regress ordinary/partial
+  refunds and every retained failed-source/capture guard; test fresh and populated
+  migration. Prove no jobs/resources/settlement rewrite,
+  false paid conversion or premature financial completion after failure.
+- Run affected real PostgreSQL/API/concurrency suites, core/backend tests and
+  relevant repository/generated checks, final-head CI and independent review.
+  #34/P6b and #185 consume the prominent obligation and add browser proof.
+
+Keeping REFUND_PENDING with no active work would redefine its existing SQL
+meaning; creating an automatic replacement would bypass the explicit retry
+command. A new state spreads unnecessary changes through contracts/consumers.
+Backfilling an intent falsifies write-once history. Guarded existing states are
+the smallest compatible solution, including the otherwise-blocked REFUNDED exit.
+Architecture is ready; implementation and validation remain required.

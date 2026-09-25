@@ -138,6 +138,15 @@ completion stays blocked for manual financial reconciliation. Provider truth
 is never rewritten as a locally invented failure or discarded because retry
 work exists.
 
+The null-intent cancelled/voided capture race uses the guarded existing
+CAPTURED → REFUND_PENDING → REFUNDED refund aggregate semantics in
+[ADR 0028, resolution #258](0028-gate-operator-refund-recovery-on-provider-evidence.md#null-intent-late-capture-states--resolution-258-2026-09-25).
+A failed compensation retains its obligation and closed capture window; CAPTURED
+never authorizes fulfilment or rewrites the missing provider intent. Exact
+capture/root evidence is enforced in SQL. The same ADR narrowly permits the
+exact failed-refund rollback for intent-bearing failed-source compensation;
+original capture authentication and suspended-refund protections remain.
+
 ## Consequences
 
 Concurrency behavior is reviewable as data rather than hidden in adapter
