@@ -1827,6 +1827,7 @@ model RecoveryCandidatePreparation {
   requestedAt            DateTime                         @default(now()) @map("requested_at") @db.Timestamptz(3)
   operatorId             String                           @map("operator_id") @db.Uuid
   operatorSessionId      String                           @map("operator_session_id") @db.Uuid
+  operatorSessionSnapshot Json?                            @map("operator_session_snapshot") @db.JsonB
   idempotencyRecordId    String                           @unique @map("idempotency_record_id") @db.Uuid
   reason                 String                           @db.VarChar(1000)
   dispatches             RecoveryCandidateDispatch[]

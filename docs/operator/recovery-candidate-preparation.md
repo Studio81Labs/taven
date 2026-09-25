@@ -48,9 +48,22 @@ replacement deadline, non-whole parcel topology or unresolved incident is a
 blocker. Escalate source repair or the unsupported topology; do not synthesize
 historical selection evidence or bypass the existing refund remedy.
 
+Each new preparation stores a minimal versioned authentication snapshot beside
+the operator identity and historical session UUID. The database obtains the
+method, credential generation, session creation time and validation time from
+the locked live session; the snapshot contains no cookie, token, contact or
+client metadata. It is immutable audit evidence, never permission to perform a
+later action. Normal authentication cleanup may delete the original session
+after its retention period; preparation history, audit and replay remain.
+Preparations created before the snapshot migration have no such detail. Do not
+infer it from a surviving session or present a missing snapshot as verified.
+
 Before applying the forward migration, drain backend writers that insert
 replacement Jobs and dispatch candidate estimates. Apply the migration and
 compatible backend together, then validate fresh replacement and LOST-claim
 reads and commands before re-enabling writers. Keep the independently running
 worker-v2 contract unchanged. The migration does not backfill old provenance
-or redispatch historical work.
+or redispatch historical work. Apply the subsequent session-snapshot migration
+while the same writers remain drained; it adds a nullable historical column
+and a guard that requires canonical evidence for all new preparations. Keep
+the operator-session purge enabled.
