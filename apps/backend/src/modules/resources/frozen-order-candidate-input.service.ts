@@ -101,6 +101,7 @@ export class FrozenOrderCandidateInputService {
     expressRequested: boolean;
     observedAt: Date;
     arrangementScope: string;
+    persistArrangementRevision?: boolean;
     legacyBindingId?: string;
     legacyOrigin?: "automatic" | "individual";
   }): Promise<FrozenCandidateInput[]> {
@@ -232,14 +233,16 @@ export class FrozenOrderCandidateInputService {
                 }),
               )
               .digest("hex");
-            await this.prisma.arrangementRevision.upsert({
-              where: { id: arrangementRevisionId },
-              create: {
-                id: arrangementRevisionId,
-                contentSha256: arrangementContentSha256,
-              },
-              update: {},
-            });
+            if (args.persistArrangementRevision !== false) {
+              await this.prisma.arrangementRevision.upsert({
+                where: { id: arrangementRevisionId },
+                create: {
+                  id: arrangementRevisionId,
+                  contentSha256: arrangementContentSha256,
+                },
+                update: {},
+              });
+            }
             const inputBase = {
               geometry: {
                 sourceModelFileId: item.sourceModelFile.id,

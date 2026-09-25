@@ -3887,9 +3887,12 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const frozenInputs = new FrozenOrderCandidateInputService(prisma);
     const enumerate = frozenInputs.enumerate.bind(frozenInputs);
     let dispatchCount = 256;
+    let enumeratedArrangementId: string | undefined;
     vi.spyOn(frozenInputs, "enumerate").mockImplementation(async (input) => {
       const options = await enumerate(input);
       expect(options.length).toBeGreaterThan(0);
+      enumeratedArrangementId =
+        options[0]!.input.arrangementRevision.revisionId;
       return Array.from({ length: dispatchCount }, () => options[0]!);
     });
     const preparation = new RecoveryCandidatePreparationService(
@@ -3915,6 +3918,11 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       where: { preparationId: accepted.preparationId },
     });
     expect(mappings).toHaveLength(256);
+    expect(
+      await prisma.arrangementRevision.findUnique({
+        where: { id: enumeratedArrangementId! },
+      }),
+    ).not.toBeNull();
     const outbox = await prisma.outboxMessage.findMany({
       where: {
         id: { in: mappings.map(({ outboxMessageId }) => outboxMessageId) },
@@ -3943,6 +3951,11 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         `batch-overflow:${randomUUID()}`,
       ),
     ).rejects.toThrow("RECOVERY_PREPARATION_LIMIT");
+    expect(
+      await prisma.arrangementRevision.findUnique({
+        where: { id: enumeratedArrangementId! },
+      }),
+    ).toBeNull();
     expect(
       await prisma.recoveryCandidateDispatch.count({
         where: { preparationId: accepted.preparationId },

@@ -196,7 +196,7 @@ export function preparationAvailability(input: {
         ? "BLOCKED"
         : coverageAvailable
           ? "CANDIDATES_AVAILABLE"
-          : expired
+          : expired && pendingCount
             ? "EXPIRED"
             : pendingCount
               ? "PREPARING"
@@ -353,6 +353,7 @@ export class RecoveryCandidatePreparationService {
         expressRequested: scope.expressRequested,
         observedAt,
         arrangementScope: `recovery:${preparationId}:${source.jobId}`,
+        persistArrangementRevision: false,
       });
       if (dispatches.length + options.length > MAX_DISPATCHES)
         throw new ConflictException("RECOVERY_PREPARATION_LIMIT");

@@ -21,5 +21,14 @@ describe("recovery preparation availability", () => {
         coverageAvailable: false,
       }),
     ).toEqual({ status: "EXPIRED", blockingCodes: ["PREPARATION_EXPIRED"] });
+    expect(
+      preparationAvailability({
+        latest: true,
+        contextValid: true,
+        expired: true,
+        pendingCount: 0,
+        coverageAvailable: false,
+      }),
+    ).toEqual({ status: "BLOCKED", blockingCodes: ["INCOMPLETE_COVERAGE"] });
   });
 });
