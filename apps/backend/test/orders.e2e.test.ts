@@ -5979,6 +5979,105 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     },
   );
 
+  it("serializes late source success against replacement creation", async () => {
+    const fixture = await preparePaidOrder("refund-success-retry-race");
+    const cancellation = await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "cancel before handoff" },
+      "refund-success-retry-race-cancel",
+    );
+    const refundId = (cancellation.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("cancellation refund was not created");
+    const refund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { payment: true },
+    });
+    await prisma.$queryRaw`
+      SELECT taven_claim_refund_dispatch(${refundId}::uuid) AS claimed_at
+    `;
+    const provider = new (class extends DisabledPaymentProviderAdapter {
+      override providerName(): string {
+        return "test";
+      }
+    })();
+    const manualOrders = new OrdersService(
+      prisma,
+      new AuditService(prisma),
+      provider,
+    );
+    const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
+    const failureBody = {
+      outcome: "FAILED" as const,
+      expectedStatus: "PENDING",
+      expectedProviderResultEventId: null,
+      providerIntentId: refund.payment.providerIntentId!,
+      requestReference: refund.idempotencyKey,
+      amountMinor: refund.amountMinor.toString(),
+      currency: refund.payment.currency,
+      providerRefundReference: `portal-${refundId}`,
+      evidenceKind: "PROVIDER_SUPPORT" as const,
+      evidenceReference: `failed-${refundId}`,
+      occurredAt: new Date().toISOString(),
+      reason: "provider confirmed final non-execution",
+      finalOutcomeConfirmed: true as const,
+    };
+    const failure = await manualOrders.recordRefundProviderResult(
+      operator,
+      fixture.foundation.orderId,
+      refundId,
+      failureBody,
+      "refund-success-retry-race-failure",
+    );
+    const failureEventId = failure.result.providerResultEventId as string;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const competing = await Promise.allSettled([
+      manualOrders.retryRefund(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        {
+          expectedFailureProviderEventId: failureEventId,
+          reason: "replace verified failed refund",
+        },
+        "refund-success-retry-race-retry",
+      ),
+      manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        {
+          ...failureBody,
+          outcome: "SUCCEEDED",
+          expectedStatus: "FAILED",
+          expectedProviderResultEventId: failureEventId,
+          evidenceReference: `late-success-${refundId}`,
+          occurredAt: new Date().toISOString(),
+          reason: "provider confirmed late source success",
+        },
+        "refund-success-retry-race-success",
+      ),
+    ]);
+    expect(competing[1]?.status).toBe("fulfilled");
+    const source = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { replacementRefundTransactions: true },
+    });
+    expect(source.status).toBe("SUCCEEDED");
+    expect(source.replacementRefundTransactions).toHaveLength(
+      competing[0]?.status === "fulfilled" ? 1 : 0,
+    );
+    expect(
+      source.replacementRefundTransactions.every(
+        (replacement) => replacement.status === "SUPERSEDED",
+      ),
+    ).toBe(true);
+    expect(
+      await prisma.businessEvent.count({
+        where: { eventType: "refund.succeeded", dedupeKey: refundId },
+      }),
+    ).toBe(1);
+  });
+
   it("reserves explicit payment balances without stranding split-payment adjustments", async () => {
     const fixture = await preparePaidOrder(
       "split-payment-adjustment",
