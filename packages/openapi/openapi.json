@@ -9626,6 +9626,10 @@
           "provider": {
             "type": "string"
           },
+          "providerIntentId": {
+            "nullable": true,
+            "type": "string"
+          },
           "providerRefundId": {
             "nullable": true,
             "type": "string"

@@ -5325,6 +5325,7 @@ export interface components {
             /** Format: uuid */
             priceAdjustmentId?: string | null;
             provider: string;
+            providerIntentId?: string | null;
             providerRefundId?: string | null;
             /** Format: uuid */
             providerResultEventId?: string | null;

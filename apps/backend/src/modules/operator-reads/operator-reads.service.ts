@@ -84,6 +84,10 @@ const refundReadInclude = {
 type RefundReadRow = Prisma.RefundTransactionGetPayload<{
   include: typeof refundReadInclude;
 }>;
+type RefundDispatchRead = Readonly<{
+  status: string;
+  payload: Prisma.JsonValue;
+}>;
 
 export type PageInput = Readonly<{
   cursor?: string;
@@ -490,9 +494,9 @@ export class OperatorReadsService {
                 ),
               },
             },
-            select: { aggregateId: true, status: true },
+            select: { aggregateId: true, status: true, payload: true },
           })
-        ).map((message) => [message.aggregateId, message.status]),
+        ).map((message) => [message.aggregateId, message]),
       );
       const orderedPayments = [...payments].sort(
         (left, right) =>
@@ -676,6 +680,17 @@ export class OperatorReadsService {
           blockers,
           this.paymentProvider.providerName(),
           this.paymentProvider.refundRetrySafety(),
+          new Map(
+            payments.flatMap((payment) =>
+              payment.refunds.map(
+                (refund) =>
+                  [
+                    refund.id,
+                    refundProviderIntentRead(refund, payment, refundDispatch),
+                  ] as const,
+              ),
+            ),
+          ),
         ),
       };
     });
@@ -780,9 +795,9 @@ export class OperatorReadsService {
                 ),
               },
             },
-            select: { aggregateId: true, status: true },
+            select: { aggregateId: true, status: true, payload: true },
           })
-        ).map((message) => [message.aggregateId, message.status]),
+        ).map((message) => [message.aggregateId, message]),
       );
       return {
         items: page.map((payment) => operatorPayment(payment, dispatch)),
@@ -827,15 +842,14 @@ export class OperatorReadsService {
               messageType: "refund_payment",
               aggregateId: { in: page.map((refund) => refund.id) },
             },
-            select: { aggregateId: true, status: true },
+            select: { aggregateId: true, status: true, payload: true },
           })
-        ).map((message) => [message.aggregateId, message.status]),
+        ).map((message) => [message.aggregateId, message]),
       );
       return {
         items: page.map((refund) => ({
-          ...operatorRefund(refund, dispatch),
+          ...operatorRefund(refund, refund.payment, dispatch),
           paymentId: refund.paymentId,
-          providerIntentId: refund.payment.providerIntentId,
           currency: refund.payment.currency,
         })),
         ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
@@ -1969,9 +1983,43 @@ function orderTimelineEvent(event: {
   };
 }
 
+function refundProviderIntentRead(
+  refund: RefundReadRow,
+  payment: {
+    providerIntentId: string | null;
+    providerCaptureId: string | null;
+    currency: string;
+  },
+  dispatch: ReadonlyMap<string, RefundDispatchRead>,
+): string | null {
+  if (payment.providerIntentId) return payment.providerIntentId;
+  if (refund.reason !== "LATE_CAPTURE_COMPENSATION") return null;
+  const payload = dispatch.get(refund.id)?.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return null;
+  const locator = payload.providerIntentId;
+  return typeof locator === "string" &&
+    locator.length > 0 &&
+    locator === payment.providerCaptureId &&
+    payload.refundTransactionId === refund.id &&
+    payload.paymentId === refund.paymentId &&
+    payload.provider === refund.provider &&
+    payload.amountMinor === refund.amountMinor.toString() &&
+    payload.currency === payment.currency &&
+    payload.idempotencyKey === refund.idempotencyKey &&
+    payload.action === "refund_payment"
+    ? locator
+    : null;
+}
+
 function operatorRefund(
   refund: RefundReadRow,
-  dispatch: ReadonlyMap<string, string>,
+  payment: {
+    providerIntentId: string | null;
+    providerCaptureId: string | null;
+    currency: string;
+  },
+  dispatch: ReadonlyMap<string, RefundDispatchRead>,
 ): OperatorRefundTransactionDto {
   const evidence = refund.providerResultEvent?.payload;
   const source =
@@ -1994,8 +2042,9 @@ function operatorRefund(
     provider: refund.provider,
     providerRefundId: refund.providerRefundId,
     requestReference: refund.idempotencyKey,
+    providerIntentId: refundProviderIntentRead(refund, payment, dispatch),
     dispatchClaimedAt: iso(refund.dispatchClaimedAt),
-    dispatchStatus: dispatch.get(refund.id) ?? null,
+    dispatchStatus: dispatch.get(refund.id)?.status ?? null,
     replacementRefundIds: refund.replacementRefundTransactions.map(
       (replacement) => replacement.id,
     ),
@@ -2196,7 +2245,7 @@ function operatorPayment(
   payment: Prisma.PaymentGetPayload<{
     include: { refunds: { include: typeof refundReadInclude } };
   }>,
-  dispatch: ReadonlyMap<string, string>,
+  dispatch: ReadonlyMap<string, RefundDispatchRead>,
 ): OperatorPaymentDto {
   return {
     id: payment.id,
@@ -2220,7 +2269,7 @@ function operatorPayment(
     updatedAt: payment.updatedAt.toISOString(),
     refunds: payment.refunds
       .slice(0, 25)
-      .map((refund) => operatorRefund(refund, dispatch)),
+      .map((refund) => operatorRefund(refund, payment, dispatch)),
     ...(payment.refunds.length > 25
       ? { refundsNextCursor: payment.refunds[24]!.id }
       : {}),
@@ -2333,6 +2382,7 @@ export function orderActions(
       id?: string;
       provider?: string;
       status?: string;
+      reason?: string;
       amountMinor?: bigint;
       dispatchClaimedAt?: Date | null;
       providerResultEventId?: string | null;
@@ -2345,6 +2395,7 @@ export function orderActions(
   barriers: readonly string[],
   providerName?: string,
   retrySafety?: string,
+  refundLocators: ReadonlyMap<string, string | null> = new Map(),
 ): OperatorActionDto[] {
   const actions: OperatorActionDto[] = [];
   const canOperate = operator.permissions.includes(
@@ -2636,6 +2687,9 @@ export function orderActions(
               ? ["PROVIDER_RECONCILIATION_UNAVAILABLE"]
               : []),
             ...(!refund.dispatchClaimedAt ? ["REFUND_DISPATCH_UNCLAIMED"] : []),
+            ...(!refundLocators.get(refund.id)
+              ? ["REFUND_PROVIDER_LOCATOR_UNAVAILABLE"]
+              : []),
           ],
           true,
           true,
@@ -2692,6 +2746,14 @@ export function orderActions(
               ? ["FINAL_REFUND_FAILURE_REQUIRED"]
               : []),
             ...(providerBlocked ? ["PROVIDER_MISMATCH"] : []),
+            ...(!refundLocators.get(refund.id)
+              ? ["REFUND_PROVIDER_LOCATOR_UNAVAILABLE"]
+              : []),
+            ...(refund.reason === "CUSTOMER_CANCELLATION" &&
+            refund.priceAdjustmentId === null &&
+            fulfilment.orderStatus !== "CANCELLED"
+              ? ["REFUND_OBLIGATION_NOT_OUTSTANDING"]
+              : []),
             ...(payment.refunds.some(
               (candidate) =>
                 candidate.status === "SUSPENDED" ||

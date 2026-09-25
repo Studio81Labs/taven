@@ -4700,6 +4700,7 @@ export class OrdersService {
       seed: Prisma.RefundTransactionGetPayload<{
         include: { payment: true };
       }>,
+      durableProviderIntentId: string,
     ) => {
       const canonicalRefundId =
         seed.providerRefundId ??
@@ -4715,7 +4716,7 @@ export class OrdersService {
         .update(
           canonicalJson({
             provider: seed.provider,
-            providerIntentId: seed.payment.providerIntentId,
+            providerIntentId: durableProviderIntentId,
             paymentId: seed.paymentId,
             refundId: seed.id,
             requestReference: seed.idempotencyKey,
@@ -4744,7 +4745,17 @@ export class OrdersService {
         });
         if (!seed)
           throw new NotFoundException("Refund was not found for this Order");
-        const { canonicalRefundId, eventId } = receiptIdentity(seed);
+        const durableProviderIntentId = await this.refundProviderIntent(
+          tx,
+          seed,
+        );
+        if (!durableProviderIntentId) {
+          throw new ConflictException("Refund provider locator is unavailable");
+        }
+        const { canonicalRefundId, eventId } = receiptIdentity(
+          seed,
+          durableProviderIntentId,
+        );
         if (eventId !== fencedEventId) {
           throw new ConflictException("Refund receipt identity changed");
         }
@@ -4770,7 +4781,7 @@ export class OrdersService {
           this.paymentProvider.refundRetrySafety() !==
             "MANUAL_RECONCILIATION" ||
           refund.payment.provider !== refund.provider ||
-          refund.payment.providerIntentId !== providerIntentId ||
+          durableProviderIntentId !== providerIntentId ||
           refund.idempotencyKey !== requestReference ||
           refund.amountMinor !== amountMinor ||
           refund.payment.currency !== body.currency ||
@@ -4889,7 +4900,12 @@ export class OrdersService {
         ) {
           return;
         }
-        const { eventId } = receiptIdentity(seed);
+        const durableProviderIntentId = await this.refundProviderIntent(
+          tx,
+          seed,
+        );
+        if (!durableProviderIntentId) return;
+        const { eventId } = receiptIdentity(seed, durableProviderIntentId);
         fencedEventId = eventId;
         await tx.$queryRaw`
           SELECT pg_advisory_xact_lock(
@@ -4966,13 +4982,33 @@ export class OrdersService {
         }
         if (
           !source.payment.capturedAmountMinor ||
-          !source.payment.providerIntentId ||
           source.provider !== source.payment.provider ||
           source.provider !== this.paymentProvider.providerName()
         ) {
           throw new ConflictException(
             "Refund provider or capture is unavailable",
           );
+        }
+        if (
+          source.reason === RefundReason.CUSTOMER_CANCELLATION &&
+          source.priceAdjustmentId === null
+        ) {
+          const order = await tx.order.findUniqueOrThrow({
+            where: { id: orderId },
+            select: { status: true },
+          });
+          if (order.status !== OrderStatus.CANCELLED) {
+            throw new ConflictException(
+              "Cancellation refund obligation is no longer active",
+            );
+          }
+        }
+        const durableProviderIntentId = await this.refundProviderIntent(
+          tx,
+          source,
+        );
+        if (!durableProviderIntentId) {
+          throw new ConflictException("Refund provider locator is unavailable");
         }
         const allRefunds = await tx.refundTransaction.findMany({
           where: { paymentId },
@@ -5087,7 +5123,13 @@ export class OrdersService {
             requestedAt,
           },
         });
-        await this.enqueueRefundPayment(tx, source.payment, retry, requestedAt);
+        await this.enqueueRefundPayment(
+          tx,
+          source.payment,
+          retry,
+          requestedAt,
+          durableProviderIntentId,
+        );
         await tx.payment.update({
           where: { id: source.paymentId },
           data: { status: "REFUND_PENDING", updatedAt: requestedAt },
@@ -6674,8 +6716,11 @@ export class OrdersService {
     },
     refund: { id: string; amountMinor: bigint; idempotencyKey: string },
     at: Date,
+    providerIntentIdOverride?: string,
   ): Promise<void> {
-    if (!payment.providerIntentId) {
+    const providerIntentId =
+      providerIntentIdOverride ?? payment.providerIntentId;
+    if (!providerIntentId) {
       throw new ConflictException("Captured Payment has no provider intent");
     }
     await tx.outboxMessage.createMany({
@@ -6690,7 +6735,7 @@ export class OrdersService {
             refundTransactionId: refund.id,
             paymentId: payment.id,
             provider: payment.provider,
-            providerIntentId: payment.providerIntentId,
+            providerIntentId,
             amountMinor: refund.amountMinor.toString(),
             currency: payment.currency,
             idempotencyKey: refund.idempotencyKey,
@@ -6701,6 +6746,63 @@ export class OrdersService {
       ],
       skipDuplicates: true,
     });
+  }
+
+  private async refundProviderIntent(
+    tx: Transaction,
+    refund: Prisma.RefundTransactionGetPayload<{
+      include: { payment: true };
+    }>,
+  ): Promise<string | null> {
+    if (refund.payment.providerIntentId) {
+      return refund.payment.providerIntentId;
+    }
+    if (refund.reason !== RefundReason.LATE_CAPTURE_COMPENSATION) {
+      return null;
+    }
+    if (refund.payment.capturedAmountMinor === null) return null;
+    const command = await tx.outboxMessage.findUnique({
+      where: { deduplicationKey: `refund_payment:v1:${refund.id}` },
+      select: { aggregateId: true, messageType: true, payload: true },
+    });
+    const payload = command?.payload;
+    if (
+      !command ||
+      command.aggregateId !== refund.id ||
+      command.messageType !== "refund_payment" ||
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    ) {
+      return null;
+    }
+    const locator = payload.providerIntentId;
+    if (
+      typeof locator !== "string" ||
+      locator.length === 0 ||
+      locator !== refund.payment.providerCaptureId ||
+      payload.refundTransactionId !== refund.id ||
+      payload.paymentId !== refund.paymentId ||
+      payload.provider !== refund.provider ||
+      payload.amountMinor !== refund.amountMinor.toString() ||
+      payload.currency !== refund.payment.currency ||
+      payload.idempotencyKey !== refund.idempotencyKey ||
+      payload.action !== "refund_payment"
+    ) {
+      return null;
+    }
+    const capture = await tx.paymentProviderEvent.findFirst({
+      where: {
+        paymentId: refund.paymentId,
+        provider: refund.provider,
+        providerTransactionId: locator,
+        kind: "PAYMENT_CAPTURED",
+        amountMinor: refund.payment.capturedAmountMinor,
+        currency: refund.payment.currency,
+      },
+      select: { id: true },
+    });
+    return capture ? locator : null;
   }
 
   private async writeRefundSuccessMetric(

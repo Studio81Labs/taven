@@ -621,6 +621,9 @@ export class OperatorRefundTransactionDto {
   @ApiProperty({ type: String })
   requestReference!: string;
 
+  @ApiPropertyOptional({ type: String, nullable: true })
+  providerIntentId!: string | null;
+
   @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
   dispatchClaimedAt!: string | null;
 
@@ -643,9 +646,6 @@ export class OperatorRefundTransactionDto {
 export class OperatorRefundPageItemDto extends OperatorRefundTransactionDto {
   @ApiProperty(UUID)
   paymentId!: string;
-
-  @ApiPropertyOptional({ type: String, nullable: true })
-  providerIntentId!: string | null;
 
   @ApiProperty({ type: String })
   currency!: string;

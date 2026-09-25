@@ -27,6 +27,10 @@ record remain immutable.
    `evidenceReference`, timezone-qualified `occurredAt`, reason and
    `finalOutcomeConfirmed: true`. No file, secret, raw statement or URL is
    accepted. This records attested evidence; it makes **no** provider call.
+   Use the refund-level `providerIntentId` from the refund history, not the
+   payment-level field. For a late-capture compensation, the payment's intent
+   may remain null; the refund-level locator is verified against the immutable
+   original refund command and captured provider event. Stop if it is null.
 4. Re-read the order and confirm the selected result receipt and incident
    state. Only a root refund with a selected final `REFUND_FAILED` receipt,
    no replacement, no later success or unresolved provider incident, and an
