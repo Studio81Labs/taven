@@ -5,11 +5,27 @@ import { formatCzkMinor, formatGrams, formatPragueInstant } from "./format";
 import { requestFeedback } from "./request-feedback";
 import {
   CommandJournal,
+  isUncertainCommandOutcome,
   isoFromZonedInput,
+  OperatorRequestError,
   requireData,
 } from "./operator-requests";
 
 describe("operator request helpers", () => {
+  it("retains ambiguous server failures but refreshes on definite conflicts", () => {
+    for (const status of [500, 502, 503, 504])
+      expect(
+        isUncertainCommandOutcome(
+          new OperatorRequestError(status, true, "server"),
+        ),
+      ).toBe(true);
+    expect(
+      isUncertainCommandOutcome(
+        new OperatorRequestError(409, true, "conflict"),
+      ),
+    ).toBe(false);
+    expect(isUncertainCommandOutcome(new Error("lost response"))).toBe(true);
+  });
   it("rejects calendar-invalid UTC evidence instead of normalizing it", () => {
     expect(isoFromZonedInput("2024-02-29T10:00:00Z")).toBe(
       "2024-02-29T10:00:00.000Z",

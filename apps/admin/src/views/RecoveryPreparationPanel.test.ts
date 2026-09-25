@@ -321,7 +321,7 @@ describe("recovery preparation panel", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("retains the same preparation body and key after an uncertain response", async () => {
+  it("retains the same preparation body and key after an ambiguous 502", async () => {
     get.mockImplementation((path: string) =>
       Promise.resolve(
         ok(
@@ -331,7 +331,7 @@ describe("recovery preparation panel", () => {
         ),
       ),
     );
-    post.mockRejectedValueOnce(new Error("connection lost"));
+    post.mockResolvedValueOnce(denied(502));
     post.mockResolvedValueOnce(ok({ preparationId, generation: 1 }));
     const wrapper = mountPanel("JOB_REPLACEMENT");
     await openFirst(wrapper);

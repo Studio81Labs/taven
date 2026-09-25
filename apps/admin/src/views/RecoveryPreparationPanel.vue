@@ -7,6 +7,7 @@ import {
   commandHeaders,
   CommandJournal,
   errorMessage,
+  isUncertainCommandOutcome,
   OperatorRequestError,
   requireData,
 } from "../operator-requests";
@@ -354,19 +355,16 @@ async function runCommand<Result>(
   } catch (cause) {
     if (activeEpoch !== epoch) return;
     error.value = errorMessage(cause);
-    if (cause instanceof OperatorRequestError && cause.refreshRequired) {
+    if (isUncertainCommandOutcome(cause)) {
+      pendingRetry.value = perform;
+      error.value +=
+        " Výsledek není jistý. Opakujte pouze původní požadavek se stejným klíčem.";
+    } else if (cause instanceof OperatorRequestError && cause.refreshRequired) {
       const feedback = error.value;
       pendingRetry.value = null;
       if (detail.value) await loadPreparation(detail.value.preparationId);
       await loadHistory();
       error.value = feedback;
-    } else if (
-      !(cause instanceof OperatorRequestError) ||
-      cause.status === 503
-    ) {
-      pendingRetry.value = perform;
-      error.value +=
-        " Výsledek není jistý. Opakujte pouze původní požadavek se stejným klíčem.";
     }
   } finally {
     busy.value = false;
@@ -380,7 +378,10 @@ async function retry(): Promise<void> {
     await pending();
   } catch (cause) {
     error.value = errorMessage(cause);
-    if (cause instanceof OperatorRequestError && cause.refreshRequired) {
+    if (isUncertainCommandOutcome(cause)) {
+      error.value +=
+        " Výsledek není jistý. Opakujte pouze původní požadavek se stejným klíčem.";
+    } else if (cause instanceof OperatorRequestError && cause.refreshRequired) {
       const feedback = error.value;
       pendingRetry.value = null;
       if (detail.value) await loadPreparation(detail.value.preparationId);

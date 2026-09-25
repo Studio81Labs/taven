@@ -11,7 +11,10 @@ vi.mock("../api", () => ({ apiClient: { GET: get, POST: post } }));
 vi.mock("../session", () => ({
   session: {
     phase: "authenticated",
-    value: { csrfToken: "csrf", operator: { nodeIds: ["node-1"] } },
+    value: {
+      csrfToken: "csrf",
+      operator: { role: "ADMIN", nodeIds: ["node-1"] },
+    },
   },
   hasPermission: () => true,
 }));

@@ -192,7 +192,7 @@ test("uncertain provider attestation retries the frozen command with one key", a
       bodies.push(route.request().postDataJSON());
       keys.push(route.request().headers()["idempotency-key"] ?? "");
       if (calls === 1)
-        return route.fulfill({ status: 503, json: { message: "uncertain" } });
+        return route.fulfill({ status: 500, json: { message: "uncertain" } });
       action = null;
       status = "FAILED";
       return route.fulfill({
@@ -396,7 +396,7 @@ test("packing offers only a shipment from the job's plan", async ({ page }) => {
   expect(packedKey).toBeTruthy();
 });
 
-test("a read-only operator can inspect an order without financial cost access", async ({
+test("a non-admin operator can measure work but cannot enter manual evidence or financial costs", async ({
   page,
 }) => {
   let costRequests = 0;
@@ -411,10 +411,10 @@ test("a read-only operator can inspect an order without financial cost access", 
         csrfToken: "csrf-viewer",
         operator: {
           operatorId: "viewer-1",
-          role: "VIEWER",
+          role: "OPERATOR",
           nodeIds: [nodeId],
           authenticationMethod: "DEVELOPMENT_PASSWORD",
-          permissions: ["operations:read"],
+          permissions: ["operations:read", "operations:write"],
         },
       },
     }),
@@ -428,6 +428,12 @@ test("a read-only operator can inspect an order without financial cost access", 
   await expect(
     page.getByText("Zobrazení nákladů vyžaduje finanční oprávnění."),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Spustit měření" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Ruční záznam práce/cesty" }),
+  ).toHaveCount(0);
   expect(costRequests).toBe(0);
 });
 
@@ -573,6 +579,169 @@ test("failed-job preparation survives async refresh and submits the returned can
     });
 });
 
+test("printing failure scopes consumption to the selected recovery", async ({
+  page,
+}) => {
+  const targetId = "00000000-0000-0000-0000-000000000091";
+  const siblingId = "00000000-0000-0000-0000-000000000092";
+  const bodies: Record<string, unknown>[] = [];
+  await installFixtures(
+    page,
+    () => null,
+    () => "PENDING",
+    () => ({
+      ...orderDetail(null),
+      fulfilment: {
+        ...orderDetail(null).fulfilment,
+        jobs: [targetId, siblingId].map((id) => ({
+          id,
+          status: "PRINTING",
+          shipmentPlanId: "plan-1",
+          replacesJobId: null,
+          shipmentAssignment: null,
+        })),
+      },
+      actions: [
+        {
+          action: "FAIL_JOB",
+          targetType: "JOB",
+          targetId,
+          enabled: false,
+          blockingCodes: ["FAILURE_DETAILS_REQUIRED"],
+          requiresReason: true,
+          requiresConfirmation: false,
+        },
+      ],
+    }),
+  );
+  await page.route(
+    `**/admin/orders/${orderId}/fulfilment/jobs/${targetId}/failure`,
+    (route) => {
+      bodies.push(route.request().postDataJSON());
+      return route.fulfill({
+        json: { orderId, status: "JOB_FAILED", result: {} },
+      });
+    },
+  );
+  await page.goto(`/objednavky?order=${orderId}`);
+  await page.getByRole("button", { name: "Zaznamenat selhání" }).click();
+  await page.getByRole("textbox", { name: "Důvod" }).fill("Selhal stroj");
+  await expect(
+    page.getByRole("textbox", { name: "Skutečná spotřeba materiálu (mg)" }),
+  ).toHaveAttribute("required", "");
+  await page
+    .getByRole("textbox", { name: "Skutečná spotřeba materiálu (mg)" })
+    .fill("1200");
+  await expect(
+    page.getByRole("textbox", {
+      name: `Skutečná spotřeba běžící úlohy ${siblingId} (mg)`,
+    }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Potvrdit krok" }).click();
+  await expect.poll(() => bodies.length).toBe(1);
+  expect(bodies[0]).toMatchObject({
+    recovery: "REPLACE",
+    actualMaterialMilligrams: "1200",
+  });
+  expect(bodies[0]).not.toHaveProperty("printingConsumptions");
+  await page.getByRole("button", { name: "Zaznamenat selhání" }).click();
+  await page.getByRole("textbox", { name: "Důvod" }).fill("Refundovat balík");
+  await page.getByRole("combobox", { name: "Náprava" }).selectOption("REFUND");
+  await page
+    .getByRole("textbox", { name: "Skutečná spotřeba materiálu (mg)" })
+    .fill("1300");
+  await page
+    .getByRole("textbox", {
+      name: `Skutečná spotřeba běžící úlohy ${siblingId} (mg)`,
+    })
+    .fill("800");
+  await expect(
+    page.getByRole("textbox", {
+      name: `Skutečná spotřeba běžící úlohy ${targetId} (mg)`,
+    }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Potvrdit krok" }).click();
+  await expect.poll(() => bodies.length).toBe(2);
+  expect(bodies[1]).toMatchObject({
+    recovery: "REFUND",
+    actualMaterialMilligrams: "1300",
+    printingConsumptions: [
+      { jobId: siblingId, actualMaterialMilligrams: "800" },
+    ],
+  });
+});
+
+test("claim origin controls incident shipment evidence", async ({ page }) => {
+  const shipmentId = "00000000-0000-0000-0000-000000000093";
+  const slotId = "00000000-0000-0000-0000-000000000094";
+  let body: unknown;
+  await installFixtures(
+    page,
+    () => null,
+    () => "PENDING",
+    () => ({
+      ...orderDetail(null),
+      fulfilment: {
+        ...orderDetail(null).fulfilment,
+        slots: [{ id: slotId, status: "DELIVERED" }],
+        shipments: [
+          {
+            id: shipmentId,
+            status: "DELIVERED",
+            shipmentPlanId: "plan-1",
+            replacesShipmentId: null,
+            jobAssignments: [],
+            carrierLabelId: "label-1",
+          },
+        ],
+      },
+      actions: [
+        {
+          action: "CREATE_CLAIM",
+          targetType: "ORDER",
+          targetId: orderId,
+          enabled: false,
+          blockingCodes: ["CLAIM_DETAILS_REQUIRED"],
+          requiresReason: true,
+          requiresConfirmation: false,
+        },
+      ],
+    }),
+  );
+  await page.route(`**/admin/orders/${orderId}/fulfilment/claims`, (route) => {
+    body = route.request().postDataJSON();
+    return route.fulfill({
+      json: { orderId, status: "CLAIM_CREATED", result: {} },
+    });
+  });
+  await page.goto(`/objednavky?order=${orderId}`);
+  await page.getByRole("button", { name: "Otevřít reklamaci" }).click();
+  await page.getByRole("textbox", { name: "Důvod" }).fill("Poškození");
+  await page.getByRole("checkbox", { name: slotId }).check();
+  await page.getByRole("button", { name: "Potvrdit krok" }).click();
+  await expect(
+    page.getByRole("combobox", { name: "Dotčená zásilka" }),
+  ).toHaveAttribute("required", "");
+  expect(body).toBeUndefined();
+  await page
+    .getByRole("combobox", { name: "Dotčená zásilka" })
+    .selectOption(shipmentId);
+  await page
+    .getByRole("combobox", { name: "Původ" })
+    .selectOption("POST_DELIVERY_QUALITY");
+  await expect(
+    page.getByRole("combobox", { name: "Dotčená zásilka" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Potvrdit krok" }).click();
+  await expect
+    .poll(() => body)
+    .toEqual({
+      fulfilmentSlotIds: [slotId],
+      origin: "POST_DELIVERY_QUALITY",
+      reason: "Poškození",
+    });
+});
+
 test("repeated LOST reprint requires a candidate for every source job", async ({
   page,
 }) => {
@@ -623,8 +792,19 @@ test("repeated LOST reprint requires a candidate for every source job", async ({
             id: claimId,
             origin: "SHIPMENT_INCIDENT",
             status: "OPEN",
+            reason: "Původní balík se ztratil",
             incidentShipmentId: originalId,
-            reshipmentAuthorizations: [{ reshipmentShipmentId: predecessorId }],
+            resolutions: [
+              {
+                id: "resolution-first-page",
+                status: "RESOLVED",
+                fulfilmentSlotId: "slot-0",
+              },
+            ],
+            refunds: [],
+            reshipmentAuthorizations: [
+              { id: "reship-first-page", reshipmentShipmentId: predecessorId },
+            ],
           },
         ],
         shipments: [
@@ -707,6 +887,10 @@ test("repeated LOST reprint requires a candidate for every source job", async ({
     },
   );
   await page.goto(`/objednavky?order=${orderId}`);
+  await expect(
+    page.getByText(/resolution-first-page · RESOLVED/),
+  ).toBeVisible();
+  await expect(page.getByText(/reship-first-page/)).toBeVisible();
   await page
     .getByRole("button", {
       name: `Připravit opakovanou zásilku pro reklamaci ${claimId} · ${predecessorId}`,
@@ -758,4 +942,92 @@ test("repeated LOST reprint requires a candidate for every source job", async ({
         candidateResourceEstimateId: `candidate-${sourceJobId}`,
       })),
     });
+});
+
+test("late artifact response cannot appear under a different selected job", async ({
+  page,
+}) => {
+  const firstId = "00000000-0000-0000-0000-000000000095";
+  const secondId = "00000000-0000-0000-0000-000000000096";
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await installFixtures(
+    page,
+    () => null,
+    () => "PENDING",
+    () => ({
+      ...orderDetail(null),
+      fulfilment: {
+        ...orderDetail(null).fulfilment,
+        jobs: [firstId, secondId].map((id) => ({
+          id,
+          status: "ACCEPTED",
+          shipmentPlanId: "plan-1",
+          replacesJobId: null,
+          shipmentAssignment: null,
+        })),
+      },
+    }),
+  );
+  await page.route("**/admin/jobs/*", (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    return route.fulfill({
+      json: {
+        id,
+        orderId,
+        status: "ACCEPTED",
+        shipmentPlanOrdinal: 1,
+        estimate: {
+          machineId: "machine-1",
+          inventoryId: "inventory-1",
+          inventoryMountStatus: "MOUNTED",
+          requiredMaterialMilligrams: "1000",
+          requiredMachineSeconds: "3600",
+        },
+        deadline: { date: null, provenance: "NO_PROMISED_DATE" },
+        slots: [],
+        artifacts: {
+          sourceModel: { available: true, reason: null },
+          preview: { available: false, reason: "NOT_GENERATED" },
+          production: { available: false, reason: "NOT_GENERATED" },
+        },
+        actions: [],
+      },
+    });
+  });
+  await page.route(
+    `**/admin/jobs/${firstId}/artifacts/SOURCE_MODEL/download`,
+    async (route) => {
+      await gate;
+      await route.fulfill({
+        json: {
+          downloadUrl: "https://example.com/first-job.stl",
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          contentLength: "100",
+          contentType: "model/stl",
+          sha256: "hash",
+        },
+      });
+    },
+  );
+  await page.goto(`/objednavky?order=${orderId}`);
+  await page.getByRole("button", { name: firstId }).click();
+  await expect(
+    page.getByRole("heading", { name: `Úloha ${firstId} · ACCEPTED` }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Stáhnout SOURCE_MODEL" }).click();
+  await page.getByRole("button", { name: secondId }).click();
+  await expect(
+    page.getByRole("heading", { name: `Úloha ${secondId} · ACCEPTED` }),
+  ).toBeVisible();
+  const lateResponse = page.waitForResponse(
+    `**/admin/jobs/${firstId}/artifacts/SOURCE_MODEL/download`,
+  );
+  release();
+  await (await lateResponse).finished();
+  await expect(
+    page.getByRole("link", { name: "Otevřít SOURCE_MODEL soubor" }),
+  ).toHaveCount(0);
 });

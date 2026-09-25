@@ -8,6 +8,7 @@ import {
   commandHeaders,
   CommandJournal,
   errorMessage,
+  isUncertainCommandOutcome,
   isoFromZonedInput,
   OperatorRequestError,
   requireData,
@@ -175,6 +176,20 @@ function withHistory<T extends { id: string }>(
   return [
     ...(initial ?? []),
     ...((continuation ?? []) as unknown as T[]),
+  ].filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+function claimChildren(
+  claim: S["FulfilmentClaimDto"],
+  kind: ChildKind,
+): ChildItem[] {
+  const seen = new Set<string>();
+  return [
+    ...((claim[kind] ?? []) as unknown as ChildItem[]),
+    ...(childHistory.value[`${claim.id}:${kind}`] ?? []),
   ].filter((item) => {
     if (seen.has(item.id)) return false;
     seen.add(item.id);
@@ -755,6 +770,9 @@ function openAction(action: Action): void {
   material.value = "";
   shipmentId.value = "";
   selectedSlots.value = [];
+  selectedIncidentShipment.value = "";
+  claimOrigin.value = "SHIPMENT_INCIDENT";
+  recovery.value = "REPLACE";
   finalOutcomeConfirmed.value = false;
   confirmed.value = false;
   printingConsumptions.value = {};
@@ -775,11 +793,13 @@ async function download(
   kind: "SOURCE_MODEL" | "PREVIEW" | "PRODUCTION",
 ): Promise<void> {
   if (!job.value || !session.value) return;
+  const requestedJobId = job.value.id;
+  const requestedEpoch = detailEpoch;
   try {
     const result = requireData(
       await apiClient.POST("/admin/jobs/{jobId}/artifacts/{kind}/download", {
         params: {
-          path: { jobId: job.value.id, kind },
+          path: { jobId: requestedJobId, kind },
           header: { "x-csrf-token": session.value.csrfToken },
         },
       }),
@@ -787,13 +807,16 @@ async function download(
     const url = new URL(result.downloadUrl);
     if (!["https:", "http:"].includes(url.protocol))
       throw new Error("Neplatný odkaz na soubor.");
+    if (detailEpoch !== requestedEpoch || job.value?.id !== requestedJobId)
+      return;
     artifactLink.value = {
       kind,
       url: url.toString(),
       expiresAt: result.expiresAt,
     };
   } catch (cause) {
-    error.value = errorMessage(cause);
+    if (detailEpoch === requestedEpoch && job.value?.id === requestedJobId)
+      error.value = errorMessage(cause);
   }
 }
 
@@ -817,12 +840,12 @@ function positiveInteger(value: string, label: string): string {
   return number;
 }
 
-function consumedPrinting(): {
+function consumedPrinting(excludeJobId = ""): {
   jobId: string;
   actualMaterialMilligrams: string;
 }[] {
   return allJobs.value
-    .filter((item) => item.status === "PRINTING")
+    .filter((item) => item.status === "PRINTING" && item.id !== excludeJobId)
     .map((item) => ({
       jobId: item.id,
       actualMaterialMilligrams: nonnegativeInteger(
@@ -874,19 +897,16 @@ async function submitBody<B>(
     }
   } catch (cause) {
     actionError.value = errorMessage(cause);
-    if (cause instanceof OperatorRequestError && cause.refreshRequired) {
-      pendingRetry.value = null;
-      pendingTarget.value = "";
-      await loadDetail();
-      error.value = actionError.value;
-    } else if (
-      !(cause instanceof OperatorRequestError) ||
-      cause.status === 503
-    ) {
+    if (isUncertainCommandOutcome(cause)) {
       pendingRetry.value = perform;
       pendingTarget.value = order.value?.id ?? "";
       actionError.value +=
         " Výsledek není jistý. Opakujte pouze totožný požadavek nebo obnovte serverový stav.";
+    } else if (cause instanceof OperatorRequestError && cause.refreshRequired) {
+      pendingRetry.value = null;
+      pendingTarget.value = "";
+      await loadDetail();
+      error.value = actionError.value;
     }
   } finally {
     busy.value = false;
@@ -915,7 +935,10 @@ async function retryPending(): Promise<void> {
     }
   } catch (cause) {
     actionError.value = errorMessage(cause);
-    if (cause instanceof OperatorRequestError && cause.refreshRequired) {
+    if (isUncertainCommandOutcome(cause)) {
+      actionError.value +=
+        " Výsledek není jistý. Opakujte pouze totožný požadavek nebo obnovte serverový stav.";
+    } else if (cause instanceof OperatorRequestError && cause.refreshRequired) {
       pendingRetry.value = null;
       pendingTarget.value = "";
       await loadDetail();
@@ -1055,6 +1078,8 @@ async function submitAction(): Promise<void> {
         );
         return;
       case "FAIL_JOB":
+        if (currentJob.value?.status === "PRINTING")
+          nonnegativeInteger(material.value, "skutečnou spotřebu");
         await submitBody(
           action,
           {
@@ -1069,9 +1094,11 @@ async function submitAction(): Promise<void> {
                   ),
                 }
               : {}),
-            printingConsumptions: consumedPrinting().filter(
-              (entry) => entry.jobId !== targetId,
-            ),
+            ...(recovery.value === "REFUND"
+              ? {
+                  printingConsumptions: consumedPrinting(targetId),
+                }
+              : {}),
           },
           (body, key) =>
             apiClient.POST(
@@ -1210,13 +1237,15 @@ async function submitAction(): Promise<void> {
       case "CREATE_CLAIM":
         if (selectedSlots.value.length === 0)
           throw new Error("Vyberte alespoň jeden dotčený slot.");
+        if (claimOrigin.value === "SHIPMENT_INCIDENT")
+          required(selectedIncidentShipment.value, "dotčenou zásilku");
         await submitBody(
           action,
           {
-            fulfilmentSlotIds: selectedSlots.value,
+            fulfilmentSlotIds: [...selectedSlots.value],
             origin: claimOrigin.value,
             reason: required(reason.value, "důvod"),
-            ...(selectedIncidentShipment.value
+            ...(claimOrigin.value === "SHIPMENT_INCIDENT"
               ? { incidentShipmentId: selectedIncidentShipment.value }
               : {}),
           },
@@ -1486,6 +1515,7 @@ async function submitHandling(): Promise<void> {
     return;
   actionError.value = "";
   const mode = handlingMode.value;
+  if ((mode === "manual" || mode === "void") && !isAdmin.value) return;
   const action: Action = {
     action: `HANDLING_${mode.toUpperCase()}`,
     targetType: "HANDLING_SESSION",
@@ -2027,10 +2057,7 @@ onMounted(() => {
             :key="kind"
           >
             <ul class="operator-list">
-              <li
-                v-for="item in childHistory[`${claim.id}:${kind}`] ?? []"
-                :key="item.id"
-              >
+              <li v-for="item in claimChildren(claim, kind)" :key="item.id">
                 {{ lineageSummary(item) }}
               </li>
             </ul>
@@ -2122,12 +2149,18 @@ onMounted(() => {
         <div v-if="canOperate" class="operator-actions">
           <button type="button" @click="openHandlingForm('start')">
             Spustit měření</button
-          ><button type="button" @click="openHandlingForm('manual')">
+          ><button
+            v-if="isAdmin"
+            type="button"
+            @click="openHandlingForm('manual')"
+          >
             Ruční záznam práce/cesty
           </button>
         </div>
         <form
-          v-if="handlingMode && canOperate"
+          v-if="
+            handlingMode && canOperate && (handlingMode !== 'manual' || isAdmin)
+          "
           class="operator-form"
           @submit.prevent="submitHandling"
         >
@@ -2402,7 +2435,11 @@ onMounted(() => {
               <input
                 v-model.trim="material"
                 inputmode="numeric"
-                :required="activeAction.action === 'FINISH_PRINTING'" /></label
+                :required="
+                  activeAction.action === 'FINISH_PRINTING' ||
+                  (activeAction.action === 'FAIL_JOB' &&
+                    currentJob?.status === 'PRINTING')
+                " /></label
           ></template>
           <template v-if="activeAction.action === 'FAIL_JOB'"
             ><label
@@ -2433,13 +2470,17 @@ onMounted(() => {
           >
           <template
             v-if="
-              ['CANCEL_ORDER', 'FAIL_JOB', 'EXPIRE_REPLACEMENT'].includes(
+              ['CANCEL_ORDER', 'EXPIRE_REPLACEMENT'].includes(
                 activeAction.action,
-              )
+              ) ||
+              (activeAction.action === 'FAIL_JOB' && recovery === 'REFUND')
             "
             ><label
               v-for="item in allJobs.filter(
-                (candidate) => candidate.status === 'PRINTING',
+                (candidate) =>
+                  candidate.status === 'PRINTING' &&
+                  (activeAction?.action !== 'FAIL_JOB' ||
+                    candidate.id !== activeAction.targetId),
               )"
               :key="item.id"
               >Skutečná spotřeba běžící úlohy {{ item.id }} (mg)
@@ -2550,9 +2591,9 @@ onMounted(() => {
                   Kvalita po doručení
                 </option>
               </select></label
-            ><label
+            ><label v-if="claimOrigin === 'SHIPMENT_INCIDENT'"
               >Dotčená zásilka
-              <select v-model="selectedIncidentShipment">
+              <select v-model="selectedIncidentShipment" required>
                 <option value="">Bez zásilky</option>
                 <option
                   v-for="item in allShipments"
