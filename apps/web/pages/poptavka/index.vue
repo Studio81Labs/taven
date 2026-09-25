@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { components } from "@taven/openapi-client";
+import ApplicationShell from "../../components/application/ApplicationShell.vue";
 import { legalDocuments } from "../../content/public-site";
 import { useLegalAvailability } from "../../composables/useLegalAvailability";
 import { usePublicLegalDocument } from "../../composables/usePublicLegalDocument";
@@ -18,6 +19,11 @@ import {
 import { getSessionStorage } from "../../utils/quote-session-storage";
 
 type CreateQuoteRequest = components["schemas"]["CreateQuoteRequestDto"];
+const assistedSteps = [
+  { index: "01", label: "POPIS" },
+  { index: "02", label: "POSOUZENÍ" },
+  { index: "03", label: "NABÍDKA" },
+] as const;
 
 usePublicPageMeta({
   path: "/poptavka",
@@ -307,22 +313,12 @@ function isPositiveDimension(value: number | ""): value is number {
 </script>
 
 <template>
-  <div class="application-page">
-    <PublicDeploymentBanner />
-    <header class="application-header">
-      <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
-        <PublicBrandMark />
-      </NuxtLink>
-      <nav aria-label="Cesta individuální poptávky" class="process-nav">
-        <ol>
-          <li aria-current="step"><span>01</span> POPIS</li>
-          <li><span>02</span> POSOUZENÍ</li>
-          <li><span>03</span> NABÍDKA</li>
-        </ol>
-      </nav>
-    </header>
-
-    <main class="order-layout assisted-layout">
+  <ApplicationShell
+    :steps="assistedSteps"
+    :active-step="1"
+    navigation-label="Cesta individuální poptávky"
+  >
+    <template #workspace>
       <section class="order-workspace" aria-labelledby="request-title">
         <div class="section-heading">
           <p class="eyebrow">INDIVIDUÁLNÍ NABÍDKA</p>
@@ -638,7 +634,9 @@ function isPositiveDimension(value: number | ""): value is number {
           </div>
         </form>
       </section>
+    </template>
 
+    <template #context>
       <aside class="process-context" aria-labelledby="assisted-process-title">
         <div>
           <p class="eyebrow">CO BUDE NÁSLEDOVAT</p>
@@ -676,8 +674,8 @@ function isPositiveDimension(value: number | ""): value is number {
           </p>
         </div>
       </aside>
-    </main>
-  </div>
+    </template>
+  </ApplicationShell>
 </template>
 
 <style src="../../assets/css/application.css"></style>

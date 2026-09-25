@@ -20,10 +20,8 @@ const punctuation = computed(() => mark.value.slice(-1));
 </script>
 
 <template>
-  <span class="inline-flex font-mono font-semibold tracking-tight">
+  <span class="brand-mark" :data-inverse="inverse">
     <span>{{ letters }}</span>
-    <span :class="inverse ? 'text-[#5c7cff]' : 'text-[#1b44e8]'">
-      {{ punctuation }}
-    </span>
+    <span class="brand-mark__period">{{ punctuation }}</span>
   </span>
 </template>
