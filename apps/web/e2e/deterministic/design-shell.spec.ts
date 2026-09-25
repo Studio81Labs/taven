@@ -50,6 +50,10 @@ test.describe("public and application shells", () => {
 
       const footer = page.locator("footer");
       await expect(footer).toContainText("Studio81 Labs, s.r.o.");
+      const identityFont = await footer
+        .locator("address")
+        .evaluate((element) => getComputedStyle(element).fontFamily);
+      expect(identityFont).toContain("IBM Plex Mono");
       await expect(
         footer.getByRole("navigation", { name: "Právní informace" }),
       ).toBeVisible();

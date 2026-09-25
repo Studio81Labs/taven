@@ -287,6 +287,11 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.title-block-footer__cell address {
+  font-family: var(--taven-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .title-block-footer__brand {
   display: inline-block;
   margin-bottom: 12px;
