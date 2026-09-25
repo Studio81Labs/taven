@@ -224,11 +224,15 @@
   font-size: 18px;
 }
 
-.checkout-summary__items p:last-of-type,
+.checkout-summary__items li > p:not(.eyebrow),
 .checkout-summary__items small {
   margin: 0;
   color: var(--ink-2);
   font: 12px/1.6 var(--taven-font-mono);
+}
+
+.checkout-summary__item-details {
+  overflow-wrap: anywhere;
 }
 
 .checkout-summary__breakdown {

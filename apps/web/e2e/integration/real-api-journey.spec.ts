@@ -716,6 +716,12 @@ test.describe("Real API Integration Journey", () => {
           component.shipmentPlanOrdinal,
       ),
     ).toEqual(shipmentComponents.map((_: unknown, index: number) => index + 1));
+    const itemSummaries = page.locator(".checkout-summary__items > li");
+    await expect(itemSummaries).toHaveCount(2);
+    await expect(itemSummaries.nth(0)).toContainText("body-0001");
+    await expect(itemSummaries.nth(1)).toContainText("body-0002");
+    await expect(itemSummaries.nth(0)).toContainText("Výplň:");
+    await expect(itemSummaries.nth(1)).toContainText("Výplň:");
     const shipmentRows = page
       .locator(".checkout-summary__breakdown > div")
       .filter({ hasText: "Doprava" });

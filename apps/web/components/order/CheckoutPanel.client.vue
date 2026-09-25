@@ -289,6 +289,13 @@ function qualityLabel(value: string): string {
     { DRAFT: "Rychlá", FINE: "Jemná", STANDARD: "Standardní" }[value] ?? value
   );
 }
+function infillLabel(value: string): string {
+  return (
+    { DECORATIVE: "Dekorativní", STANDARD: "Standardní", STRONG: "Pevná" }[
+      value
+    ] ?? value
+  );
+}
 const selectedDestination = computed(
   () => props.quote.selectedDeliveryDestination ?? null,
 );
@@ -1103,6 +1110,11 @@ function compactBilling(
           <p>
             {{ item.material }} · {{ colorLabel(item.color) }} ·
             {{ qualityLabel(item.quality) }} · {{ item.quantity }} ks
+          </p>
+          <p class="checkout-summary__item-details">
+            Výplň: {{ infillLabel(item.infillPreset) }} ·
+            {{ item.bodyIds.length === 1 ? "Těleso" : "Tělesa" }}:
+            {{ item.bodyIds.join(", ") }}
           </p>
           <small v-if="item.fitSensitive">Přesně lícující díl</small>
         </li>
