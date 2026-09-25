@@ -42,6 +42,7 @@ import {
 } from "../payments/payment-provider.port";
 import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import { slicerSettingsSnapshot } from "../slicing/slicer-profile-snapshot.service";
+import { RecoveryCandidatePreparationService } from "./recovery-candidate-preparation.service";
 import {
   ApproveLegacyClaimWindowDto,
   CancelOrderDto,
@@ -93,6 +94,8 @@ export class OrdersService {
     private readonly audit: AuditService,
     @Inject(PAYMENT_PROVIDER)
     private readonly paymentProvider: PaymentProviderPort,
+    @Inject(RecoveryCandidatePreparationService)
+    private readonly recoveryPreparations: RecoveryCandidatePreparationService,
   ) {}
 
   async getFulfilment(
@@ -3386,12 +3389,6 @@ export class OrdersService {
             "A v0 parcel reprint must be reserved on one production node",
           );
         }
-        await this.assertRecoveryCandidateProvenance(tx, {
-          kind: RecoveryCandidatePreparationKind.LOST_CLAIM_REPRINT,
-          targetId: claimId,
-          expectedContextId: predecessor.id,
-          replacements,
-        });
         const sourceJobIds = sourceJobs.map(({ id }) => id).sort();
         await tx.$queryRaw`
           SELECT id FROM jobs
@@ -3404,6 +3401,12 @@ export class OrdersService {
         await tx.$queryRaw`
           SELECT id FROM shipment_plans WHERE id = ${predecessor.shipmentPlanId}::uuid FOR UPDATE
         `;
+        await this.assertRecoveryCandidateProvenance(tx, {
+          kind: RecoveryCandidatePreparationKind.LOST_CLAIM_REPRINT,
+          targetId: claimId,
+          expectedContextId: predecessor.id,
+          replacements,
+        });
         await this.lockRecoveryCandidateResources(
           tx,
           replacements.map(
@@ -7223,6 +7226,10 @@ export class OrdersService {
         "Recovery needs a current scoped candidate preparation",
       );
     }
+    await this.recoveryPreparations.assertCurrentScopeFingerprint(
+      tx,
+      preparation,
+    );
     if (input.kind === RecoveryCandidatePreparationKind.LOST_CLAIM_REPRINT) {
       const selectedEvidence = await tx.shipmentProviderEvent.findFirst({
         where: { shipmentId: input.expectedContextId, kind: "LOST" },

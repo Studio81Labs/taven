@@ -194,7 +194,11 @@ BEGIN
               SELECT 1 FROM claim_slot_resolutions resolution
               WHERE resolution.claim_id = claim.id
                 AND (resolution.replacement_shipment_id IS DISTINCT FROM predecessor.id
-                  OR resolution.status IS DISTINCT FROM 'PENDING')))
+                  OR resolution.status IS DISTINCT FROM 'PENDING'
+                  OR (predecessor.reprint_claim_id IS NOT DISTINCT FROM claim.id
+                    AND resolution.replacement_request_id IS NULL)
+                  OR (predecessor.reprint_claim_id IS DISTINCT FROM claim.id
+                    AND resolution.replacement_request_id IS NOT NULL))))
         )
         AND NOT EXISTS (
           SELECT 1 FROM shipments successor

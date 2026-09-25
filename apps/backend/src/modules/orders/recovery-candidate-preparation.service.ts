@@ -1163,6 +1163,15 @@ export class RecoveryCandidatePreparationService {
     );
   }
 
+  async assertCurrentScopeFingerprint(
+    tx: Transaction,
+    row: RecoveryCandidatePreparation,
+  ): Promise<void> {
+    if (!(await this.contextMatches(tx, row))) {
+      throw new ConflictException("Recovery preparation context changed");
+    }
+  }
+
   private async currentScopeFingerprint(
     tx: Transaction,
     row: RecoveryCandidatePreparation,

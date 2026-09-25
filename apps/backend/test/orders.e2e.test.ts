@@ -47,6 +47,18 @@ let balanceProviderIntentCalls = 0;
 let pauseBalanceIntentBeforeReturn: (() => Promise<void>) | undefined;
 let previousCheckoutEnvironment: Record<string, string | undefined>;
 
+function recoveryPreparationService(): RecoveryCandidatePreparationService {
+  const snapshots = new SlicerProfileSnapshotService(prisma, {
+    putImmutableObject: async () => undefined,
+  } as unknown as ObjectStorage);
+  return new RecoveryCandidatePreparationService(
+    prisma,
+    new CandidateEstimateService(prisma, snapshots),
+    new FrozenOrderCandidateInputService(prisma),
+    new AuditService(prisma),
+  );
+}
+
 type LegacyOrdersClient = {
   [Method in keyof OrdersService]: OrdersService[Method] extends (
     operator: OperatorContext,
@@ -595,6 +607,7 @@ async function ingestPreparedCandidates(
 async function createFreshReplacementCandidate(
   fixture: FulfilmentFixture,
   index: number,
+  scopeFingerprintOverride?: string,
 ): Promise<string> {
   const source = await prisma.candidateResourceEstimate.findUniqueOrThrow({
     where: { id: fixture.productions[index]!.candidateResourceEstimateId },
@@ -665,6 +678,26 @@ async function createFreshReplacementCandidate(
     : null;
   const kind = claim ? "LOST_CLAIM_REPRINT" : "JOB_REPLACEMENT";
   const targetId = claim?.id ?? sourceJobId;
+  const sourceFingerprints = await prisma.$queryRaw<
+    Array<{ fingerprint: string | null }>
+  >`
+    SELECT taven_recovery_source_fingerprint(${sourceJobId}::uuid) AS fingerprint
+  `;
+  const sourceFingerprint = sourceFingerprints[0]?.fingerprint;
+  if (!sourceFingerprint)
+    throw new Error("recovery source fingerprint is unavailable");
+  const scopeFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        kind,
+        targetId,
+        replacementRequestId: request?.id ?? null,
+        predecessorShipmentId: predecessorShipmentId ?? null,
+        incidentEvidenceId: incidentEvidence?.id ?? null,
+        sources: [{ jobId: sourceJobId, fingerprint: sourceFingerprint }],
+      }),
+    )
+    .digest("hex");
   const latest = await prisma.recoveryCandidatePreparation.findFirst({
     where: { kind, targetId },
     orderBy: { generation: "desc" },
@@ -698,9 +731,7 @@ async function createFreshReplacementCandidate(
       incidentEvidenceId: incidentEvidence?.id ?? null,
       generation: (latest?.generation ?? 0) + 1,
       sourceJobIds: [sourceJobId],
-      sourceScopeFingerprint: createHash("sha256")
-        .update(`${sourceJobId}:${candidateId}`)
-        .digest("hex"),
+      sourceScopeFingerprint: scopeFingerprintOverride ?? scopeFingerprint,
       requestedAt: new Date(calculatedAt.getTime() - 1_000),
       operatorId: testOperatorId,
       operatorSessionId: recoveryOperator.sessionId,
@@ -1198,6 +1229,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma,
       new AuditService(prisma),
       provider,
+      recoveryPreparationService(),
     );
     orders = legacyOrdersClient(scopedOrders, operator.id);
     payments = legacyPaymentsClient(
@@ -2565,6 +2597,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         prisma,
         new AuditService(prisma),
         manualProvider,
+        recoveryPreparationService(),
       );
       const operator = operatorForTest(
         testOperatorId,
@@ -2783,6 +2816,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma,
       new AuditService(prisma),
       manualProvider,
+      recoveryPreparationService(),
     );
     const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
     const failed = await manualOrders.recordRefundProviderResult(
@@ -2928,6 +2962,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma,
       new AuditService(prisma),
       provider,
+      recoveryPreparationService(),
     );
     const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
     const result = await manualOrders.recordRefundProviderResult(
@@ -3098,6 +3133,39 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
     ).resolves.toMatchObject({ status: "COMPLETED" });
   }, 10_000);
+
+  it("rejects final replacement with a forged preparation scope fingerprint", async () => {
+    const fixture = await preparePaidOrder("forged-preparation-scope");
+    const { orderId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "forged-scope-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "forged-scope-failure",
+    );
+    const candidateResourceEstimateId = await createFreshReplacementCandidate(
+      fixture,
+      0,
+      "f".repeat(64),
+    );
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        { candidateResourceEstimateId },
+        "forged-scope-create",
+      ),
+    ).rejects.toThrow("Recovery preparation context changed");
+    expect(
+      await prisma.job.count({ where: { replacesJobId: sourceJobId } }),
+    ).toBe(0);
+  }, 15_000);
 
   it("prepares, ingests, reads and consumes a scoped replacement candidate", async () => {
     const fixture = await preparePaidOrder("prepared-replacement");
@@ -5455,6 +5523,42 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       "repeat-first-loss",
     );
 
+    const firstStoredPreparation =
+      await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: firstPreparation.preparationId },
+      });
+    const leafLoss = await prisma.shipmentProviderEvent.findFirstOrThrow({
+      where: { shipmentId: firstShipmentId, kind: "LOST" },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    });
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await tx.claimSlotResolution.updateMany({
+          where: { claimId: claim.id },
+          data: { replacementRequestId: null },
+        });
+        const replay = await tx.idempotencyRecord.create({
+          data: {
+            namespace: `invalid-leaf-request:${randomUUID()}`,
+            idempotencyKey: randomUUID(),
+            requestFingerprint: "c".repeat(64),
+            expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+          },
+        });
+        await tx.recoveryCandidatePreparation.create({
+          data: {
+            ...firstStoredPreparation,
+            id: randomUUID(),
+            generation: firstStoredPreparation.generation + 1,
+            predecessorShipmentId: firstShipmentId,
+            incidentEvidenceId: leafLoss.id,
+            sourceJobIds: [firstJobId],
+            idempotencyRecordId: replay.id,
+          },
+        });
+      }),
+    ).rejects.toThrow(/claim preparation scope is invalid/);
+
     const stale = await preparation.choices(
       operator,
       orderId,
@@ -6922,6 +7026,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
           prisma,
           new AuditService(prisma),
           manualProvider,
+          recoveryPreparationService(),
         );
         operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
         const failure = await manualOrders.recordRefundProviderResult(
@@ -7842,6 +7947,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         prisma,
         new AuditService(prisma),
         manualProvider,
+        recoveryPreparationService(),
       );
       const operator = operatorForTest(
         testOperatorId,
@@ -8173,6 +8279,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma,
       new AuditService(prisma),
       provider,
+      recoveryPreparationService(),
     );
     const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
     const failureBody = {
