@@ -25,6 +25,9 @@ test.describe("Assisted Quote Journey", () => {
         level: 1,
       }),
     ).toBeVisible();
+    await expect(
+      page.getByText("Odpovíme do 24 hodin v pracovní dny."),
+    ).toBeVisible();
 
     // Fill in required fields
     await page

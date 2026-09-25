@@ -386,7 +386,8 @@ function isPositiveDimension(value: number | ""): value is number {
         <p class="public-page__index">JAK TATO CESTA FUNGUJE</p>
         <p>
           Technik nejprve ověří, zda zadání umíme zpracovat a jaké podklady
-          chybí. Individuální nabídku dostaneš bezpečným odkazem e-mailem.
+          chybí. Odpovíme do 24 hodin v pracovní dny. Individuální nabídku
+          dostaneš bezpečným odkazem e-mailem.
         </p>
         <strong>BEZ ZÁVAZNÉ CENY PŘED POSOUZENÍM</strong>
         <p>Účet k odeslání poptávky nepotřebuješ.</p>
