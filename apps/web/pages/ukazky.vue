@@ -14,26 +14,29 @@ usePublicPageMeta({
 </script>
 
 <template>
-  <article class="mx-auto max-w-4xl px-5 py-14 sm:px-8 sm:py-20">
-    <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-      Portfolio
-    </p>
-    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-[38px]">
-      Ukázky vlastních výtisků
-    </h1>
-    <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">
-      Zde budou jen skutečné fotografie výtisků, které můžeme zveřejnit. Obecné
-      ilustrační fotografie ani cizí výrobky nepoužíváme.
-    </p>
-    <div
-      class="mt-12 border border-dashed border-[#9b9c93] bg-white p-8 sm:p-12"
-    >
-      <p class="font-mono text-sm text-[#66675f]">ČEKÁ NA SCHVÁLENÉ PODKLADY</p>
-      <h2 class="mt-4 text-2xl font-semibold">Portfolio je zatím prázdné</h2>
-      <p class="mt-3 max-w-xl leading-7 text-[#54554c]">
-        Obsah doplníme po výběru vlastních referenčních výtisků a ověření
-        souhlasů s publikací. Rozvržení stránky se kvůli tomu měnit nemusí.
-      </p>
+  <article class="public-page public-page--portfolio">
+    <div class="sheet-utility sheet-utility--inset">
+      <span>LIST 03 / UKÁZKY</span><span>REGISTR SKUTEČNÝCH DÍLŮ</span>
     </div>
+    <header class="public-page__intro">
+      <div>
+        <p class="public-page__index">ARCHIV / OVĚŘENÉ REALIZACE</p>
+        <h1>Registr vyrobených dílů.</h1>
+      </div>
+      <p>
+        Vlastní výtisky a fotografie zveřejníme až po ověření práv a podkladů.
+        Návrhové záznamy nenahrazují skutečnou výrobu.
+      </p>
+    </header>
+    <section class="public-section" aria-label="Ukázky výtisků">
+      <div class="sheet-section-heading">
+        <div>
+          <span>REGISTR</span>
+          <h2>VEŘEJNÉ ZÁZNAMY</h2>
+        </div>
+        <p>{{ publicSite.portfolio.items.length }} SCHVÁLENÝCH ZÁZNAMŮ</p>
+      </div>
+      <PublicPortfolioGallery :items="publicSite.portfolio.items" />
+    </section>
   </article>
 </template>

@@ -21,7 +21,7 @@ test.describe("Default-Closed Architectural Safeguards", () => {
     await expect(page).toHaveURL(/\/cenik/);
     await expect(
       page.getByRole("heading", {
-        name: "Cena podle skutečného tisku",
+        name: "Cena vzniká ze slicingu.",
         level: 1,
       }),
     ).toBeVisible();

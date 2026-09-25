@@ -2,7 +2,6 @@
 import { publicSite } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
-
 const automaticQuoteEnabled = useAutomaticQuoteEnabled();
 
 usePublicPageMeta({
@@ -12,164 +11,271 @@ usePublicPageMeta({
     publicSite.brand.name +
     ".",
 });
+
+const processSteps = [
+  {
+    index: "01",
+    tag: "SOUBOR",
+    title: "Nahraješ model",
+    description:
+      "Vybereš STL nebo podporované 3MF. Ještě před nahráním zkontrolujeme rozměry a základní geometrii.",
+    detail: "KONTROLA V PROHLÍŽEČI",
+  },
+  {
+    index: "02",
+    tag: "SLICING",
+    title: "Zvolíš parametry",
+    description:
+      "Nastavíš materiál, dostupnou barvu, kvalitu, výplň a počet kusů. Referenční řez spočítá spotřebu a čas.",
+    detail: "SKUTEČNÁ TISKOVÁ DATA",
+  },
+  {
+    index: "03",
+    tag: "ZÁVAZNÁ CENA",
+    title: "Potvrdíš celkový součet",
+    description:
+      "Po volbě doručení znovu ověříme dostupnost a ukážeme závazný součet před platbou.",
+    detail: "DORUČENÍ + PLATBA",
+  },
+] as const;
+
+const responsibility = [
+  {
+    index: "01",
+    title: "Závazná cena před platbou",
+    description:
+      "Nejdřív uvidíš aktuální cenu tisku a doručení; teprve pak můžeš objednávku zaplatit.",
+  },
+  {
+    index: "02",
+    title: "Kontrola každého kusu",
+    description: "Hotový výtisk prochází kontrolou před předáním k doručení.",
+  },
+  {
+    index: "03",
+    title: "Jedna služba",
+    description:
+      "Výrobu, kontrolu i předání řešíme jako součást jedné zakázky.",
+  },
+  {
+    index: "04",
+    title: "Odpovědný prodávající",
+    description: `Prodávajícím a provozovatelem je ${publicSite.seller.legalName}`,
+  },
+] as const;
 </script>
 
 <template>
   <div>
-    <section class="border-b border-[#d9d9d2] bg-white">
-      <div
-        class="mx-auto grid max-w-6xl items-center gap-10 px-5 py-12 sm:px-8 sm:py-20 lg:grid-cols-[minmax(0,0.85fr)_minmax(28rem,1.15fr)] lg:gap-14"
-      >
-        <PublicHeroUpload class="lg:order-2" />
-        <div class="lg:order-1">
-          <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-            Zakázkový 3D tisk
+    <div class="sheet-utility">
+      <span>VEŘEJNÝ LIST 01 / ZAKÁZKOVÝ 3D TISK</span>
+      <span>STL · 3MF / CENA PODLE SKUTEČNÉHO TISKU</span>
+    </div>
+
+    <section class="landing-hero" aria-labelledby="landing-title">
+      <div class="landing-hero__inner">
+        <div class="landing-hero__main">
+          <p class="public-page__index">AUTOMATICKÁ CESTA / HOTOVÝ MODEL</p>
+          <h1 id="landing-title">Nahraj model. Cenu určí skutečný tisk.</h1>
+          <p class="landing-hero__copy">
+            Nahraj STL nebo podporované 3MF. Soubor nejprve zkontrolujeme v
+            prohlížeči a cenu spočítáme z referenčního slicingu. Závazný součet
+            uvidíš před platbou po volbě doručení.
           </p>
-          <h1
-            class="mt-4 text-4xl leading-tight font-semibold tracking-tight sm:text-[38px]"
-          >
-            Nahraj model. Cenu spočítáme ze skutečných tiskových dat.
-          </h1>
-          <p class="mt-6 text-lg leading-8 text-[#54554c]">
-            Hotový <span class="font-mono">STL</span> nebo
-            <span class="font-mono">3MF</span> projde kontrolou geometrie a
-            referenčním slicingem. Bez e-mailového kolečka a bez ručně
-            odhadované výrobní ceny.
-          </p>
+          <PublicHeroUpload class="landing-hero__upload" />
+        </div>
+
+        <div class="landing-hero__side">
+          <article class="landing-side-card">
+            <p class="public-page__index">KÓTA / NESTANDARDNÍ ZADÁNÍ</p>
+            <h2>Nemáš hotový 3D model?</h2>
+            <p>
+              Pošli popis, účel, rozměry a případné fotografie. Zadání posoudí
+              člověk; individuální poptávka neslibuje automatickou cenu.
+            </p>
+            <NuxtLink class="public-link" to="/poptavka" no-prefetch>
+              Popsat zadání <span aria-hidden="true">→</span>
+            </NuxtLink>
+          </article>
+          <article class="landing-side-card landing-side-card--facts">
+            <p class="public-page__index">SKUTEČNÝ STAV SLUŽBY</p>
+            <dl class="technical-facts">
+              <div>
+                <dt>Podporované soubory</dt>
+                <dd>STL · podporované 3MF</dd>
+              </div>
+              <div>
+                <dt>Maximální velikost</dt>
+                <dd>100 MiB</dd>
+              </div>
+              <div>
+                <dt>Výrobní cena</dt>
+                <dd>Referenční slicing</dd>
+              </div>
+              <div>
+                <dt>Celková cena</dt>
+                <dd>Po volbě doručení</dd>
+              </div>
+            </dl>
+            <p class="landing-side-card__footnote">
+              Veřejnou cenu „od“ ani dodací lhůtu nezveřejňujeme bez schválení.
+            </p>
+          </article>
         </div>
       </div>
     </section>
 
-    <section class="mx-auto max-w-6xl px-5 py-14 sm:px-8 sm:py-20">
-      <div class="max-w-2xl">
-        <h2 class="text-3xl font-semibold tracking-tight sm:text-4xl">
-          Od souboru k objednávce ve třech krocích
-        </h2>
-      </div>
-      <div class="mt-10 max-w-3xl border-l-4 border-[#1b44e8] pl-6 sm:pl-8">
-        <article class="pb-8">
-          <h3 class="text-xl font-semibold">Nahraješ model</h3>
-          <p class="mt-3 leading-7 text-[#54554c]">
-            Přijímáme <span class="font-mono">STL</span> a podporované
-            <span class="font-mono">3MF</span>. Před nahráním uvidíš rozměry a
-            základní kontrolu souboru.
-          </p>
-        </article>
-        <article class="border-t border-[#d9d9d2] py-8">
-          <h3 class="text-xl font-semibold">Zvolíš parametry</h3>
-          <p class="mt-3 leading-7 text-[#54554c]">
-            Vybereš materiál, dostupnou barvu, kvalitu, výplň a počet kusů.
-          </p>
-        </article>
-        <article class="border-t border-[#d9d9d2] pt-8">
-          <h3 class="text-xl font-semibold">Potvrdíš aktuální cenu</h3>
-          <p class="mt-3 leading-7 text-[#54554c]">
-            Výrobní cenu určí slicing. Závazný celkový součet vznikne až po
-            volbě doručení a nové kontrole dostupnosti.
-          </p>
-        </article>
-      </div>
-      <NuxtLink
-        class="mt-7 inline-block font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
-        to="/jak-to-funguje"
-      >
-        Podrobný popis procesu
-      </NuxtLink>
-    </section>
+    <div class="public-page public-page--landing">
+      <section class="public-section !mt-0" aria-labelledby="process-title">
+        <div class="sheet-section-heading">
+          <div>
+            <span>01</span>
+            <h2 id="process-title">JAK TO FUNGUJE</h2>
+          </div>
+          <NuxtLink to="/jak-to-funguje"
+            >Podrobný postup <span aria-hidden="true">↗</span></NuxtLink
+          >
+        </div>
+        <ol class="landing-step-grid">
+          <li v-for="step in processSteps" :key="step.index">
+            <p class="landing-step-grid__top">
+              <span>{{ step.index }} / {{ step.tag }}</span
+              ><span>{{ step.detail }}</span>
+            </p>
+            <h3>{{ step.title }}</h3>
+            <p>{{ step.description }}</p>
+          </li>
+        </ol>
+      </section>
 
-    <section class="border-y border-[#d9d9d2] bg-white">
-      <div class="mx-auto grid max-w-6xl gap-px bg-[#d9d9d2] md:grid-cols-2">
-        <article class="bg-white px-5 py-12 sm:px-8">
-          <h2 class="text-2xl font-semibold">Máš tisknutelný soubor</h2>
-          <p class="mt-4 max-w-lg leading-7 text-[#54554c]">
-            Konfigurátor je určený pro modely, které můžeme automaticky
-            zkontrolovat a ocenit. Pokud kontrola najde problém, nabídne
-            bezpečný přechod do individuální poptávky.
+      <section class="public-section" aria-labelledby="calculation-title">
+        <div class="sheet-section-heading">
+          <div>
+            <span>ŘEZ A–A</span>
+            <h2 id="calculation-title">JAK VZNIKÁ CENA</h2>
+          </div>
+          <p>SKUTEČNÝ TISK / NIKOLI SAMOTNÁ HMOTNOST</p>
+        </div>
+        <div class="landing-comparison">
+          <article>
+            <p class="public-page__index">ORIENTAČNÍ / PŘEDBĚŽNÝ</p>
+            <h3>Rychlý odhad</h3>
+            <p>
+              Rozměry souboru mohou dát první představu. Nezahrnují všechny
+              tiskové dráhy, podpěry ani aktuální doručení.
+            </p>
+            <p class="landing-comparison__result">VÝSLEDEK: NEZÁVAZNÝ ODHAD</p>
+          </article>
+          <article class="landing-comparison__primary">
+            <p class="public-page__index">
+              REFERENČNÍ SLICING / AKTUÁLNÍ VSTUPY
+            </p>
+            <h3>Výrobní cena z řezu</h3>
+            <p>
+              Slicer spočítá spotřebu materiálu a čas stroje pro zvolenou
+              konfiguraci. Závazný celkový součet vzniká po ověření doručení.
+            </p>
+            <p class="landing-comparison__result">
+              VÝSLEDEK: AKTUÁLNÍ CENA PŘED PLATBOU
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="public-section" aria-labelledby="pricing-title">
+        <div class="sheet-section-heading">
+          <div>
+            <span>02</span>
+            <h2 id="pricing-title">PRAVIDLA VÝPOČTU CENY</h2>
+          </div>
+          <p>BEZ NESCHVÁLENÝCH VEŘEJNÝCH SAZEB</p>
+        </div>
+        <dl class="landing-pricing-table">
+          <div>
+            <dt>Model a parametry</dt>
+            <dd>Geometrie, materiál, kvalita, výplň a množství</dd>
+            <dd>VSTUPY PRO ŘEZ</dd>
+          </div>
+          <div>
+            <dt>Výrobní náklady</dt>
+            <dd>Spotřeba, čas stroje, příprava a práce</dd>
+            <dd>AKTUÁLNÍ CENÍK</dd>
+          </div>
+          <div>
+            <dt>Doručení</dt>
+            <dd>Podporované místo a aktuální dostupnost</dd>
+            <dd>PŘED PLATBOU</dd>
+          </div>
+        </dl>
+        <NuxtLink class="public-link" to="/cenik"
+          >Jak cenu počítáme <span aria-hidden="true">↗</span></NuxtLink
+        >
+      </section>
+
+      <section class="public-section" aria-labelledby="portfolio-title">
+        <div class="sheet-section-heading">
+          <div>
+            <span>03</span>
+            <h2 id="portfolio-title">REGISTR REALIZOVANÝCH DÍLŮ</h2>
+          </div>
+          <NuxtLink to="/ukazky"
+            >Stav portfolia <span aria-hidden="true">↗</span></NuxtLink
+          >
+        </div>
+        <div class="portfolio-state">
+          <p class="public-page__index">ČEKÁ NA SCHVÁLENÉ PODKLADY</p>
+          <h3>Veřejné ukázky zatím nejsou dostupné</h3>
+          <p>
+            Zveřejníme jen vlastní fotografie výtisků, ke kterým máme ověřené
+            oprávnění. Fiktivní záznamy ani ilustrační fotografie nenahrazují
+            skutečné portfolio.
           </p>
+        </div>
+      </section>
+
+      <section class="public-section" aria-labelledby="responsibility-title">
+        <div class="sheet-section-heading">
+          <div>
+            <span>04</span>
+            <h2 id="responsibility-title">ZA ZAKÁZKU RUČÍ TAVEN</h2>
+          </div>
+          <p>{{ publicSite.seller.legalName }}</p>
+        </div>
+        <ol class="landing-responsibility">
+          <li v-for="item in responsibility" :key="item.index">
+            <span>{{ item.index }}</span>
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.description }}</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="landing-final-cta" aria-labelledby="final-cta-title">
+        <p class="public-page__index">/ 3D TISK NA ZAKÁZKU</p>
+        <h2 id="final-cta-title">Nahraj model a pokračuj k ceně.</h2>
+        <p>
+          Soubor nejdřív bezpečně zkontrolujeme; platbu potvrdíš až po závazném
+          součtu.
+        </p>
+        <div>
           <NuxtLink
             v-if="automaticQuoteEnabled"
-            class="mt-6 inline-flex min-h-11 items-center bg-[#1b44e8] px-5 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
+            class="public-action"
             to="/objednavka"
             no-prefetch
+            >Nahrát model</NuxtLink
           >
-            Nahrát model
-          </NuxtLink>
-          <span
-            v-else
-            class="mt-6 inline-flex min-h-11 cursor-not-allowed items-center border border-[#9b9c93] px-5 font-semibold text-[#66675f]"
-            aria-disabled="true"
+          <span v-else class="public-action" aria-disabled="true"
+            >Kalkulace čeká na schválení</span
           >
-            Kalkulace čeká na schválení
-          </span>
-        </article>
-        <article class="bg-[#efefea] px-5 py-12 sm:px-8">
-          <h2 class="text-2xl font-semibold">
-            Máš díl, nápad nebo nestandardní zadání
-          </h2>
-          <p class="mt-4 max-w-lg leading-7 text-[#54554c]">
-            Pošli popis, účel, rozměry a případné fotografie. Poptávka vznikne
-            jako samostatný záznam a neslibuje automatickou cenu.
-          </p>
           <NuxtLink
-            class="mt-6 inline-block font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
+            class="public-action public-action--secondary"
             to="/poptavka"
             no-prefetch
+            >Nemám model</NuxtLink
           >
-            Popsat zadání
-          </NuxtLink>
-        </article>
-      </div>
-    </section>
-
-    <section
-      class="mx-auto grid max-w-6xl gap-10 px-5 py-14 sm:px-8 sm:py-20 md:grid-cols-2"
-    >
-      <div>
-        <h2 class="text-3xl font-semibold tracking-tight">
-          Čísla ukážeme až po jejich schválení
-        </h2>
-        <p class="mt-5 leading-7 text-[#54554c]">
-          Veřejná cena „od“ ani standardní dodací lhůta zatím nejsou schválené.
-          Hrubý odhad doplníme až ze schválených cenových vstupů. Přesnou
-          výrobní cenu určí až aktuální slice.
-        </p>
-        <NuxtLink
-          class="mt-6 inline-block font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
-          to="/cenik"
-        >
-          Jak cenu počítáme
-        </NuxtLink>
-      </div>
-      <div>
-        <h2 class="text-3xl font-semibold tracking-tight">
-          Jen vlastní a schválené výtisky
-        </h2>
-        <p class="mt-5 leading-7 text-[#54554c]">
-          Portfolio je zatím prázdné. Fotografie doplníme až po schválení
-          konkrétních vlastních podkladů a souhlasu s jejich zveřejněním.
-        </p>
-        <NuxtLink
-          class="mt-6 inline-block font-semibold text-[#1a1a16] underline decoration-[#1b44e8] decoration-2 underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
-          to="/ukazky"
-        >
-          Stav portfolia
-        </NuxtLink>
-      </div>
-    </section>
-
-    <section class="border-t border-[#d9d9d2] bg-white">
-      <div class="mx-auto max-w-6xl px-5 py-14 sm:px-8 sm:py-20">
-        <h2 class="max-w-2xl text-3xl font-semibold tracking-tight">
-          Za zakázku ručí {{ publicSite.brand.name }}
-        </h2>
-        <p class="mt-5 max-w-2xl leading-7 text-[#54554c]">
-          Prodávajícím a odpovědným provozovatelem je
-          <span class="font-mono">{{ publicSite.seller.legalName }}</span
-          >. Závaznou cenu uvidíš před platbou. Každý výtisk zkontrolujeme a
-          před odesláním uvidíš fotografii hotového dílu. Výroba, kontrola i
-          předání jsou součástí jedné služby; neobjednáváš u anonymního výrobce.
-        </p>
-      </div>
-    </section>
+        </div>
+      </section>
+    </div>
   </div>
 </template>

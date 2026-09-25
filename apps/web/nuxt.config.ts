@@ -12,6 +12,7 @@ export default defineNuxtConfig({
     "@taven/ui-web/tokens.css",
     "~/assets/css/tailwind.css",
     "~/assets/css/design-system.css",
+    "~/assets/css/public-pages.css",
   ],
   vite: { plugins: [tailwindcss()] },
   nitro: { compressPublicAssets: true },

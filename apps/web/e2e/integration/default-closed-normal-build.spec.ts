@@ -36,7 +36,7 @@ test.describe("Normal default-closed build", () => {
       page.getByText("Kalkulace čeká", { exact: true }),
     ).toBeVisible();
     const chooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     await (await chooserPromise).setFiles(cubePath);
     await expect(
       page.getByRole("button", { name: "Kalkulace čeká na schválení" }),
@@ -51,6 +51,17 @@ test.describe("Normal default-closed build", () => {
       ),
     ).toBeVisible();
     expect(automaticSessionCreates).toBe(0);
+
+    await page.goto("/kontakt");
+    await expect(page.locator(".contact-bottom .public-action")).toHaveText(
+      "Kalkulace čeká na schválení",
+    );
+    await expect(
+      page.locator(".contact-bottom .public-action"),
+    ).toHaveAttribute("aria-disabled", "true");
+    await expect(
+      page.locator('.contact-bottom a[href="/objednavka"]'),
+    ).toHaveCount(0);
 
     await page.goto("/vop");
     await expect(

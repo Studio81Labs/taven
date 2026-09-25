@@ -192,7 +192,7 @@ test.describe("Real API assisted request", () => {
 
     await page.goto("/");
     const chooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     await (await chooserPromise).setFiles(cubePath);
     const proceed = page.getByRole("button", {
       name: "Nahrát a pokračovat ke konfiguraci",
@@ -314,7 +314,7 @@ test.describe("Real API assisted request", () => {
 
     await page.goto("/");
     const chooserPromise = page.waitForEvent("filechooser");
-    await page.getByText("Přetáhni soubor sem").click();
+    await page.getByText("Přetáhni sem svůj 3D model").click();
     const fileChooser = await chooserPromise;
     await fileChooser.setFiles({
       name: "painted-two-material.3mf",

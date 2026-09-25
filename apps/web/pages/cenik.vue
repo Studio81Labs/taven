@@ -2,7 +2,6 @@
 import { publicSite } from "../content/public-site";
 
 definePageMeta({ layout: "public" });
-
 const route = useRoute();
 const automaticQuoteEnabled = useAutomaticQuoteEnabled();
 const redirectedFromAutomaticQuote = computed(
@@ -17,79 +16,215 @@ usePublicPageMeta({
     publicSite.brand.name +
     " počítá cenu zakázkového 3D tisku a kdy vznikne závazný celkový součet.",
 });
+
+const rules = [
+  {
+    number: "01",
+    title: "Model a konfigurace",
+    description:
+      "Geometrie, materiál, dostupná barva, kvalita, výplň a množství vstupují do referenčního řezu.",
+    value: "VSTUPY PRO SLICING",
+  },
+  {
+    number: "02",
+    title: "Skutečné výrobní náklady",
+    description:
+      "Cena vychází ze spotřeby materiálu, času stroje, přípravy, práce a aktuálního ceníku.",
+    value: "PODLE KONKRÉTNÍHO TISKU",
+  },
+  {
+    number: "03",
+    title: "Doručení",
+    description:
+      "Dostupnost a cenu dopravy ověříme podle vybraného podporovaného místa před platbou.",
+    value: "SOUČÁST CELKOVÉ CENY",
+  },
+] as const;
+const factors = [
+  {
+    number: "01",
+    tag: "GEOMETRIE",
+    title: "Dráhy trysky",
+    description: "Rozměry a tvar modelu určují dráhy, nikoli samy o sobě cenu.",
+  },
+  {
+    number: "02",
+    tag: "MATERIÁL",
+    title: "Spotřeba materiálu",
+    description:
+      "Řez zahrnuje materiál dílu a spotřebu potřebnou pro zvolenou konfiguraci.",
+  },
+  {
+    number: "03",
+    tag: "PODPĚRY",
+    title: "Podpěry a práce",
+    description: "Podpěrná struktura může změnit spotřebu i následnou práci.",
+  },
+  {
+    number: "04",
+    tag: "STROJ",
+    title: "Výrobní čas",
+    description: "Čas stroje vychází z konkrétního řezu modelu.",
+  },
+  {
+    number: "05",
+    tag: "ROZLIŠENÍ",
+    title: "Kvalita tisku",
+    description: "Výška vrstvy mění počet vrstev a dobu výroby.",
+  },
+  {
+    number: "06",
+    tag: "MNOŽSTVÍ",
+    title: "Počet kusů",
+    description:
+      "Počet kusů a rozložení výroby se projeví v celkové kalkulaci.",
+  },
+  {
+    number: "07",
+    tag: "ROZVRŽENÍ",
+    title: "Umístění na podložce",
+    description: "Slicer určí potřebné uspořádání a spotřebu pro výrobu.",
+  },
+] as const;
 </script>
 
 <template>
-  <article class="mx-auto max-w-4xl px-5 py-14 sm:px-8 sm:py-20">
-    <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-      Ceník
-    </p>
-    <h1 class="mt-3 text-4xl font-semibold tracking-tight sm:text-[38px]">
-      Cena podle skutečného tisku
-    </h1>
-    <p class="mt-6 max-w-2xl text-lg leading-8 text-[#54554c]">
-      Veřejná cena „od“ ani vstupy pro hrubý cenový odhad ještě nebyly
-      schváleny. Přesnou výrobní cenu určí referenční slicing konkrétní
-      konfigurace.
-    </p>
+  <article class="public-page public-page--pricing">
+    <div class="sheet-utility sheet-utility--inset">
+      <span>LIST 02 / CENÍK</span><span>ARCHITEKTURA VÝPOČTU CENY</span>
+    </div>
+    <header class="public-page__intro">
+      <div>
+        <p class="public-page__index">PRAVIDLA CENY</p>
+        <h1>Cena vzniká ze slicingu.</h1>
+      </div>
+      <p>
+        Žádná univerzální sazba za gram. Konečná výrobní cena vychází z
+        konkrétního modelu a konfigurace; závazný celkový součet zahrne i
+        aktuální doručení.
+      </p>
+    </header>
     <p
       v-if="redirectedFromAutomaticQuote"
-      class="mt-6 max-w-2xl border-l-4 border-[#925b10] bg-white p-4 leading-7"
+      class="public-note public-note--warning mt-6"
       role="status"
     >
       Automatická kalkulace zatím není veřejně dostupná. Čeká na schválené
       cenové vstupy.
     </p>
-
-    <dl
-      class="mt-12 divide-y divide-[#d9d9d2] border-y border-[#d9d9d2] bg-white"
-    >
-      <div class="grid gap-2 p-6 sm:grid-cols-[13rem_1fr] sm:p-8">
-        <dt class="font-semibold">Model a konfigurace</dt>
-        <dd class="leading-7 text-[#54554c]">
-          Geometrie, materiál, kvalita, výplň a počet kusů určují referenční
-          tisková data.
-        </dd>
+    <section class="public-section" aria-labelledby="rules-title">
+      <div class="sheet-section-heading">
+        <div>
+          <span>SEKCE 01</span>
+          <h2 id="rules-title">PRAVIDLA A VSTUPY</h2>
+        </div>
+        <p>BEZ NESCHVÁLENÝCH SAZEB</p>
       </div>
-      <div class="grid gap-2 p-6 sm:grid-cols-[13rem_1fr] sm:p-8">
-        <dt class="font-semibold">Výrobní náklady</dt>
-        <dd class="leading-7 text-[#54554c]">
-          Cena vychází ze spotřeby materiálu, času stroje, práce, přípravy a
-          souvisejících nákladů podle aktuálního ceníku.
-        </dd>
+      <div class="pricing-rule-layout">
+        <ol class="pricing-rule-list">
+          <li v-for="rule in rules" :key="rule.number">
+            <span>{{ rule.number }}</span>
+            <div>
+              <h3>{{ rule.title }}</h3>
+              <p>{{ rule.description }}</p>
+            </div>
+            <strong>{{ rule.value }}</strong>
+          </li>
+        </ol>
+        <div class="pricing-algorithm">
+          <p class="public-page__index">STRUKTURA VÝPOČTU</p>
+          <h3>Skutečný řez, skutečná cena</h3>
+          <dl>
+            <div>
+              <dt>Příprava a práce</dt>
+              <dd>Podle aktuálního ceníku</dd>
+            </div>
+            <div>
+              <dt>Spotřeba materiálu</dt>
+              <dd>Referenční slicing</dd>
+            </div>
+            <div>
+              <dt>Čas stroje</dt>
+              <dd>Referenční slicing</dd>
+            </div>
+            <div>
+              <dt>Doručení</dt>
+              <dd>Po volbě místa</dd>
+            </div>
+          </dl>
+          <p class="pricing-algorithm__formula">
+            CELKOVÁ CENA = VÝROBA + AKTUÁLNÍ DORUČENÍ
+          </p>
+          <p>
+            Veřejné pevné sazby nebo cenu „od“ zveřejníme až po schválení jejich
+            zdroje.
+          </p>
+        </div>
       </div>
-      <div class="grid gap-2 p-6 sm:grid-cols-[13rem_1fr] sm:p-8">
-        <dt class="font-semibold">Doručení a dostupnost</dt>
-        <dd class="leading-7 text-[#54554c]">
-          Doprava a celkový součet jsou konečné až po volbě podporovaného místa
-          doručení a opětovném ověření dostupnosti před platbou.
-        </dd>
+    </section>
+    <section class="public-section" aria-labelledby="factors-title">
+      <div class="sheet-section-heading">
+        <div>
+          <span>SEKCE 02</span>
+          <h2 id="factors-title">CO S CENOU HÝBE?</h2>
+        </div>
+        <p>SEDM FAKTORŮ KONKRÉTNÍHO TISKU</p>
       </div>
-    </dl>
-
-    <aside class="mt-10 border border-[#d9d9d2] bg-white p-6 sm:p-8">
-      <h2 class="text-xl font-semibold">Hodnoty čekající na schválení</h2>
-      <p class="mt-3 leading-7 text-[#54554c]">
-        Cena „od“ a standardní dodací lhůta budou doplněny z jednoho
-        konfigurovatelného zdroje. Stejná schvalovací hranice platí pro vstupy
-        hrubého odhadu.
+      <p class="pricing-intro">
+        Cena není odhadovaná z vnějších rozměrů krabice. Výpočet vychází z
+        reálného řezu a aktuálních vstupů.
       </p>
-    </aside>
-
-    <NuxtLink
-      v-if="automaticQuoteEnabled"
-      class="mt-8 inline-flex min-h-12 items-center bg-[#1b44e8] px-6 font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
-      to="/objednavka"
-      no-prefetch
-    >
-      Nahrát model a zjistit cenu
-    </NuxtLink>
-    <span
-      v-else
-      class="mt-8 inline-flex min-h-12 cursor-not-allowed items-center border border-[#9b9c93] px-6 font-semibold text-[#66675f]"
-      aria-disabled="true"
-    >
-      Kalkulace čeká na schválení
-    </span>
+      <ol class="pricing-factors">
+        <li v-for="factor in factors" :key="factor.number">
+          <div>
+            <strong>{{ factor.number }}</strong
+            ><span>{{ factor.tag }}</span>
+          </div>
+          <h3>{{ factor.title }}</h3>
+          <p>{{ factor.description }}</p>
+        </li>
+      </ol>
+    </section>
+    <section class="public-section" aria-labelledby="pricing-register-title">
+      <div class="sheet-section-heading">
+        <div>
+          <span>ARCHIV</span>
+          <h2 id="pricing-register-title">SKUTEČNÉ ZAKÁZKY</h2>
+        </div>
+        <p>JEN OVĚŘENÉ A SCHVÁLENÉ PODKLADY</p>
+      </div>
+      <div class="portfolio-state">
+        <p class="public-page__index">REGISTR ČEKÁ NA OBSAH</p>
+        <h3>Veřejné příklady zatím nejsou schválené.</h3>
+        <p>
+          Ukázkové ceny ani zakázky z návrhu nevydáváme za skutečné realizace.
+          Jakmile budou podklady ověřené, zobrazíme je zde a v registru ukázek.
+        </p>
+        <NuxtLink class="public-link" to="/ukazky"
+          >Stav registru ukázek ↗</NuxtLink
+        >
+      </div>
+    </section>
+    <section class="process-cta" aria-labelledby="pricing-cta-title">
+      <div>
+        <p class="public-page__index">REFERENČNÍ VÝPOČET</p>
+        <h2 id="pricing-cta-title">Zjisti cenu svého modelu.</h2>
+        <p>
+          Přesnou výrobní cenu určí konkrétní řez. Celkový součet uvidíš před
+          platbou.
+        </p>
+      </div>
+      <div>
+        <NuxtLink
+          v-if="automaticQuoteEnabled"
+          class="public-action"
+          to="/objednavka"
+          no-prefetch
+          >Nahrát model</NuxtLink
+        ><span v-else class="public-action" aria-disabled="true"
+          >Kalkulace čeká na schválení</span
+        >
+      </div>
+    </section>
   </article>
 </template>
