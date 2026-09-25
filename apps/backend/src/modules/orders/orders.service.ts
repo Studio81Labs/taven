@@ -7198,7 +7198,10 @@ export class OrdersService {
           source.deleted_at IS NULL
           AND (
             source.retention_hold <> 'NONE'
-            OR source.source_delete_after >= horizon.ends_at
+            OR (
+              source.source_delete_after >= horizon.ends_at
+              AND source.source_delete_after > clock_timestamp()
+            )
           )
         ), false) AS retained
         FROM jobs source_job
