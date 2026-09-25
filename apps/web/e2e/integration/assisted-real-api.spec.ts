@@ -66,7 +66,9 @@ test.describe("Real API assisted request", () => {
 
     await page.goto("/poptavka?source=no-file");
     await expect(
-      page.getByRole("heading", { name: "Popište, co potřebujete vyrobit." }),
+      page.getByRole("heading", {
+        name: "Nemáš model? Pošli fotku nebo náčrt.",
+      }),
     ).toBeVisible();
     await page
       .getByRole("textbox", { name: /Co potřebujete vyrobit/ })

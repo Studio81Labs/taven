@@ -21,9 +21,12 @@ test.describe("Assisted Quote Journey", () => {
     // Check page title and heading
     await expect(
       page.getByRole("heading", {
-        name: "Popište, co potřebujete vyrobit.",
+        name: "Nemáš model? Pošli fotku nebo náčrt.",
         level: 1,
       }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Odpovíme do 24 hodin v pracovní dny."),
     ).toBeVisible();
 
     // Fill in required fields
@@ -81,6 +84,61 @@ test.describe("Assisted Quote Journey", () => {
     expect(
       testState.lastAssistedQuote.description.length,
     ).toBeGreaterThanOrEqual(10);
+  });
+
+  test("the reference-photo drop zone adds a valid photo and preserves file validation", async ({
+    page,
+  }) => {
+    await page.goto("/poptavka");
+    await expect(page.locator(".assisted-capabilities li")).toHaveCount(5);
+    await expect(page.locator(".assisted-process li")).toHaveCount(5);
+    await expect(
+      page.getByRole("group", { name: "Referenční fotografie" }),
+    ).toBeVisible();
+
+    const dropPhoto = async (name: string, mimeType: string) => {
+      await page.locator(".assisted-photo-picker").dispatchEvent("drop", {
+        dataTransfer: await page.evaluateHandle(
+          ({ fileName, type }) => {
+            const transfer = new DataTransfer();
+            transfer.items.add(new File(["photo-data"], fileName, { type }));
+            return transfer;
+          },
+          { fileName: name, type: mimeType },
+        ),
+      });
+    };
+
+    await dropPhoto("reference.png", "image/png");
+    await expect(page.getByText("reference.png")).toBeVisible();
+
+    await dropPhoto("invalid.txt", "text/plain");
+    await expect(page.getByRole("alert")).toContainText("fotograf");
+    await expect(page.getByText("reference.png")).toBeVisible();
+    await expect(page.getByText("invalid.txt")).toHaveCount(0);
+  });
+
+  test("the supplied five-card and five-step composition collapses for mobile", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/poptavka");
+    const columns = async (selector: string) =>
+      page
+        .locator(selector)
+        .evaluate(
+          (element) =>
+            getComputedStyle(element).gridTemplateColumns.split(" ").length,
+        );
+
+    expect(await columns(".assisted-hero")).toBe(2);
+    expect(await columns(".assisted-capabilities ol")).toBe(3);
+    expect(await columns(".assisted-process ol")).toBe(5);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await columns(".assisted-hero")).toBe(1);
+    expect(await columns(".assisted-capabilities ol")).toBe(1);
+    expect(await columns(".assisted-process ol")).toBe(1);
   });
 
   test("recovers from an unavailable legal read only after an explicit retry and fresh acknowledgement", async ({
