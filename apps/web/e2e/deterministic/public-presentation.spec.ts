@@ -56,7 +56,7 @@ test.describe("public presentation and legal reading", () => {
       ["/jak-to-funguje", ".process-ledger__index"],
       ["/cenik", ".pricing-factors li > div"],
       ["/kontakt", ".contact-cards__foot"],
-    ]) {
+    ] as const) {
       await page.goto(route);
       const size = await page
         .locator(selector)
