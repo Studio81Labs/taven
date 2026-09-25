@@ -1012,13 +1012,27 @@ export class RecoveryCandidatePreparationService {
       tx,
       latestMappings.map(({ outboxMessageId }) => outboxMessageId),
     );
-    const contextValidByPreparation = new Map(
-      await Promise.all(
-        rows.map(
-          async (row) => [row.id, await this.contextMatches(tx, row)] as const,
-        ),
-      ),
-    );
+    const contextValidByPreparation = new Map<string, boolean>();
+    const fingerprintByContext = new Map<string, string | null>();
+    for (const row of rows) {
+      const contextKey = JSON.stringify([
+        row.orderId,
+        row.nodeId,
+        row.kind,
+        row.targetId,
+        row.replacementRequestId ?? row.predecessorShipmentId,
+      ]);
+      if (!fingerprintByContext.has(contextKey)) {
+        fingerprintByContext.set(
+          contextKey,
+          await this.currentScopeFingerprint(tx, row),
+        );
+      }
+      contextValidByPreparation.set(
+        row.id,
+        fingerprintByContext.get(contextKey) === row.sourceScopeFingerprint,
+      );
+    }
     return rows.map((row) => {
       const expired = now.getTime() >= row.requestedAt.getTime() + 30 * 60_000;
       const contextValid = contextValidByPreparation.get(row.id) ?? false;
@@ -1143,6 +1157,16 @@ export class RecoveryCandidatePreparationService {
     tx: Transaction,
     row: RecoveryCandidatePreparation,
   ): Promise<boolean> {
+    return (
+      (await this.currentScopeFingerprint(tx, row)) ===
+      row.sourceScopeFingerprint
+    );
+  }
+
+  private async currentScopeFingerprint(
+    tx: Transaction,
+    row: RecoveryCandidatePreparation,
+  ): Promise<string | null> {
     try {
       const current = await this.resolveScope(
         tx,
@@ -1152,9 +1176,9 @@ export class RecoveryCandidatePreparationService {
         row.replacementRequestId ?? row.predecessorShipmentId!,
         row.nodeId,
       );
-      return current.fingerprint === row.sourceScopeFingerprint;
+      return current.fingerprint;
     } catch (error) {
-      if (error instanceof HttpException) return false;
+      if (error instanceof HttpException) return null;
       throw error;
     }
   }

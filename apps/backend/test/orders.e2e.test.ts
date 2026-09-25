@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { BadRequestException, ConflictException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import { OrdersService } from "../src/modules/orders/orders.service";
 import { RecoveryCandidatePreparationService } from "../src/modules/orders/recovery-candidate-preparation.service";
@@ -3303,6 +3303,84 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const originalMessage = await prisma.outboxMessage.findUniqueOrThrow({
       where: { id: mappings[0]!.outboxMessageId },
     });
+    const capProbePrefix = `recovery-dispatch-cap:${randomUUID()}:`;
+    await expect(
+      prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRaw`
+            WITH generated AS (
+              SELECT gen_random_uuid() AS message_id, gen_random_uuid() AS job_id
+              FROM generate_series(1, ${256 - mappings.length})
+            )
+            INSERT INTO outbox_messages
+              (id, deduplication_key, aggregate_type, aggregate_id,
+               message_type, schema_version, payload, updated_at)
+            SELECT generated.message_id,
+                   ${capProbePrefix} || generated.job_id::text,
+                   'CandidateEstimateDispatch', generated.job_id,
+                   'slicing.candidate-estimate.requested', 2,
+                   jsonb_set(${JSON.stringify(originalMessage.payload)}::jsonb,
+                     '{job,jobId}', to_jsonb(generated.job_id::text)),
+                   clock_timestamp()
+            FROM generated
+          `;
+          await tx.$executeRaw`
+            INSERT INTO recovery_candidate_dispatches
+              (id, preparation_id, node_id, order_id, order_phase_id,
+               shipment_plan_id, source_job_id, source_fingerprint,
+               dispatch_job_id, outbox_message_id)
+            SELECT gen_random_uuid(), ${accepted.preparationId}::uuid,
+                   ${nodeId}::uuid, ${orderId}::uuid,
+                   ${mappings[0]!.orderPhaseId}::uuid,
+                   ${mappings[0]!.shipmentPlanId}::uuid,
+                   ${sourceJobId}::uuid, ${mappings[0]!.sourceFingerprint},
+                   aggregate_id, id
+            FROM outbox_messages
+            WHERE deduplication_key LIKE ${`${capProbePrefix}%`}
+          `;
+          expect(
+            await tx.recoveryCandidateDispatch.count({
+              where: { preparationId: accepted.preparationId },
+            }),
+          ).toBe(256);
+          const overflowJobId = randomUUID();
+          const overflowPayload = structuredClone(
+            originalMessage.payload,
+          ) as Record<string, unknown>;
+          (overflowPayload.job as Record<string, unknown>).jobId =
+            overflowJobId;
+          const overflowMessage = await tx.outboxMessage.create({
+            data: {
+              deduplicationKey: `${capProbePrefix}${overflowJobId}`,
+              aggregateType: "CandidateEstimateDispatch",
+              aggregateId: overflowJobId,
+              messageType: "slicing.candidate-estimate.requested",
+              schemaVersion: 2,
+              payload: overflowPayload as Prisma.InputJsonObject,
+            },
+          });
+          await tx.recoveryCandidateDispatch.create({
+            data: {
+              preparationId: accepted.preparationId,
+              nodeId,
+              orderId,
+              orderPhaseId: mappings[0]!.orderPhaseId,
+              shipmentPlanId: mappings[0]!.shipmentPlanId,
+              sourceJobId,
+              sourceFingerprint: mappings[0]!.sourceFingerprint,
+              dispatchJobId: overflowJobId,
+              outboxMessageId: overflowMessage.id,
+            },
+          });
+        },
+        { timeout: 60_000 },
+      ),
+    ).rejects.toThrow(/recovery dispatch limit exceeded/);
+    expect(
+      await prisma.recoveryCandidateDispatch.count({
+        where: { preparationId: accepted.preparationId },
+      }),
+    ).toBe(mappings.length);
     const forgedJobId = randomUUID();
     const forgedPayload = structuredClone(originalMessage.payload) as Record<
       string,
@@ -3530,7 +3608,93 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         key,
       ),
     ).resolves.toEqual(accepted);
-  }, 45_000);
+  }, 90_000);
+
+  it("resolves shared recovery context once for a history page", async () => {
+    const fixture = await preparePaidOrder("preparation-history-context");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "history-context-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "history-context-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      new CandidateEstimateService(prisma, snapshots),
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const accepted = await preparation.prepareReplacement(
+      operator,
+      orderId,
+      sourceJobId,
+      {
+        expectedReplacementRequestId: request.id,
+        reason: "prepare initial recovery generation",
+      },
+      `history-context:${randomUUID()}`,
+    );
+    const first = await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+      where: { id: accepted.preparationId },
+    });
+    for (const generation of [2, 3]) {
+      const replay = await prisma.idempotencyRecord.create({
+        data: {
+          namespace: `history-context:${randomUUID()}`,
+          idempotencyKey: randomUUID(),
+          requestFingerprint: "a".repeat(64),
+          expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+        },
+      });
+      await prisma.recoveryCandidatePreparation.create({
+        data: {
+          ...first,
+          id: randomUUID(),
+          generation,
+          idempotencyRecordId: replay.id,
+        },
+      });
+    }
+    const contextSpy = vi.spyOn(
+      preparation as unknown as {
+        currentScopeFingerprint: (...args: unknown[]) => Promise<string | null>;
+      },
+      "currentScopeFingerprint",
+    );
+    const history = await preparation.list(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      { limit: "10" },
+    );
+    expect(history.items).toHaveLength(3);
+    expect(history.items.map(({ status }) => status)).toEqual([
+      "BLOCKED",
+      "SUPERSEDED",
+      "SUPERSEDED",
+    ]);
+    expect(contextSpy).toHaveBeenCalledTimes(1);
+  }, 30_000);
 
   it("rejects a prepared candidate at the fifteen-minute admission boundary", async () => {
     const fixture = await preparePaidOrder("prepared-replacement-boundary");

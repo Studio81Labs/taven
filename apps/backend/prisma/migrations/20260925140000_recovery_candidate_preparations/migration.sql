@@ -281,7 +281,13 @@ DECLARE
   source_geometry_hash text;
   source_item_count integer;
 BEGIN
-  SELECT * INTO parent FROM recovery_candidate_preparations WHERE id = NEW.preparation_id;
+  SELECT * INTO parent FROM recovery_candidate_preparations
+    WHERE id = NEW.preparation_id FOR UPDATE;
+  IF (SELECT count(*) FROM recovery_candidate_dispatches
+      WHERE preparation_id = NEW.preparation_id) >= 256 THEN
+    RAISE EXCEPTION 'recovery dispatch limit exceeded'
+      USING ERRCODE = '23514', CONSTRAINT = 'recovery_dispatch_limit_check';
+  END IF;
   SELECT * INTO message FROM outbox_messages WHERE id = NEW.outbox_message_id;
   SELECT candidate.model_geometry_id, candidate.print_config_revision_id,
          candidate.quantity, candidate.parts_per_plate,
