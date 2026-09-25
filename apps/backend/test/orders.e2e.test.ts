@@ -4832,6 +4832,26 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         ],
       );
       expect(incident.rows[0]?.incident_code).toBe("REFUND_SUSPENDED");
+      await retryFirstProbe.query("SAVEPOINT selected_retry_success");
+      await expect(
+        retryFirstProbe.query(
+          `SELECT * FROM taven_apply_refund_provider_result(
+             $1, $2, $3, 'REFUND_FAILED', $4, $5::jsonb
+           )`,
+          [
+            retryRefundId,
+            `provider-retry-success-${retryRefundId}`,
+            `retry-failure-after-success-${retryRefundId}`,
+            new Date(sourceSuccessAt.getTime() + 2_000),
+            JSON.stringify({ source: "isolated-test-provider" }),
+          ],
+        ),
+      ).rejects.toMatchObject({
+        constraint: "refund_retry_source_reconciliation_check",
+      });
+      await retryFirstProbe.query(
+        "ROLLBACK TO SAVEPOINT selected_retry_success",
+      );
       const doubleSuccessReplay = await retryFirstProbe.query<{
         recorded: boolean;
         incident_code: string;

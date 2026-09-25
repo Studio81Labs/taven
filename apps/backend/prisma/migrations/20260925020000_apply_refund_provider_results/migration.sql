@@ -211,6 +211,12 @@ BEGIN
         END IF;
     ELSIF target_refund."status" = 'SUSPENDED'
           AND refund_kind = 'REFUND_FAILED' THEN
+        IF target_refund."dispatch_claimed_at" IS NULL
+           OR target_refund."provider_result_event_id" IS NOT NULL THEN
+            RAISE EXCEPTION 'suspended replacement failure cannot overwrite a selected provider result'
+                USING ERRCODE = '23514',
+                      CONSTRAINT = 'refund_retry_source_reconciliation_check';
+        END IF;
         SELECT * INTO source_refund FROM "refund_transactions" source
         WHERE source."id" = target_refund."replaces_refund_transaction_id"
         FOR UPDATE;
