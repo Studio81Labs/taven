@@ -266,25 +266,38 @@ describe("QuoteRequest and tokenized individual offers", () => {
     );
     expect(issued.response.status, JSON.stringify(issued.body)).toBe(201);
 
-    for (const acknowledgeWithdrawalException of [undefined, false]) {
+    for (const { name, acknowledgement } of [
+      { name: "omitted", acknowledgement: undefined },
+      { name: "false", acknowledgement: false },
+      { name: "null", acknowledgement: null },
+      { name: "string", acknowledgement: "true" },
+      { name: "number", acknowledgement: 1 },
+    ]) {
+      const commandKey = key(`launch-gate-withdrawal-${name}`);
       const rejected = await apiJson(`offers/${issued.body.quoteId}/accept`, {
         method: "POST",
         headers: {
           ...bearer(issued.body.offerToken),
           "content-type": "application/json",
-          "idempotency-key": key(
-            `launch-gate-withdrawal-${String(acknowledgeWithdrawalException)}`,
-          ),
+          "idempotency-key": commandKey,
         },
         body: JSON.stringify({
           version: issued.body.version,
           termsRevision: issued.body.termsRevision,
-          ...(acknowledgeWithdrawalException === undefined
+          ...(acknowledgement === undefined
             ? {}
-            : { acknowledgeWithdrawalException }),
+            : { acknowledgeWithdrawalException: acknowledgement }),
         }),
       });
       expect(rejected.response.status).toBe(400);
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: {
+            namespace: "quote-offer.accept",
+            idempotencyKey: commandKey,
+          },
+        }),
+      ).toBe(0);
     }
     expect(
       await prisma.individualOrderOrigin.count({
