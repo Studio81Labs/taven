@@ -6,6 +6,7 @@ import {
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
+  UnauthorizedException,
 } from "@nestjs/common";
 import {
   ClaimOrigin,
@@ -123,8 +124,8 @@ function sha(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-function isPreparationScopeViolation(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
+function databaseErrorIdentifiers(error: unknown): unknown[] {
+  if (!error || typeof error !== "object") return [];
   const record = error as {
     message?: unknown;
     meta?: {
@@ -141,7 +142,7 @@ function isPreparationScopeViolation(error: unknown): boolean {
     };
   };
   const adapter = record.meta?.driverAdapterError;
-  const identifiers = [
+  return [
     record.message,
     record.meta?.constraint,
     adapter?.message,
@@ -150,13 +151,57 @@ function isPreparationScopeViolation(error: unknown): boolean {
     adapter?.cause?.constraint,
     adapter?.cause?.originalConstraint,
   ];
-  return identifiers.some(
+}
+
+function isPreparationScopeViolation(error: unknown): boolean {
+  return databaseErrorIdentifiers(error).some(
     (value) =>
       typeof value === "string" &&
       (value.includes("recovery_preparation_scope_check") ||
         value.includes("replacement preparation scope is invalid") ||
         value.includes("claim preparation scope is invalid")),
   );
+}
+
+function isPreparationSessionViolation(error: unknown): boolean {
+  return databaseErrorIdentifiers(error).some(
+    (value) =>
+      typeof value === "string" &&
+      (value.includes("recovery_preparation_operator_session_check") ||
+        value.includes("recovery preparation operator session is invalid")),
+  );
+}
+
+export function preparationAvailability(input: {
+  latest: boolean;
+  contextValid: boolean;
+  expired: boolean;
+  pendingCount: number;
+  coverageAvailable: boolean;
+}): Pick<RecoveryCandidatePreparationDetailDto, "status" | "blockingCodes"> {
+  const { latest, contextValid, expired, pendingCount, coverageAvailable } =
+    input;
+  return {
+    blockingCodes: [
+      ...(!latest ? ["PREPARATION_SUPERSEDED"] : []),
+      ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
+      ...(expired && pendingCount && !coverageAvailable
+        ? ["PREPARATION_EXPIRED"]
+        : []),
+      ...(!coverageAvailable && !pendingCount ? ["INCOMPLETE_COVERAGE"] : []),
+    ],
+    status: !latest
+      ? "SUPERSEDED"
+      : !contextValid
+        ? "BLOCKED"
+        : coverageAvailable
+          ? "CANDIDATES_AVAILABLE"
+          : expired
+            ? "EXPIRED"
+            : pendingCount
+              ? "PREPARING"
+              : "BLOCKED",
+  };
 }
 
 function pageLimit(value?: string): number {
@@ -505,6 +550,11 @@ export class RecoveryCandidatePreparationService {
             },
           });
         } catch (error) {
+          if (isPreparationSessionViolation(error)) {
+            throw new UnauthorizedException(
+              "Operator session is no longer valid",
+            );
+          }
           if (isPreparationScopeViolation(error)) {
             throw new ConflictException(
               "Recovery context changed during preparation",
@@ -1173,27 +1223,16 @@ export class RecoveryCandidatePreparationService {
         (sum, source) => sum + source.failedCount,
         0,
       );
-      const blockers = [
-        ...(latest?.id !== row.id ? ["PREPARATION_SUPERSEDED"] : []),
-        ...(!contextValid ? ["RECOVERY_CONTEXT_CHANGED"] : []),
-        ...(expired && pendingCount ? ["PREPARATION_EXPIRED"] : []),
-        ...(!sourceRows.every(({ selectableCount }) => selectableCount > 0) &&
-        !pendingCount
-          ? ["INCOMPLETE_COVERAGE"]
-          : []),
-      ];
-      const status =
-        latest?.id !== row.id
-          ? "SUPERSEDED"
-          : !contextValid
-            ? "BLOCKED"
-            : sourceRows.every(({ selectableCount }) => selectableCount > 0)
-              ? "CANDIDATES_AVAILABLE"
-              : expired
-                ? "EXPIRED"
-                : pendingCount
-                  ? "PREPARING"
-                  : "BLOCKED";
+      const coverageAvailable = sourceRows.every(
+        ({ selectableCount }) => selectableCount > 0,
+      );
+      const availability = preparationAvailability({
+        latest: latest?.id === row.id,
+        contextValid,
+        expired,
+        pendingCount,
+        coverageAvailable,
+      });
       const accepted: RecoveryCandidatePreparationAcceptedDto = {
         preparationId: row.id,
         kind: row.kind,
@@ -1210,14 +1249,14 @@ export class RecoveryCandidatePreparationService {
         predecessorShipmentId: row.predecessorShipmentId,
         incidentEvidenceId: row.incidentEvidenceId,
         sourceJobIds: row.sourceJobIds,
-        status,
+        status: availability.status,
         sources: sourceRows,
         dispatchCount: mappings.filter(
           ({ preparationId }) => preparationId === row.id,
         ).length,
         pendingCount,
         failedCount,
-        blockingCodes: blockers,
+        blockingCodes: availability.blockingCodes,
         nextRefreshAt:
           pendingCount && !expired
             ? new Date(row.requestedAt.getTime() + 30 * 60_000).toISOString()

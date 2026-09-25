@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { BadRequestException, ConflictException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
@@ -3225,6 +3229,72 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       await prisma.job.count({ where: { replacesJobId: sourceJobId } }),
     ).toBe(0);
   }, 15_000);
+
+  it("rejects preparation when the operator session is revoked during preflight", async () => {
+    const fixture = await preparePaidOrder("recovery-revoked-during-preflight");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "recovery-revoked-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "recovery-revoked-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const candidates = new CandidateEstimateService(
+      prisma,
+      new SlicerProfileSnapshotService(prisma, {
+        putImmutableObject: async () => undefined,
+      } as unknown as ObjectStorage),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const prepareBatch = candidates.prepareDispatchBatch.bind(candidates);
+    vi.spyOn(candidates, "prepareDispatchBatch").mockImplementation(
+      async (inputs) => {
+        const prepared = await prepareBatch(inputs);
+        await prisma.operatorSession.update({
+          where: { id: operator.sessionId },
+          data: { revokedAt: new Date() },
+        });
+        return prepared;
+      },
+    );
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      candidates,
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    await expect(
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: "test a session revoked during preparation",
+        },
+        `recovery-revoked:${randomUUID()}`,
+      ),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(
+      await prisma.recoveryCandidatePreparation.count({
+        where: { kind: "JOB_REPLACEMENT", targetId: sourceJobId },
+      }),
+    ).toBe(0);
+  });
 
   it("prepares, ingests, reads and consumes a scoped replacement candidate", async () => {
     const fixture = await preparePaidOrder("prepared-replacement");
