@@ -3238,6 +3238,38 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     });
     expect(fullyReservedInputInjected).toBe(true);
     expect(mappings.length).toBeGreaterThan(0);
+    const persistedPreparation =
+      await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: accepted.preparationId },
+      });
+    expect(accepted.requestedAt).toBe(
+      persistedPreparation.requestedAt.toISOString(),
+    );
+    await expect(
+      prisma.$transaction(async (tx) => {
+        const replay = await tx.idempotencyRecord.create({
+          data: {
+            namespace: `backdate-probe:${randomUUID()}`,
+            idempotencyKey: randomUUID(),
+            requestFingerprint: "a".repeat(64),
+            expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+          },
+        });
+        const direct = await tx.recoveryCandidatePreparation.create({
+          data: {
+            ...persistedPreparation,
+            id: randomUUID(),
+            generation: persistedPreparation.generation + 1,
+            idempotencyRecordId: replay.id,
+            requestedAt: new Date("2000-01-01T00:00:00.000Z"),
+          },
+        });
+        expect(direct.requestedAt.getTime()).toBeGreaterThan(
+          Date.now() - 60_000,
+        );
+        throw new Error("rollback backdate probe");
+      }),
+    ).rejects.toThrow("rollback backdate probe");
     expect(
       (
         await preparation.detail(
@@ -3448,6 +3480,15 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     const selected = choices.items.find(({ selectable }) => selectable);
     expect(selected).toBeDefined();
+    const uppercaseFiltered = await preparation.choices(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      accepted.preparationId,
+      { sourceJobId: sourceJobId.toUpperCase() },
+    );
+    expect(uppercaseFiltered.items).toEqual(choices.items);
     expect(
       new Date(selected!.expiresAt).getTime() -
         new Date(selected!.calculatedAt).getTime(),
@@ -3619,6 +3660,38 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     expect(detail.status).toBe("CANDIDATES_AVAILABLE");
     expect(detail.sourceJobIds).toEqual([sourceJobId]);
+    const persistedClaimPreparation =
+      await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: accepted.preparationId },
+      });
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await tx.fulfilmentSlot.update({
+          where: { id: detail.sources[0]!.fulfilmentSlotIds[0]! },
+          data: {
+            outcome: "DELIVERED",
+            deliveredAt: new Date(),
+            claimUntil: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+          },
+        });
+        const replay = await tx.idempotencyRecord.create({
+          data: {
+            namespace: `resolved-slot-probe:${randomUUID()}`,
+            idempotencyKey: randomUUID(),
+            requestFingerprint: "b".repeat(64),
+            expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+          },
+        });
+        await tx.recoveryCandidatePreparation.create({
+          data: {
+            ...persistedClaimPreparation,
+            id: randomUUID(),
+            generation: persistedClaimPreparation.generation + 1,
+            idempotencyRecordId: replay.id,
+          },
+        });
+      }),
+    ).rejects.toThrow(/claim preparation scope is invalid/);
     const choices = await preparation.choices(
       operator,
       orderId,

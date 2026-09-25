@@ -123,6 +123,8 @@ LANGUAGE plpgsql AS $$
 DECLARE
   source_count integer;
 BEGIN
+  -- The creation instant is database-owned even for direct SQL inserts.
+  NEW.requested_at := clock_timestamp();
   -- Sessions may later be pruned, so validate attribution on insert without
   -- retaining a foreign key that would block session cleanup.
   IF NOT EXISTS (
@@ -158,6 +160,16 @@ BEGIN
         AND claim.order_phase_id = NEW.order_phase_id
         AND claim.origin = 'SHIPMENT_INCIDENT'
         AND claim.status IN ('OPEN', 'ACTIVE')
+        AND NOT EXISTS (
+          SELECT 1 FROM refund_transactions refund WHERE refund.claim_id = claim.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM price_adjustments adjustment WHERE adjustment.claim_id = claim.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM shipment_plan_fulfilment_slots plan_slot
+          JOIN fulfilment_slots slot ON slot.id = plan_slot.fulfilment_slot_id
+          WHERE plan_slot.shipment_plan_id = NEW.shipment_plan_id
+            AND (slot.order_id IS DISTINCT FROM NEW.order_id
+              OR slot.outcome IS DISTINCT FROM 'PENDING'))
         AND predecessor.order_id = NEW.order_id AND predecessor.order_phase_id = NEW.order_phase_id
         AND predecessor.shipment_plan_id = NEW.shipment_plan_id
         AND predecessor.status = 'LOST'

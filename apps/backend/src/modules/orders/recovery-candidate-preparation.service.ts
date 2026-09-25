@@ -409,15 +409,6 @@ export class RecoveryCandidatePreparationService {
         }
         await this.lockAndCheckResources(tx, dispatches, current);
         const generation = (latest?.generation ?? 0) + 1;
-        const acknowledgement: RecoveryCandidatePreparationAcceptedDto = {
-          preparationId,
-          kind,
-          orderId,
-          targetId,
-          generation,
-          requestedAt: now.toISOString(),
-          statusPath: `/admin/orders/${orderId}/fulfilment/${kind === RecoveryCandidatePreparationKind.JOB_REPLACEMENT ? `jobs/${targetId}/replacement-preparations` : `claims/${targetId}/reprint-preparations`}/${preparationId}`,
-        };
         const record = await tx.idempotencyRecord.create({
           data: {
             namespace,
@@ -427,7 +418,7 @@ export class RecoveryCandidatePreparationService {
             expiresAt: IMMUTABLE_REPLAY_EXPIRY,
           },
         });
-        await tx.recoveryCandidatePreparation.create({
+        const created = await tx.recoveryCandidatePreparation.create({
           data: {
             id: preparationId,
             nodeId,
@@ -444,13 +435,21 @@ export class RecoveryCandidatePreparationService {
             generation,
             sourceJobIds: scope.sources.map(({ jobId }) => jobId),
             sourceScopeFingerprint: scope.fingerprint,
-            requestedAt: now,
             operatorId: operator.operatorId,
             operatorSessionId: operator.sessionId,
             idempotencyRecordId: record.id,
             reason,
           },
         });
+        const acknowledgement: RecoveryCandidatePreparationAcceptedDto = {
+          preparationId,
+          kind,
+          orderId,
+          targetId,
+          generation,
+          requestedAt: created.requestedAt.toISOString(),
+          statusPath: `/admin/orders/${orderId}/fulfilment/${kind === RecoveryCandidatePreparationKind.JOB_REPLACEMENT ? `jobs/${targetId}/replacement-preparations` : `claims/${targetId}/reprint-preparations`}/${preparationId}`,
+        };
         for (const { source, prepared } of dispatches) {
           let staged: Awaited<
             ReturnType<CandidateEstimateService["stageDispatch"]>
@@ -676,14 +675,17 @@ export class RecoveryCandidatePreparationService {
     validUuid(orderId, "orderId");
     validUuid(targetId, "targetId");
     validUuid(preparationId, "preparationId");
-    if (query.sourceJobId) validUuid(query.sourceJobId, "sourceJobId");
+    const sourceJobId =
+      query.sourceJobId === undefined
+        ? undefined
+        : validUuid(query.sourceJobId, "sourceJobId");
     const limit = pageLimit(query.limit);
     const filter = sha({
       orderId,
       kind,
       targetId,
       preparationId,
-      sourceJobId: query.sourceJobId ?? null,
+      sourceJobId: sourceJobId ?? null,
     });
     const after = cursorValue(query.cursor, filter);
     return this.prisma.$transaction(async (tx) => {
@@ -700,12 +702,12 @@ export class RecoveryCandidatePreparationService {
       });
       if (!row)
         throw new NotFoundException("Recovery preparation was not found");
-      if (query.sourceJobId && !row.sourceJobIds.includes(query.sourceJobId))
+      if (sourceJobId && !row.sourceJobIds.includes(sourceJobId))
         throw new NotFoundException("Source Job is not in this preparation");
       const mappings = await tx.recoveryCandidateDispatch.findMany({
         where: {
           preparationId,
-          ...(query.sourceJobId ? { sourceJobId: query.sourceJobId } : {}),
+          ...(sourceJobId ? { sourceJobId } : {}),
           ...(after ? { id: { gt: after } } : {}),
         },
         orderBy: { id: "asc" },
