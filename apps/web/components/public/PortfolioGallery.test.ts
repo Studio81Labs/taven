@@ -6,11 +6,17 @@ import type { PortfolioItem } from "../../utils/portfolio-display";
 
 const fixtureItems: PortfolioItem[] = [
   {
-    id: "fixture-a",
+    publicId: "D-0142",
     title: "Fixture A",
     category: "Kategorie A",
     material: "Materiál A",
     description: "Popis pouze pro izolovaný test.",
+    manufacturing: {
+      color: "Černá",
+      quantity: 2,
+      quality: "Standard",
+      revision: "A",
+    },
     image: {
       src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />",
       alt: "Testovací geometrie A",
@@ -19,11 +25,10 @@ const fixtureItems: PortfolioItem[] = [
     },
   },
   {
-    id: "fixture-b",
+    publicId: "D-0139",
     title: "Fixture B",
     category: "Kategorie B",
     material: "Materiál B",
-    description: "Druhý izolovaný test.",
     image: {
       src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />",
       alt: "Testovací geometrie B",
@@ -59,6 +64,8 @@ describe("PortfolioGallery presentation", () => {
         .map((image) => image.attributes("alt")),
     ).toEqual(["Testovací geometrie A", "Testovací geometrie B"]);
     expect(wrapper.get(".portfolio-card img").attributes("width")).toBe("800");
+    expect(wrapper.get(".portfolio-card__public-id").text()).toBe("D-0142");
+    expect(wrapper.get(".portfolio-card__body").text()).toContain("Černá");
 
     await wrapper
       .get(".portfolio-filters button:nth-child(2)")
@@ -73,6 +80,8 @@ describe("PortfolioGallery presentation", () => {
 
     await wrapper.get(".portfolio-card button").trigger("click");
     expect(wrapper.get(".portfolio-detail h2").text()).toBe("Fixture A");
+    expect(wrapper.get(".portfolio-detail").text()).toContain("D-0142");
+    expect(wrapper.get(".portfolio-detail").text()).toContain("Standard");
     await wrapper.get(".portfolio-detail button").trigger("click");
     expect(wrapper.find(".portfolio-detail").exists()).toBe(false);
 
@@ -80,6 +89,9 @@ describe("PortfolioGallery presentation", () => {
       .get(".portfolio-filters button:nth-child(1)")
       .trigger("click");
     expect(wrapper.findAll(".portfolio-card")).toHaveLength(2);
+    expect(
+      wrapper.findAll(".portfolio-card__body > p:not(.public-page__index)"),
+    ).toHaveLength(1);
   });
 
   it("replaces missing and failed images in cards and detail without hiding metadata", async () => {
@@ -108,5 +120,27 @@ describe("PortfolioGallery presentation", () => {
         .get(".portfolio-detail .portfolio-image-fallback")
         .attributes("aria-label"),
     ).toContain("Fixture A");
+  });
+
+  it("moves focus to a distant opened detail and restores the card trigger on close", async () => {
+    const items = Array.from({ length: 8 }, (_, index) => ({
+      ...fixtureItems[0]!,
+      publicId: `D-${index}`,
+      title: `Fixture ${index}`,
+    }));
+    const wrapper = mount(PortfolioGallery, {
+      props: { items },
+      attachTo: document.body,
+    });
+    const trigger = wrapper.findAll<HTMLButtonElement>(
+      ".portfolio-card button",
+    )[0]!;
+    await trigger.trigger("click");
+    expect(document.activeElement).toBe(
+      wrapper.get(".portfolio-detail").element,
+    );
+    await wrapper.get(".portfolio-detail button").trigger("click");
+    expect(document.activeElement).toBe(trigger.element);
+    wrapper.unmount();
   });
 });

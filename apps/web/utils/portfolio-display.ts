@@ -1,9 +1,15 @@
 export interface PortfolioItem {
-  id: string;
+  publicId: string;
   title: string;
   category: string;
   material: string;
-  description: string;
+  description?: string;
+  manufacturing?: {
+    color?: string;
+    quantity?: number;
+    quality?: string;
+    revision?: string;
+  };
   image: { src: string; alt: string; width: number; height: number };
 }
 
