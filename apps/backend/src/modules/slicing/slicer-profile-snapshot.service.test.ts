@@ -199,6 +199,19 @@ describe("SlicerProfileSnapshotService", () => {
       ]),
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotMismatchError);
     expect(putImmutableObject).not.toHaveBeenCalled();
+
+    putImmutableObject.mockRejectedValueOnce(
+      new Error("snapshot store timed out"),
+    );
+    await expect(
+      service.ensureCandidateJobSnapshotsBatch([candidateJob(hashes)]),
+    ).rejects.toBeInstanceOf(SlicerProfileSnapshotUnavailableError);
+    putImmutableObject.mockRejectedValueOnce(
+      new ImmutableObjectConflictError("snapshot bytes differ"),
+    );
+    await expect(
+      service.ensureCandidateJobSnapshotsBatch([candidateJob(hashes)]),
+    ).rejects.toBeInstanceOf(SlicerProfileSnapshotIntegrityError);
   });
 
   it("rejects aggregate preset counts the worker cannot materialize", async () => {

@@ -326,12 +326,19 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
         all.set(snapshot.contentSha256, snapshot);
     }
     for (const snapshot of all.values()) {
-      await this.objects.putImmutableObject({
-        objectKey: snapshot.objectKey,
-        bytes: snapshot.bytes,
-        contentHash: snapshot.contentSha256,
-        contentType: "application/json",
-      });
+      try {
+        await this.objects.putImmutableObject({
+          objectKey: snapshot.objectKey,
+          bytes: snapshot.bytes,
+          contentHash: snapshot.contentSha256,
+          contentType: "application/json",
+        });
+      } catch (error) {
+        if (error instanceof ImmutableObjectConflictError) {
+          throw new SlicerProfileSnapshotIntegrityError(error.message);
+        }
+        throw new SlicerProfileSnapshotUnavailableError();
+      }
     }
   }
 
