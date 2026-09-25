@@ -80,7 +80,9 @@ describe("PaymentOutboxDispatcherService", () => {
       .fn()
       .mockResolvedValueOnce([message(1)])
       .mockResolvedValueOnce([message(2)])
-      .mockResolvedValueOnce([{ applied: true }]);
+      .mockResolvedValueOnce([
+        { success_refund_id: "00000000-0000-4000-8000-000000000011" },
+      ]);
     const eventUpsert = vi.fn();
     const findUniqueOrThrow = vi.fn().mockResolvedValue({
       id: "00000000-0000-4000-8000-000000000011",
@@ -112,6 +114,7 @@ describe("PaymentOutboxDispatcherService", () => {
             currency: "CZK",
           },
         }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({ status: "PENDING" }),
       },
       $executeRaw: executeRaw,
     };
@@ -196,6 +199,7 @@ describe("PaymentOutboxDispatcherService", () => {
             currency: "CZK",
           },
         }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({ status: "PENDING" }),
       },
       $executeRaw: executeRaw,
     };
@@ -215,6 +219,69 @@ describe("PaymentOutboxDispatcherService", () => {
     expect(refund).not.toHaveBeenCalled();
     expect(executeRaw.mock.calls[0]?.[2]).toContain(
       "manual provider reconciliation",
+    );
+  });
+
+  it("settles a refund superseded during the durable claim without a provider call", async () => {
+    const refundId = "00000000-0000-4000-8000-000000000024";
+    const message = {
+      id: "00000000-0000-4000-8000-000000000025",
+      attempts: 1,
+      message_type: "refund_payment" as const,
+      aggregate_id: refundId,
+      payload: {
+        refundTransactionId: refundId,
+        paymentId: "00000000-0000-4000-8000-000000000026",
+        provider: "comgate",
+        providerIntentId: "comgate-payment-3",
+        amountMinor: "12300",
+        currency: "CZK",
+        idempotencyKey: "retry-claim-race",
+        action: "refund_payment",
+      },
+    };
+    const claim = vi.fn().mockResolvedValue([message]);
+    const refund = vi.fn();
+    const prisma = {
+      $transaction: vi.fn(
+        async (work: (transaction: { $queryRaw: typeof claim }) => unknown) =>
+          work({ $queryRaw: claim }),
+      ),
+      $queryRaw: vi.fn().mockResolvedValue([{ claimed_at: null }]),
+      refundTransaction: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: refundId,
+          paymentId: message.payload.paymentId,
+          status: "PENDING",
+          amountMinor: 12_300n,
+          idempotencyKey: message.payload.idempotencyKey,
+          payment: {
+            provider: "comgate",
+            providerIntentId: message.payload.providerIntentId,
+            currency: "CZK",
+          },
+        }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          status: "SUPERSEDED",
+        }),
+      },
+      $executeRaw: vi.fn().mockResolvedValue(1),
+    };
+    const service = new PaymentOutboxDispatcherService(prisma as never, {
+      providerName: () => "comgate",
+      capabilities: async () => ({ provider: "comgate", methods: ["CARD"] }),
+      refundRetrySafety: () => "MANUAL_RECONCILIATION",
+      createIntent: vi.fn(),
+      locateEvent: vi.fn(),
+      verifyEvent: vi.fn(),
+      cancelIntent: vi.fn(),
+      refund,
+    });
+
+    await expect(service.runOnce()).resolves.toBe(1);
+    expect(refund).not.toHaveBeenCalled();
+    expect(sqlText(prisma.$executeRaw.mock.calls[0])).toContain(
+      "delivered_at = clock_timestamp()",
     );
   });
 
@@ -243,7 +310,7 @@ describe("PaymentOutboxDispatcherService", () => {
       .fn()
       .mockResolvedValueOnce([message])
       .mockRejectedValueOnce(new Error("database temporarily unavailable"))
-      .mockResolvedValueOnce([{ applied: true }]);
+      .mockResolvedValueOnce([{ success_refund_id: message.aggregate_id }]);
     const eventUpsert = vi.fn();
     const findUniqueOrThrow = vi.fn().mockResolvedValue({
       id: message.aggregate_id,
@@ -275,6 +342,7 @@ describe("PaymentOutboxDispatcherService", () => {
             currency: "CZK",
           },
         }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({ status: "PENDING" }),
       },
       $executeRaw: executeRaw,
     };

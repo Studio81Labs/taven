@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AdminAccessModule } from "../admin-access/admin-access.module";
 import { OrdersModule } from "../orders/orders.module";
+import { PaymentsModule } from "../payments/payments.module";
 import { PrismaModule } from "../../prisma/prisma.module";
 import { AuditModule } from "../audit/audit.module";
 import { StorageModule } from "../storage/storage.module";
@@ -13,6 +14,7 @@ import { OperatorReadsService } from "./operator-reads.service";
     PrismaModule,
     AdminAccessModule,
     OrdersModule,
+    PaymentsModule,
     AuditModule,
     StorageModule,
   ],

@@ -30196,7 +30196,7 @@ describe("v0 lifecycle policy tables", () => {
     },
   );
 
-  it("keeps a failed-source late capture in compensation after a refund attempt fails", () => {
+  it("rejects failed-source refund rollback without exact capture provenance", () => {
     const base = contextForTransition("captured", "refund_pending");
     expect(() =>
       transition(paymentPolicy, {
@@ -30214,6 +30214,120 @@ describe("v0 lifecycle policy tables", () => {
         },
       }),
     ).toThrow(TransitionGuardError);
+  });
+
+  it("permits only the exact final failed-source compensation rollback", () => {
+    const base = contextForTransition("captured", "refund_pending");
+    const cutoff = Instant.parse("2026-01-01T00:30:00.000Z");
+    const capturedAt = Instant.parse("2026-01-01T00:31:00.000Z");
+    const context = {
+      ...base,
+      paymentCaptureKind: "refund_failure_rollback",
+      refundFailureAmountMinor: 10_000n,
+      refundFailureRollbackExpectedPayment: {
+        ...base.refundFailureRollbackExpectedPayment,
+        providerIntentId: "provider-transaction-1",
+        providerFailureEventId: "payment-failure-event-1",
+      },
+      refundFailureRollbackRestoredPayment: {
+        ...base.refundFailureRollbackRestoredPayment,
+        providerFailureEventId: "payment-failure-event-1",
+      },
+      refundFailureRollbackRefundTransaction: {
+        ...base.refundFailureRollbackRefundTransaction,
+        amountMinor: 10_000n,
+        reason: "LATE_CAPTURE_COMPENSATION",
+        replacesRefundTransactionId: null,
+      },
+      refundFailureProviderEvidence: {
+        ...base.refundFailureProviderEvidence,
+        amountMinor: 10_000n,
+      },
+      refundFailureCompensationOrigin: {
+        paymentId: "payment-1",
+        provider: "sandbox",
+        providerIntentId: "provider-transaction-1",
+        providerCaptureId: "provider-transaction-1",
+        currency: "EUR",
+        capturedAmountMinor: 10_000n,
+        captureAuthorized: false,
+        captureCutoffAt: cutoff,
+        capturedAt,
+        fullCompensationRootId: "refund-1",
+        fullCompensationAmountMinor: 10_000n,
+        failedAttemptId: "refund-1",
+        noActiveOrSuccessfulRefunds: true,
+        captureEvent: {
+          paymentId: "payment-1",
+          provider: "sandbox",
+          providerTransactionId: "provider-transaction-1",
+          kind: "PAYMENT_CAPTURED",
+          refundTransactionId: null,
+          amountMinor: 10_000n,
+          currency: "EUR",
+          verifiedAt: capturedAt,
+          authenticated: true,
+          verified: true,
+          immutable: true,
+        },
+        priorFailureEvent: {
+          id: "payment-failure-event-1",
+          paymentId: "payment-1",
+          provider: "sandbox",
+          providerTransactionId: "provider-transaction-1",
+          kind: "PAYMENT_FAILED",
+          refundTransactionId: null,
+          amountMinor: 10_000n,
+          currency: "EUR",
+          verifiedAt: cutoff,
+          authenticated: true,
+          verified: true,
+          immutable: true,
+        },
+      },
+    };
+    const command = {
+      ...commandAnchors(paymentPolicy, "refund_pending", "captured"),
+      current: "refund_pending" as const,
+      target: "captured" as const,
+      idempotencyKey: "exact-failed-source-compensation-rollback",
+      context,
+    };
+    expect(transition(paymentPolicy, command)).toMatchObject({
+      kind: "changed",
+      current: "captured",
+    });
+    for (const changedOrigin of [
+      { providerCaptureId: "foreign-capture" },
+      { fullCompensationAmountMinor: 9_999n },
+      { fullCompensationRootId: "different-root" },
+      { noActiveOrSuccessfulRefunds: false },
+      {
+        captureEvent: {
+          ...context.refundFailureCompensationOrigin.captureEvent,
+          verifiedAt: cutoff,
+        },
+      },
+      {
+        priorFailureEvent: {
+          ...context.refundFailureCompensationOrigin.priorFailureEvent,
+          kind: "PAYMENT_CAPTURED",
+        },
+      },
+    ]) {
+      expect(() =>
+        transition(paymentPolicy, {
+          ...command,
+          context: {
+            ...context,
+            refundFailureCompensationOrigin: {
+              ...context.refundFailureCompensationOrigin,
+              ...changedOrigin,
+            },
+          },
+        }),
+      ).toThrow(TransitionGuardError);
+    }
   });
 
   it("requires immutable capture-origin provenance for refund-failure rollback", () => {

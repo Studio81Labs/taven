@@ -1518,6 +1518,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment/refunds/{refundId}/provider-results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an operator-attested final refund provider result */
+        post: operations["OrdersController_recordRefundProviderResult"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/refunds/{refundId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue one guarded replacement for a failed refund */
+        post: operations["OrdersController_retryRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/shipments": {
         parameters: {
             query?: never;
@@ -5143,6 +5177,7 @@ export interface components {
             /** Format: uuid */
             priceSnapshotId: string;
             provider: string;
+            providerIntentId?: string | null;
             refunds: components["schemas"]["OperatorRefundTransactionDto"][];
             /** Format: uuid */
             refundsNextCursor?: string;
@@ -5244,6 +5279,10 @@ export interface components {
             claimId?: string | null;
             /** Format: date-time */
             completedAt?: string | null;
+            currency: string;
+            /** Format: date-time */
+            dispatchClaimedAt?: string | null;
+            dispatchStatus?: string | null;
             /** Format: uuid */
             id: string;
             /** Format: uuid */
@@ -5251,16 +5290,23 @@ export interface components {
             /** Format: uuid */
             priceAdjustmentId?: string | null;
             provider: string;
+            providerIntentId?: string | null;
             providerRefundId?: string | null;
             /** Format: uuid */
             providerResultEventId?: string | null;
             reason: string;
+            replacementRefundIds: string[];
             /** Format: uuid */
             replacesFailureProviderEventId?: string | null;
             /** Format: uuid */
             replacesRefundTransactionId?: string | null;
             /** Format: date-time */
             requestedAt: string;
+            requestReference: string;
+            selectedResultKind?: string | null;
+            /** Format: date-time */
+            selectedResultOccurredAt?: string | null;
+            selectedResultSource?: string | null;
             /** Format: uuid */
             sourceSuccessProviderEventId?: string | null;
             status: string;
@@ -5271,21 +5317,31 @@ export interface components {
             claimId?: string | null;
             /** Format: date-time */
             completedAt?: string | null;
+            /** Format: date-time */
+            dispatchClaimedAt?: string | null;
+            dispatchStatus?: string | null;
             /** Format: uuid */
             id: string;
             /** Format: uuid */
             priceAdjustmentId?: string | null;
             provider: string;
+            providerIntentId?: string | null;
             providerRefundId?: string | null;
             /** Format: uuid */
             providerResultEventId?: string | null;
             reason: string;
+            replacementRefundIds: string[];
             /** Format: uuid */
             replacesFailureProviderEventId?: string | null;
             /** Format: uuid */
             replacesRefundTransactionId?: string | null;
             /** Format: date-time */
             requestedAt: string;
+            requestReference: string;
+            selectedResultKind?: string | null;
+            /** Format: date-time */
+            selectedResultOccurredAt?: string | null;
+            selectedResultSource?: string | null;
             /** Format: uuid */
             sourceSuccessProviderEventId?: string | null;
             status: string;
@@ -5945,6 +6001,44 @@ export interface components {
             pendingOrSuspendedRefunds: number;
             succeededRefunds: components["schemas"]["MetricMoneyDto"];
         };
+        RefundProviderResultCommandResultDto: {
+            /** Format: uuid */
+            orderId: string;
+            result: components["schemas"]["RefundProviderResultPayloadDto"];
+            /** @enum {string} */
+            status: "REFUND_PROVIDER_RESULT_RECORDED";
+        };
+        RefundProviderResultDto: {
+            amountMinor: string;
+            currency: string;
+            /** @enum {string} */
+            evidenceKind: "PROVIDER_PORTAL" | "PROVIDER_SUPPORT";
+            evidenceReference: string;
+            /** Format: uuid */
+            expectedProviderResultEventId: string | null;
+            /** @enum {string} */
+            expectedStatus: "PENDING" | "FAILED" | "SUSPENDED" | "SUCCEEDED" | "SUPERSEDED";
+            /** @enum {boolean} */
+            finalOutcomeConfirmed: true;
+            /** Format: date-time */
+            occurredAt: string;
+            /** @enum {string} */
+            outcome: "SUCCEEDED" | "FAILED";
+            providerIntentId: string;
+            providerRefundReference?: string;
+            reason: string;
+            requestReference: string;
+        };
+        RefundProviderResultPayloadDto: {
+            blockingCode?: string | null;
+            paymentStatus: string;
+            /** Format: uuid */
+            providerResultEventId: string;
+            recorded: boolean;
+            refundStatus: string;
+            /** Format: uuid */
+            refundTransactionId: string;
+        };
         RegisterMachineDto: {
             code: string;
             displayName: string;
@@ -5982,6 +6076,28 @@ export interface components {
             expectedVersion: number | null;
             reason: string;
             windows: components["schemas"]["MachineAvailabilityWindowDto"][];
+        };
+        RetryRefundCommandResultDto: {
+            /** Format: uuid */
+            orderId: string;
+            result: components["schemas"]["RetryRefundPayloadDto"];
+            /** @enum {string} */
+            status: "REFUND_RETRY_PENDING";
+        };
+        RetryRefundDto: {
+            /** Format: uuid */
+            expectedFailureProviderEventId: string;
+            reason: string;
+        };
+        RetryRefundPayloadDto: {
+            amountMinor: string;
+            currency: string;
+            /** Format: uuid */
+            failureProviderEventId: string;
+            /** Format: uuid */
+            refundTransactionId: string;
+            /** Format: uuid */
+            sourceRefundTransactionId: string;
         };
         SelectAutomaticQuoteDestinationDto: {
             endpointType: string;
@@ -9388,6 +9504,82 @@ export interface operations {
                 };
             };
             /** @description Replacement request has not expired */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_recordRefundProviderResult: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                refundId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundProviderResultDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundProviderResultCommandResultDto"];
+                };
+            };
+            /** @description Refund evidence or expected state is stale or ineligible */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    OrdersController_retryRefund: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                refundId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryRefundDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryRefundCommandResultDto"];
+                };
+            };
+            /** @description Failure evidence or refund obligation is not retryable */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -4,11 +4,14 @@ import { Prisma } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { OrdersService } from "../src/modules/orders/orders.service";
+import { OperatorReadsService } from "../src/modules/operator-reads/operator-reads.service";
 import type { OperatorContext } from "../src/modules/admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import { AuditService } from "../src/modules/audit/audit.service";
 import type { DeliveryCapabilityPort } from "../src/modules/automatic-quotes/delivery-capability.port";
 import type { PaymentProviderPort } from "../src/modules/payments/payment-provider.port";
+import { DisabledPaymentProviderAdapter } from "../src/modules/payments/disabled-payment-provider.adapter";
+import { PaymentOutboxDispatcherService } from "../src/modules/payments/payment-outbox-dispatcher.service";
 import { PaymentsService } from "../src/modules/payments/payments.service";
 import type { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import type { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
@@ -772,8 +775,6 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       },
     });
     testOperatorId = operator.id;
-    scopedOrders = new OrdersService(prisma, new AuditService(prisma));
-    orders = legacyOrdersClient(scopedOrders, operator.id);
     const provider: PaymentProviderPort = {
       providerName: () => "test",
       capabilities: async () => {
@@ -827,6 +828,12 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         evidence: {},
       }),
     };
+    scopedOrders = new OrdersService(
+      prisma,
+      new AuditService(prisma),
+      provider,
+    );
+    orders = legacyOrdersClient(scopedOrders, operator.id);
     payments = legacyPaymentsClient(
       new PaymentsService(
         prisma,
@@ -1936,91 +1943,619 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     expect(claimRefund.result.refundIds).not.toEqual([]);
   });
 
-  it("voids a cancelled balance attempt and compensates a late capture", async () => {
+  it.each(["SUCCEEDED", "FAILED"] as const)(
+    "voids a cancelled balance attempt and reconciles a late capture replacement as %s",
+    async (childOutcome) => {
+      const fixture = await preparePaidOrder(
+        `cancelled-balance-late-capture-${childOutcome}`,
+        1,
+        "DEPOSIT_BALANCE",
+      );
+      await advanceThroughQc(fixture, 0);
+      let markIntentCreated!: () => void;
+      const intentCreated = new Promise<void>((resolve) => {
+        markIntentCreated = resolve;
+      });
+      let releaseIntent!: () => void;
+      const intentReleased = new Promise<void>((resolve) => {
+        releaseIntent = resolve;
+      });
+      pauseBalanceIntentBeforeReturn = async () => {
+        markIntentCreated();
+        await intentReleased;
+      };
+      const creation = payments.createBalancePayment(
+        fixture.foundation.orderId,
+        { method: "CARD" },
+        "cancelled-balance-payment-link",
+      );
+      let staged: Awaited<ReturnType<typeof prisma.payment.findFirstOrThrow>>;
+      let cancelled: Awaited<ReturnType<OrdersService["cancelOrder"]>>;
+      try {
+        await intentCreated;
+        staged = await prisma.payment.findFirstOrThrow({
+          where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+        });
+        cancelled = await orders.cancelOrder(
+          fixture.foundation.orderId,
+          { reason: "customer cancelled before final payment" },
+          "cancelled-balance-order",
+        );
+      } finally {
+        releaseIntent();
+        pauseBalanceIntentBeforeReturn = undefined;
+      }
+      const pending = await creation;
+      expect(pending.paymentId).toBe(staged.id);
+      const cancelledReplay = await orders.cancelOrder(
+        fixture.foundation.orderId,
+        { reason: "customer cancelled before final payment" },
+        "cancelled-balance-order",
+      );
+      expect(cancelled.status).toBe("ORDER_CANCELLED");
+      expect(cancelledReplay).toEqual(cancelled);
+      await expect(
+        prisma.payment.findUniqueOrThrow({ where: { id: pending.paymentId } }),
+      ).resolves.toMatchObject({
+        status: "VOIDED",
+        captureAuthorized: false,
+        captureCutoffAt: expect.any(Date),
+      });
+      await expect(
+        prisma.outboxMessage.findUniqueOrThrow({
+          where: { deduplicationKey: `void_payment:v1:${pending.paymentId}` },
+        }),
+      ).resolves.toMatchObject({
+        aggregateType: "Payment",
+        aggregateId: pending.paymentId,
+        messageType: "void_payment",
+      });
+
+      if (childOutcome === "SUCCEEDED") {
+        const forged = await pool.connect();
+        await forged.query("BEGIN");
+        try {
+          const observed = await forged.query<{ at: Date }>(
+            "SELECT clock_timestamp() AS at",
+          );
+          const at = observed.rows[0]!.at;
+          const eventId = `no-command-capture-${pending.paymentId}`;
+          const transactionId = `balance-intent-${pending.paymentId}`;
+          const amountMinor = BigInt(pending.amountMinor);
+          await forged.query(
+            `WITH evidence AS (
+             SELECT jsonb_build_object(
+               'paymentId', $1::text, 'providerEventId', $2::text,
+               'providerTransactionId', $3::text,
+               'merchantReference', $1::text, 'kind', 'PAYMENT_CAPTURED',
+               'amountMinor', $4::text, 'currency', $5::text,
+               'evidence', '{}'::jsonb
+             ) AS payload
+           )
+           INSERT INTO payment_provider_events
+             (id,payment_id,refund_transaction_id,provider,provider_event_id,
+              provider_transaction_id,kind,amount_minor,currency,payload,
+              payload_hash,occurred_at,authenticated_at,verified_at,created_at)
+           SELECT gen_random_uuid(),$1::uuid,NULL,'test',$2,$3,'PAYMENT_CAPTURED',
+                  $4::bigint,$5,payload,
+                  encode(sha256(convert_to(payload::text,'UTF8')),'hex'),
+                  $6,$6,$6,$6 FROM evidence`,
+            [
+              pending.paymentId,
+              eventId,
+              transactionId,
+              amountMinor,
+              pending.currency,
+              at,
+            ],
+          );
+          await forged.query(
+            `UPDATE payments SET status='REFUND_PENDING',
+             captured_amount_minor=$2,provider_capture_id=$3,captured_at=$4,
+             updated_at=$4 WHERE id=$1`,
+            [pending.paymentId, amountMinor, transactionId, at],
+          );
+          await forged.query(
+            `INSERT INTO refund_transactions
+             (id,payment_id,idempotency_key,provider,amount_minor,reason,
+              status,requested_at,created_at,updated_at)
+           VALUES ($1,$2,$3,'test',$4,'LATE_CAPTURE_COMPENSATION',
+                   'PENDING',$5,$5,$5)`,
+            [
+              randomUUID(),
+              pending.paymentId,
+              `missing-command-${pending.paymentId}`,
+              amountMinor,
+              at,
+            ],
+          );
+          await expect(forged.query("COMMIT")).rejects.toMatchObject({
+            constraint: "payment_null_intent_compensation_check",
+          });
+        } finally {
+          await forged.query("ROLLBACK").catch(() => undefined);
+          forged.release();
+        }
+      }
+
+      const event = {
+        providerEventId: `cancelled-late-capture-${pending.paymentId}`,
+        providerTransactionId: `balance-intent-${pending.paymentId}`,
+        merchantReference: pending.paymentId,
+        status: "CAPTURED" as const,
+        amountMinor: BigInt(pending.amountMinor),
+        currency: pending.currency,
+      };
+      await expect(
+        payments.consumeProviderEvent("test", {}, event),
+      ).resolves.toEqual({ outcome: "REFUND_PENDING" });
+      await expect(
+        payments.consumeProviderEvent("test", {}, event),
+      ).resolves.toEqual({ outcome: "DUPLICATE" });
+      await expect(
+        prisma.refundTransaction.findFirstOrThrow({
+          where: {
+            paymentId: pending.paymentId,
+            reason: "LATE_CAPTURE_COMPENSATION",
+          },
+        }),
+      ).resolves.toMatchObject({
+        amountMinor: BigInt(pending.amountMinor),
+        status: "PENDING",
+      });
+      await expect(
+        prisma.refundTransaction.count({
+          where: {
+            paymentId: pending.paymentId,
+            reason: "LATE_CAPTURE_COMPENSATION",
+          },
+        }),
+      ).resolves.toBe(1);
+      await expect(
+        prisma.outboxMessage.count({
+          where: {
+            aggregateType: "Payment",
+            aggregateId: pending.paymentId,
+            messageType: "void_payment",
+          },
+        }),
+      ).resolves.toBe(1);
+
+      const compensation = await prisma.refundTransaction.findFirstOrThrow({
+        where: {
+          paymentId: pending.paymentId,
+          reason: "LATE_CAPTURE_COMPENSATION",
+        },
+        include: { payment: true },
+      });
+      expect(compensation.payment.providerIntentId).toBeNull();
+      if (childOutcome === "SUCCEEDED") {
+        for (const falseStatus of ["CAPTURED", "REFUNDED"] as const) {
+          const forged = await pool.connect();
+          await forged.query("BEGIN");
+          try {
+            await forged.query(
+              "UPDATE payments SET status = $2 WHERE id = $1",
+              [pending.paymentId, falseStatus],
+            );
+            await expect(forged.query("COMMIT")).rejects.toMatchObject({
+              constraint: "payment_null_intent_compensation_check",
+            });
+          } finally {
+            await forged.query("ROLLBACK").catch(() => undefined);
+            forged.release();
+          }
+        }
+      }
+      const manualProvider = new (class extends DisabledPaymentProviderAdapter {
+        override providerName(): string {
+          return "test";
+        }
+      })();
+      const manualOrders = new OrdersService(
+        prisma,
+        new AuditService(prisma),
+        manualProvider,
+      );
+      const operator = operatorForTest(
+        testOperatorId,
+        fixture.foundation.nodeId,
+      );
+      const reads = new OperatorReadsService(
+        prisma,
+        manualOrders,
+        manualProvider,
+      );
+      const before = await reads.orderRefunds(
+        operator,
+        fixture.foundation.orderId,
+        { limit: 10 },
+      );
+      expect(
+        before.items.find((item) => item.id === compensation.id),
+      ).toMatchObject({
+        providerIntentId: event.providerTransactionId,
+        status: "PENDING",
+      });
+      await prisma.$queryRaw`
+      SELECT taven_claim_refund_dispatch(${compensation.id}::uuid)::text
+    `;
+      const failed = await manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        compensation.id,
+        {
+          outcome: "FAILED",
+          expectedStatus: "PENDING",
+          expectedProviderResultEventId: null,
+          providerIntentId: event.providerTransactionId,
+          requestReference: compensation.idempotencyKey,
+          amountMinor: compensation.amountMinor.toString(),
+          currency: compensation.payment.currency,
+          providerRefundReference: `late-capture-final-${compensation.id}`,
+          evidenceKind: "PROVIDER_SUPPORT",
+          evidenceReference: `late-capture-case-${compensation.id}`,
+          occurredAt: new Date().toISOString(),
+          reason: "provider confirmed final non-execution",
+          finalOutcomeConfirmed: true,
+        },
+        "late-capture-compensation-failure",
+      );
+      expect(failed.result.refundStatus).toBe("FAILED");
+      expect(failed.result.paymentStatus).toBe("CAPTURED");
+      const failedDetail = await reads.orderDetail(
+        operator,
+        fixture.foundation.orderId,
+      );
+      expect(failedDetail.financial.outstandingCompensationMinor).toBe(
+        compensation.amountMinor.toString(),
+      );
+      expect(failedDetail.financial.blockingCodes).toContain(
+        "COMPENSATION_DUE",
+      );
+      expect(
+        failedDetail.actions.find(
+          (action) =>
+            action.action === "RETRY_REFUND" &&
+            action.targetId === compensation.id,
+        ),
+      ).toMatchObject({ enabled: true, blockingCodes: [] });
+      const retry = await manualOrders.retryRefund(
+        operator,
+        fixture.foundation.orderId,
+        compensation.id,
+        {
+          expectedFailureProviderEventId: failed.result
+            .providerResultEventId as string,
+          reason: "retry exact late-capture compensation obligation",
+        },
+        "late-capture-compensation-retry",
+      );
+      const retryId = retry.result.refundTransactionId as string;
+      await expect(
+        prisma.outboxMessage.findUniqueOrThrow({
+          where: { deduplicationKey: `refund_payment:v1:${retryId}` },
+        }),
+      ).resolves.toMatchObject({
+        payload: { providerIntentId: event.providerTransactionId },
+      });
+      await expect(
+        prisma.refundTransaction.count({
+          where: { replacesRefundTransactionId: compensation.id },
+        }),
+      ).resolves.toBe(1);
+      const replacement = await prisma.refundTransaction.findUniqueOrThrow({
+        where: { id: retryId },
+        include: { payment: true },
+      });
+      await prisma.$queryRaw`
+      SELECT taven_claim_refund_dispatch(${retryId}::uuid)::text
+    `;
+      const succeeded = await manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        retryId,
+        {
+          outcome: childOutcome,
+          expectedStatus: "PENDING",
+          expectedProviderResultEventId: null,
+          providerIntentId: event.providerTransactionId,
+          requestReference: replacement.idempotencyKey,
+          amountMinor: replacement.amountMinor.toString(),
+          currency: replacement.payment.currency,
+          providerRefundReference: `late-capture-result-${retryId}`,
+          evidenceKind: "PROVIDER_SUPPORT",
+          evidenceReference: `late-capture-result-case-${retryId}`,
+          occurredAt: new Date().toISOString(),
+          reason: "provider confirmed final replacement outcome",
+          finalOutcomeConfirmed: true,
+        },
+        `late-capture-compensation-${childOutcome}`,
+      );
+      expect(succeeded.result).toMatchObject({
+        refundStatus: childOutcome,
+        paymentStatus: childOutcome === "SUCCEEDED" ? "REFUNDED" : "CAPTURED",
+      });
+      await expect(
+        prisma.payment.findUniqueOrThrow({ where: { id: pending.paymentId } }),
+      ).resolves.toMatchObject({
+        status: childOutcome === "SUCCEEDED" ? "REFUNDED" : "CAPTURED",
+        providerIntentId: null,
+        providerCaptureId: event.providerTransactionId,
+      });
+      await expect(
+        prisma.order.findUniqueOrThrow({
+          where: { id: fixture.foundation.orderId },
+        }),
+      ).resolves.toMatchObject({ status: "CANCELLED" });
+      if (childOutcome === "FAILED") {
+        await expect(
+          manualOrders.retryRefund(
+            operator,
+            fixture.foundation.orderId,
+            retryId,
+            {
+              expectedFailureProviderEventId: succeeded.result
+                .providerResultEventId as string,
+              reason: "a third transfer must be denied",
+            },
+            "late-capture-third-transfer-denied",
+          ),
+        ).rejects.toThrow(
+          "Refund has no exact retryable final failure evidence",
+        );
+      }
+    },
+    20_000,
+  );
+
+  it("retries an intent-bearing failed-source late capture only after final refund failure", async () => {
     const fixture = await preparePaidOrder(
-      "cancelled-balance-late-capture",
+      "failed-source-late-capture-retry",
       1,
       "DEPOSIT_BALANCE",
     );
     await advanceThroughQc(fixture, 0);
-    const pending = await payments.createBalancePayment(
+    const balance = await payments.createBalancePayment(
       fixture.foundation.orderId,
       { method: "CARD" },
-      "cancelled-balance-payment-link",
+      "failed-source-balance-link",
     );
-
-    const cancelled = await orders.cancelOrder(
-      fixture.foundation.orderId,
-      { reason: "customer cancelled before final payment" },
-      "cancelled-balance-order",
-    );
-    const cancelledReplay = await orders.cancelOrder(
-      fixture.foundation.orderId,
-      { reason: "customer cancelled before final payment" },
-      "cancelled-balance-order",
-    );
-    expect(cancelled.status).toBe("ORDER_CANCELLED");
-    expect(cancelledReplay).toEqual(cancelled);
-    await expect(
-      prisma.payment.findUniqueOrThrow({ where: { id: pending.paymentId } }),
-    ).resolves.toMatchObject({
-      status: "VOIDED",
-      captureAuthorized: false,
-      captureCutoffAt: expect.any(Date),
-    });
-    await expect(
-      prisma.outboxMessage.findUniqueOrThrow({
-        where: { deduplicationKey: `void_payment:v1:${pending.paymentId}` },
-      }),
-    ).resolves.toMatchObject({
-      aggregateType: "Payment",
-      aggregateId: pending.paymentId,
-      messageType: "void_payment",
-    });
-
-    const event = {
-      providerEventId: `cancelled-late-capture-${pending.paymentId}`,
-      providerTransactionId: `balance-intent-${pending.paymentId}`,
-      merchantReference: pending.paymentId,
-      status: "CAPTURED" as const,
-      amountMinor: BigInt(pending.amountMinor),
-      currency: pending.currency,
+    const providerTransactionId = `balance-intent-${balance.paymentId}`;
+    const baseEvent = {
+      providerTransactionId,
+      merchantReference: balance.paymentId,
+      amountMinor: BigInt(balance.amountMinor),
+      currency: balance.currency,
     };
     await expect(
-      payments.consumeProviderEvent("test", {}, event),
-    ).resolves.toEqual({ outcome: "REFUND_PENDING" });
-    await expect(
-      payments.consumeProviderEvent("test", {}, event),
-    ).resolves.toEqual({ outcome: "DUPLICATE" });
-    await expect(
-      prisma.refundTransaction.findFirstOrThrow({
-        where: {
-          paymentId: pending.paymentId,
-          reason: "LATE_CAPTURE_COMPENSATION",
+      payments.consumeProviderEvent(
+        "test",
+        {},
+        {
+          ...baseEvent,
+          providerEventId: `failed-source-${balance.paymentId}`,
+          status: "FAILED",
         },
-      }),
-    ).resolves.toMatchObject({
-      amountMinor: BigInt(pending.amountMinor),
-      status: "PENDING",
+      ),
+    ).resolves.toEqual({ outcome: "FAILED" });
+    const orderBeforeLateCapture = await prisma.order.findUniqueOrThrow({
+      where: { id: fixture.foundation.orderId },
+      select: { status: true },
     });
     await expect(
-      prisma.refundTransaction.count({
-        where: {
-          paymentId: pending.paymentId,
-          reason: "LATE_CAPTURE_COMPENSATION",
+      payments.consumeProviderEvent(
+        "test",
+        {},
+        {
+          ...baseEvent,
+          providerEventId: `failed-source-late-${balance.paymentId}`,
+          status: "CAPTURED",
         },
-      }),
-    ).resolves.toBe(1);
+      ),
+    ).resolves.toEqual({ outcome: "REFUND_PENDING" });
+    const root = await prisma.refundTransaction.findFirstOrThrow({
+      where: {
+        paymentId: balance.paymentId,
+        reason: "LATE_CAPTURE_COMPENSATION",
+      },
+      include: { payment: true },
+    });
+    expect(root.payment.providerIntentId).toBe(providerTransactionId);
+    await prisma.$queryRaw`
+      SELECT taven_claim_refund_dispatch(${root.id}::uuid)::text
+    `;
+    const manualProvider = new (class extends DisabledPaymentProviderAdapter {
+      override providerName(): string {
+        return "test";
+      }
+    })();
+    const manualOrders = new OrdersService(
+      prisma,
+      new AuditService(prisma),
+      manualProvider,
+    );
+    const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
+    const failed = await manualOrders.recordRefundProviderResult(
+      operator,
+      fixture.foundation.orderId,
+      root.id,
+      {
+        outcome: "FAILED",
+        expectedStatus: "PENDING",
+        expectedProviderResultEventId: null,
+        providerIntentId: providerTransactionId,
+        requestReference: root.idempotencyKey,
+        amountMinor: root.amountMinor.toString(),
+        currency: root.payment.currency,
+        providerRefundReference: `failed-source-final-${root.id}`,
+        evidenceKind: "PROVIDER_SUPPORT",
+        evidenceReference: `failed-source-case-${root.id}`,
+        occurredAt: new Date().toISOString(),
+        reason: "provider confirmed final non-execution",
+        finalOutcomeConfirmed: true,
+      },
+      "failed-source-root-failure",
+    );
+    expect(failed.result.paymentStatus).toBe("CAPTURED");
+    const retry = await manualOrders.retryRefund(
+      operator,
+      fixture.foundation.orderId,
+      root.id,
+      {
+        expectedFailureProviderEventId: failed.result
+          .providerResultEventId as string,
+        reason: "exact compensation remains due",
+      },
+      "failed-source-root-retry",
+    );
+    const retryId = retry.result.refundTransactionId as string;
+    const child = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: retryId },
+    });
+    await prisma.$queryRaw`
+      SELECT taven_claim_refund_dispatch(${retryId}::uuid)::text
+    `;
+    const succeeded = await manualOrders.recordRefundProviderResult(
+      operator,
+      fixture.foundation.orderId,
+      retryId,
+      {
+        outcome: "SUCCEEDED",
+        expectedStatus: "PENDING",
+        expectedProviderResultEventId: null,
+        providerIntentId: providerTransactionId,
+        requestReference: child.idempotencyKey,
+        amountMinor: child.amountMinor.toString(),
+        currency: root.payment.currency,
+        providerRefundReference: `failed-source-success-${retryId}`,
+        evidenceKind: "PROVIDER_SUPPORT",
+        evidenceReference: `failed-source-success-case-${retryId}`,
+        occurredAt: new Date().toISOString(),
+        reason: "provider confirmed final compensation",
+        finalOutcomeConfirmed: true,
+      },
+      "failed-source-retry-success",
+    );
+    expect(succeeded.result.paymentStatus).toBe("REFUNDED");
     await expect(
-      prisma.outboxMessage.count({
-        where: {
-          aggregateType: "Payment",
-          aggregateId: pending.paymentId,
-          messageType: "void_payment",
-        },
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
       }),
-    ).resolves.toBe(1);
-  });
+    ).resolves.toMatchObject({ status: orderBeforeLateCapture.status });
+  }, 20_000);
+
+  it("directly refunds an authenticated null-intent late capture without restoring checkout", async () => {
+    const fixture = await preparePaidOrder(
+      "direct-null-intent-compensation",
+      1,
+      "DEPOSIT_BALANCE",
+    );
+    await advanceThroughQc(fixture, 0);
+    let markIntentCreated!: () => void;
+    const intentCreated = new Promise<void>((resolve) => {
+      markIntentCreated = resolve;
+    });
+    let releaseIntent!: () => void;
+    const intentReleased = new Promise<void>((resolve) => {
+      releaseIntent = resolve;
+    });
+    pauseBalanceIntentBeforeReturn = async () => {
+      markIntentCreated();
+      await intentReleased;
+    };
+    const creation = payments.createBalancePayment(
+      fixture.foundation.orderId,
+      { method: "CARD" },
+      "direct-null-intent-balance-link",
+    );
+    let paymentId: string;
+    try {
+      await intentCreated;
+      const staged = await prisma.payment.findFirstOrThrow({
+        where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+      });
+      paymentId = staged.id;
+      await orders.cancelOrder(
+        fixture.foundation.orderId,
+        { reason: "customer cancelled before provider intent returned" },
+        "direct-null-intent-cancel",
+      );
+    } finally {
+      releaseIntent();
+      pauseBalanceIntentBeforeReturn = undefined;
+    }
+    await creation;
+    const providerTransactionId = `balance-intent-${paymentId}`;
+    const payment = await prisma.payment.findUniqueOrThrow({
+      where: { id: paymentId },
+    });
+    await expect(
+      payments.consumeProviderEvent(
+        "test",
+        {},
+        {
+          providerEventId: `direct-null-intent-capture-${paymentId}`,
+          providerTransactionId,
+          merchantReference: paymentId,
+          status: "CAPTURED",
+          amountMinor: payment.requestedAmountMinor,
+          currency: payment.currency,
+        },
+      ),
+    ).resolves.toEqual({ outcome: "REFUND_PENDING" });
+    const root = await prisma.refundTransaction.findFirstOrThrow({
+      where: { paymentId, reason: "LATE_CAPTURE_COMPENSATION" },
+    });
+    await prisma.$queryRaw`
+      SELECT taven_claim_refund_dispatch(${root.id}::uuid)::text
+    `;
+    const provider = new (class extends DisabledPaymentProviderAdapter {
+      override providerName(): string {
+        return "test";
+      }
+    })();
+    const manualOrders = new OrdersService(
+      prisma,
+      new AuditService(prisma),
+      provider,
+    );
+    const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
+    const result = await manualOrders.recordRefundProviderResult(
+      operator,
+      fixture.foundation.orderId,
+      root.id,
+      {
+        outcome: "SUCCEEDED",
+        expectedStatus: "PENDING",
+        expectedProviderResultEventId: null,
+        providerIntentId: providerTransactionId,
+        requestReference: root.idempotencyKey,
+        amountMinor: root.amountMinor.toString(),
+        currency: payment.currency,
+        providerRefundReference: `direct-compensation-${root.id}`,
+        evidenceKind: "PROVIDER_SUPPORT",
+        evidenceReference: `direct-compensation-case-${root.id}`,
+        occurredAt: new Date().toISOString(),
+        reason: "provider confirmed final full compensation",
+        finalOutcomeConfirmed: true,
+      },
+      "direct-null-intent-success",
+    );
+    expect(result.result.paymentStatus).toBe("REFUNDED");
+    await expect(
+      prisma.payment.findUniqueOrThrow({ where: { id: paymentId } }),
+    ).resolves.toMatchObject({
+      providerIntentId: null,
+      providerCaptureId: providerTransactionId,
+      status: "REFUNDED",
+    });
+    await expect(
+      prisma.order.findUniqueOrThrow({
+        where: { id: fixture.foundation.orderId },
+      }),
+    ).resolves.toMatchObject({ status: "CANCELLED" });
+  }, 20_000);
 
   it("creates a replacement only after acquiring a fresh reservation", async () => {
     const fixture = await preparePaidOrder("replacement");
@@ -2868,6 +3403,30 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     );
     const refundId = (pending.result.refundIds as string[])[0];
     if (!refundId) throw new Error("claim refund was not created");
+    const refund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { payment: true },
+    });
+    const dispatch = await prisma.outboxMessage.findUniqueOrThrow({
+      where: { deduplicationKey: `refund_payment:v1:${refundId}` },
+    });
+    expect(dispatch).toMatchObject({
+      aggregateType: "RefundTransaction",
+      aggregateId: refundId,
+      messageType: "refund_payment",
+      schemaVersion: 1,
+      status: "PENDING",
+      payload: {
+        refundTransactionId: refundId,
+        paymentId: refund.paymentId,
+        provider: refund.provider,
+        providerIntentId: refund.payment.providerIntentId,
+        amountMinor: refund.amountMinor.toString(),
+        currency: refund.payment.currency,
+        idempotencyKey: refund.idempotencyKey,
+        action: "refund_payment",
+      },
+    });
     await succeedRefund(refundId);
 
     const projection = await orders.getFulfilment(fixture.foundation.orderId);
@@ -4145,6 +4704,198 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       client.release();
     }
 
+    const sourceSuccessAt = new Date(
+      Math.max(Date.now(), failedAt.getTime() + 1),
+    );
+    const unclaimedProbe = await pool.connect();
+    await unclaimedProbe.query("BEGIN");
+    try {
+      const applied = await unclaimedProbe.query<{
+        success_refund_id: string;
+      }>(
+        `SELECT success_refund_id
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          failedRefundId,
+          failureProviderRefundId,
+          `late-source-unclaimed-${failedRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(applied.rows[0]?.success_refund_id).toBe(failedRefundId);
+      const states = await unclaimedProbe.query<{ status: string }>(
+        `SELECT status::text FROM refund_transactions WHERE id = $1`,
+        [retryRefundId],
+      );
+      expect(states.rows[0]?.status).toBe("SUPERSEDED");
+    } finally {
+      await unclaimedProbe.query("ROLLBACK");
+      unclaimedProbe.release();
+    }
+
+    const claimedProbe = await pool.connect();
+    await claimedProbe.query("BEGIN");
+    try {
+      const claim = await claimedProbe.query<{ claimed_at: Date | null }>(
+        `SELECT taven_claim_refund_dispatch($1) AS claimed_at`,
+        [retryRefundId],
+      );
+      expect(claim.rows[0]?.claimed_at).toBeInstanceOf(Date);
+      const suspended = await claimedProbe.query<{ incident_code: string }>(
+        `SELECT incident_code
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          failedRefundId,
+          failureProviderRefundId,
+          `late-source-claimed-${failedRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(suspended.rows[0]?.incident_code).toBe("REFUND_SUSPENDED");
+      const suspendedReplay = await claimedProbe.query<{
+        recorded: boolean;
+        incident_code: string;
+      }>(
+        `SELECT recorded, incident_code
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          failedRefundId,
+          failureProviderRefundId,
+          `late-source-claimed-${failedRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(suspendedReplay.rows[0]).toMatchObject({
+        recorded: false,
+        incident_code: "REFUND_SUSPENDED",
+      });
+      const failedRetry = await claimedProbe.query<{
+        success_refund_id: string;
+      }>(
+        `SELECT success_refund_id
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_FAILED', $4, $5::jsonb
+         )`,
+        [
+          retryRefundId,
+          `provider-retry-failed-${retryRefundId}`,
+          `retry-failed-${retryRefundId}`,
+          new Date(sourceSuccessAt.getTime() + 1_000),
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(failedRetry.rows[0]?.success_refund_id).toBe(failedRefundId);
+    } finally {
+      await claimedProbe.query("ROLLBACK");
+      claimedProbe.release();
+    }
+
+    const retryFirstProbe = await pool.connect();
+    await retryFirstProbe.query("BEGIN");
+    try {
+      await retryFirstProbe.query(`SELECT taven_claim_refund_dispatch($1)`, [
+        retryRefundId,
+      ]);
+      await retryFirstProbe.query(
+        `SELECT * FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          retryRefundId,
+          `provider-retry-success-${retryRefundId}`,
+          `retry-first-success-${retryRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      const incident = await retryFirstProbe.query<{
+        incident_code: string;
+      }>(
+        `SELECT incident_code FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          failedRefundId,
+          failureProviderRefundId,
+          `late-source-retry-first-${failedRefundId}`,
+          new Date(sourceSuccessAt.getTime() + 1),
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(incident.rows[0]?.incident_code).toBe("REFUND_SUSPENDED");
+      await retryFirstProbe.query("SAVEPOINT selected_retry_success");
+      await expect(
+        retryFirstProbe.query(
+          `SELECT * FROM taven_apply_refund_provider_result(
+             $1, $2, $3, 'REFUND_FAILED', $4, $5::jsonb
+           )`,
+          [
+            retryRefundId,
+            `provider-retry-success-${retryRefundId}`,
+            `retry-failure-after-success-${retryRefundId}`,
+            new Date(sourceSuccessAt.getTime() + 2_000),
+            JSON.stringify({ source: "isolated-test-provider" }),
+          ],
+        ),
+      ).rejects.toMatchObject({
+        constraint: "refund_retry_source_reconciliation_check",
+      });
+      await retryFirstProbe.query(
+        "ROLLBACK TO SAVEPOINT selected_retry_success",
+      );
+      const doubleSuccessReplay = await retryFirstProbe.query<{
+        recorded: boolean;
+        incident_code: string;
+      }>(
+        `SELECT recorded, incident_code
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          retryRefundId,
+          `provider-retry-success-${retryRefundId}`,
+          `retry-first-success-${retryRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(doubleSuccessReplay.rows[0]).toMatchObject({
+        recorded: false,
+        incident_code: "REFUND_DOUBLE_SUCCESS",
+      });
+      const states = await retryFirstProbe.query<{
+        payment_status: string;
+        retry_status: string;
+        source_status: string;
+      }>(
+        `SELECT payment.status::text AS payment_status,
+                retry.status::text AS retry_status,
+                source.status::text AS source_status
+         FROM refund_transactions source
+         JOIN refund_transactions retry ON retry.id = $2
+         JOIN payments payment ON payment.id = source.payment_id
+         WHERE source.id = $1`,
+        [failedRefundId, retryRefundId],
+      );
+      expect(states.rows[0]).toMatchObject({
+        payment_status: "REFUND_PENDING",
+        retry_status: "SUSPENDED",
+        source_status: "FAILED",
+      });
+    } finally {
+      await retryFirstProbe.query("ROLLBACK");
+      retryFirstProbe.release();
+    }
+
     const warnings = new OperatorWarningsService(prisma);
     const warningOperator = operatorForTest(
       testOperatorId,
@@ -4198,6 +4949,34 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         where: { id: fixture.foundation.orderId },
       }),
     ).resolves.toMatchObject({ status: "PARTIALLY_FULFILLED" });
+
+    await expect(prisma.$executeRaw`
+      INSERT INTO refund_transactions (
+        id, payment_id, claim_id, price_adjustment_id,
+        replaces_refund_transaction_id, replaces_failure_provider_event_id,
+        idempotency_key, provider, amount_minor, reason, status
+      )
+      SELECT ${randomUUID()}::uuid, source.payment_id, source.claim_id,
+             source.price_adjustment_id, source.id,
+             source.provider_result_event_id, ${`sibling-${randomUUID()}`},
+             source.provider, source.amount_minor, source.reason, 'PENDING'
+      FROM refund_transactions source
+      WHERE source.id = ${failedRefundId}::uuid
+    `).rejects.toThrow("a refund obligation permits only one replacement");
+
+    await expect(prisma.$executeRaw`
+      INSERT INTO refund_transactions (
+        id, payment_id, claim_id, price_adjustment_id,
+        replaces_refund_transaction_id, replaces_failure_provider_event_id,
+        idempotency_key, provider, amount_minor, reason, status
+      )
+      SELECT ${randomUUID()}::uuid, source.payment_id, source.claim_id,
+             source.price_adjustment_id, source.id,
+             source.provider_result_event_id, ${`nested-${randomUUID()}`},
+             source.provider, source.amount_minor, source.reason, 'PENDING'
+      FROM refund_transactions source
+      WHERE source.id = ${retryRefundId}::uuid
+    `).rejects.toThrow("a replacement refund cannot be retried again");
   });
 
   it("keeps cancellation pending until the exact carrier label void is confirmed", async () => {
@@ -4637,86 +5416,157 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     });
   }, 10_000);
 
-  it("reconciles a pre-void acceptance scan after an undispatched cancellation refund", async () => {
-    const fixture = await preparePaidOrder("post-void-handoff-pending");
-    await advanceThroughQc(fixture, 0);
-    await labelAndPack(fixture, 0);
-    await orders.cancelOrder(
-      fixture.foundation.orderId,
-      { reason: "carrier acceptance was delayed" },
-      "post-void-handoff-pending-cancel",
-    );
-    const voidOccurredAt = new Date();
-    const confirmed = await orders.confirmLabelVoid(
-      fixture.foundation.orderId,
-      fixture.foundation.shipmentId,
-      {
-        providerEventId: `post-void-${fixture.foundation.shipmentId}`,
-        providerTransactionId: `post-void-tx-${fixture.foundation.shipmentId}`,
-        occurredAt: voidOccurredAt.toISOString(),
-      },
-      "post-void-handoff-pending-confirm",
-    );
-    const refundId = (confirmed.result.refundIds as string[])[0];
-    if (!refundId) throw new Error("cancellation refund was not created");
-    await expect(
-      prisma.refundTransaction.update({
-        where: { id: refundId },
-        data: { status: "SUPERSEDED" },
-      }),
-    ).rejects.toThrow("exact post-void handoff evidence");
-
-    const evidence = {
-      providerEventId: `post-void-acceptance-${fixture.foundation.shipmentId}`,
-      providerTransactionId: `post-void-acceptance-tx-${fixture.foundation.shipmentId}`,
-      occurredAt: new Date(voidOccurredAt.getTime() - 1).toISOString(),
-    };
-    const reconciled = await orders.handoffShipment(
-      fixture.foundation.orderId,
-      fixture.foundation.shipmentId,
-      evidence,
-      "post-void-handoff-pending-acceptance",
-    );
-    const replay = await orders.handoffShipment(
-      fixture.foundation.orderId,
-      fixture.foundation.shipmentId,
-      evidence,
-      "post-void-handoff-pending-replay",
-    );
-
-    expect(reconciled.status).toBe("SHIPMENT_HANDOFF_RECONCILED");
-    expect(replay.status).toBe("SHIPMENT_HANDOFF_ALREADY_APPLIED");
-    await expect(
-      prisma.businessEvent.findUniqueOrThrow({
-        where: {
-          eventType_dedupeKey: {
-            eventType: "shipment.handed-off",
-            dedupeKey: fixture.foundation.shipmentId,
-          },
+  it.each(["PENDING", "FAILED"] as const)(
+    "reconciles a pre-void acceptance scan after a %s cancellation refund",
+    async (refundState) => {
+      const fixture = await preparePaidOrder(
+        `post-void-handoff-${refundState}`,
+      );
+      await advanceThroughQc(fixture, 0);
+      await labelAndPack(fixture, 0);
+      await orders.cancelOrder(
+        fixture.foundation.orderId,
+        { reason: "carrier acceptance was delayed" },
+        "post-void-handoff-pending-cancel",
+      );
+      const voidOccurredAt = new Date();
+      const confirmed = await orders.confirmLabelVoid(
+        fixture.foundation.orderId,
+        fixture.foundation.shipmentId,
+        {
+          providerEventId: `post-void-${fixture.foundation.shipmentId}`,
+          providerTransactionId: `post-void-tx-${fixture.foundation.shipmentId}`,
+          occurredAt: voidOccurredAt.toISOString(),
         },
-      }),
-    ).resolves.toMatchObject({
-      orderId: fixture.foundation.orderId,
-      nodeId: fixture.foundation.nodeId,
-      payload: { shipmentId: fixture.foundation.shipmentId },
-    });
-    await expect(
-      prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
-    ).resolves.toMatchObject({ status: "SUPERSEDED" });
-    await expect(
-      prisma.payment.findUniqueOrThrow({
-        where: { id: fixture.foundation.paymentId },
-      }),
-    ).resolves.toMatchObject({ status: "CAPTURED" });
-    const projection = await orders.getFulfilment(fixture.foundation.orderId);
-    expect(projection).toMatchObject({
-      orderStatus: "SHIPPED",
-      phase: { status: "SHIPPED" },
-      jobs: [expect.objectContaining({ status: "HANDED_OVER" })],
-      shipments: [expect.objectContaining({ status: "HANDED_OVER" })],
-      slots: [expect.objectContaining({ outcome: "PENDING" })],
-    });
-  });
+        "post-void-handoff-pending-confirm",
+      );
+      const refundId = (confirmed.result.refundIds as string[])[0];
+      if (!refundId) throw new Error("cancellation refund was not created");
+      let failureEventId: string | null = null;
+      let manualOrders: OrdersService | null = null;
+      let operator: OperatorContext | null = null;
+      if (refundState === "FAILED") {
+        const refund = await prisma.refundTransaction.findUniqueOrThrow({
+          where: { id: refundId },
+          include: { payment: true },
+        });
+        await prisma.$queryRaw`
+        SELECT taven_claim_refund_dispatch(${refundId}::uuid)::text
+      `;
+        const manualProvider =
+          new (class extends DisabledPaymentProviderAdapter {
+            override providerName(): string {
+              return "test";
+            }
+          })();
+        manualOrders = new OrdersService(
+          prisma,
+          new AuditService(prisma),
+          manualProvider,
+        );
+        operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
+        const failure = await manualOrders.recordRefundProviderResult(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          {
+            outcome: "FAILED",
+            expectedStatus: "PENDING",
+            expectedProviderResultEventId: null,
+            providerIntentId: refund.payment.providerIntentId!,
+            requestReference: refund.idempotencyKey,
+            amountMinor: refund.amountMinor.toString(),
+            currency: refund.payment.currency,
+            providerRefundReference: `handoff-failed-${refundId}`,
+            evidenceKind: "PROVIDER_SUPPORT",
+            evidenceReference: `handoff-failure-${refundId}`,
+            occurredAt: new Date().toISOString(),
+            reason: "provider confirmed final non-execution",
+            finalOutcomeConfirmed: true,
+          },
+          "post-void-handoff-final-failure",
+        );
+        failureEventId = failure.result.providerResultEventId as string;
+      }
+      await expect(
+        prisma.refundTransaction.update({
+          where: { id: refundId },
+          data: { status: "SUPERSEDED" },
+        }),
+      ).rejects.toThrow(
+        refundState === "FAILED"
+          ? "failed refund transactions may only reconcile a late provider success"
+          : "exact post-void handoff evidence",
+      );
+
+      const evidence = {
+        providerEventId: `post-void-acceptance-${fixture.foundation.shipmentId}`,
+        providerTransactionId: `post-void-acceptance-tx-${fixture.foundation.shipmentId}`,
+        occurredAt: new Date(voidOccurredAt.getTime() - 1).toISOString(),
+      };
+      const reconciled = await orders.handoffShipment(
+        fixture.foundation.orderId,
+        fixture.foundation.shipmentId,
+        evidence,
+        "post-void-handoff-pending-acceptance",
+      );
+      const replay = await orders.handoffShipment(
+        fixture.foundation.orderId,
+        fixture.foundation.shipmentId,
+        evidence,
+        "post-void-handoff-pending-replay",
+      );
+
+      expect(reconciled.status).toBe("SHIPMENT_HANDOFF_RECONCILED");
+      expect(replay.status).toBe("SHIPMENT_HANDOFF_ALREADY_APPLIED");
+      await expect(
+        prisma.businessEvent.findUniqueOrThrow({
+          where: {
+            eventType_dedupeKey: {
+              eventType: "shipment.handed-off",
+              dedupeKey: fixture.foundation.shipmentId,
+            },
+          },
+        }),
+      ).resolves.toMatchObject({
+        orderId: fixture.foundation.orderId,
+        nodeId: fixture.foundation.nodeId,
+        payload: { shipmentId: fixture.foundation.shipmentId },
+      });
+      await expect(
+        prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
+      ).resolves.toMatchObject({
+        status: refundState === "FAILED" ? "FAILED" : "SUPERSEDED",
+      });
+      await expect(
+        prisma.payment.findUniqueOrThrow({
+          where: { id: fixture.foundation.paymentId },
+        }),
+      ).resolves.toMatchObject({ status: "CAPTURED" });
+      const projection = await orders.getFulfilment(fixture.foundation.orderId);
+      expect(projection).toMatchObject({
+        orderStatus: "SHIPPED",
+        phase: { status: "SHIPPED" },
+        jobs: [expect.objectContaining({ status: "HANDED_OVER" })],
+        shipments: [expect.objectContaining({ status: "HANDED_OVER" })],
+        slots: [expect.objectContaining({ outcome: "PENDING" })],
+      });
+      if (manualOrders && operator && failureEventId) {
+        await expect(
+          manualOrders.retryRefund(
+            operator,
+            fixture.foundation.orderId,
+            refundId,
+            {
+              expectedFailureProviderEventId: failureEventId,
+              reason: "obligation has been removed by handoff",
+            },
+            "post-void-handoff-ineligible-retry",
+          ),
+        ).rejects.toThrow("Cancellation refund obligation is no longer active");
+      }
+    },
+  );
 
   it("records aggregate settlement when a pre-void acceptance arrives after refunds", async () => {
     const fixture = await preparePaidOrder("post-void-handoff-refunded");
@@ -5444,6 +6294,498 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     await expect(
       prisma.refundTransaction.findUniqueOrThrow({ where: { id: refundId } }),
     ).resolves.toMatchObject({ reason: "EXPRESS_BREACH" });
+  });
+
+  it.each(["FULL", "DEPOSIT", "BALANCE"] as const)(
+    "records final operator evidence before queueing one failed-refund replacement for %s",
+    async (paymentScheduleKind) => {
+      const fixture = await preparePaidOrder(
+        `operator-refund-recovery-${paymentScheduleKind}`,
+        1,
+        paymentScheduleKind === "FULL" ? "FULL" : "DEPOSIT_BALANCE",
+      );
+      await advanceThroughQc(fixture, 0);
+      let selectedPaymentId = fixture.foundation.paymentId;
+      if (paymentScheduleKind === "FULL") {
+        await markSlotPriceComponentExpress(
+          fixture.foundation.fulfilmentSlotIds[0]!,
+        );
+      } else {
+        const balance = await prisma.payment.findFirstOrThrow({
+          where: { orderId: fixture.foundation.orderId, role: "BALANCE" },
+        });
+        await payments.createBalancePayment(
+          fixture.foundation.orderId,
+          { method: "CARD" },
+          `operator-refund-recovery-balance-${balance.id}`,
+        );
+        await payments.consumeProviderEvent(
+          "test",
+          {},
+          {
+            providerEventId: `operator-refund-recovery-capture-${balance.id}`,
+            providerTransactionId: `balance-intent-${balance.id}`,
+            merchantReference: balance.id,
+            status: "CAPTURED",
+            amountMinor: balance.requestedAmountMinor,
+            currency: balance.currency,
+          },
+        );
+        if (paymentScheduleKind === "BALANCE") selectedPaymentId = balance.id;
+      }
+      const adjustment = await orders.createPriceAdjustment(
+        fixture.foundation.orderId,
+        {
+          reason:
+            paymentScheduleKind === "FULL"
+              ? "EXPRESS_BREACH"
+              : "POST_DELIVERY_ISSUE",
+          amountMinor: "1",
+          paymentId: selectedPaymentId,
+          allocation: {
+            slotCredits: [
+              {
+                fulfilmentSlotId: fixture.foundation.fulfilmentSlotIds[0]!,
+                amountMinor: "1",
+              },
+            ],
+          },
+        },
+        "operator-refund-recovery-adjustment",
+      );
+      const pending = await orders.refundAdjustment(
+        fixture.foundation.orderId,
+        adjustment.result.priceAdjustmentId as string,
+        "operator-refund-recovery-initial",
+      );
+      const refundId = (pending.result.refundIds as string[])[0];
+      if (!refundId) throw new Error("initial refund was not created");
+      const refund = await prisma.refundTransaction.findUniqueOrThrow({
+        where: { id: refundId },
+        include: { payment: true },
+      });
+      let transferCalls = 0;
+      const manualProvider = new (class extends DisabledPaymentProviderAdapter {
+        override providerName(): string {
+          return "test";
+        }
+
+        override async refund() {
+          transferCalls += 1;
+          return {
+            providerRefundId: `provider-retry-${randomUUID()}`,
+            occurredAt: new Date(),
+            evidence: { source: "isolated-test-provider" },
+          };
+        }
+      })();
+      const manualOrders = new OrdersService(
+        prisma,
+        new AuditService(prisma),
+        manualProvider,
+      );
+      const operator = operatorForTest(
+        testOperatorId,
+        fixture.foundation.nodeId,
+      );
+      const failureBody = {
+        outcome: "FAILED" as const,
+        expectedStatus: "PENDING",
+        expectedProviderResultEventId: null,
+        providerIntentId: refund.payment.providerIntentId!,
+        requestReference: refund.idempotencyKey,
+        amountMinor: refund.amountMinor.toString(),
+        currency: refund.payment.currency,
+        providerRefundReference: `portal-refund-${refundId}`,
+        evidenceKind: "PROVIDER_SUPPORT" as const,
+        evidenceReference: `definitive-non-execution-${refundId}`,
+        occurredAt: new Date().toISOString(),
+        reason: "support confirmed final non-execution",
+        finalOutcomeConfirmed: true as const,
+      };
+      await expect(
+        manualOrders.recordRefundProviderResult(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          failureBody,
+          "operator-refund-recovery-unclaimed",
+        ),
+      ).rejects.toThrow("Refund has no immutable provider dispatch claim");
+      await expect(
+        manualOrders.retryRefund(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          { expectedFailureProviderEventId: randomUUID(), reason: "not final" },
+          "operator-refund-recovery-pending",
+        ),
+      ).rejects.toThrow("Refund has no exact retryable final failure evidence");
+      const claim = await prisma.$queryRaw<Array<{ claimed_at: Date | null }>>`
+      SELECT taven_claim_refund_dispatch(${refundId}::uuid) AS claimed_at
+    `;
+      expect(claim[0]?.claimed_at).toBeInstanceOf(Date);
+      const claimedAt = claim[0]?.claimed_at;
+      if (!claimedAt) throw new Error("refund dispatch claim was not recorded");
+      const dispatchKey = `refund_payment:v1:${refundId}`;
+      await prisma.outboxMessage.update({
+        where: { deduplicationKey: dispatchKey },
+        data: { status: "PROCESSING", lockedAt: new Date(), attempts: 1 },
+      });
+      const processingDetail = await new OperatorReadsService(
+        prisma,
+        manualOrders,
+        manualProvider,
+      ).orderDetail(operator, fixture.foundation.orderId);
+      expect(
+        processingDetail.actions.find(
+          (action) =>
+            action.action === "RECORD_REFUND_PROVIDER_RESULT" &&
+            action.targetId === refundId,
+        )?.blockingCodes,
+      ).toContain("REFUND_DISPATCH_PROCESSING");
+      await expect(
+        manualOrders.recordRefundProviderResult(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          failureBody,
+          "operator-refund-recovery-active-dispatch",
+        ),
+      ).rejects.toThrow("Refund dispatch is still processing at the provider");
+      expect(
+        await prisma.paymentProviderEvent.count({
+          where: { refundTransactionId: refundId },
+        }),
+      ).toBe(0);
+      await prisma.outboxMessage.update({
+        where: { deduplicationKey: dispatchKey },
+        data: { status: "FAILED", lockedAt: null },
+      });
+      await expect(
+        manualOrders.recordRefundProviderResult(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          {
+            ...failureBody,
+            occurredAt: new Date(claimedAt.getTime() - 5_001).toISOString(),
+          },
+          "operator-refund-recovery-predated-claim",
+        ),
+      ).rejects.toThrow(
+        "Provider outcome predates the exact refund dispatch claim",
+      );
+      for (const [field, value] of [
+        ["providerIntentId", "wrong-intent"],
+        ["requestReference", "wrong-request"],
+        ["amountMinor", "2"],
+        ["currency", refund.payment.currency === "EUR" ? "CZK" : "EUR"],
+      ] as const) {
+        await expect(
+          manualOrders.recordRefundProviderResult(
+            operator,
+            fixture.foundation.orderId,
+            refundId,
+            { ...failureBody, [field]: value },
+            `operator-refund-recovery-wrong-${field}`,
+          ),
+        ).rejects.toThrow(
+          "Provider evidence does not match the refund attempt",
+        );
+      }
+      expect(
+        await prisma.paymentProviderEvent.count({
+          where: { refundTransactionId: refundId },
+        }),
+      ).toBe(0);
+      const failure = await manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        failureBody,
+        "operator-refund-recovery-failure",
+      );
+      expect(failure.status).toBe("REFUND_PROVIDER_RESULT_RECORDED");
+      expect(failure.result.refundStatus).toBe("FAILED");
+      const failureEventId = failure.result.providerResultEventId as string;
+      const replay = await manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        failureBody,
+        "operator-refund-recovery-failure",
+      );
+      expect(replay).toEqual(failure);
+      const duplicateEvidence = await manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        failureBody,
+        "operator-refund-recovery-duplicate-evidence",
+      );
+      expect(duplicateEvidence.result).toMatchObject({
+        providerResultEventId: failureEventId,
+        recorded: false,
+        refundStatus: "FAILED",
+      });
+      expect(
+        await prisma.paymentProviderEvent.count({
+          where: { refundTransactionId: refundId, kind: "REFUND_FAILED" },
+        }),
+      ).toBe(1);
+      const reads = new OperatorReadsService(
+        prisma,
+        manualOrders,
+        manualProvider,
+      );
+      const eligibleDetail = await reads.orderDetail(
+        operator,
+        fixture.foundation.orderId,
+      );
+      expect(
+        eligibleDetail.actions.find(
+          (action) =>
+            action.action === "RETRY_REFUND" && action.targetId === refundId,
+        ),
+      ).toMatchObject({ enabled: true, blockingCodes: [] });
+      await expect(
+        manualOrders.recordRefundProviderResult(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          { ...failureBody, reason: "different evidence reason" },
+          "operator-refund-recovery-failure",
+        ),
+      ).rejects.toThrow(
+        "Idempotency key was already used with different input",
+      );
+      const retryBody = {
+        expectedFailureProviderEventId: failureEventId,
+        reason: "replace the verified failed transfer",
+      };
+      const competing = await Promise.allSettled([
+        manualOrders.retryRefund(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          retryBody,
+          "operator-refund-recovery-retry-a",
+        ),
+        manualOrders.retryRefund(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          retryBody,
+          "operator-refund-recovery-retry-b",
+        ),
+      ]);
+      expect(
+        competing.filter((attempt) => attempt.status === "fulfilled"),
+      ).toHaveLength(1);
+      expect(
+        competing.filter((attempt) => attempt.status === "rejected"),
+      ).toHaveLength(1);
+      const winner = competing.find(
+        (attempt) => attempt.status === "fulfilled",
+      );
+      if (!winner || winner.status !== "fulfilled")
+        throw new Error("retry race had no winner");
+      const retry = winner.value;
+      const winningKey = `operator-refund-recovery-retry-${
+        competing[0]?.status === "fulfilled" ? "a" : "b"
+      }`;
+      expect(
+        await manualOrders.retryRefund(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          retryBody,
+          winningKey,
+        ),
+      ).toEqual(retry);
+      expect(retry.status).toBe("REFUND_RETRY_PENDING");
+      const retryId = retry.result.refundTransactionId as string;
+      const dispatch = await prisma.outboxMessage.findUniqueOrThrow({
+        where: { deduplicationKey: `refund_payment:v1:${retryId}` },
+      });
+      expect(dispatch).toMatchObject({
+        aggregateId: retryId,
+        messageType: "refund_payment",
+        status: "PENDING",
+      });
+      const refundPage = await reads.orderRefunds(
+        operator,
+        fixture.foundation.orderId,
+        { limit: 10 },
+      );
+      expect(
+        refundPage.items.find((item) => item.id === refundId),
+      ).toMatchObject({
+        selectedResultKind: "REFUND_FAILED",
+        selectedResultSource: "operator-provider-reconciliation",
+        dispatchStatus: "FAILED",
+        replacementRefundIds: [retryId],
+        providerIntentId: refund.payment.providerIntentId,
+        currency: refund.payment.currency,
+      });
+      const detail = await reads.orderDetail(
+        operator,
+        fixture.foundation.orderId,
+      );
+      const retryAction = detail.actions.find(
+        (action) =>
+          action.action === "RETRY_REFUND" && action.targetId === refundId,
+      );
+      expect(retryAction?.enabled).toBe(false);
+      expect(retryAction?.blockingCodes).toContain("REFUND_REPLACEMENT_EXISTS");
+      await expect(
+        manualOrders.retryRefund(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          {
+            expectedFailureProviderEventId: failureEventId,
+            reason: "second transfer must be blocked",
+          },
+          "operator-refund-recovery-second-key",
+        ),
+      ).rejects.toThrow("Refund has no exact retryable final failure evidence");
+      expect(
+        await prisma.refundTransaction.count({
+          where: { replacesRefundTransactionId: refundId },
+        }),
+      ).toBe(1);
+      // Fence unrelated fixture outbox work so runOnce executes only this real
+      // source/replacement pair, including settlement of the obsolete source.
+      const outboxFence = await pool.connect();
+      await outboxFence.query("BEGIN");
+      try {
+        await outboxFence.query(
+          `SELECT id FROM outbox_messages
+         WHERE message_type IN ('void_payment', 'refund_payment')
+           AND aggregate_id <> ALL($1::uuid[])
+         FOR UPDATE`,
+          [[refundId, retryId]],
+        );
+        const dispatcher = new PaymentOutboxDispatcherService(
+          prisma,
+          manualProvider,
+        );
+        expect(await dispatcher.runOnce(100)).toBe(2);
+      } finally {
+        await outboxFence.query("ROLLBACK");
+        outboxFence.release();
+      }
+      expect(transferCalls).toBe(1);
+      await expect(
+        prisma.refundTransaction.findUniqueOrThrow({ where: { id: retryId } }),
+      ).resolves.toMatchObject({ status: "SUCCEEDED" });
+      await expect(
+        prisma.outboxMessage.findUniqueOrThrow({
+          where: { deduplicationKey: `refund_payment:v1:${refundId}` },
+        }),
+      ).resolves.toMatchObject({ status: "DELIVERED" });
+    },
+  );
+
+  it("serializes late source success against replacement creation", async () => {
+    const fixture = await preparePaidOrder("refund-success-retry-race");
+    const cancellation = await orders.cancelOrder(
+      fixture.foundation.orderId,
+      { reason: "cancel before handoff" },
+      "refund-success-retry-race-cancel",
+    );
+    const refundId = (cancellation.result.refundIds as string[])[0];
+    if (!refundId) throw new Error("cancellation refund was not created");
+    const refund = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { payment: true },
+    });
+    await prisma.$queryRaw`
+      SELECT taven_claim_refund_dispatch(${refundId}::uuid) AS claimed_at
+    `;
+    const provider = new (class extends DisabledPaymentProviderAdapter {
+      override providerName(): string {
+        return "test";
+      }
+    })();
+    const manualOrders = new OrdersService(
+      prisma,
+      new AuditService(prisma),
+      provider,
+    );
+    const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
+    const failureBody = {
+      outcome: "FAILED" as const,
+      expectedStatus: "PENDING",
+      expectedProviderResultEventId: null,
+      providerIntentId: refund.payment.providerIntentId!,
+      requestReference: refund.idempotencyKey,
+      amountMinor: refund.amountMinor.toString(),
+      currency: refund.payment.currency,
+      providerRefundReference: `portal-${refundId}`,
+      evidenceKind: "PROVIDER_SUPPORT" as const,
+      evidenceReference: `failed-${refundId}`,
+      occurredAt: new Date().toISOString(),
+      reason: "provider confirmed final non-execution",
+      finalOutcomeConfirmed: true as const,
+    };
+    const failure = await manualOrders.recordRefundProviderResult(
+      operator,
+      fixture.foundation.orderId,
+      refundId,
+      failureBody,
+      "refund-success-retry-race-failure",
+    );
+    const failureEventId = failure.result.providerResultEventId as string;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const competing = await Promise.allSettled([
+      manualOrders.retryRefund(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        {
+          expectedFailureProviderEventId: failureEventId,
+          reason: "replace verified failed refund",
+        },
+        "refund-success-retry-race-retry",
+      ),
+      manualOrders.recordRefundProviderResult(
+        operator,
+        fixture.foundation.orderId,
+        refundId,
+        {
+          ...failureBody,
+          outcome: "SUCCEEDED",
+          expectedStatus: "FAILED",
+          expectedProviderResultEventId: failureEventId,
+          evidenceReference: `late-success-${refundId}`,
+          occurredAt: new Date().toISOString(),
+          reason: "provider confirmed late source success",
+        },
+        "refund-success-retry-race-success",
+      ),
+    ]);
+    expect(competing[1]?.status).toBe("fulfilled");
+    const source = await prisma.refundTransaction.findUniqueOrThrow({
+      where: { id: refundId },
+      include: { replacementRefundTransactions: true },
+    });
+    expect(source.status).toBe("SUCCEEDED");
+    expect(source.replacementRefundTransactions).toHaveLength(
+      competing[0]?.status === "fulfilled" ? 1 : 0,
+    );
+    expect(
+      source.replacementRefundTransactions.every(
+        (replacement) => replacement.status === "SUPERSEDED",
+      ),
+    ).toBe(true);
+    expect(
+      await prisma.businessEvent.count({
+        where: { eventType: "refund.succeeded", dedupeKey: refundId },
+      }),
+    ).toBe(1);
   });
 
   it("reserves explicit payment balances without stranding split-payment adjustments", async () => {

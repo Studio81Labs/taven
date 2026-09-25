@@ -43,6 +43,10 @@ import {
   PackJobDto,
   RejectClaimDto,
   RefundDto,
+  RefundProviderResultDto,
+  RefundProviderResultCommandResultDto,
+  RetryRefundDto,
+  RetryRefundCommandResultDto,
   ShipmentEventDto,
   ShipmentLabelDto,
   ShipmentProviderEvidenceDto,
@@ -74,6 +78,7 @@ const ADJUSTMENT_ID_PARAM = {
   format: "uuid",
 };
 const CLAIM_ID_PARAM = { name: "claimId", type: String, format: "uuid" };
+const REFUND_ID_PARAM = { name: "refundId", type: String, format: "uuid" };
 
 @ApiTags("operator fulfilment")
 @ApiSecurity("operatorSession")
@@ -563,6 +568,60 @@ export class OrdersController {
     @Headers("idempotency-key") key?: string,
   ): Promise<FulfilmentCommandResultDto> {
     return this.orders.refundClaim(operator, orderId, claimId, body, key);
+  }
+
+  @Post("refunds/:refundId/provider-results")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Record an operator-attested final refund provider result",
+  })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(REFUND_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: RefundProviderResultDto })
+  @ApiConflictResponse({
+    description: "Refund evidence or expected state is stale or ineligible",
+  })
+  @ApiOkResponse({ type: RefundProviderResultCommandResultDto })
+  recordRefundProviderResult(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Param("refundId") refundId: string,
+    @Body() body: RefundProviderResultDto,
+    @Headers("idempotency-key") key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    return this.orders.recordRefundProviderResult(
+      operator,
+      orderId,
+      refundId,
+      body,
+      key,
+    );
+  }
+
+  @Post("refunds/:refundId/retry")
+  @RequireOperatorPermissions(OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION)
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Queue one guarded replacement for a failed refund",
+  })
+  @ApiParam(ORDER_ID_PARAM)
+  @ApiParam(REFUND_ID_PARAM)
+  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiBody({ type: RetryRefundDto })
+  @ApiConflictResponse({
+    description: "Failure evidence or refund obligation is not retryable",
+  })
+  @ApiOkResponse({ type: RetryRefundCommandResultDto })
+  retryRefund(
+    @CurrentOperator() operator: OperatorContext,
+    @Param("orderId") orderId: string,
+    @Param("refundId") refundId: string,
+    @Body() body: RetryRefundDto,
+    @Headers("idempotency-key") key?: string,
+  ): Promise<FulfilmentCommandResultDto> {
+    return this.orders.retryRefund(operator, orderId, refundId, body, key);
   }
 
   @Post("complete")

@@ -9125,6 +9125,10 @@
           "provider": {
             "type": "string"
           },
+          "providerIntentId": {
+            "nullable": true,
+            "type": "string"
+          },
           "refunds": {
             "items": {
               "$ref": "#/components/schemas/OperatorRefundTransactionDto"
@@ -9481,6 +9485,18 @@
             "nullable": true,
             "type": "string"
           },
+          "currency": {
+            "type": "string"
+          },
+          "dispatchClaimedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "dispatchStatus": {
+            "nullable": true,
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "type": "string"
@@ -9497,6 +9513,10 @@
           "provider": {
             "type": "string"
           },
+          "providerIntentId": {
+            "nullable": true,
+            "type": "string"
+          },
           "providerRefundId": {
             "nullable": true,
             "type": "string"
@@ -9508,6 +9528,13 @@
           },
           "reason": {
             "type": "string"
+          },
+          "replacementRefundIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
           },
           "replacesFailureProviderEventId": {
             "format": "uuid",
@@ -9521,6 +9548,22 @@
           },
           "requestedAt": {
             "format": "date-time",
+            "type": "string"
+          },
+          "requestReference": {
+            "type": "string"
+          },
+          "selectedResultKind": {
+            "nullable": true,
+            "type": "string"
+          },
+          "selectedResultOccurredAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "selectedResultSource": {
+            "nullable": true,
             "type": "string"
           },
           "sourceSuccessProviderEventId": {
@@ -9539,7 +9582,10 @@
           "status",
           "requestedAt",
           "provider",
-          "paymentId"
+          "requestReference",
+          "replacementRefundIds",
+          "paymentId",
+          "currency"
         ],
         "type": "object"
       },
@@ -9559,6 +9605,15 @@
             "nullable": true,
             "type": "string"
           },
+          "dispatchClaimedAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "dispatchStatus": {
+            "nullable": true,
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "type": "string"
@@ -9569,6 +9624,10 @@
             "type": "string"
           },
           "provider": {
+            "type": "string"
+          },
+          "providerIntentId": {
+            "nullable": true,
             "type": "string"
           },
           "providerRefundId": {
@@ -9583,6 +9642,13 @@
           "reason": {
             "type": "string"
           },
+          "replacementRefundIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
           "replacesFailureProviderEventId": {
             "format": "uuid",
             "nullable": true,
@@ -9595,6 +9661,22 @@
           },
           "requestedAt": {
             "format": "date-time",
+            "type": "string"
+          },
+          "requestReference": {
+            "type": "string"
+          },
+          "selectedResultKind": {
+            "nullable": true,
+            "type": "string"
+          },
+          "selectedResultOccurredAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "selectedResultSource": {
+            "nullable": true,
             "type": "string"
           },
           "sourceSuccessProviderEventId": {
@@ -9612,7 +9694,9 @@
           "reason",
           "status",
           "requestedAt",
-          "provider"
+          "provider",
+          "requestReference",
+          "replacementRefundIds"
         ],
         "type": "object"
       },
@@ -12086,6 +12170,153 @@
         ],
         "type": "object"
       },
+      "RefundProviderResultCommandResultDto": {
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RefundProviderResultPayloadDto"
+          },
+          "status": {
+            "enum": [
+              "REFUND_PROVIDER_RESULT_RECORDED"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "status",
+          "result"
+        ],
+        "type": "object"
+      },
+      "RefundProviderResultDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "type": "string"
+          },
+          "evidenceKind": {
+            "enum": [
+              "PROVIDER_PORTAL",
+              "PROVIDER_SUPPORT"
+            ],
+            "type": "string"
+          },
+          "evidenceReference": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expectedProviderResultEventId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "expectedStatus": {
+            "enum": [
+              "PENDING",
+              "FAILED",
+              "SUSPENDED",
+              "SUCCEEDED",
+              "SUPERSEDED"
+            ],
+            "type": "string"
+          },
+          "finalOutcomeConfirmed": {
+            "enum": [
+              true
+            ],
+            "type": "boolean"
+          },
+          "occurredAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "SUCCEEDED",
+              "FAILED"
+            ],
+            "type": "string"
+          },
+          "providerIntentId": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "providerRefundReference": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "requestReference": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "expectedStatus",
+          "expectedProviderResultEventId",
+          "providerIntentId",
+          "requestReference",
+          "amountMinor",
+          "currency",
+          "evidenceKind",
+          "evidenceReference",
+          "occurredAt",
+          "reason",
+          "finalOutcomeConfirmed"
+        ],
+        "type": "object"
+      },
+      "RefundProviderResultPayloadDto": {
+        "properties": {
+          "blockingCode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "paymentStatus": {
+            "type": "string"
+          },
+          "providerResultEventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "recorded": {
+            "type": "boolean"
+          },
+          "refundStatus": {
+            "type": "string"
+          },
+          "refundTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refundTransactionId",
+          "providerResultEventId",
+          "recorded",
+          "refundStatus",
+          "paymentStatus"
+        ],
+        "type": "object"
+      },
       "RegisterMachineDto": {
         "properties": {
           "code": {
@@ -12259,6 +12490,78 @@
           "reason",
           "expectedVersion",
           "windows"
+        ],
+        "type": "object"
+      },
+      "RetryRefundCommandResultDto": {
+        "properties": {
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RetryRefundPayloadDto"
+          },
+          "status": {
+            "enum": [
+              "REFUND_RETRY_PENDING"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "orderId",
+          "status",
+          "result"
+        ],
+        "type": "object"
+      },
+      "RetryRefundDto": {
+        "properties": {
+          "expectedFailureProviderEventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedFailureProviderEventId",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "RetryRefundPayloadDto": {
+        "properties": {
+          "amountMinor": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "failureProviderEventId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "refundTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sourceRefundTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceRefundTransactionId",
+          "refundTransactionId",
+          "failureProviderEventId",
+          "amountMinor",
+          "currency"
         ],
         "type": "object"
       },
@@ -19615,6 +19918,168 @@
           }
         ],
         "summary": "Close an expired replacement request into refund recovery",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/refunds/{refundId}/provider-results": {
+      "post": {
+        "operationId": "OrdersController_recordRefundProviderResult",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "refundId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundProviderResultDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefundProviderResultCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Refund evidence or expected state is stale or ineligible"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Record an operator-attested final refund provider result",
+        "tags": [
+          "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/refunds/{refundId}/retry": {
+      "post": {
+        "operationId": "OrdersController_retryRefund",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "refundId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryRefundDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryRefundCommandResultDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": "Failure evidence or refund obligation is not retryable"
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Queue one guarded replacement for a failed refund",
         "tags": [
           "operator fulfilment"
         ]

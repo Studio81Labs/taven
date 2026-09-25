@@ -9174,7 +9174,7 @@ describe("commerce persistence foundations", () => {
     });
   });
 
-  it("reconciles a newer refund failure while sibling refund work remains pending", async () => {
+  it("reconciles a late source success with sibling work and rejects a second retry", async () => {
     await rollback(
       "stable-refund-pending-reconciliation",
       async (client, fixtures) => {
@@ -10092,91 +10092,29 @@ describe("commerce persistence foundations", () => {
             source_status: "SUCCEEDED",
           },
         ]);
-        await client.query(
-          `SET CONSTRAINTS
-             "payment_provider_events_consumed",
-             "payments_refund_status_reconciled",
-             "refund_transactions_payment_status_reconciled",
-             "refund_transactions_source_reconciliation_reconciled"
-             DEFERRED`,
+        await expectQueryError(
+          client,
+          "reject_second_refund_retry_after_source_success",
+          () =>
+            client.query(
+              `INSERT INTO refund_transactions
+                 (id, payment_id, replaces_refund_transaction_id,
+                  replaces_failure_provider_event_id, idempotency_key,
+                  amount_minor, reason, status, requested_at, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,'CUSTOMER_CANCELLATION','PENDING',
+                       $7,$7,$7)`,
+              [
+                fixtures.id("stable-refund-pending-second-retry"),
+                foundation.paymentId,
+                affectedRefundId,
+                failureResultEventId,
+                "stable-refund-pending-second-retry",
+                affectedAmount,
+                lateRecoveryAt,
+              ],
+            ),
+          { code: "23514", constraint: "refund_retry_single_child_check" },
         );
-
-        const failedAgainAt = new Date(failedAt.getTime() + 2);
-        const failedAgainProviderEventId =
-          "stable-refund-pending-second-failure-event";
-        await fixtures.persistRefundProviderEvent(
-          affectedRefundId,
-          "REFUND_FAILED",
-          providerRefundId,
-          failedAgainAt,
-          failedAgainProviderEventId,
-          failedAgainAt,
-        );
-        const failedAgainResultEventId = fixtures.id(
-          `provider-event:${failedAgainProviderEventId}`,
-        );
-        await client.query(
-          `UPDATE refund_transactions
-           SET status = 'FAILED', provider_result_event_id = $2,
-               completed_at = NULL, updated_at = $3
-           WHERE id = $1`,
-          [affectedRefundId, failedAgainResultEventId, failedAgainAt],
-        );
-        const secondRetryRefundId = fixtures.id(
-          "stable-refund-pending-second-retry",
-        );
-        await client.query(
-          `INSERT INTO refund_transactions
-             (id, payment_id, replaces_refund_transaction_id,
-              replaces_failure_provider_event_id, idempotency_key,
-              amount_minor, reason, status, requested_at, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,'CUSTOMER_CANCELLATION','PENDING',
-                   $7,$7,$7)`,
-          [
-            secondRetryRefundId,
-            foundation.paymentId,
-            affectedRefundId,
-            failedAgainResultEventId,
-            "stable-refund-pending-second-retry",
-            affectedAmount,
-            failedAgainAt,
-          ],
-        );
-        await forceOrderLifecycleConstraints(client);
-        await client.query(
-          `SET CONSTRAINTS
-             "payment_provider_events_consumed",
-             "payments_refund_status_reconciled",
-             "refund_transactions_payment_status_reconciled",
-             "refund_transactions_retry_lineage_reconciled",
-             "refund_transactions_failure_retry_obligation_reconciled",
-             "refund_transactions_source_reconciliation_reconciled"
-             IMMEDIATE`,
-        );
-        expect(
-          (
-            await client.query<{
-              replaces_failure_provider_event_id: string;
-              retry_status: string;
-            }>(
-              `SELECT status::text AS retry_status,
-                      replaces_failure_provider_event_id
-               FROM refund_transactions
-               WHERE replaces_refund_transaction_id = $1
-               ORDER BY requested_at, id`,
-              [affectedRefundId],
-            )
-          ).rows,
-        ).toEqual([
-          {
-            retry_status: "SUPERSEDED",
-            replaces_failure_provider_event_id: failureResultEventId,
-          },
-          {
-            retry_status: "PENDING",
-            replaces_failure_provider_event_id: failedAgainResultEventId,
-          },
-        ]);
       },
     );
   });

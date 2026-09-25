@@ -617,11 +617,38 @@ export class OperatorRefundTransactionDto {
 
   @ApiPropertyOptional({ type: String, nullable: true })
   providerRefundId!: string | null;
+
+  @ApiProperty({ type: String })
+  requestReference!: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  providerIntentId!: string | null;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  dispatchClaimedAt!: string | null;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  dispatchStatus!: string | null;
+
+  @ApiProperty({ type: [String], format: "uuid" })
+  replacementRefundIds!: string[];
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  selectedResultKind!: string | null;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  selectedResultSource!: string | null;
+
+  @ApiPropertyOptional({ type: String, format: "date-time", nullable: true })
+  selectedResultOccurredAt!: string | null;
 }
 
 export class OperatorRefundPageItemDto extends OperatorRefundTransactionDto {
   @ApiProperty(UUID)
   paymentId!: string;
+
+  @ApiProperty({ type: String })
+  currency!: string;
 }
 
 export class OperatorRefundPageDto {
@@ -647,6 +674,9 @@ export class OperatorPaymentDto {
 
   @ApiProperty({ type: String })
   provider!: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true })
+  providerIntentId!: string | null;
 
   @ApiProperty({ type: String })
   checkoutMethod!: string;
