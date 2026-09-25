@@ -30,6 +30,8 @@ import { AutomaticQuotesService } from "../src/modules/automatic-quotes/automati
 import { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
 import { ResourceConflictError } from "../src/modules/resources/resource-errors";
 import { ResourceReservationService } from "../src/modules/resources/resource-reservation.service";
+import { OrdersService } from "../src/modules/orders/orders.service";
+import { PaymentsService } from "../src/modules/payments/payments.service";
 
 const uploadClientHashKey = "test-only-upload-client-hash-key-32";
 const quoteCapabilityKey =
@@ -791,7 +793,7 @@ describe("QuoteRequest and tokenized individual offers", () => {
     ).toBe(request.status === "QUOTED" ? 1 : 0);
   });
 
-  it("submits idempotently, isolates attachments, issues, previews, and accepts once", async () => {
+  it("submits, accepts, pays, and delivers with frozen individual claims evidence", async () => {
     const createKey = key("create");
     const requestBody = requestInput("accept");
     const created = await createRequest(createKey, requestBody);
@@ -1858,7 +1860,301 @@ describe("QuoteRequest and tokenized individual offers", () => {
         acceptedOrderId: accepted.body.orderId,
       }),
     );
-  }, 30_000);
+    const acceptedClaims = await prisma.order.findUniqueOrThrow({
+      where: { id: accepted.body.orderId },
+      select: {
+        acceptedClaimPolicyRevision: true,
+        acceptedClaimWindowDays: true,
+      },
+    });
+    expect(acceptedClaims).toEqual({
+      acceptedClaimPolicyRevision: e2eLegalRevisionCodes.claims,
+      acceptedClaimWindowDays: 30,
+    });
+    const claimsDocument = await prisma.legalDocument.findUniqueOrThrow({
+      where: { key: "claims" },
+    });
+    const previousClaimsPublications =
+      await prisma.legalDocumentPublication.findMany({
+        where: { documentId: claimsDocument.id },
+      });
+    const latestClaimsRevision =
+      await prisma.legalDocumentRevision.findFirstOrThrow({
+        where: { documentId: claimsDocument.id },
+        orderBy: { sequence: "desc" },
+      });
+    const rotatedClaims = {
+      contentVersion: 1 as const,
+      title: "Rotated claims policy for accepted-order delivery",
+      summary: "The accepted order keeps its original claim window.",
+      sections: [
+        {
+          title: "Rotated claims",
+          paragraphs: ["Future orders use this published revision."],
+        },
+      ],
+    };
+    const nextClaimsRevision = await prisma.legalDocumentRevision.create({
+      data: {
+        documentId: claimsDocument.id,
+        sequence: latestClaimsRevision.sequence + 1,
+        editVersion: 1,
+        status: "APPROVED",
+        ...rotatedClaims,
+        contentHash: computeLegalRevisionContentHash(rotatedClaims),
+        revisionCode: `claims-delivery-${randomUUID()}`,
+        effectiveAt: new Date(Date.now() - 1_000),
+        approvalEvidence: "Individual claims delivery E2E fixture",
+        approvedBy: operator.operatorId,
+        approvedAt: new Date(),
+      },
+    });
+    const previousClaimWindow = process.env.TAVEN_CLAIM_WINDOW_DAYS;
+    const productionReservation =
+      await prisma.productionReservation.findUniqueOrThrow({
+        where: { id: productionInput.input.productionReservationId },
+        select: { inventoryId: true },
+      });
+    const inventory = await prisma.inventory.findUniqueOrThrow({
+      where: { id: productionReservation.inventoryId },
+      select: { mountStatus: true },
+    });
+    process.env.TAVEN_CLAIM_WINDOW_DAYS = "7";
+    try {
+      await legalDocuments.publishRevision(
+        operator,
+        "claims",
+        nextClaimsRevision.id,
+        {
+          expectedGeneration: claimsDocument.generation,
+          reason: "Individual claims delivery rotation E2E fixture",
+          reasonCode: "E2E_CLAIMS_DELIVERY_ROTATION",
+        },
+        key("individual-claims-rotation"),
+      );
+      const currentClaims =
+        await prisma.legalDocumentPublication.findFirstOrThrow({
+          where: {
+            documentId: claimsDocument.id,
+            revisionId: nextClaimsRevision.id,
+            cancelledAt: null,
+          },
+          select: { endsAt: true },
+        });
+      expect(currentClaims.endsAt).toBeNull();
+      await prisma.inventory.update({
+        where: { id: productionReservation.inventoryId },
+        data: { mountStatus: "MOUNTED" },
+      });
+      // Fulfilment needs a Job-bound artifact; slicing itself is outside this test.
+      await prisma.$executeRaw`
+        INSERT INTO slice_results
+          (id, kind, cache_key, model_geometry_id, print_config_revision_id,
+           machine_profile_id, machine_calibration_id, arrangement_revision_id,
+           package_quantity, package_plate_count, parts_per_plate,
+           artifact_object_key, artifact_hash, estimated_print_seconds,
+           estimated_material_milligrams, slicer_engine, slicer_version)
+        SELECT gen_random_uuid(), 'PRODUCTION', 'individual-claims-gcode:' || job.id::text,
+               candidate.model_geometry_id, production.print_config_revision_id,
+               production.machine_profile_id, production.machine_calibration_id,
+               candidate.arrangement_revision_id, candidate.quantity,
+               ceil(candidate.quantity::numeric / candidate.parts_per_plate::numeric)::integer,
+               occupancy.parts_per_plate,
+               'gcode/' || job.id::text || '/toolpaths.gcode.3mf', repeat('f', 64),
+               production.required_machine_seconds,
+               production.required_material_milligrams,
+               occupancy.slicer_engine, occupancy.slicer_version
+        FROM jobs job
+        JOIN production_reservations production ON production.job_id = job.id
+        JOIN phase_resource_plan_jobs plan_job
+          ON plan_job.id = production.phase_resource_plan_job_id
+         AND plan_job.node_id = production.node_id
+        JOIN candidate_resource_estimates candidate
+          ON candidate.id = plan_job.candidate_resource_estimate_id
+         AND candidate.node_id = plan_job.node_id
+        JOIN slice_results occupancy
+          ON occupancy.id = production.occupancy_slice_result_id
+        WHERE job.id = ${productionJob.id}::uuid AND job.status = 'ACCEPTED'
+      `;
+      await prisma.$executeRaw`
+        UPDATE production_reservations production
+        SET slice_result_id = slice.id
+        FROM slice_results slice
+        WHERE production.job_id = ${productionJob.id}::uuid
+          AND slice.cache_key = 'individual-claims-gcode:' || ${productionJob.id}::uuid::text
+      `;
+      await prisma.$executeRaw`
+        UPDATE jobs job
+        SET status = 'GCODE_READY', gcode_ready_at = clock_timestamp(),
+            production_slice_result_id = production.slice_result_id,
+            production_artifact_hash = slice.artifact_hash,
+            updated_at = clock_timestamp()
+        FROM production_reservations production
+        JOIN slice_results slice ON slice.id = production.slice_result_id
+        WHERE job.id = ${productionJob.id}::uuid
+          AND production.job_id = job.id
+      `;
+      const orderCommands = app.get(OrdersService);
+      await orderCommands.startPrinting(
+        operator,
+        accepted.body.orderId,
+        productionJob.id,
+        key("individual-claims-printing"),
+      );
+      await orderCommands.finishPrinting(
+        operator,
+        accepted.body.orderId,
+        productionJob.id,
+        { actualMaterialMilligrams: "50" },
+        key("individual-claims-printed"),
+      );
+      await orderCommands.submitQc(
+        operator,
+        accepted.body.orderId,
+        productionJob.id,
+        { omissionReason: "Test visual inspection" },
+        key("individual-claims-qc"),
+      );
+      await orderCommands.approveQc(
+        operator,
+        accepted.body.orderId,
+        productionJob.id,
+        key("individual-claims-qc-approved"),
+      );
+      const balance = await app
+        .get(PaymentsService)
+        .createBalancePayment(
+          operator,
+          accepted.body.orderId,
+          { method: "CARD" },
+          key("individual-claims-balance"),
+        );
+      expect(balance.checkoutUrl).toBeTruthy();
+      const balanceUrl = new URL(balance.checkoutUrl!);
+      const balanceCapture = await fetch(
+        new URL(`${balanceUrl.pathname}/capture`, baseUrl),
+        { method: "POST", redirect: "manual" },
+      );
+      expect(balanceCapture.status, await balanceCapture.text()).toBe(200);
+      const shipmentPlan = await prisma.shipmentPlan.findFirstOrThrow({
+        where: { orderId: accepted.body.orderId },
+        select: { id: true },
+      });
+      await orderCommands.createShipment(
+        operator,
+        accepted.body.orderId,
+        { shipmentPlanId: shipmentPlan.id },
+        key("individual-claims-shipment"),
+      );
+      const shipment = await prisma.shipment.findFirstOrThrow({
+        where: { orderId: accepted.body.orderId },
+        select: { id: true },
+      });
+      await orderCommands.labelShipment(
+        operator,
+        accepted.body.orderId,
+        shipment.id,
+        {
+          carrier: "test-carrier",
+          providerShipmentId: `individual-claims-shipment-${shipment.id}`,
+          carrierLabelId: `individual-claims-label-${shipment.id}`,
+          trackingCode: `individual-claims-tracking-${shipment.id}`,
+          reason: "Test frozen claims through delivery",
+        },
+        key("individual-claims-label"),
+      );
+      await orderCommands.packJob(
+        operator,
+        accepted.body.orderId,
+        productionJob.id,
+        { shipmentId: shipment.id },
+        key("individual-claims-pack"),
+      );
+      await orderCommands.handoffShipment(
+        operator,
+        accepted.body.orderId,
+        shipment.id,
+        {
+          providerEventId: `individual-claims-handoff-${shipment.id}`,
+          providerTransactionId: `individual-claims-handoff-tx-${shipment.id}`,
+          occurredAt: new Date().toISOString(),
+          reason: "Test carrier handoff",
+        },
+        key("individual-claims-handoff"),
+      );
+      await orderCommands.applyShipmentEvent(
+        operator,
+        accepted.body.orderId,
+        shipment.id,
+        {
+          kind: "TRANSIT_SCAN",
+          providerEventId: `individual-claims-transit-${shipment.id}`,
+          providerTransactionId: `individual-claims-transit-tx-${shipment.id}`,
+          occurredAt: new Date().toISOString(),
+          reason: "Test carrier transit",
+        },
+        key("individual-claims-transit"),
+      );
+      await orderCommands.applyShipmentEvent(
+        operator,
+        accepted.body.orderId,
+        shipment.id,
+        {
+          kind: "DELIVERY_SCAN",
+          providerEventId: `individual-claims-delivery-${shipment.id}`,
+          providerTransactionId: `individual-claims-delivery-tx-${shipment.id}`,
+          occurredAt: new Date().toISOString(),
+          reason: "Test carrier delivery",
+        },
+        key("individual-claims-delivery"),
+      );
+      const slot = await prisma.fulfilmentSlot.findFirstOrThrow({
+        where: { orderId: accepted.body.orderId },
+        select: { deliveredAt: true, claimUntil: true },
+      });
+      expect(slot.deliveredAt).not.toBeNull();
+      expect(slot.claimUntil).toEqual(
+        new Date(slot.deliveredAt!.getTime() + 30 * 86_400_000),
+      );
+    } finally {
+      if (previousClaimWindow === undefined) {
+        delete process.env.TAVEN_CLAIM_WINDOW_DAYS;
+      } else {
+        process.env.TAVEN_CLAIM_WINDOW_DAYS = previousClaimWindow;
+      }
+      await prisma.inventory.update({
+        where: { id: productionReservation.inventoryId },
+        data: { mountStatus: inventory.mountStatus },
+      });
+      await prisma.$transaction(async (transaction) => {
+        await transaction.$executeRawUnsafe(
+          "SET LOCAL session_replication_role = 'replica'",
+        );
+        await transaction.$executeRaw`
+          DELETE FROM legal_document_publications
+          WHERE document_id = ${claimsDocument.id}::uuid
+        `;
+        for (const publication of previousClaimsPublications) {
+          await transaction.$executeRaw`
+            INSERT INTO legal_document_publications
+              (id, document_id, revision_id, starts_at, ends_at, cancelled_at,
+               published_by, reason, created_at, updated_at)
+            VALUES
+              (${publication.id}::uuid, ${publication.documentId}::uuid,
+               ${publication.revisionId}::uuid, ${publication.startsAt},
+               ${publication.endsAt}, ${publication.cancelledAt},
+               ${publication.publishedBy}::uuid, ${publication.reason},
+               ${publication.createdAt}, ${publication.updatedAt})
+          `;
+        }
+        await transaction.$executeRaw`
+          UPDATE legal_documents
+          SET generation = ${claimsDocument.generation}
+          WHERE id = ${claimsDocument.id}::uuid
+        `;
+      });
+    }
+  }, 60_000);
 
   it("dispatches each reserved individual job with its assigned body selection", async () => {
     const requestBody = requestInput("two-selections");
