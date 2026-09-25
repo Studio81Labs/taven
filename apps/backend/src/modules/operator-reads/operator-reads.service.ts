@@ -88,6 +88,70 @@ type RefundDispatchRead = Readonly<{
   status: string;
   payload: Prisma.JsonValue;
 }>;
+type CapturePaymentRead = Readonly<{
+  id: string;
+  provider: string;
+  providerIntentId: string | null;
+  providerCaptureId: string | null;
+  capturedAmountMinor: bigint | null;
+  capturedAt: Date | null;
+  captureAuthorized: boolean;
+  captureCutoffAt: Date | null;
+  currency: string;
+}>;
+
+async function authenticatedCapturePaymentIds(
+  tx: Prisma.TransactionClient,
+  payments: readonly CapturePaymentRead[],
+): Promise<ReadonlySet<string>> {
+  const eligible = new Map(
+    payments
+      .filter(
+        (payment) =>
+          payment.providerIntentId === null &&
+          payment.providerCaptureId !== null &&
+          payment.providerCaptureId.trim().length > 0 &&
+          payment.capturedAmountMinor !== null &&
+          payment.capturedAmountMinor > 0n &&
+          payment.capturedAt !== null &&
+          payment.captureCutoffAt !== null &&
+          payment.capturedAt >= payment.captureCutoffAt &&
+          !payment.captureAuthorized,
+      )
+      .map((payment) => [payment.id, payment]),
+  );
+  if (eligible.size === 0) return new Set();
+  const captures = await tx.paymentProviderEvent.findMany({
+    where: {
+      paymentId: { in: [...eligible.keys()] },
+      refundTransactionId: null,
+      kind: "PAYMENT_CAPTURED",
+    },
+    select: {
+      paymentId: true,
+      provider: true,
+      providerTransactionId: true,
+      amountMinor: true,
+      currency: true,
+      verifiedAt: true,
+    },
+  });
+  return new Set(
+    captures
+      .filter((capture) => {
+        const payment = eligible.get(capture.paymentId);
+        return (
+          payment !== undefined &&
+          capture.provider === payment.provider &&
+          capture.providerTransactionId === payment.providerCaptureId &&
+          capture.amountMinor === payment.capturedAmountMinor &&
+          capture.currency === payment.currency &&
+          capture.verifiedAt.getTime() === payment.capturedAt?.getTime()
+        );
+      })
+      .map((capture) => capture.paymentId),
+  );
+}
 
 export type PageInput = Readonly<{
   cursor?: string;
@@ -483,6 +547,10 @@ export class OperatorReadsService {
       const payments = order.priceBindings.flatMap(
         (binding) => binding.payments,
       );
+      const authenticatedCaptures = await authenticatedCapturePaymentIds(
+        transaction,
+        payments,
+      );
       const refundDispatch = new Map(
         (
           await transaction.outboxMessage.findMany({
@@ -631,7 +699,9 @@ export class OperatorReadsService {
             : {}),
           payments: orderedPayments
             .slice(0, 25)
-            .map((payment) => operatorPayment(payment, refundDispatch)),
+            .map((payment) =>
+              operatorPayment(payment, refundDispatch, authenticatedCaptures),
+            ),
           ...(orderedPayments.length > 25
             ? { paymentsNextCursor: orderedPayments[24]!.id }
             : {}),
@@ -686,7 +756,12 @@ export class OperatorReadsService {
                 (refund) =>
                   [
                     refund.id,
-                    refundProviderIntentRead(refund, payment, refundDispatch),
+                    refundProviderIntentRead(
+                      refund,
+                      payment,
+                      refundDispatch,
+                      authenticatedCaptures,
+                    ),
                   ] as const,
               ),
             ),
@@ -784,6 +859,10 @@ export class OperatorReadsService {
         },
       });
       const page = rows.slice(0, limit);
+      const authenticatedCaptures = await authenticatedCapturePaymentIds(
+        tx,
+        page,
+      );
       const dispatch = new Map(
         (
           await tx.outboxMessage.findMany({
@@ -800,7 +879,9 @@ export class OperatorReadsService {
         ).map((message) => [message.aggregateId, message]),
       );
       return {
-        items: page.map((payment) => operatorPayment(payment, dispatch)),
+        items: page.map((payment) =>
+          operatorPayment(payment, dispatch, authenticatedCaptures),
+        ),
         ...(rows.length > limit ? { nextCursor: page.at(-1)!.id } : {}),
       };
     });
@@ -835,6 +916,10 @@ export class OperatorReadsService {
         include: { ...refundReadInclude, payment: true },
       });
       const page = rows.slice(0, limit);
+      const authenticatedCaptures = await authenticatedCapturePaymentIds(
+        tx,
+        page.map((refund) => refund.payment),
+      );
       const dispatch = new Map(
         (
           await tx.outboxMessage.findMany({
@@ -848,7 +933,12 @@ export class OperatorReadsService {
       );
       return {
         items: page.map((refund) => ({
-          ...operatorRefund(refund, refund.payment, dispatch),
+          ...operatorRefund(
+            refund,
+            refund.payment,
+            dispatch,
+            authenticatedCaptures,
+          ),
           paymentId: refund.paymentId,
           currency: refund.payment.currency,
         })),
@@ -1985,15 +2075,16 @@ function orderTimelineEvent(event: {
 
 function refundProviderIntentRead(
   refund: RefundReadRow,
-  payment: {
-    providerIntentId: string | null;
-    providerCaptureId: string | null;
-    currency: string;
-  },
+  payment: CapturePaymentRead,
   dispatch: ReadonlyMap<string, RefundDispatchRead>,
+  authenticatedCaptures: ReadonlySet<string>,
 ): string | null {
   if (payment.providerIntentId) return payment.providerIntentId;
-  if (refund.reason !== "LATE_CAPTURE_COMPENSATION") return null;
+  if (
+    refund.reason !== "LATE_CAPTURE_COMPENSATION" ||
+    !authenticatedCaptures.has(payment.id)
+  )
+    return null;
   const payload = dispatch.get(refund.id)?.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload))
     return null;
@@ -2014,12 +2105,9 @@ function refundProviderIntentRead(
 
 function operatorRefund(
   refund: RefundReadRow,
-  payment: {
-    providerIntentId: string | null;
-    providerCaptureId: string | null;
-    currency: string;
-  },
+  payment: CapturePaymentRead,
   dispatch: ReadonlyMap<string, RefundDispatchRead>,
+  authenticatedCaptures: ReadonlySet<string>,
 ): OperatorRefundTransactionDto {
   const evidence = refund.providerResultEvent?.payload;
   const source =
@@ -2042,7 +2130,12 @@ function operatorRefund(
     provider: refund.provider,
     providerRefundId: refund.providerRefundId,
     requestReference: refund.idempotencyKey,
-    providerIntentId: refundProviderIntentRead(refund, payment, dispatch),
+    providerIntentId: refundProviderIntentRead(
+      refund,
+      payment,
+      dispatch,
+      authenticatedCaptures,
+    ),
     dispatchClaimedAt: iso(refund.dispatchClaimedAt),
     dispatchStatus: dispatch.get(refund.id)?.status ?? null,
     replacementRefundIds: refund.replacementRefundTransactions.map(
@@ -2246,6 +2339,7 @@ function operatorPayment(
     include: { refunds: { include: typeof refundReadInclude } };
   }>,
   dispatch: ReadonlyMap<string, RefundDispatchRead>,
+  authenticatedCaptures: ReadonlySet<string>,
 ): OperatorPaymentDto {
   return {
     id: payment.id,
@@ -2269,7 +2363,9 @@ function operatorPayment(
     updatedAt: payment.updatedAt.toISOString(),
     refunds: payment.refunds
       .slice(0, 25)
-      .map((refund) => operatorRefund(refund, payment, dispatch)),
+      .map((refund) =>
+        operatorRefund(refund, payment, dispatch, authenticatedCaptures),
+      ),
     ...(payment.refunds.length > 25
       ? { refundsNextCursor: payment.refunds[24]!.id }
       : {}),

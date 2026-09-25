@@ -6760,7 +6760,14 @@ export class OrdersService {
     if (refund.reason !== RefundReason.LATE_CAPTURE_COMPENSATION) {
       return null;
     }
-    if (refund.payment.capturedAmountMinor === null) return null;
+    if (
+      refund.payment.capturedAmountMinor === null ||
+      refund.payment.capturedAt === null ||
+      refund.payment.captureAuthorized ||
+      refund.payment.captureCutoffAt === null ||
+      refund.payment.capturedAt < refund.payment.captureCutoffAt
+    )
+      return null;
     const command = await tx.outboxMessage.findUnique({
       where: { deduplicationKey: `refund_payment:v1:${refund.id}` },
       select: { aggregateId: true, messageType: true, payload: true },
@@ -6794,11 +6801,13 @@ export class OrdersService {
     const capture = await tx.paymentProviderEvent.findFirst({
       where: {
         paymentId: refund.paymentId,
+        refundTransactionId: null,
         provider: refund.provider,
         providerTransactionId: locator,
         kind: "PAYMENT_CAPTURED",
         amountMinor: refund.payment.capturedAmountMinor,
         currency: refund.payment.currency,
+        verifiedAt: refund.payment.capturedAt,
       },
       select: { id: true },
     });

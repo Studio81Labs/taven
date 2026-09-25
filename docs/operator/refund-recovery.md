@@ -41,6 +41,16 @@ record remain immutable.
    A successful response means one new refund attempt was **queued**, not
    that money moved. Re-read its outbox, dispatch claim and provider result.
 
+For a cancelled checkout whose late capture arrived without a returned provider
+intent, a final failed compensation can leave the payment `CAPTURED`. That is
+an **outstanding refund obligation**, not permission to fulfil the cancelled
+order. The original payment intent remains null: use the verified refund-level
+locator from step 3 for the explicit retry. While a replacement is pending or
+suspended the payment is `REFUND_PENDING`; only a verified full success makes
+it `REFUNDED`. If that replacement also fails, the payment returns to
+`CAPTURED`, but v0 denies a third transfer attempt. Escalate the unresolved
+obligation through the financial incident process.
+
 Reuse the same key and identical body only to recover an uncertain HTTP
 response; changing the body under that key returns 409. A second key cannot
 create a sibling. A failed replacement cannot be retried again in v0. A late

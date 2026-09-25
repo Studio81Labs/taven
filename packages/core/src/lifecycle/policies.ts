@@ -4465,18 +4465,80 @@ function requireExactRefundFailureRollback<S extends string>(
     context?.refundFailureRollbackRefundTransaction,
   );
   const failure = record(context?.refundFailureProviderEvidence);
+  const compensationOrigin = record(context?.refundFailureCompensationOrigin);
+  const captureEvent = record(compensationOrigin?.captureEvent);
+  const priorFailure = record(compensationOrigin?.priorFailureEvent);
 
   if (
     command.target === "captured" &&
     typeof expectedPayment?.providerFailureEventId === "string" &&
     expectedPayment.providerFailureEventId.trim().length > 0
   ) {
-    throw new TransitionGuardError(
-      lifecycle,
-      command.current,
-      command.target,
-      "failed-source late capture must retain compensation provenance and retry its refund",
-    );
+    const cutoff = compensationOrigin?.captureCutoffAt;
+    const capturedAt = compensationOrigin?.capturedAt;
+    if (
+      !compensationOrigin ||
+      !captureEvent ||
+      !priorFailure ||
+      compensationOrigin.paymentId !== paymentId ||
+      compensationOrigin.provider !== provider ||
+      compensationOrigin.providerIntentId !==
+        expectedPayment.providerIntentId ||
+      !nonBlank(compensationOrigin.providerIntentId) ||
+      compensationOrigin.providerCaptureId !==
+        compensationOrigin.providerIntentId ||
+      compensationOrigin.currency !== currency ||
+      compensationOrigin.capturedAmountMinor !== capturedAmountMinor ||
+      compensationOrigin.captureAuthorized !== false ||
+      !(cutoff instanceof Instant) ||
+      !(capturedAt instanceof Instant) ||
+      capturedAt.compare(cutoff) < 0 ||
+      compensationOrigin.fullCompensationRootId === undefined ||
+      !nonBlank(compensationOrigin.fullCompensationRootId) ||
+      compensationOrigin.fullCompensationAmountMinor !== capturedAmountMinor ||
+      compensationOrigin.failedAttemptId !== refundTransactionId ||
+      refundTransaction?.reason !== "LATE_CAPTURE_COMPENSATION" ||
+      (refundTransaction.replacesRefundTransactionId !== null &&
+        refundTransaction.replacesRefundTransactionId !==
+          compensationOrigin.fullCompensationRootId) ||
+      (refundTransaction.replacesRefundTransactionId === null &&
+        refundTransactionId !== compensationOrigin.fullCompensationRootId) ||
+      compensationOrigin.noActiveOrSuccessfulRefunds !== true ||
+      captureEvent.paymentId !== paymentId ||
+      captureEvent.provider !== provider ||
+      captureEvent.providerTransactionId !==
+        compensationOrigin.providerCaptureId ||
+      captureEvent.kind !== "PAYMENT_CAPTURED" ||
+      captureEvent.refundTransactionId !== null ||
+      captureEvent.amountMinor !== capturedAmountMinor ||
+      captureEvent.currency !== currency ||
+      !(captureEvent.verifiedAt instanceof Instant) ||
+      !captureEvent.verifiedAt.equals(capturedAt) ||
+      captureEvent.authenticated !== true ||
+      captureEvent.verified !== true ||
+      captureEvent.immutable !== true ||
+      priorFailure.id !== expectedPayment.providerFailureEventId ||
+      priorFailure.paymentId !== paymentId ||
+      priorFailure.provider !== provider ||
+      priorFailure.providerTransactionId !==
+        compensationOrigin.providerIntentId ||
+      priorFailure.kind !== "PAYMENT_FAILED" ||
+      priorFailure.refundTransactionId !== null ||
+      priorFailure.amountMinor !== capturedAmountMinor ||
+      priorFailure.currency !== currency ||
+      !(priorFailure.verifiedAt instanceof Instant) ||
+      !priorFailure.verifiedAt.equals(cutoff) ||
+      priorFailure.authenticated !== true ||
+      priorFailure.verified !== true ||
+      priorFailure.immutable !== true
+    ) {
+      throw new TransitionGuardError(
+        lifecycle,
+        command.current,
+        command.target,
+        "failed-source refund rollback requires the exact retained capture, prior failure and full compensation obligation",
+      );
+    }
   }
 
   if (
