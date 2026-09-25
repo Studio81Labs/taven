@@ -41,8 +41,23 @@ recorded after the fact, use the manual form with a timezone-qualified start
 and end; its duration must match the interval. Voiding a completed record
 requires an administrator and a reason and preserves the original evidence.
 
-Replacement and incident reprint require a fresh, compatible resource
-candidate. If the action is blocked, do not reuse the original candidate or
-enter an arbitrary ID; resolve the missing preparation path before acting.
+For a failed or QC-rejected job, open **Připravit náhradu úlohy**. For an open
+shipment-incident claim with a LOST parcel, open **Připravit opakovanou
+zásilku** for the current lost predecessor. Load older order history first if
+the relevant job, claim, or shipment is not on the first page. Enter a reason
+to request fresh candidates. Preparation runs asynchronously; refresh its
+progress and inspect failed, expired, blocked, or superseded generations.
+Preparation neither reserves a resource nor creates a replacement.
+
+Open the current candidate list for every source job and select one eligible
+machine, inventory, and schedule choice per source. A whole-parcel reprint
+needs all source jobs, each with its own quantity and slot coverage. The
+candidate deadline governs when the command can be admitted; the scheduled
+print intervals may end later. Enter a separate confirmation reason and
+confirm the final replacement or reprint. The backend rechecks the source,
+candidate freshness, resource budget, and lifecycle under locks. On a conflict,
+refresh the order and preparation before choosing a new intent. For an
+uncertain response, use only **Opakovat stejný požadavek** with its retained
+body and key. Do not reuse the original candidate or enter an arbitrary ID.
 Communications status and resend are delivered in the separate notification
 integration phase.

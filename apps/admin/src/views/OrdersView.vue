@@ -13,6 +13,7 @@ import {
   requireData,
 } from "../operator-requests";
 import { hasPermission, session } from "../session";
+import RecoveryPreparationPanel from "./RecoveryPreparationPanel.vue";
 
 type S = components["schemas"];
 type Action = S["OperatorActionDto"];
@@ -121,7 +122,6 @@ const shipmentEventKind = ref<
 const finalOutcomeConfirmed = ref(false);
 const providerRefundReference = ref("");
 const checkoutMethod = ref<"CARD" | "BANK_TRANSFER">("CARD");
-const candidateId = ref("");
 const selectedSlots = ref<string[]>([]);
 const claimOrigin = ref<"SHIPMENT_INCIDENT" | "POST_DELIVERY_QUALITY">(
   "SHIPMENT_INCIDENT",
@@ -227,7 +227,6 @@ const inputBlockers = new Set([
   "WITHDRAWAL_REASON_REQUIRED",
 ]);
 function actionCanOpen(action: Action): boolean {
-  if (action.action === "PREPARE_REPLACEMENT") return false;
   return (
     action.enabled ||
     action.blockingCodes.every((code) => inputBlockers.has(code))
@@ -742,6 +741,10 @@ function chooseOrder(id: string, jobId = ""): void {
   });
 }
 
+async function refreshAfterRecovery(): Promise<void> {
+  await Promise.all([loadDetail(), loadLists()]);
+}
+
 function openAction(action: Action): void {
   if (pendingRetry.value) return;
   handlingMode.value = "";
@@ -751,7 +754,6 @@ function openAction(action: Action): void {
   amount.value = "";
   material.value = "";
   shipmentId.value = "";
-  candidateId.value = "";
   selectedSlots.value = [];
   finalOutcomeConfirmed.value = false;
   confirmed.value = false;
@@ -1084,10 +1086,6 @@ async function submitAction(): Promise<void> {
             ),
         );
         return;
-      case "PREPARE_REPLACEMENT":
-        throw new Error(
-          "Příprava čerstvého kandidáta na náhradu čeká na architektonické rozhodnutí #259.",
-        );
       case "CREATE_SHIPMENT":
         await submitBody(
           action,
@@ -2313,11 +2311,25 @@ onMounted(() => {
         </button>
       </section>
 
+      <RecoveryPreparationPanel
+        :key="order.id"
+        :order-id="order.id"
+        :jobs="allJobs"
+        :claims="allClaims"
+        :shipments="allShipments"
+        :replacement-requests="allReplacementRequests"
+        :actions="actions"
+        :blocked="busy || loading || !!pendingRetry || refreshRequired"
+        @changed="refreshAfterRecovery"
+      />
+
       <section class="operator-card" aria-labelledby="actions-title">
         <h2 id="actions-title">Další kroky</h2>
         <ul class="operator-list">
           <li
-            v-for="action in actions"
+            v-for="action in actions.filter(
+              (item) => item.action !== 'PREPARE_REPLACEMENT',
+            )"
             :key="`${action.action}:${action.targetId}`"
           >
             <button
@@ -2337,9 +2349,6 @@ onMounted(() => {
               <span v-if="action.blockingCodes.length"
                 >· překážky: {{ action.blockingCodes.join(", ") }}</span
               ></small
-            >
-            <span v-if="action.action === 'PREPARE_REPLACEMENT'">
-              · čeká na #259</span
             >
           </li>
         </ul>

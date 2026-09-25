@@ -430,3 +430,332 @@ test("a read-only operator can inspect an order without financial cost access", 
   ).toBeVisible();
   expect(costRequests).toBe(0);
 });
+
+test("failed-job preparation survives async refresh and submits the returned candidate", async ({
+  page,
+}) => {
+  const jobId = "00000000-0000-0000-0000-000000000071";
+  const requestId = "00000000-0000-0000-0000-000000000072";
+  const preparationId = "00000000-0000-0000-0000-000000000073";
+  const candidateId = "00000000-0000-0000-0000-000000000074";
+  const preparation = {
+    preparationId,
+    kind: "JOB_REPLACEMENT",
+    status: "CANDIDATES_AVAILABLE",
+    generation: 1,
+    orderId,
+    targetId: jobId,
+    requestedAt: "2026-09-25T08:00:00Z",
+    sourceJobIds: [jobId],
+    dispatchCount: 1,
+    pendingCount: 0,
+    failedCount: 0,
+    blockingCodes: [],
+    sources: [
+      {
+        sourceJobId: jobId,
+        quantity: 1,
+        fulfilmentSlotIds: ["slot-1"],
+        selectableCount: 1,
+        pendingCount: 0,
+        failedCount: 0,
+        blockingCodes: [],
+      },
+    ],
+  };
+  let prepared = false;
+  let finalBody: unknown;
+  await installFixtures(
+    page,
+    () => null,
+    () => "PENDING",
+    () => ({
+      ...orderDetail(null),
+      fulfilment: {
+        ...orderDetail(null).fulfilment,
+        jobs: [{ id: jobId, status: "FAILED" }],
+        replacementRequests: [
+          { id: requestId, sourceJobId: jobId, status: "OPEN" },
+        ],
+      },
+      actions: [
+        {
+          action: "PREPARE_REPLACEMENT",
+          targetType: "JOB",
+          targetId: jobId,
+          enabled: false,
+          blockingCodes: ["FRESH_RESERVATION_REQUIRED"],
+          requiresReason: true,
+          requiresConfirmation: false,
+        },
+      ],
+    }),
+  );
+  await page.route(
+    `**/admin/orders/${orderId}/fulfilment/jobs/${jobId}/replacement-preparations**`,
+    (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (route.request().method() === "POST") {
+        expect(route.request().postDataJSON()).toEqual({
+          expectedReplacementRequestId: requestId,
+          reason: "Selhaný tisk",
+        });
+        prepared = true;
+        return route.fulfill({ json: { preparationId, generation: 1 } });
+      }
+      if (path.endsWith("/candidates"))
+        return route.fulfill({
+          json: {
+            items: [
+              {
+                sourceJobId: jobId,
+                candidateResourceEstimateId: candidateId,
+                machineId: "machine-1",
+                machineProfileId: "profile-1",
+                machineCalibrationId: "calibration-1",
+                inventoryId: "inventory-1",
+                printConfigRevisionId: "config-1",
+                material: "PLA",
+                quantity: 1,
+                partsPerPlate: 1,
+                requiredMaterialMilligrams: "1000",
+                requiredMachineSeconds: "3600",
+                calculatedAt: "2026-09-25T08:00:00Z",
+                expiresAt: new Date(Date.now() + 45 * 60_000).toISOString(),
+                intervals: [],
+                selectable: true,
+                blockingCodes: [],
+              },
+            ],
+          },
+        });
+      if (path.endsWith(preparationId))
+        return route.fulfill({ json: preparation });
+      return route.fulfill({ json: { items: prepared ? [preparation] : [] } });
+    },
+  );
+  await page.route(
+    `**/admin/orders/${orderId}/fulfilment/jobs/${jobId}/replacement`,
+    (route) => {
+      finalBody = route.request().postDataJSON();
+      return route.fulfill({
+        json: { orderId, status: "REPLACEMENT_CREATED", result: {} },
+      });
+    },
+  );
+  await page.goto(`/objednavky?order=${orderId}`);
+  await page
+    .getByRole("button", { name: `Připravit náhradu úlohy ${jobId}` })
+    .click();
+  await page
+    .getByRole("textbox", { name: "Důvod přípravy" })
+    .fill("Selhaný tisk");
+  await page
+    .getByRole("button", { name: "Připravit čerstvé kandidáty" })
+    .click();
+  await expect(
+    page.getByText("Příprava 1 · CANDIDATES_AVAILABLE"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Načíst aktuální volby" }).click();
+  await page.getByRole("radio", { name: /Stroj machine-1/ }).check();
+  await page
+    .getByRole("textbox", { name: "Důvod potvrzení" })
+    .fill("Schválená náhrada");
+  await page
+    .getByRole("checkbox", { name: /Potvrzuji aktuální kandidáty/ })
+    .check();
+  await page.getByRole("button", { name: "Vytvořit náhradní úlohu" }).click();
+  await expect
+    .poll(() => finalBody)
+    .toEqual({
+      reason: "Schválená náhrada",
+      candidateResourceEstimateId: candidateId,
+    });
+});
+
+test("repeated LOST reprint requires a candidate for every source job", async ({
+  page,
+}) => {
+  const claimId = "00000000-0000-0000-0000-000000000081";
+  const predecessorId = "00000000-0000-0000-0000-000000000082";
+  const originalId = "00000000-0000-0000-0000-000000000083";
+  const sourceIds = [
+    "00000000-0000-0000-0000-000000000084",
+    "00000000-0000-0000-0000-000000000085",
+  ];
+  const preparationId = "00000000-0000-0000-0000-000000000086";
+  const preparation = {
+    preparationId,
+    kind: "LOST_CLAIM_REPRINT",
+    status: "CANDIDATES_AVAILABLE",
+    generation: 2,
+    orderId,
+    targetId: claimId,
+    predecessorShipmentId: predecessorId,
+    requestedAt: "2026-09-25T08:00:00Z",
+    sourceJobIds: sourceIds,
+    dispatchCount: 2,
+    pendingCount: 0,
+    failedCount: 0,
+    blockingCodes: [],
+    sources: sourceIds.map((sourceJobId, index) => ({
+      sourceJobId,
+      quantity: index + 1,
+      fulfilmentSlotIds: [`slot-${index}`],
+      selectableCount: 1,
+      pendingCount: 0,
+      failedCount: 0,
+      blockingCodes: [],
+    })),
+  };
+  let prepared = false;
+  let finalBody: unknown;
+  await installFixtures(
+    page,
+    () => null,
+    () => "PENDING",
+    () => ({
+      ...orderDetail(null),
+      fulfilment: {
+        ...orderDetail(null).fulfilment,
+        claims: [
+          {
+            id: claimId,
+            origin: "SHIPMENT_INCIDENT",
+            status: "OPEN",
+            incidentShipmentId: originalId,
+            reshipmentAuthorizations: [{ reshipmentShipmentId: predecessorId }],
+          },
+        ],
+        shipments: [
+          {
+            id: originalId,
+            status: "LOST",
+            shipmentPlanId: "plan-1",
+            replacesShipmentId: null,
+            reprintClaimId: null,
+            jobAssignments: [],
+            carrierLabelId: null,
+          },
+          {
+            id: predecessorId,
+            status: "LOST",
+            shipmentPlanId: "plan-1",
+            replacesShipmentId: originalId,
+            reprintClaimId: claimId,
+            jobAssignments: [],
+            carrierLabelId: null,
+          },
+        ],
+      },
+    }),
+  );
+  await page.route(
+    `**/admin/orders/${orderId}/fulfilment/claims/${claimId}/reprint-preparations**`,
+    (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (route.request().method() === "POST") {
+        expect(route.request().postDataJSON()).toEqual({
+          expectedPredecessorShipmentId: predecessorId,
+          reason: "Druhá ztracená zásilka",
+        });
+        prepared = true;
+        return route.fulfill({ json: { preparationId, generation: 2 } });
+      }
+      if (path.endsWith("/candidates")) {
+        const sourceJobId = new URL(route.request().url()).searchParams.get(
+          "sourceJobId",
+        )!;
+        return route.fulfill({
+          json: {
+            items: [
+              {
+                sourceJobId,
+                candidateResourceEstimateId: `candidate-${sourceJobId}`,
+                machineId: "machine-1",
+                machineProfileId: "profile-1",
+                machineCalibrationId: "calibration-1",
+                inventoryId: "inventory-1",
+                printConfigRevisionId: "config-1",
+                material: "PLA",
+                quantity: sourceIds.indexOf(sourceJobId) + 1,
+                partsPerPlate: 1,
+                requiredMaterialMilligrams: "1000",
+                requiredMachineSeconds: "3600",
+                calculatedAt: "2026-09-25T08:00:00Z",
+                expiresAt: new Date(Date.now() + 45 * 60_000).toISOString(),
+                intervals: [],
+                selectable: true,
+                blockingCodes: [],
+              },
+            ],
+          },
+        });
+      }
+      if (path.endsWith(preparationId))
+        return route.fulfill({ json: preparation });
+      return route.fulfill({ json: { items: prepared ? [preparation] : [] } });
+    },
+  );
+  await page.route(
+    `**/admin/orders/${orderId}/fulfilment/claims/${claimId}/reprint`,
+    (route) => {
+      finalBody = route.request().postDataJSON();
+      return route.fulfill({
+        json: { orderId, status: "REPRINT_CREATED", result: {} },
+      });
+    },
+  );
+  await page.goto(`/objednavky?order=${orderId}`);
+  await page
+    .getByRole("button", {
+      name: `Připravit opakovanou zásilku pro reklamaci ${claimId} · ${predecessorId}`,
+    })
+    .click();
+  await page
+    .getByRole("textbox", { name: "Důvod přípravy" })
+    .fill("Druhá ztracená zásilka");
+  await page
+    .getByRole("button", { name: "Připravit čerstvé kandidáty" })
+    .click();
+  await expect(
+    page.getByText("Příprava 2 · CANDIDATES_AVAILABLE"),
+  ).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Důvod potvrzení" })
+    .fill("Celý balík znovu");
+  await page
+    .getByRole("checkbox", { name: /Potvrzuji aktuální kandidáty/ })
+    .check();
+  const confirm = page.getByRole("button", {
+    name: "Vytvořit celou opakovanou zásilku",
+  });
+  await expect(confirm).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Načíst aktuální volby" })
+    .nth(0)
+    .click();
+  await page
+    .getByRole("radio", { name: /Stroj machine-1/ })
+    .nth(0)
+    .check();
+  await expect(confirm).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Načíst aktuální volby" })
+    .nth(1)
+    .click();
+  await page
+    .getByRole("radio", { name: /Stroj machine-1/ })
+    .nth(1)
+    .check();
+  await confirm.click();
+  await expect
+    .poll(() => finalBody)
+    .toEqual({
+      reason: "Celý balík znovu",
+      replacements: sourceIds.map((sourceJobId) => ({
+        sourceJobId,
+        candidateResourceEstimateId: `candidate-${sourceJobId}`,
+      })),
+    });
+});
