@@ -6405,6 +6405,8 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       SELECT taven_claim_refund_dispatch(${refundId}::uuid) AS claimed_at
     `;
       expect(claim[0]?.claimed_at).toBeInstanceOf(Date);
+      const claimedAt = claim[0]?.claimed_at;
+      if (!claimedAt) throw new Error("refund dispatch claim was not recorded");
       const dispatchKey = `refund_payment:v1:${refundId}`;
       await prisma.outboxMessage.update({
         where: { deduplicationKey: dispatchKey },
@@ -6440,6 +6442,20 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         where: { deduplicationKey: dispatchKey },
         data: { status: "FAILED", lockedAt: null },
       });
+      await expect(
+        manualOrders.recordRefundProviderResult(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          {
+            ...failureBody,
+            occurredAt: new Date(claimedAt.getTime() - 5_001).toISOString(),
+          },
+          "operator-refund-recovery-predated-claim",
+        ),
+      ).rejects.toThrow(
+        "Provider outcome predates the exact refund dispatch claim",
+      );
       for (const [field, value] of [
         ["providerIntentId", "wrong-intent"],
         ["requestReference", "wrong-request"],
@@ -6588,7 +6604,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       ).toMatchObject({
         selectedResultKind: "REFUND_FAILED",
         selectedResultSource: "operator-provider-reconciliation",
-        dispatchStatus: "PENDING",
+        dispatchStatus: "FAILED",
         replacementRefundIds: [retryId],
         providerIntentId: refund.payment.providerIntentId,
         currency: refund.payment.currency,

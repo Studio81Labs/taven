@@ -27,6 +27,9 @@ record remain immutable.
    `evidenceReference`, timezone-qualified `occurredAt`, reason and
    `finalOutcomeConfirmed: true`. No file, secret, raw statement or URL is
    accepted. This records attested evidence; it makes **no** provider call.
+   The provider outcome must not predate the immutable dispatch claim by more
+   than the five-second clock-skew allowance. If it does, stop and investigate
+   the attempt identity instead of recording a failure.
    Use the refund-level `providerIntentId` from the refund history, not the
    payment-level field. For a late-capture compensation, the payment's intent
    may remain null; the refund-level locator is verified against the immutable

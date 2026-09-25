@@ -4810,6 +4810,11 @@ export class OrdersService {
         if (occurredAt > decisionAt) {
           throw new ConflictException("Provider outcome time is in the future");
         }
+        if (occurredAt.getTime() < claim.claimedAt.getTime() - 5_000) {
+          throw new ConflictException(
+            "Provider outcome predates the exact refund dispatch claim",
+          );
+        }
         if (
           !existing &&
           !(

@@ -66,7 +66,12 @@ BEGIN
        OR (target_refund."provider_refund_id" IS NOT NULL
            AND target_refund."provider_refund_id" IS DISTINCT FROM refund_provider_id)
        OR (refund_occurred_at IS NOT NULL
-           AND refund_occurred_at < target_refund."requested_at" - interval '5 seconds') THEN
+           AND (
+               refund_occurred_at < target_refund."requested_at" - interval '5 seconds'
+               OR (target_refund."dispatch_claimed_at" IS NOT NULL
+                   AND refund_occurred_at <
+                       target_refund."dispatch_claimed_at" - interval '5 seconds')
+           )) THEN
         RAISE EXCEPTION 'refund result does not match its exact attempt'
             USING ERRCODE = '23514', CONSTRAINT = 'refund_result_scope_check';
     END IF;
