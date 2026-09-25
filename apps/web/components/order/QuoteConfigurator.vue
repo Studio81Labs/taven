@@ -559,8 +559,13 @@ function quantityPrice(choice: {
     class="configurator"
     :aria-labelledby="
       quote.phase === 'CHECKOUT_READY' && !editingCheckout
-        ? 'checkout-title'
+        ? undefined
         : 'configurator-title'
+    "
+    :aria-label="
+      quote.phase === 'CHECKOUT_READY' && !editingCheckout
+        ? 'Konfigurace a objednávka'
+        : undefined
     "
   >
     <header

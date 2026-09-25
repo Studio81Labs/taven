@@ -266,6 +266,9 @@ test.describe("Accessibility and Responsive Viewports", () => {
       page.getByRole("heading", { name: "Shrnutí zakázky / TAV-2026-TEST" }),
     ).toBeVisible();
     await expect(
+      page.locator('section[aria-labelledby="checkout-title"]'),
+    ).toHaveCount(1);
+    await expect(
       page.getByRole("group", { name: "02 Kontaktní údaje" }),
     ).toBeVisible();
     await expect(

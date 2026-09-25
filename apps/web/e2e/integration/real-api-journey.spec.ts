@@ -716,10 +716,11 @@ test.describe("Real API Integration Journey", () => {
           component.shipmentPlanOrdinal,
       ),
     ).toEqual(shipmentComponents.map((_: unknown, index: number) => index + 1));
-    await page.getByText("Rozpis ceny").click();
-    await expect(
-      page.locator(".price-list li").filter({ hasText: "Doprava" }),
-    ).toHaveCount(shipmentComponents.length);
+    const shipmentRows = page
+      .locator(".checkout-summary__breakdown > div")
+      .filter({ hasText: "Doprava" });
+    await expect(shipmentRows).toHaveCount(shipmentComponents.length);
+    await expect(shipmentRows.first()).toBeVisible();
 
     await page.getByLabel("Jméno kontaktní osoby").fill("E2E Parcel Test");
     await page.getByLabel("E-mail").fill("browser-144-parcels@example.test");
