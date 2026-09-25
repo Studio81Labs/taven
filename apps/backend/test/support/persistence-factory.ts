@@ -114,6 +114,7 @@ export type SliceMetrics = {
 export type CandidateOccupancyPlan = {
   partsPerPlate?: number;
   tailSliceResultId?: string | null;
+  dispatchJobId?: string;
 };
 export type CommerceItem = {
   quantity?: number;
@@ -1957,7 +1958,11 @@ export class PersistenceFactory {
         partsPerPlate,
         requiredMaterialMilligrams,
         requiredMachineSeconds,
-        JSON.stringify({}),
+        JSON.stringify(
+          occupancyPlan.dispatchJobId
+            ? { dispatchJobId: occupancyPlan.dispatchJobId }
+            : {},
+        ),
         createdAt,
         expiresAt,
       ],

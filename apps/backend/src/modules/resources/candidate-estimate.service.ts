@@ -269,10 +269,10 @@ export class CandidateEstimateService {
     private readonly snapshots: SlicerProfileSnapshotService,
   ) {}
 
-  /** Persists the exact queue dispatch before it can be published. */
-  async dispatch(
+  /** Materialize trusted snapshots before acquiring business/resource locks. */
+  async prepareDispatch(
     input: CandidateEstimateDispatch,
-  ): Promise<CandidateEstimateJob> {
+  ): Promise<CandidateEstimateDispatch> {
     if (input.availableAt !== undefined) {
       assertValidDate(input.availableAt, "availableAt");
     }
@@ -294,6 +294,15 @@ export class CandidateEstimateService {
       }
       throw error;
     }
+    return { ...input, job };
+  }
+
+  /** Stage an exact dispatch in the caller's transaction with its owner. */
+  async stageDispatch(
+    transaction: Prisma.TransactionClient,
+    input: CandidateEstimateDispatch,
+  ): Promise<{ job: CandidateEstimateJob; outboxMessageId: string }> {
+    const job = input.job;
     const payload = {
       nodeId: input.nodeId,
       inventoryId: input.inventoryId,
@@ -305,68 +314,65 @@ export class CandidateEstimateService {
       job.idempotencyKey,
       job.attempt,
     );
-
-    try {
-      return await this.prisma.$transaction(async (transaction) => {
-        await transaction.$queryRaw`
+    await transaction.$queryRaw`
           SELECT pg_advisory_xact_lock(
             hashtextextended(${job.idempotencyKey}, 0)
           )::text
         `;
-        const existing = await this.findDispatchForAttempt(
-          transaction,
-          job.idempotencyKey,
-          job.attempt,
-          attemptDeduplicationKey,
+    const existing = await this.findDispatchForAttempt(
+      transaction,
+      job.idempotencyKey,
+      job.attempt,
+      attemptDeduplicationKey,
+    );
+    if (existing) {
+      const persisted = await parseDispatchPayload(existing.payload);
+      if (
+        existing.message_type !== CANDIDATE_DISPATCH_TYPE ||
+        existing.aggregate_id !== job.jobId ||
+        persisted.job.attempt !== job.attempt ||
+        !(await this.hasSameDispatchEffect(persisted, payload))
+      ) {
+        throw new ResourceConflictError(
+          "candidate dispatch attempt belongs to different inputs",
+          "outbox_messages_deduplication_key_key",
         );
-        if (existing) {
-          const persisted = await parseDispatchPayload(existing.payload);
-          if (
-            existing.message_type !== CANDIDATE_DISPATCH_TYPE ||
-            existing.aggregate_id !== job.jobId ||
-            persisted.job.attempt !== job.attempt ||
-            !(await this.hasSameDispatchEffect(persisted, payload))
-          ) {
-            throw new ResourceConflictError(
-              "candidate dispatch attempt belongs to different inputs",
-              "outbox_messages_deduplication_key_key",
-            );
-          }
-          return persisted.job;
-        }
+      }
+      return { job: persisted.job, outboxMessageId: existing.id };
+    }
 
-        if (job.attempt > 1) {
-          const previousAttempt = job.attempt - 1;
-          const previous = await this.findDispatchForAttempt(
-            transaction,
-            job.idempotencyKey,
-            previousAttempt,
-            slicingDispatchAttemptKey(job.idempotencyKey, previousAttempt),
-          );
-          if (!previous) {
-            throw new ResourceConflictError(
-              "candidate dispatch retry must immediately follow a persisted attempt",
-              "candidate_estimate_dispatch_attempt_sequence_check",
-            );
-          }
-          const previousPayload = await parseDispatchPayload(previous.payload);
-          const previousTerminal = await this.findTerminalReceipt(
-            transaction,
-            previous.id,
-          );
-          if (
-            !(await this.hasSameDispatchEffect(previousPayload, payload)) ||
-            previousTerminal?.outcome !== "FAILED" ||
-            previousTerminal.failure_class !== "retryable_infrastructure"
-          ) {
-            throw new ResourceConflictError(
-              "candidate dispatch retry requires the previous exact attempt to fail retryably",
-              "candidate_estimate_dispatch_retry_check",
-            );
-          }
-        }
+    if (job.attempt > 1) {
+      const previousAttempt = job.attempt - 1;
+      const previous = await this.findDispatchForAttempt(
+        transaction,
+        job.idempotencyKey,
+        previousAttempt,
+        slicingDispatchAttemptKey(job.idempotencyKey, previousAttempt),
+      );
+      if (!previous) {
+        throw new ResourceConflictError(
+          "candidate dispatch retry must immediately follow a persisted attempt",
+          "candidate_estimate_dispatch_attempt_sequence_check",
+        );
+      }
+      const previousPayload = await parseDispatchPayload(previous.payload);
+      const previousTerminal = await this.findTerminalReceipt(
+        transaction,
+        previous.id,
+      );
+      if (
+        !(await this.hasSameDispatchEffect(previousPayload, payload)) ||
+        previousTerminal?.outcome !== "FAILED" ||
+        previousTerminal.failure_class !== "retryable_infrastructure"
+      ) {
+        throw new ResourceConflictError(
+          "candidate dispatch retry requires the previous exact attempt to fail retryably",
+          "candidate_estimate_dispatch_retry_check",
+        );
+      }
+    }
 
-        await transaction.$executeRaw`
+    await transaction.$executeRaw`
           INSERT INTO arrangement_revisions (id, content_sha256)
           VALUES (
             ${job.input.arrangementRevision.revisionId}::uuid,
@@ -375,9 +381,7 @@ export class CandidateEstimateService {
           ON CONFLICT (id) DO NOTHING
         `;
 
-        const resource = await transaction.$queryRaw<
-          Array<{ exists: boolean }>
-        >`
+    const resource = await transaction.$queryRaw<Array<{ exists: boolean }>>`
           SELECT EXISTS (
             SELECT 1
             FROM inventories inventory
@@ -433,30 +437,41 @@ export class CandidateEstimateService {
               AND arrangement_revision.content_sha256 = ${job.input.arrangementRevision.contentSha256}
           ) AS exists
         `;
-        if (!resource[0]?.exists) {
-          throw new ResourceNotFoundError(
-            "candidate dispatch resources do not match persisted revisions",
-          );
-        }
-        await this.lockCandidateArtifactKeys(
-          transaction,
-          job.input.occupancySliceTargets.map(
-            ({ analysisObjectKey }) => analysisObjectKey,
-          ),
-        );
-        await transaction.outboxMessage.create({
-          data: {
-            deduplicationKey: attemptDeduplicationKey,
-            aggregateType: "CandidateEstimateDispatch",
-            aggregateId: job.jobId,
-            messageType: CANDIDATE_DISPATCH_TYPE,
-            schemaVersion: CANDIDATE_SCHEMA_VERSION,
-            payload: payload as unknown as Prisma.InputJsonObject,
-            ...(input.availableAt ? { availableAt: input.availableAt } : {}),
-          },
-        });
-        return job;
-      });
+    if (!resource[0]?.exists) {
+      throw new ResourceNotFoundError(
+        "candidate dispatch resources do not match persisted revisions",
+      );
+    }
+    await this.lockCandidateArtifactKeys(
+      transaction,
+      job.input.occupancySliceTargets.map(
+        ({ analysisObjectKey }) => analysisObjectKey,
+      ),
+    );
+    const outbox = await transaction.outboxMessage.create({
+      data: {
+        deduplicationKey: attemptDeduplicationKey,
+        aggregateType: "CandidateEstimateDispatch",
+        aggregateId: job.jobId,
+        messageType: CANDIDATE_DISPATCH_TYPE,
+        schemaVersion: CANDIDATE_SCHEMA_VERSION,
+        payload: payload as unknown as Prisma.InputJsonObject,
+        ...(input.availableAt ? { availableAt: input.availableAt } : {}),
+      },
+    });
+    return { job, outboxMessageId: outbox.id };
+  }
+
+  /** Persists the exact queue dispatch before it can be published. */
+  async dispatch(
+    input: CandidateEstimateDispatch,
+  ): Promise<CandidateEstimateJob> {
+    const prepared = await this.prepareDispatch(input);
+    try {
+      const staged = await this.prisma.$transaction((transaction) =>
+        this.stageDispatch(transaction, prepared),
+      );
+      return staged.job;
     } catch (error) {
       if (
         error instanceof ResourceConflictError ||

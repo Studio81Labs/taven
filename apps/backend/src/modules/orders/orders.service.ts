@@ -17,6 +17,7 @@ import {
   OrderStatus,
   PriceAdjustmentReason,
   Prisma,
+  RecoveryCandidatePreparationKind,
   RefundReason,
   RefundStatus,
   ReplacementRequestReason,
@@ -1182,6 +1183,17 @@ export class OrdersService {
         reason,
       },
       async (tx) => {
+        await this.lockOrder(tx, orderId);
+        await tx.$queryRaw`
+          SELECT id FROM order_phases
+          WHERE order_id = ${orderId}::uuid
+          ORDER BY id FOR UPDATE
+        `;
+        await tx.$queryRaw`
+          SELECT id FROM fulfilment_slots
+          WHERE order_id = ${orderId}::uuid
+          ORDER BY id FOR UPDATE
+        `;
         const source = await this.lockJob(tx, orderId, sourceJobId);
         if (
           source.status !== JobStatus.FAILED &&
@@ -1195,15 +1207,15 @@ export class OrdersService {
         if (!request || request.status !== ReplacementRequestStatus.OPEN) {
           throw new ConflictException("Replacement request is not open");
         }
-        const now = await databaseNow(tx);
-        if (request.deadlineAt.getTime() <= now.getTime()) {
+        const initialNow = await databaseNow(tx);
+        if (request.deadlineAt.getTime() <= initialNow.getTime()) {
           return this.finalizeExpiredReplacement(
             tx,
             orderId,
             sourceJobId,
             source.shipmentPlanId,
             request.id,
-            now,
+            initialNow,
             key!,
             new Map(),
           );
@@ -1218,6 +1230,25 @@ export class OrdersService {
         if (!sourcePlanJob || sourcePlanJob.slots.length === 0) {
           throw new ConflictException("Replacement source plan is incomplete");
         }
+        await this.assertRecoveryCandidateProvenance(tx, {
+          kind: RecoveryCandidatePreparationKind.JOB_REPLACEMENT,
+          targetId: sourceJobId,
+          expectedContextId: request.id,
+          replacements: [
+            {
+              sourceJobId,
+              candidateResourceEstimateId: body.candidateResourceEstimateId,
+            },
+          ],
+        });
+        await this.lockRecoveryCandidateResources(tx, [
+          body.candidateResourceEstimateId,
+        ]);
+        const now = await databaseNow(tx);
+        if (request.deadlineAt <= now)
+          throw new ConflictException(
+            "Replacement request expired during admission",
+          );
         const replacementCandidate =
           await tx.candidateResourceEstimate.findFirst({
             where: {
@@ -1242,8 +1273,7 @@ export class OrdersService {
           replacementCandidate.capacityIntervals.some(
             (interval) =>
               interval.startsAt.getTime() <= now.getTime() ||
-              interval.endsAt.getTime() >
-                replacementCandidate.expiresAt.getTime(),
+              interval.endsAt.getTime() <= interval.startsAt.getTime(),
           )
         ) {
           throw new ConflictException(
@@ -3175,6 +3205,16 @@ export class OrdersService {
           );
         }
         await tx.$queryRaw`
+          SELECT id FROM order_phases
+          WHERE order_id = ${orderId}::uuid
+          ORDER BY id FOR UPDATE
+        `;
+        await tx.$queryRaw`
+          SELECT id FROM fulfilment_slots
+          WHERE order_id = ${orderId}::uuid
+          ORDER BY id FOR UPDATE
+        `;
+        await tx.$queryRaw`
           SELECT id FROM claims
           WHERE id = ${claimId}::uuid AND order_id = ${orderId}::uuid
           FOR UPDATE
@@ -3224,12 +3264,6 @@ export class OrdersService {
             "Only an unresolved LOST parcel Claim can authorize a reprint",
           );
         }
-        await tx.$queryRaw`
-          SELECT id FROM fulfilment_slots
-          WHERE order_id = ${orderId}::uuid
-          ORDER BY id
-          FOR UPDATE
-        `;
         await tx.$queryRaw`
           SELECT id FROM claim_slot_resolutions
           WHERE claim_id = ${claimId}::uuid
@@ -3346,6 +3380,30 @@ export class OrdersService {
             "A v0 parcel reprint must be reserved on one production node",
           );
         }
+        await this.assertRecoveryCandidateProvenance(tx, {
+          kind: RecoveryCandidatePreparationKind.LOST_CLAIM_REPRINT,
+          targetId: claimId,
+          expectedContextId: predecessor.id,
+          replacements,
+        });
+        const sourceJobIds = sourceJobs.map(({ id }) => id).sort();
+        await tx.$queryRaw`
+          SELECT id FROM jobs
+          WHERE id IN (${Prisma.join(sourceJobIds.map((id) => Prisma.sql`${id}::uuid`))})
+          ORDER BY node_id, id FOR UPDATE
+        `;
+        await tx.$queryRaw`
+          SELECT id FROM shipments WHERE id = ${predecessor.id}::uuid FOR UPDATE
+        `;
+        await tx.$queryRaw`
+          SELECT id FROM shipment_plans WHERE id = ${predecessor.shipmentPlanId}::uuid FOR UPDATE
+        `;
+        await this.lockRecoveryCandidateResources(
+          tx,
+          replacements.map(
+            ({ candidateResourceEstimateId }) => candidateResourceEstimateId,
+          ),
+        );
         const now = await databaseNow(tx);
         const commandDigest = createHash("sha256")
           .update(`${claimId}\0${requestedPlanKey ?? key ?? "claim-reprint"}`)
@@ -3394,7 +3452,7 @@ export class OrdersService {
             candidate.capacityIntervals.some(
               (interval) =>
                 interval.startsAt.getTime() <= now.getTime() ||
-                interval.endsAt.getTime() > candidate.expiresAt.getTime(),
+                interval.endsAt.getTime() <= interval.startsAt.getTime(),
             )
           ) {
             throw new ConflictException(
@@ -7055,6 +7113,152 @@ export class OrdersService {
         fulfilmentSlotId: allocation.targetId,
         amountMinor: allocation.amount.minorUnits,
       }));
+  }
+
+  private async lockRecoveryCandidateResources(
+    tx: Transaction,
+    candidateIds: string[],
+  ): Promise<void> {
+    const ids = [...new Set(candidateIds)].sort();
+    const candidates = await tx.candidateResourceEstimate.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        machineProfileId: true,
+        machineId: true,
+        machineCalibrationId: true,
+        inventoryId: true,
+      },
+    });
+    if (candidates.length !== ids.length)
+      throw new ConflictException("Recovery candidate set is incomplete");
+    const locks: Array<[string, string[]]> = [
+      ["candidate_resource_estimates", ids],
+      [
+        "machine_profiles",
+        candidates.map(({ machineProfileId }) => machineProfileId),
+      ],
+      ["machines", candidates.map(({ machineId }) => machineId)],
+      [
+        "machine_calibrations",
+        candidates.map(({ machineCalibrationId }) => machineCalibrationId),
+      ],
+      ["inventories", candidates.map(({ inventoryId }) => inventoryId)],
+    ];
+    for (const [table, values] of locks) {
+      const sorted = [...new Set(values)].sort();
+      if (!sorted.length) continue;
+      await tx.$queryRawUnsafe(
+        `SELECT id FROM ${table} WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+        sorted,
+      );
+    }
+    await tx.$queryRaw`
+      SELECT id FROM candidate_capacity_intervals
+      WHERE candidate_resource_estimate_id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+      ORDER BY node_id, id FOR UPDATE
+    `;
+  }
+
+  private async assertRecoveryCandidateProvenance(
+    tx: Transaction,
+    input: {
+      kind: RecoveryCandidatePreparationKind;
+      targetId: string;
+      expectedContextId: string;
+      replacements: Array<{
+        sourceJobId: string;
+        candidateResourceEstimateId: string;
+      }>;
+    },
+  ): Promise<void> {
+    const preparation = await tx.recoveryCandidatePreparation.findFirst({
+      where: { kind: input.kind, targetId: input.targetId },
+      orderBy: { generation: "desc" },
+    });
+    if (
+      !preparation ||
+      (input.kind === RecoveryCandidatePreparationKind.JOB_REPLACEMENT
+        ? preparation.replacementRequestId !== input.expectedContextId
+        : preparation.predecessorShipmentId !== input.expectedContextId)
+    ) {
+      throw new ConflictException(
+        "Recovery needs a current scoped candidate preparation",
+      );
+    }
+    if (input.kind === RecoveryCandidatePreparationKind.LOST_CLAIM_REPRINT) {
+      const selectedEvidence = await tx.shipmentProviderEvent.findFirst({
+        where: { shipmentId: input.expectedContextId, kind: "LOST" },
+        orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+        select: { id: true },
+      });
+      if (selectedEvidence?.id !== preparation.incidentEvidenceId)
+        throw new ConflictException(
+          "LOST incident evidence changed after preparation",
+        );
+    }
+    const expected = [...preparation.sourceJobIds].sort();
+    const selected = input.replacements
+      .map(({ sourceJobId }) => sourceJobId)
+      .sort();
+    if (
+      expected.length !== selected.length ||
+      expected.some((id, index) => id !== selected[index])
+    ) {
+      throw new ConflictException(
+        "Recovery candidates do not cover the exact source Job set",
+      );
+    }
+    const dispatches = await tx.recoveryCandidateDispatch.findMany({
+      where: { preparationId: preparation.id, sourceJobId: { in: selected } },
+    });
+    const receipts = await tx.candidateEstimateTerminalResult.findMany({
+      where: {
+        outboxMessageId: {
+          in: dispatches.map(({ outboxMessageId }) => outboxMessageId),
+        },
+        outcome: "SUCCEEDED",
+      },
+    });
+    const receiptByCandidate = new Map(
+      receipts
+        .filter(
+          ({ candidateResourceEstimateId }) => candidateResourceEstimateId,
+        )
+        .map((receipt) => [
+          receipt.candidateResourceEstimateId,
+          receipt.outboxMessageId,
+        ]),
+    );
+    for (const {
+      sourceJobId,
+      candidateResourceEstimateId,
+    } of input.replacements) {
+      const outboxMessageId = receiptByCandidate.get(
+        candidateResourceEstimateId,
+      );
+      if (
+        !outboxMessageId ||
+        !dispatches.some(
+          (dispatch) =>
+            dispatch.sourceJobId === sourceJobId &&
+            dispatch.outboxMessageId === outboxMessageId,
+        )
+      ) {
+        throw new ConflictException(
+          "Selected candidate has no successful dispatch for this recovery source",
+        );
+      }
+      const candidate = await tx.candidateResourceEstimate.findUnique({
+        where: { id: candidateResourceEstimateId },
+        select: { calculatedAt: true },
+      });
+      if (!candidate || candidate.calculatedAt < preparation.requestedAt) {
+        throw new ConflictException(
+          "Selected recovery candidate predates its preparation",
+        );
+      }
+    }
   }
 
   private async command(

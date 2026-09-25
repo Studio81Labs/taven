@@ -10236,6 +10236,25 @@
         ],
         "type": "object"
       },
+      "PrepareClaimReprintDto": {
+        "properties": {
+          "expectedPredecessorShipmentId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedPredecessorShipmentId",
+          "reason"
+        ],
+        "type": "object"
+      },
       "PrepareIndividualOrderResourcesDto": {
         "properties": {
           "reason": {
@@ -10246,6 +10265,25 @@
           }
         },
         "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "PrepareJobReplacementDto": {
+        "properties": {
+          "expectedReplacementRequestId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedReplacementRequestId",
           "reason"
         ],
         "type": "object"
@@ -11923,6 +11961,363 @@
           "durationMilliseconds",
           "reason",
           "allocations"
+        ],
+        "type": "object"
+      },
+      "RecoveryCandidateChoiceDto": {
+        "properties": {
+          "blockingCodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "calculatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "candidateResourceEstimateId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "color": {
+            "nullable": true,
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "intervals": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryCandidateIntervalDto"
+            },
+            "type": "array"
+          },
+          "inventoryId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineCalibrationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "machineProfileId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "partsPerPlate": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "printConfigRevisionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "requiredMachineSeconds": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "requiredMaterialMilligrams": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "selectable": {
+            "type": "boolean"
+          },
+          "sourceJobId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidateResourceEstimateId",
+          "sourceJobId",
+          "machineId",
+          "machineProfileId",
+          "machineCalibrationId",
+          "inventoryId",
+          "printConfigRevisionId",
+          "material",
+          "quantity",
+          "partsPerPlate",
+          "requiredMaterialMilligrams",
+          "requiredMachineSeconds",
+          "intervals",
+          "calculatedAt",
+          "expiresAt",
+          "selectable",
+          "blockingCodes"
+        ],
+        "type": "object"
+      },
+      "RecoveryCandidateChoicePageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryCandidateChoiceDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "RecoveryCandidateIntervalDto": {
+        "properties": {
+          "endsAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "startsAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "startsAt",
+          "endsAt"
+        ],
+        "type": "object"
+      },
+      "RecoveryCandidatePreparationAcceptedDto": {
+        "properties": {
+          "generation": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "JOB_REPLACEMENT",
+              "LOST_CLAIM_REPRINT"
+            ],
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "preparationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "requestedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "statusPath": {
+            "type": "string"
+          },
+          "targetId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preparationId",
+          "kind",
+          "orderId",
+          "targetId",
+          "generation",
+          "requestedAt",
+          "statusPath"
+        ],
+        "type": "object"
+      },
+      "RecoveryCandidatePreparationDetailDto": {
+        "properties": {
+          "blockingCodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "claimId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "dispatchCount": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "failedCount": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "generation": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "incidentEvidenceId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "JOB_REPLACEMENT",
+              "LOST_CLAIM_REPRINT"
+            ],
+            "type": "string"
+          },
+          "nextRefreshAt": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "orderId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "pendingCount": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "predecessorShipmentId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "preparationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "replacementRequestId": {
+            "format": "uuid",
+            "nullable": true,
+            "type": "string"
+          },
+          "requestedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sourceJobIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryCandidateSourceProgressDto"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "PREPARING",
+              "CANDIDATES_AVAILABLE",
+              "BLOCKED",
+              "EXPIRED",
+              "SUPERSEDED"
+            ],
+            "type": "string"
+          },
+          "statusPath": {
+            "type": "string"
+          },
+          "targetId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preparationId",
+          "kind",
+          "orderId",
+          "targetId",
+          "generation",
+          "requestedAt",
+          "statusPath",
+          "sourceJobIds",
+          "status",
+          "sources",
+          "dispatchCount",
+          "pendingCount",
+          "failedCount",
+          "blockingCodes"
+        ],
+        "type": "object"
+      },
+      "RecoveryCandidatePreparationPageDto": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryCandidatePreparationDetailDto"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "RecoveryCandidateSourceProgressDto": {
+        "properties": {
+          "blockingCodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "failedCount": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "fulfilmentSlotIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pendingCount": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "quantity": {
+            "minimum": 1,
+            "type": "number"
+          },
+          "selectableCount": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "sourceJobId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceJobId",
+          "fulfilmentSlotIds",
+          "quantity",
+          "pendingCount",
+          "failedCount",
+          "selectableCount",
+          "blockingCodes"
         ],
         "type": "object"
       },
@@ -19021,6 +19416,316 @@
         ]
       }
     },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint-preparations": {
+      "get": {
+        "operationId": "RecoveryCandidateController_claimPreparations",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCandidatePreparationPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List bounded LOST-claim preparation history",
+        "tags": [
+          "operator recovery candidates"
+        ]
+      },
+      "post": {
+        "operationId": "RecoveryCandidateController_prepareReprint",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareClaimReprintDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCandidatePreparationAcceptedDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Prepare fresh candidates for a whole LOST parcel reprint",
+        "tags": [
+          "operator recovery candidates"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint-preparations/{preparationId}": {
+      "get": {
+        "operationId": "RecoveryCandidateController_claimPreparation",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "preparationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCandidatePreparationDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read LOST-claim preparation progress",
+        "tags": [
+          "operator recovery candidates"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint-preparations/{preparationId}/candidates": {
+      "get": {
+        "operationId": "RecoveryCandidateController_claimCandidates",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sourceJobId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "preparationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "claimId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCandidateChoicePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read typed candidates for every source Job in a LOST parcel",
+        "tags": [
+          "operator recovery candidates"
+        ]
+      }
+    },
     "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reshipment-handoff": {
       "post": {
         "operationId": "OrdersController_handoffReshipment",
@@ -19920,6 +20625,316 @@
         "summary": "Close an expired replacement request into refund recovery",
         "tags": [
           "operator fulfilment"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-preparations": {
+      "get": {
+        "operationId": "RecoveryCandidateController_jobPreparations",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCandidatePreparationPageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "List bounded failed-Job preparation history",
+        "tags": [
+          "operator recovery candidates"
+        ]
+      },
+      "post": {
+        "operationId": "RecoveryCandidateController_prepareReplacement",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable command key; replaying altered input returns 409",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "minLength": 8,
+              "pattern": "^\\s*\\S[\\s\\S]{6,253}\\S\\s*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareJobReplacementDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCandidatePreparationAcceptedDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Prepare fresh candidates for one failed Job replacement",
+        "tags": [
+          "operator recovery candidates"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-preparations/{preparationId}": {
+      "get": {
+        "operationId": "RecoveryCandidateController_jobPreparation",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "preparationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCandidatePreparationDetailDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read failed-Job preparation progress",
+        "tags": [
+          "operator recovery candidates"
+        ]
+      }
+    },
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-preparations/{preparationId}/candidates": {
+      "get": {
+        "operationId": "RecoveryCandidateController_jobCandidates",
+        "parameters": [
+          {
+            "description": "Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session.",
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 20,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sourceJobId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "preparationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "orderId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCandidateChoicePageDto"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "summary": "Read typed candidates for one failed Job",
+        "tags": [
+          "operator recovery candidates"
         ]
       }
     },
