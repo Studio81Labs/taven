@@ -32,6 +32,9 @@
     "@axe-core/playwright": "4.13.0",
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "4.3.3",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/test-utils": "^2.5.1",
+    "jsdom": "^26.1.0",
     "lighthouse": "13.4.1",
     "tailwindcss": "4.3.3"
   }
