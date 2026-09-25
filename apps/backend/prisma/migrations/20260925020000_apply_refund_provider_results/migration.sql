@@ -111,6 +111,20 @@ BEGIN
         recorded := false;
         success_refund_id := NULL;
         incident_code := NULL;
+        IF refund_kind = 'REFUND_SUCCEEDED' THEN
+            IF target_refund."status" = 'SUSPENDED'
+               AND target_refund."provider_result_event_id" = existing_event."id"
+               AND target_refund."source_success_provider_event_id" IS NOT NULL THEN
+                incident_code := 'REFUND_DOUBLE_SUCCESS';
+            ELSIF EXISTS (
+                SELECT 1 FROM "refund_transactions" child
+                WHERE child."replaces_refund_transaction_id" = target_refund."id"
+                  AND child."status" = 'SUSPENDED'
+                  AND child."source_success_provider_event_id" = existing_event."id"
+            ) THEN
+                incident_code := 'REFUND_SUSPENDED';
+            END IF;
+        END IF;
         RETURN NEXT;
         RETURN;
     END IF;

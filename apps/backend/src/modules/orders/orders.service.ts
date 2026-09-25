@@ -4732,6 +4732,7 @@ export class OrdersService {
       return { canonicalRefundId, eventId };
     };
     let fencedEventId: string | null = null;
+    let fencedDispatchStatus: string | null = null;
     return this.command(
       operator,
       orderId,
@@ -4798,6 +4799,11 @@ export class OrdersService {
         if (!claim || !refund.dispatchClaimedAt) {
           throw new ConflictException(
             "Refund has no immutable provider dispatch claim",
+          );
+        }
+        if (fencedDispatchStatus === "PROCESSING") {
+          throw new ConflictException(
+            "Refund dispatch is still processing at the provider",
           );
         }
         const decisionAt = await databaseNow(tx);
@@ -4912,6 +4918,18 @@ export class OrdersService {
             hashtextextended(${`refund-receipt:${eventId}`}, 0)
           )::text
         `;
+        // The dispatcher claims this same outbox row before provider I/O.
+        // Hold its lock through receipt application so it cannot start a
+        // transfer after our final status check; reject an already-active call.
+        const dispatch = await tx.$queryRaw<Array<{ status: string }>>`
+          SELECT status::text FROM outbox_messages
+          WHERE deduplication_key = ${`refund_payment:v1:${refundId}`}
+            AND aggregate_type = 'RefundTransaction'
+            AND aggregate_id = ${refundId}::uuid
+            AND message_type = 'refund_payment'
+          FOR UPDATE
+        `;
+        fencedDispatchStatus = dispatch[0]?.status ?? null;
       },
     );
   }

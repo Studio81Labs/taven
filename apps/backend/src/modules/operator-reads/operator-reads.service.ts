@@ -766,6 +766,7 @@ export class OperatorReadsService {
               ),
             ),
           ),
+          refundDispatch,
         ),
       };
     });
@@ -2492,6 +2493,7 @@ export function orderActions(
   providerName?: string,
   retrySafety?: string,
   refundLocators: ReadonlyMap<string, string | null> = new Map(),
+  refundDispatch: ReadonlyMap<string, RefundDispatchRead> = new Map(),
 ): OperatorActionDto[] {
   const actions: OperatorActionDto[] = [];
   const canOperate = operator.permissions.includes(
@@ -2783,6 +2785,9 @@ export function orderActions(
               ? ["PROVIDER_RECONCILIATION_UNAVAILABLE"]
               : []),
             ...(!refund.dispatchClaimedAt ? ["REFUND_DISPATCH_UNCLAIMED"] : []),
+            ...(refundDispatch.get(refund.id)?.status === "PROCESSING"
+              ? ["REFUND_DISPATCH_PROCESSING"]
+              : []),
             ...(!refundLocators.get(refund.id)
               ? ["REFUND_PROVIDER_LOCATOR_UNAVAILABLE"]
               : []),

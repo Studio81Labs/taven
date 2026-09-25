@@ -4758,6 +4758,26 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         ],
       );
       expect(suspended.rows[0]?.incident_code).toBe("REFUND_SUSPENDED");
+      const suspendedReplay = await claimedProbe.query<{
+        recorded: boolean;
+        incident_code: string;
+      }>(
+        `SELECT recorded, incident_code
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          failedRefundId,
+          failureProviderRefundId,
+          `late-source-claimed-${failedRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(suspendedReplay.rows[0]).toMatchObject({
+        recorded: false,
+        incident_code: "REFUND_SUSPENDED",
+      });
       const failedRetry = await claimedProbe.query<{
         success_refund_id: string;
       }>(
@@ -4812,6 +4832,26 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         ],
       );
       expect(incident.rows[0]?.incident_code).toBe("REFUND_SUSPENDED");
+      const doubleSuccessReplay = await retryFirstProbe.query<{
+        recorded: boolean;
+        incident_code: string;
+      }>(
+        `SELECT recorded, incident_code
+         FROM taven_apply_refund_provider_result(
+           $1, $2, $3, 'REFUND_SUCCEEDED', $4, $5::jsonb
+         )`,
+        [
+          retryRefundId,
+          `provider-retry-success-${retryRefundId}`,
+          `retry-first-success-${retryRefundId}`,
+          sourceSuccessAt,
+          JSON.stringify({ source: "isolated-test-provider" }),
+        ],
+      );
+      expect(doubleSuccessReplay.rows[0]).toMatchObject({
+        recorded: false,
+        incident_code: "REFUND_DOUBLE_SUCCESS",
+      });
       const states = await retryFirstProbe.query<{
         payment_status: string;
         retry_status: string;
@@ -6365,6 +6405,41 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       SELECT taven_claim_refund_dispatch(${refundId}::uuid) AS claimed_at
     `;
       expect(claim[0]?.claimed_at).toBeInstanceOf(Date);
+      const dispatchKey = `refund_payment:v1:${refundId}`;
+      await prisma.outboxMessage.update({
+        where: { deduplicationKey: dispatchKey },
+        data: { status: "PROCESSING", lockedAt: new Date(), attempts: 1 },
+      });
+      const processingDetail = await new OperatorReadsService(
+        prisma,
+        manualOrders,
+        manualProvider,
+      ).orderDetail(operator, fixture.foundation.orderId);
+      expect(
+        processingDetail.actions.find(
+          (action) =>
+            action.action === "RECORD_REFUND_PROVIDER_RESULT" &&
+            action.targetId === refundId,
+        )?.blockingCodes,
+      ).toContain("REFUND_DISPATCH_PROCESSING");
+      await expect(
+        manualOrders.recordRefundProviderResult(
+          operator,
+          fixture.foundation.orderId,
+          refundId,
+          failureBody,
+          "operator-refund-recovery-active-dispatch",
+        ),
+      ).rejects.toThrow("Refund dispatch is still processing at the provider");
+      expect(
+        await prisma.paymentProviderEvent.count({
+          where: { refundTransactionId: refundId },
+        }),
+      ).toBe(0);
+      await prisma.outboxMessage.update({
+        where: { deduplicationKey: dispatchKey },
+        data: { status: "FAILED", lockedAt: null },
+      });
       for (const [field, value] of [
         ["providerIntentId", "wrong-intent"],
         ["requestReference", "wrong-request"],
