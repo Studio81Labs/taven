@@ -870,7 +870,8 @@ test.describe("Real API Integration Journey", () => {
         .getByRole("button", { name: "Zvolit nový platební pokus" })
         .click();
       if (restoreDocuments) {
-        const historicalTerms = page.getByRole("link", {
+        const checkoutEvidence = page.locator("#hlavni-obsah");
+        const historicalTerms = checkoutEvidence.getByRole("link", {
           name: "Zobrazit VOP",
         });
         await expect(historicalTerms).toHaveAttribute(
@@ -892,12 +893,16 @@ test.describe("Real API Integration Journey", () => {
             evidence: frozenEvidence.terms,
           },
           {
-            link: page.getByRole("link", { name: "reklamační řád" }),
+            link: checkoutEvidence.getByRole("link", {
+              name: "reklamační řád",
+            }),
             path: "/reklamace",
             evidence: frozenEvidence.claims,
           },
           {
-            link: page.getByRole("link", { name: /pravidel fotografování/i }),
+            link: checkoutEvidence.getByRole("link", {
+              name: /pravidel fotografování/i,
+            }),
             path: "/fotografie-a-duvernost",
             evidence: frozenEvidence.photoConsent,
           },

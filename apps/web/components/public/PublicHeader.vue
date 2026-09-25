@@ -3,53 +3,96 @@ import { publicNavigation, publicSite } from "../../content/public-site";
 
 const route = useRoute();
 const automaticQuoteEnabled = useAutomaticQuoteEnabled();
+const menuOpen = ref(false);
+const menuButton = ref<HTMLButtonElement>();
+const navigation = ref<HTMLElement>();
+
+watch(
+  () => route.fullPath,
+  () => {
+    menuOpen.value = false;
+  },
+);
+
+async function toggleMenu(): Promise<void> {
+  menuOpen.value = !menuOpen.value;
+  if (menuOpen.value) {
+    await nextTick();
+    navigation.value?.querySelector<HTMLAnchorElement>("a")?.focus();
+  }
+}
+
+async function closeMenu(returnFocus = false): Promise<void> {
+  if (!menuOpen.value) return;
+  menuOpen.value = false;
+  if (returnFocus) {
+    await nextTick();
+    menuButton.value?.focus();
+  }
+}
 </script>
 
 <template>
-  <header class="border-b border-[#d9d9d2] bg-white">
-    <div
-      class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-8"
-    >
-      <NuxtLink
-        class="text-xl text-[#1a1a16] no-underline outline-offset-4 focus-visible:outline-2 focus-visible:outline-[#1b44e8]"
-        to="/"
-        :aria-label="`${publicSite.brand.name}, úvodní stránka`"
-      >
-        <PublicBrandMark />
-      </NuxtLink>
-
-      <nav class="w-full min-w-0 sm:w-auto" aria-label="Hlavní navigace">
-        <ul class="flex flex-wrap items-center gap-x-5 gap-y-3 text-sm">
-          <li v-for="item in publicNavigation" :key="item.to">
-            <NuxtLink
-              class="text-[#54554c] underline-offset-4 hover:text-[#1a1a16] hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1b44e8]"
-              :to="item.to"
-              :aria-current="route.path === item.to ? 'page' : undefined"
-            >
-              <span class="font-mono text-xs">{{ item.index }}</span>
-              {{ item.label }}
-            </NuxtLink>
-          </li>
-          <li>
-            <NuxtLink
-              v-if="automaticQuoteEnabled"
-              class="inline-flex min-h-11 items-center bg-[#1b44e8] px-4 font-semibold text-white hover:bg-[#1536b8] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1a1a16]"
-              to="/objednavka"
-              no-prefetch
-            >
-              Nahrát model
-            </NuxtLink>
-            <span
-              v-else
-              class="inline-flex min-h-11 cursor-not-allowed items-center border border-[#9b9c93] px-4 font-semibold text-[#66675f]"
-              aria-disabled="true"
-              title="Automatická kalkulace čeká na schválené cenové vstupy"
-            >
-              Kalkulace čeká
-            </span>
-          </li>
-        </ul>
-      </nav>
+  <header class="public-header" @keydown.esc="closeMenu(true)">
+    <div class="site-sheet">
+      <div class="public-header__top">
+        <NuxtLink
+          class="public-header__brand"
+          to="/"
+          :aria-label="`${publicSite.brand.name}, úvodní stránka`"
+        >
+          <PublicBrandMark />
+        </NuxtLink>
+        <p class="public-header__meta">ZAKÁZKOVÝ 3D TISK / ČR</p>
+        <button
+          ref="menuButton"
+          class="public-header__menu"
+          type="button"
+          aria-controls="public-navigation"
+          :aria-expanded="menuOpen"
+          @click="toggleMenu"
+        >
+          01–04 MENU
+        </button>
+      </div>
+      <div class="public-header__bottom" :data-open="menuOpen">
+        <nav
+          id="public-navigation"
+          ref="navigation"
+          class="public-header__nav"
+          aria-label="Hlavní navigace"
+        >
+          <ul class="public-header__nav-list">
+            <li v-for="item in publicNavigation" :key="item.to">
+              <NuxtLink
+                :to="item.to"
+                :aria-current="route.path === item.to ? 'page' : undefined"
+                @click="closeMenu()"
+              >
+                <span class="public-header__nav-index">{{ item.index }}</span>
+                {{ item.label }}
+              </NuxtLink>
+            </li>
+          </ul>
+          <NuxtLink
+            v-if="automaticQuoteEnabled"
+            class="public-header__cta"
+            to="/objednavka"
+            no-prefetch
+            @click="closeMenu()"
+          >
+            Nahrát model
+          </NuxtLink>
+          <span
+            v-else
+            class="public-header__unavailable"
+            aria-disabled="true"
+            title="Automatická kalkulace čeká na schválené cenové vstupy"
+          >
+            Kalkulace čeká
+          </span>
+        </nav>
+      </div>
     </div>
   </header>
 </template>

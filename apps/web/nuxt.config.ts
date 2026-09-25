@@ -11,6 +11,7 @@ export default defineNuxtConfig({
     "@fontsource/ibm-plex-mono/600.css",
     "@taven/ui-web/tokens.css",
     "~/assets/css/tailwind.css",
+    "~/assets/css/design-system.css",
   ],
   vite: { plugins: [tailwindcss()] },
   nitro: { compressPublicAssets: true },

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ApplicationShell from "../../components/application/ApplicationShell.vue";
 import { formatFileSize } from "../../utils/model-file";
 import {
   loadOrCreateHandoffIssuanceKey,
@@ -68,6 +69,19 @@ const activeProcessStep = computed(() => {
   )
     return 3;
   return 2;
+});
+const orderSteps = [
+  { index: "01", label: "SOUBOR" },
+  { index: "02", label: "KONFIGURACE" },
+  { index: "03", label: "DOPRAVA" },
+  { index: "04", label: "PLATBA" },
+  { index: "05", label: "VÝROBA" },
+] as const;
+const itemSummary = computed(() => {
+  const count = quote.value?.items.length ?? 0;
+  if (count === 0) return undefined;
+  const noun = count === 1 ? "POLOŽKA" : count < 5 ? "POLOŽKY" : "POLOŽEK";
+  return `OBJ. / ${String(count).padStart(2, "0")} ${noun}`;
 });
 
 const pipeline = computed(() => {
@@ -241,32 +255,13 @@ function inspectionLabel(status: string | undefined): string {
 </script>
 
 <template>
-  <div class="application-page">
-    <PublicDeploymentBanner />
-    <header class="application-header">
-      <NuxtLink class="wordmark" to="/" aria-label="Taven, úvodní stránka">
-        <PublicBrandMark />
-      </NuxtLink>
-      <nav aria-label="Průběh objednávky" class="process-nav" tabindex="0">
-        <ol>
-          <li :aria-current="activeProcessStep === 1 ? 'step' : undefined">
-            <span>01</span> SOUBOR
-          </li>
-          <li :aria-current="activeProcessStep === 2 ? 'step' : undefined">
-            <span>02</span> KONFIGURACE
-          </li>
-          <li :aria-current="activeProcessStep === 3 ? 'step' : undefined">
-            <span>03</span> DOPRAVA
-          </li>
-          <li :aria-current="activeProcessStep === 4 ? 'step' : undefined">
-            <span>04</span> PLATBA
-          </li>
-          <li><span>05</span> VÝROBA</li>
-        </ol>
-      </nav>
-    </header>
-
-    <main class="order-layout">
+  <ApplicationShell
+    :steps="orderSteps"
+    :active-step="activeProcessStep"
+    :summary="itemSummary"
+    navigation-label="Průběh objednávky"
+  >
+    <template #workspace>
       <section
         class="order-workspace"
         :aria-labelledby="
@@ -576,7 +571,9 @@ function inspectionLabel(status: string | undefined): string {
           </div>
         </div>
       </section>
+    </template>
 
+    <template #context>
       <aside class="process-context" aria-labelledby="process-title">
         <div>
           <p class="eyebrow">PRŮBĚH</p>
@@ -615,8 +612,8 @@ function inspectionLabel(status: string | undefined): string {
           <p>STL a jednovrstvý, nebarvený 3MF do 100 MiB.</p>
         </div>
       </aside>
-    </main>
-  </div>
+    </template>
+  </ApplicationShell>
 </template>
 
 <style src="../../assets/css/application.css"></style>
