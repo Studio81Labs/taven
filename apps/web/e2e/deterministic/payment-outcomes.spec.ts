@@ -929,6 +929,16 @@ test.describe("Payment result visual states", () => {
           "Tato stránka neprokazuje zahájení výroby, odeslání e-mailu ani stav doručení.",
         ),
       ).toBeVisible();
+      await expect(
+        page
+          .locator(".application-shell__steps li")
+          .filter({ hasText: "04 PLATBA" }),
+      ).toHaveAttribute("aria-current", "step");
+      await expect(
+        page
+          .locator(".application-shell__steps li")
+          .filter({ hasText: "05 VÝROBA" }),
+      ).not.toHaveAttribute("aria-current", "step");
       if (status !== "CAPTURED") {
         await expect(page.getByText("PLATBA PŘIJATA")).toHaveCount(0);
       }

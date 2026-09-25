@@ -48,9 +48,6 @@ const orderSteps = [
   { index: "04", label: "PLATBA" },
   { index: "05", label: "VÝROBA" },
 ] as const;
-const activeStep = computed(() =>
-  payment.value?.status === "CAPTURED" ? 5 : 4,
-);
 const orderSummary = computed(() =>
   payment.value
     ? `OBJ. / ${formatMoney(payment.value.amountMinor, payment.value.currency)}`
@@ -214,7 +211,7 @@ function queryValue(value: unknown): string | undefined {
 <template>
   <ApplicationShell
     :steps="orderSteps"
-    :active-step="activeStep"
+    :active-step="4"
     :summary="orderSummary"
     navigation-label="Průběh objednávky"
   >
