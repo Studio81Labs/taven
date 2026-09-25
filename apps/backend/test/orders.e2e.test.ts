@@ -10,6 +10,7 @@ import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permi
 import { AuditService } from "../src/modules/audit/audit.service";
 import type { DeliveryCapabilityPort } from "../src/modules/automatic-quotes/delivery-capability.port";
 import type { PaymentProviderPort } from "../src/modules/payments/payment-provider.port";
+import { DisabledPaymentProviderAdapter } from "../src/modules/payments/disabled-payment-provider.adapter";
 import { PaymentOutboxDispatcherService } from "../src/modules/payments/payment-outbox-dispatcher.service";
 import { PaymentsService } from "../src/modules/payments/payments.service";
 import type { EligibilityPlanService } from "../src/modules/resources/eligibility-plan.service";
@@ -5671,18 +5672,20 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       include: { payment: true },
     });
     let transferCalls = 0;
-    const manualProvider = {
-      providerName: () => "test",
-      refundRetrySafety: () => "MANUAL_RECONCILIATION",
-      refund: async () => {
+    const manualProvider = new (class extends DisabledPaymentProviderAdapter {
+      override providerName(): string {
+        return "test";
+      }
+
+      override async refund() {
         transferCalls += 1;
         return {
           providerRefundId: `provider-retry-${randomUUID()}`,
           occurredAt: new Date(),
           evidence: { source: "isolated-test-provider" },
         };
-      },
-    } as PaymentProviderPort;
+      }
+    })();
     const manualOrders = new OrdersService(
       prisma,
       new AuditService(prisma),
