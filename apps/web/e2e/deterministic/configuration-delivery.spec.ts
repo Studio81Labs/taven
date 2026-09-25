@@ -49,9 +49,37 @@ test.describe("Rendered configuration and delivery", () => {
     const prepared = await prepareResponse;
     expect(prepared.status()).toBe(200);
     expect((await prepared.json()).bindingQuote.totalMinor).toBe(148900);
-    await expect(page.locator(".price-summary .total-price")).toContainText(
+    await expect(page.locator(".checkout-summary__total strong")).toContainText(
       "1 489,00",
     );
+  });
+
+  test("keeps a five-digit binding total inside narrow checkout cards", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.getByRole("spinbutton", { name: "Jiné" }).fill("30");
+    await page.getByRole("button", { name: "Uložit a přepočítat" }).click();
+    const total = page.locator(".checkout-summary__total strong");
+    await expect(total).toContainText(/10[\s\u00a0]589,00/);
+    for (const width of [320, 375, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const card = await page.locator(".checkout-summary").boundingBox();
+      const amount = await total.boundingBox();
+      expect(card).not.toBeNull();
+      expect(amount).not.toBeNull();
+      expect(amount!.x).toBeGreaterThanOrEqual(card!.x);
+      expect(amount!.x + amount!.width).toBeLessThanOrEqual(
+        card!.x + card!.width,
+      );
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth,
+        ),
+      ).toBe(false);
+    }
   });
 
   test("offers standard production after the requested express plan fails", async ({
@@ -117,7 +145,7 @@ test.describe("Rendered configuration and delivery", () => {
     await expect(
       page.getByRole("heading", { name: "Dokončení objednávky" }),
     ).toBeVisible();
-    await expect(page.locator(".price-summary .total-price")).toContainText(
+    await expect(page.locator(".checkout-summary__total strong")).toContainText(
       "439,00",
     );
     const state = await request.get("http://127.0.0.1:4175/__test/state");
@@ -137,7 +165,7 @@ test.describe("Rendered configuration and delivery", () => {
       .click();
     const initialPrepared = await (await initialPrepareResponse).json();
     expect(initialPrepared.bindingQuote.totalMinor).toBe(43900);
-    await expect(page.locator(".price-summary .total-price")).toContainText(
+    await expect(page.locator(".checkout-summary__total strong")).toContainText(
       "439,00",
     );
 
@@ -187,7 +215,7 @@ test.describe("Rendered configuration and delivery", () => {
         ]),
       },
     });
-    await expect(page.locator(".price-summary .total-price")).toContainText(
+    await expect(page.locator(".checkout-summary__total strong")).toContainText(
       "469,00",
     );
     await expect(
@@ -270,7 +298,7 @@ test("Packeta picker ignores cancelled and stale callbacks, then requotes the se
     endpointType: "pickup_point",
     providerEndpointId: "packeta-2",
   });
-  await expect(page.locator(".price-summary .total-price")).toContainText(
+  await expect(page.locator(".checkout-summary__total strong")).toContainText(
     "469,00",
   );
   await expect(
@@ -294,7 +322,7 @@ test("Packeta picker ignores cancelled and stale callbacks, then requotes the se
     checkoutReady: false,
     bindingQuote: null,
   });
-  await expect(page.locator(".price-summary .total-price")).toContainText(
+  await expect(page.locator(".checkout-summary__total strong")).toContainText(
     "439,00",
   );
   expect(destinationRequests).toBe(2);

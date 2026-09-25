@@ -251,10 +251,12 @@ export function requiresQuoteRestart(
 
 export function priceLabel(component: PriceComponent): string {
   const labels: Record<string, string> = {
+    DELIVERY: "Doprava",
     EXPRESS: "Expresní výroba",
     ITEM_POSTPROCESSING: "Dokončení",
     ITEM_PRODUCTION: "Tisk položky",
     ITEM_QUANTITY: "Množství",
+    ITEMS: "Tisk položek",
     ORDER_MIN_PRINT: "Minimální cena tisku",
     ORDER_SMALL_SURCHARGE: "Příplatek za zakázku pod 100 g",
     PAYMENT_FEE: "Platební poplatek",

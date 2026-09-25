@@ -66,6 +66,9 @@ const showModelPreview = computed(
     Boolean(geometry.value) &&
     ["ready", "uploading", "inspecting", "complete"].includes(phase.value),
 );
+const showCheckout = computed(
+  () => showConfigurator.value && quote.value?.phase === "CHECKOUT_READY",
+);
 const preflightFindings = computed(
   () =>
     quote.value?.items.flatMap((item) =>
@@ -287,6 +290,7 @@ function inspectionLabel(status: string | undefined): string {
     <template #workspace>
       <section
         class="order-workspace order-workspace--quote"
+        v-show="!showCheckout"
         :aria-labelledby="
           showConfigurator ? 'model-workspace-title' : 'upload-title'
         "
@@ -644,9 +648,16 @@ function inspectionLabel(status: string | undefined): string {
     <template #context>
       <aside
         class="process-context order-context"
-        :class="{ 'order-context--configurator': showConfigurator }"
+        :class="{
+          'order-context--configurator': showConfigurator,
+          'order-context--checkout': showCheckout,
+        }"
         :aria-labelledby="
-          showConfigurator ? 'configurator-title' : 'process-title'
+          showCheckout
+            ? 'checkout-title'
+            : showConfigurator
+              ? 'configurator-title'
+              : 'process-title'
         "
       >
         <OrderQuoteConfigurator

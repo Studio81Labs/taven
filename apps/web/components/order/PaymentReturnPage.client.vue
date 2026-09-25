@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ApplicationShell from "../application/ApplicationShell.vue";
 import type { components } from "@taven/openapi-client";
 import {
   clearQuoteSession,
@@ -18,6 +19,7 @@ import {
   type PaymentReturnKind,
 } from "../../utils/payment-return";
 import { paymentReturnMatchesHandoff } from "../../utils/checkout-flow";
+import { formatMoney } from "../../utils/automatic-quote-configurator";
 
 type CheckoutPayment = components["schemas"]["CheckoutPaymentDto"];
 
@@ -39,6 +41,18 @@ const presentation = computed(() =>
     ? paymentReturnPresentation(payment.value.status)
     : initialPaymentReturnPresentation(props.returnKind),
 );
+const orderSteps = [
+  { index: "01", label: "SOUBOR" },
+  { index: "02", label: "KONFIGURACE" },
+  { index: "03", label: "DOPRAVA" },
+  { index: "04", label: "PLATBA" },
+  { index: "05", label: "VÝROBA" },
+] as const;
+const orderSummary = computed(() =>
+  payment.value
+    ? `OBJ. / ${formatMoney(payment.value.amountMinor, payment.value.currency)}`
+    : undefined,
+);
 const restartMode = computed(() =>
   payment.value ? paymentRestartMode(payment.value.status) : null,
 );
@@ -50,18 +64,6 @@ const paymentRetryDestination = computed(() =>
       }
     : "/objednavka",
 );
-const toneClass = computed(() => {
-  switch (presentation.value.tone) {
-    case "success":
-      return "border-[#1b44e8]";
-    case "failure":
-      return "border-[#b4441a]";
-    case "refund":
-      return "border-[#6e6f66]";
-    default:
-      return "border-[#925b10]";
-  }
-});
 
 onMounted(() => {
   disposed = false;
@@ -207,87 +209,139 @@ function queryValue(value: unknown): string | undefined {
 </script>
 
 <template>
-  <article class="mx-auto max-w-3xl px-5 py-14 sm:px-8 sm:py-20">
-    <section
-      class="border-l-4 bg-white px-6 py-8 sm:px-10 sm:py-12"
-      :class="toneClass"
-      :aria-busy="loading"
-      :role="errorMessage ? 'alert' : 'status'"
-    >
-      <p class="font-mono text-xs tracking-wider text-[#66675f] uppercase">
-        {{ presentation.label }}
-      </p>
-      <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
-        {{ presentation.title }}
-      </h1>
-      <p class="mt-5 max-w-xl text-lg leading-8 text-[#54554c]">
-        {{ errorMessage || presentation.description }}
-      </p>
-      <p
-        v-if="session?.publicReference"
-        class="mt-5 font-mono text-sm text-[#54554c]"
-      >
-        Reference {{ session.publicReference }}
-      </p>
-
-      <div class="mt-8 flex flex-wrap gap-4">
-        <button
-          v-if="errorMessage || presentation.refreshable"
-          class="inline-flex min-h-12 items-center bg-[#1b44e8] px-6 font-semibold text-white disabled:cursor-wait disabled:opacity-60"
-          type="button"
-          :disabled="loading"
-          @click="refreshPayment"
+  <ApplicationShell
+    :steps="orderSteps"
+    :active-step="4"
+    :summary="orderSummary"
+    navigation-label="Průběh objednávky"
+  >
+    <template #workspace>
+      <div class="payment-return-workspace">
+        <section
+          class="payment-return-card"
+          :class="`payment-return-card--${presentation.tone}`"
+          :aria-busy="loading"
+          :role="errorMessage ? 'alert' : 'status'"
+          aria-labelledby="payment-return-title"
         >
-          {{ loading ? "Načítáme…" : "Načíst aktuální stav" }}
-        </button>
-        <button
-          v-if="
-            returnKind === 'cancelled' &&
-            (payment?.status === 'CREATED' || payment?.status === 'PENDING')
-          "
-          class="inline-flex min-h-12 items-center border border-[#1a1a16] px-6 font-semibold disabled:cursor-wait disabled:opacity-60"
-          type="button"
-          :disabled="cancelling"
-          @click="cancelPayment"
+          <p class="eyebrow">{{ presentation.label }}</p>
+          <h1 id="payment-return-title">{{ presentation.title }}</h1>
+          <p>{{ errorMessage || presentation.description }}</p>
+          <p
+            v-if="session?.publicReference"
+            class="payment-return-card__reference mono"
+          >
+            Reference {{ session.publicReference }}
+          </p>
+          <div class="payment-return-card__actions">
+            <button
+              v-if="errorMessage || presentation.refreshable"
+              class="primary-button"
+              type="button"
+              :disabled="loading"
+              @click="refreshPayment"
+            >
+              {{ loading ? "Načítáme…" : "Načíst aktuální stav" }}
+            </button>
+            <button
+              v-if="
+                returnKind === 'cancelled' &&
+                (payment?.status === 'CREATED' || payment?.status === 'PENDING')
+              "
+              class="secondary-button"
+              type="button"
+              :disabled="cancelling"
+              @click="cancelPayment"
+            >
+              {{ cancelling ? "Rušíme…" : "Opravdu zrušit platební pokus" }}
+            </button>
+            <NuxtLink
+              v-if="restartMode === 'PAYMENT'"
+              class="secondary-button"
+              :to="paymentRetryDestination"
+              no-prefetch
+            >
+              Zpět ke kalkulaci
+            </NuxtLink>
+            <button
+              v-if="restartMode === 'QUOTE'"
+              class="secondary-button"
+              type="button"
+              @click="startFreshQuote"
+            >
+              Začít novou kalkulaci
+            </button>
+            <NuxtLink class="text-button" to="/">Na hlavní stránku</NuxtLink>
+          </div>
+        </section>
+        <section
+          class="payment-return-note"
+          aria-labelledby="payment-return-note-title"
         >
-          {{ cancelling ? "Rušíme…" : "Opravdu zrušit platební pokus" }}
-        </button>
-        <NuxtLink
-          v-if="restartMode === 'PAYMENT'"
-          class="inline-flex min-h-12 items-center border border-[#1a1a16] px-6 font-semibold"
-          :to="paymentRetryDestination"
-          no-prefetch
-        >
-          Zpět ke kalkulaci
-        </NuxtLink>
-        <button
-          v-if="restartMode === 'QUOTE'"
-          class="inline-flex min-h-12 items-center border border-[#1a1a16] px-6 font-semibold"
-          type="button"
-          @click="startFreshQuote"
-        >
-          Začít novou kalkulaci
-        </button>
-        <NuxtLink
-          class="inline-flex min-h-12 items-center px-2 font-semibold underline decoration-[#1b44e8] decoration-2 underline-offset-4"
-          to="/"
-        >
-          Na hlavní stránku
-        </NuxtLink>
+          <p class="eyebrow">OVĚŘENÝ STAV</p>
+          <h2 id="payment-return-note-title">Bezpečné potvrzení</h2>
+          <p>
+            Stav platby nikdy neurčujeme jen podle návratové adresy
+            poskytovatele. Úspěch znamená až potvrzené přijetí platby serverem.
+          </p>
+          <p>
+            Pokud stav neodpovídá očekávání, napište nám na
+            <a :href="contacts.customer.href">{{ contacts.customer.email }}</a
+            >.
+          </p>
+        </section>
       </div>
-    </section>
-
-    <div class="mt-6 text-sm leading-6 text-[#66675f]">
-      <p>Pokud stav neodpovídá očekávání, napište nám:</p>
-      <a
-        class="mt-1 inline-block underline decoration-[#6e6f66] underline-offset-4 hover:decoration-[#1b44e8]"
-        :href="contacts.customer.href"
+    </template>
+    <template #context>
+      <aside
+        class="payment-return-context"
+        aria-labelledby="payment-record-title"
       >
-        {{ contacts.customer.email }}
-      </a>
-      <p class="mt-3">
-        Stav platby nikdy neurčujeme jen podle návratové adresy poskytovatele.
-      </p>
-    </div>
-  </article>
+        <div class="payment-return-context__heading">
+          <p class="eyebrow">DOKLAD O STAVU PLATBY</p>
+          <h2 id="payment-record-title">
+            {{ session?.publicReference || "Ověřujeme zakázku" }}
+          </h2>
+        </div>
+        <dl v-if="payment" class="payment-return-context__facts">
+          <div>
+            <dt>Stav</dt>
+            <dd>{{ presentation.title }}</dd>
+          </div>
+          <div>
+            <dt>Metoda</dt>
+            <dd>
+              {{
+                payment.method === "CARD" ? "Platební karta" : "Bankovní převod"
+              }}
+            </dd>
+          </div>
+          <div>
+            <dt>Částka</dt>
+            <dd class="mono">
+              {{ formatMoney(payment.amountMinor, payment.currency) }}
+            </dd>
+          </div>
+          <div>
+            <dt>Identifikátor platby</dt>
+            <dd class="mono">{{ payment.paymentId }}</dd>
+          </div>
+        </dl>
+        <p v-else class="payment-return-context__pending">
+          {{
+            loading
+              ? "Načítáme ověřený záznam platby…"
+              : "Záznam platby zatím není dostupný."
+          }}
+        </p>
+        <p class="payment-return-context__footnote">
+          Tato stránka neprokazuje zahájení výroby, odeslání e-mailu ani stav
+          doručení.
+        </p>
+      </aside>
+    </template>
+  </ApplicationShell>
 </template>
+
+<style src="../../assets/css/application.css"></style>
+<style src="../../assets/css/order-payment-return.css"></style>

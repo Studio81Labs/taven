@@ -716,10 +716,17 @@ test.describe("Real API Integration Journey", () => {
           component.shipmentPlanOrdinal,
       ),
     ).toEqual(shipmentComponents.map((_: unknown, index: number) => index + 1));
-    await page.getByText("Rozpis ceny").click();
-    await expect(
-      page.locator(".price-list li").filter({ hasText: "Doprava" }),
-    ).toHaveCount(shipmentComponents.length);
+    const itemSummaries = page.locator(".checkout-summary__items > li");
+    await expect(itemSummaries).toHaveCount(2);
+    await expect(itemSummaries.nth(0)).toContainText("body-0001");
+    await expect(itemSummaries.nth(1)).toContainText("body-0002");
+    await expect(itemSummaries.nth(0)).toContainText("Výplň:");
+    await expect(itemSummaries.nth(1)).toContainText("Výplň:");
+    const shipmentRows = page
+      .locator(".checkout-summary__breakdown > div")
+      .filter({ hasText: "Doprava" });
+    await expect(shipmentRows).toHaveCount(shipmentComponents.length);
+    await expect(shipmentRows.first()).toBeVisible();
 
     await page.getByLabel("Jméno kontaktní osoby").fill("E2E Parcel Test");
     await page.getByLabel("E-mail").fill("browser-144-parcels@example.test");
