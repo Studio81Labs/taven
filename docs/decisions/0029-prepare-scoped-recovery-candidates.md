@@ -2,7 +2,7 @@
 
 - **Status:** accepted; implementation and validation required
 - **Date:** 2026-09-25
-- **Authority:** escalation #259, Epic #10 revision 9, orchestration #186
+- **Authority:** escalations #259/#279, Epic #10 revision 10, orchestration #186
 - **Implementation:** #262 / P6b-P before #34/P6b PR #260 merges
 - **Inspected baseline:** main `bd30e6bc`; UI checkpoint `c3ee474d`
 - **Related:** ADR0003 transaction boundaries, ADR0024 resource admission
@@ -148,9 +148,10 @@ Add two narrow relations, with forward Prisma SQL and no backfill:
    replacementRequestId for the first kind, or claimId and predecessorShipmentId
    for the second; selected incident evidence identity where applicable;
    monotonic generation within that logical context, immutable source-scope/input
-   fingerprint, requestedAt from database time, operator/session attribution,
-   reason and audit linkage. Conditional shape checks and scoped Restrict FKs
-   must prove that every identity belongs to the same recovery aggregate.
+   fingerprint, requestedAt from database time, operator/session attribution
+   under the #279 amendment below, reason and audit linkage. Conditional shape
+   checks and scoped Restrict FKs prove recovery aggregate identities. The
+   historical session identifier intentionally has no live-session FK.
 2. RecoveryCandidateDispatch: preparationId, sourceJobId, frozen source/slot
    fingerprint, dispatch Job ID and exact outboxMessageId, with unique outbox
    ownership and scoped composite FKs. The outbox already holds immutable worker
@@ -303,3 +304,147 @@ new retained reproduction bytes, actual fan-out beyond the v0 bound, worker
 contract changes, changed financial/product invariants or inability to preserve
 the full lock protocol require architectural escalation. No unresolved design
 question blocks the described existing v0 paths; readiness is not runtime proof.
+
+## Session attribution after authentication purge — resolution #279
+
+### Decision and retention boundary
+
+Retain a minimal immutable **command-time session snapshot on the preparation**,
+not the authentication-session row. Keep operator_id's existing RESTRICT FK to
+operator_identities. Keep operator_session_id as a historical UUID, deliberately
+without a foreign key to operator_sessions. It is neither a bearer credential
+nor a promise that the operational session remains queryable.
+
+OperatorAuthService.purgeExpired stays unchanged: a session is eligible when
+absolute_expires_at is strictly earlier than database now minus 30 days and no
+login attempts or security events still reference it. Existing bounded cleanup,
+security-event expiry, idle/absolute authentication lifetime and revocation stay
+unchanged. Preparations must not exclude a session from that query, prevent its
+deletion, clear their attribution, or fail the cleanup transaction.
+
+The snapshot is recovery/audit evidence, retained for the same lifetime as its
+immutable preparation. Current preparations have no automatic expiry/deletion;
+this amendment adds no separate session archive, retention timer or numeric
+business-record retention period. Any future authorized recovery/audit disposal
+must handle the snapshot with its parent. It is not a reason to retain cookies,
+token/CSRF hashes, login attempts, security-event histories or other auth data.
+
+After purge the record establishes: which retained operator identity requested
+the preparation, the exact historical session UUID, when that session began,
+its authentication method and credential generation, and when the database
+validated it for this command. It does not establish the session's later
+revocation/logout history, current permission or current validity. Those facts
+must never be reconstructed or invented from the historical snapshot.
+
+### Exact persisted evidence and insertion
+
+Add one JSONB column operator_session_snapshot (Prisma operatorSessionSnapshot)
+on RecoveryCandidatePreparation. Version 1 has exactly these fields:
+
+```json
+{
+  "schemaVersion": 1,
+  "authenticationMethod": "GITHUB",
+  "credentialVersion": 1,
+  "sessionCreatedAt": "2026-09-25T10:00:00.000Z",
+  "validatedAt": "2026-09-25T10:05:00.000Z"
+}
+```
+
+authenticationMethod uses the existing GITHUB/DEVELOPMENT_PASSWORD enum;
+credentialVersion is a positive integer. Times are canonical UTC millisecond
+instants. The containing row's immutable operator_id, operator_session_id and
+requested_at complete the evidence; validatedAt equals requested_at. No actor
+email, IP, user agent, external provider login/token, password, cookie, tokenHash,
+csrfHash, mutable lastSeen history or redundant session payload is retained.
+
+The database insert guard resolves and validates the exact session/operator,
+then constructs the snapshot from those locked rows. Never accept browser or
+OperatorContext-supplied method/version/time as proof. Use explicit identity
+then session row locking, compatible with login/credential-reset order, and hold
+the locks through the preparation transaction. After lock waits, capture one
+database decision instant, assign requested_at and validatedAt, and recheck:
+session belongs to operator, is unrevoked, absolute expiry and lastSeen plus
+30 minutes are strictly later than that instant, operator is active, and
+credential versions match. Check sessionCreatedAt is not after the instant.
+Keep HTTP session/CSRF/environment/permission/node validation as well; this
+snapshot does not replace it or grant new authority. No new global lock rank or
+session-to-order lock acquisition is introduced.
+
+Fresh insert must create nonnull canonical version-1 evidence. A supplied
+conflicting snapshot is rejected; omitted input is populated by SQL. Database
+shape/value checks and existing append-only protection cover the column. Missing,
+foreign, revoked, expired or stale-version session aborts the entire preparation,
+audit, idempotency completion and dispatch write, with the current 401 behavior
+for invalidated authentication. A credential reset/revocation which wins first
+prevents insertion; one which waits for a successful command does not invalidate
+the historical fact or rewrite its snapshot. A purge cannot remove the session
+between validation and snapshot commit; after commit, normal purge is unimpeded.
+
+The existing same-transaction audit event retains its operator identity, node,
+preparationId and correlation to the immutable idempotency record. The snapshot
+has one authority on the preparation; no global AuditEvent schema change or
+duplicate snapshot in audit JSON is required. No new public API field, operator
+permission or UI session-detail view is required. Existing protected projections
+remain redacted and cannot expose credentials through a generic JSON read.
+
+Completed replay still requires a currently authorized session and scope. It
+returns the original acknowledgement without a second preparation/snapshot/audit
+or relabelling the historical session as the caller's new session. Preparation
+history, candidate consumption and provenance checks must work after auth purge
+without an inner join requiring the original session row. A new command records
+its own current session; the historical snapshot is never authorization.
+
+### Migration and existing rows
+
+Keep the existing PR #274 migration unchanged and add a forward migration in the
+same PR, plus the Prisma field and replacement insert guard. The SQL column is
+nullable only for preparations predating this amendment; every subsequent insert
+is required by the guard to receive the snapshot. No nonnull default fabricated
+from application time or an invented authentication method is allowed.
+
+Do not reconstruct old snapshots from surviving or purged auth records, patch
+immutable rows, discard preparations or reset a shared database. Existing null
+snapshots mean legacy detail unavailable; preserve their operator/session UUID,
+requestedAt, audit, replay and already-approved recovery provenance. They cannot
+be described as having version-1 evidence. This explicit compatibility exception
+does not permit new null/unknown snapshots. A fresh database receives both
+migrations and all real command-created rows have complete evidence.
+
+Deploy the compatible guard before resuming new recovery writes under the
+existing writer-drain rollout. Auth purge remains enabled. No new service,
+session FK, security-event FK, auth-retention exemption or credential archive.
+
+### Validation and resume
+
+In #262/P6b-P **existing draft PR #274**, add real PostgreSQL proof that a valid
+command creates the exact snapshot and linked audit; after eligible expiry and
+actual purgeExpired execution, the auth row is absent and preparation/snapshot/
+audit/history/replay remain intact. Cover the strict 30-day boundary, dependent
+login/security rows delaying deletion and later allowing it, and multiple
+preparations sharing one session. Exercise fresh commands via a new session
+after purge, not authenticating with the old UUID or snapshot.
+
+Cover nonexistent/foreign/revoked/idle-expired/absolute-expired/credential-mismatch
+sessions, supplied forged metadata, direct SQL null injection, post-insert edits,
+revocation/reset versus insertion in both orders, and expiry during a lock wait
+using the post-lock decision instant. Verify no deadlock with auth writers and
+no partial outbox/audit on denial. Fresh/populated migration tests retain old
+null-snapshot rows honestly while enforcing new inserts; secret/redaction and
+unchanged generated API checks are required. Rerun relevant auth/orders suites,
+lint/typecheck/build/format and final-head CI/review after implementation.
+
+The reviewer's durable-provenance concern is valid; the proposed RESTRICT FK
+is superseded by this explicit snapshot contract because it would pin sensitive
+auth rows or break purge. UUID-only evidence loses method/generation context;
+SET NULL loses identity, CASCADE loses recovery history, and a separate archive
+adds an unnecessary lifecycle. None is the approved fix.
+
+No new implementation issue or PR boundary: amend #274, then resume #260 only
+after #262 merges. SERIAL/max1 and all other #259 decisions remain. Keep the
+session-attribution review thread unresolved until the implementation and proof
+address this decision; final-head independent review and the required Codex
+approval remain gates. Architecture closure supplies neither a test pass nor a
+review reaction. Missing historical metadata stays explicitly unavailable; any
+proposal to extend auth retention, grant from snapshots or rewrite history
+requires a new escalation.
