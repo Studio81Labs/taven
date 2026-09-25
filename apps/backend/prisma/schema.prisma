@@ -1803,6 +1803,60 @@ model CandidateEstimateTerminalResult {
   @@map("candidate_estimate_terminal_results")
 }
 
+enum RecoveryCandidatePreparationKind {
+  JOB_REPLACEMENT
+  LOST_CLAIM_REPRINT
+}
+
+model RecoveryCandidatePreparation {
+  id                     String                           @id @default(uuid()) @db.Uuid
+  nodeId                 String                           @map("node_id") @db.Uuid
+  orderId                String                           @map("order_id") @db.Uuid
+  orderPhaseId           String                           @map("order_phase_id") @db.Uuid
+  shipmentPlanId         String                           @map("shipment_plan_id") @db.Uuid
+  kind                   RecoveryCandidatePreparationKind
+  targetId               String                           @map("target_id") @db.Uuid
+  sourceJobId            String?                          @map("source_job_id") @db.Uuid
+  replacementRequestId   String?                          @map("replacement_request_id") @db.Uuid
+  claimId                String?                          @map("claim_id") @db.Uuid
+  predecessorShipmentId  String?                          @map("predecessor_shipment_id") @db.Uuid
+  incidentEvidenceId     String?                          @map("incident_evidence_id") @db.Uuid
+  generation             Int
+  sourceJobIds           String[]                         @map("source_job_ids") @db.Uuid
+  sourceScopeFingerprint String                           @map("source_scope_fingerprint") @db.VarChar(64)
+  requestedAt            DateTime                         @default(now()) @map("requested_at") @db.Timestamptz(3)
+  operatorId             String                           @map("operator_id") @db.Uuid
+  operatorSessionId      String                           @map("operator_session_id") @db.Uuid
+  operatorSessionSnapshot Json?                            @map("operator_session_snapshot") @db.JsonB
+  idempotencyRecordId    String                           @unique @map("idempotency_record_id") @db.Uuid
+  reason                 String                           @db.VarChar(1000)
+  dispatches             RecoveryCandidateDispatch[]
+  idempotencyRecord      IdempotencyRecord                @relation(fields: [idempotencyRecordId], references: [id], onDelete: Restrict)
+
+  @@unique([kind, targetId, generation])
+  @@unique([id, nodeId, orderId, orderPhaseId, shipmentPlanId])
+  @@index([orderId, kind, targetId, requestedAt, id])
+  @@map("recovery_candidate_preparations")
+}
+
+model RecoveryCandidateDispatch {
+  id                String                       @id @default(uuid()) @db.Uuid
+  preparationId     String                       @map("preparation_id") @db.Uuid
+  nodeId            String                       @map("node_id") @db.Uuid
+  orderId           String                       @map("order_id") @db.Uuid
+  orderPhaseId      String                       @map("order_phase_id") @db.Uuid
+  shipmentPlanId    String                       @map("shipment_plan_id") @db.Uuid
+  sourceJobId       String                       @map("source_job_id") @db.Uuid
+  sourceFingerprint String                       @map("source_fingerprint") @db.VarChar(64)
+  dispatchJobId     String                       @map("dispatch_job_id") @db.Uuid
+  outboxMessageId   String                       @unique @map("outbox_message_id") @db.Uuid
+  preparation       RecoveryCandidatePreparation @relation(fields: [preparationId, nodeId, orderId, orderPhaseId, shipmentPlanId], references: [id, nodeId, orderId, orderPhaseId, shipmentPlanId], onDelete: Restrict)
+
+  @@unique([preparationId, sourceJobId, dispatchJobId])
+  @@index([preparationId, sourceJobId])
+  @@map("recovery_candidate_dispatches")
+}
+
 model IdempotencyRecord {
   id                 String            @id @default(uuid()) @db.Uuid
   namespace          String            @db.VarChar(100)
@@ -1812,6 +1866,7 @@ model IdempotencyRecord {
   status             IdempotencyStatus @default(PROCESSING)
   responseStatusCode Int?              @map("response_status_code")
   responseBody       Json?             @map("response_body") @db.JsonB
+  recoveryPreparation RecoveryCandidatePreparation?
   expiresAt          DateTime          @map("expires_at") @db.Timestamptz(3)
   createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)

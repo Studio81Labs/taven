@@ -4,6 +4,7 @@ import { AdminAccessModule } from "../admin-access/admin-access.module";
 import { AuditModule } from "../audit/audit.module";
 import { SlicerProfileSnapshotsModule } from "../slicing/slicer-profile-snapshots.module";
 import { CandidateEstimateService } from "./candidate-estimate.service";
+import { FrozenOrderCandidateInputService } from "./frozen-order-candidate-input.service";
 import { EligibilityPlanService } from "./eligibility-plan.service";
 import { ResourceCatalogService } from "./resource-catalog.service";
 import { OperatorCatalogController } from "./operator-catalog.controller";
@@ -23,6 +24,7 @@ import { ResourceReservationService } from "./resource-reservation.service";
     ResourceCatalogService,
     OperatorCatalogService,
     CandidateEstimateService,
+    FrozenOrderCandidateInputService,
     EligibilityPlanService,
     ResourceReservationService,
     ResourceReservationExpiryService,
@@ -30,6 +32,7 @@ import { ResourceReservationService } from "./resource-reservation.service";
   exports: [
     ResourceCatalogService,
     CandidateEstimateService,
+    FrozenOrderCandidateInputService,
     EligibilityPlanService,
     ResourceReservationService,
     ResourceReservationExpiryService,

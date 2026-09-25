@@ -12,8 +12,6 @@ import {
   AutomaticQuoteRiskDecision,
   AutomaticQuoteHandoffScope,
   IdempotencyStatus,
-  InventoryStatus,
-  MachineStatus,
   Material,
   ModelFileFormat,
   OrderPhaseKind,
@@ -28,7 +26,6 @@ import {
   PriceComponentScope,
   QuoteSessionStatus,
   RetentionHold,
-  RevisionState,
   UploadIntentStatus,
 } from "@prisma/client";
 import {
@@ -42,6 +39,7 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { normalizeAttribution } from "../metrics/attribution";
 import { writeBusinessEvent } from "../metrics/business-event.writer";
 import { CandidateEstimateService } from "../resources/candidate-estimate.service";
+import { FrozenOrderCandidateInputService } from "../resources/frozen-order-candidate-input.service";
 import { EligibilityPlanService } from "../resources/eligibility-plan.service";
 import {
   ResourceConflictError,
@@ -55,7 +53,6 @@ import {
   INSPECTION_REVISION,
   modelInspectionInput,
 } from "../slicing/model-inspection-dispatch";
-import { toSlicerProductionArtifactFormat } from "../slicing/production-artifact-format";
 import { reserveAnonymousQuote } from "../quotes/anonymous-quote-limit";
 import {
   currentCommercialPolicy,
@@ -72,7 +69,6 @@ import {
   type AutomaticQuotePricingItem,
   type AutomaticQuotePricingParameters,
 } from "./automatic-quote-pricing";
-import { candidatePlateCapacities } from "./candidate-plate-capacities";
 import type {
   AttachAutomaticQuoteModelFileDto,
   AutomaticQuoteEstimateDto,
@@ -3886,203 +3882,53 @@ export class AutomaticQuotesService {
           ({ fulfilmentSlot }) => fulfilmentSlot.orderItemId === item.id,
         ).length;
         if (quantity === 0) continue;
-        const profiles = await this.prisma.machineProfile.findMany({
-          where: {
-            state: RevisionState.ACTIVE,
-            referenceProfileId: source.referenceProfileId,
-            material: item.material,
-          },
-          include: {
-            machineCapability: {
-              include: {
-                machines: {
-                  where: {
-                    status: MachineStatus.ACTIVE,
-                    ...(nodeId ? { nodeId } : {}),
-                  },
-                  include: {
-                    node: true,
-                    availabilitySelection: {
-                      include: {
-                        revision: {
-                          select: {
-                            reason: true,
-                            windows: { select: { endsAt: true } },
-                          },
-                        },
-                      },
-                    },
-                    calibrations: {
-                      where: { state: RevisionState.ACTIVE },
-                      orderBy: [{ activatedAt: "desc" }, { id: "asc" }],
-                    },
-                    inventories: {
-                      where: {
-                        status: InventoryStatus.AVAILABLE,
-                        material: item.material,
-                        remainingMilligrams: { gt: 0n },
-                        receipts: { some: { kind: "INITIAL" } },
-                        ...(order.automaticQuoteDraft?.expressRequested
-                          ? { mountStatus: "MOUNTED" as const }
-                          : {}),
-                        ...(item.color ? { color: item.color } : {}),
-                      },
-                      orderBy: { id: "asc" },
-                    },
-                  },
-                  orderBy: { id: "asc" },
-                },
-              },
-            },
-          },
-          orderBy: { id: "asc" },
+        const options = await new FrozenOrderCandidateInputService(
+          this.prisma,
+        ).enumerate({
+          item,
+          source,
+          shipmentPlanId: shipmentPlan.id,
+          quantity,
+          ...(nodeId ? { nodeId } : {}),
+          expressRequested:
+            order.automaticQuoteDraft?.expressRequested ?? false,
+          observedAt,
+          arrangementScope: `${order.individualOrigin ? "individual" : "automatic"}:${bindingId}`,
+          legacyBindingId: bindingId,
+          legacyOrigin: order.individualOrigin ? "individual" : "automatic",
         });
-        for (const profile of profiles) {
-          const productionArtifactFormat = toSlicerProductionArtifactFormat(
-            profile.productionArtifactFormat,
+        for (const option of options) {
+          const initialJobId = deterministicUuid(
+            `${order.individualOrigin ? "individual" : "automatic"}-candidate:${bindingId}:${option.identity}`,
           );
-          const plateCapacities = candidatePlateCapacities(
-            quantity,
-            productionArtifactFormat,
+          const dispatchIdentity = await this.nextAutomaticCandidateDispatch(
+            initialJobId,
+            observedAt,
           );
-          if (plateCapacities.length === 0) continue;
-          if (
-            !geometryFitsCapability(
-              item.modelGeometry,
-              profile.machineCapability,
-            )
-          ) {
-            continue;
-          }
-          for (const machine of profile.machineCapability.machines) {
-            if (
-              !machine.node.active ||
-              !machine.availabilitySelection ||
-              machine.availabilitySelection.revision.reason ===
-                "LEGACY_LIVE_RESERVATION_BOOTSTRAP" ||
-              !machine.availabilitySelection.revision.windows.some(
-                ({ endsAt }) => endsAt > observedAt,
-              ) ||
-              machine.installedNozzleMicrometers !==
-                profile.nozzleDiameterMicrometers
-            ) {
-              continue;
-            }
-            const calibration = machine.calibrations[0];
-            if (!calibration) continue;
-            for (const inventory of machine.inventories) {
-              for (const partsPerPlate of plateCapacities) {
-                const arrangementRevisionId = deterministicUuid(
-                  `${order.individualOrigin ? "individual" : "automatic"}-arrangement:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${quantity}:${partsPerPlate}`,
-                );
-                const arrangementContentSha256 = fingerprintOf({
-                  bindingId,
-                  itemId: item.id,
-                  shipmentPlanId: shipmentPlan.id,
-                  machineId: machine.id,
-                  machineProfileId: profile.id,
-                  machineCalibrationId: calibration.id,
-                  quantity,
-                  partsPerPlate,
-                });
-                await this.prisma.arrangementRevision.upsert({
-                  where: { id: arrangementRevisionId },
-                  create: {
-                    id: arrangementRevisionId,
-                    contentSha256: arrangementContentSha256,
-                  },
-                  update: {},
-                });
-                const inputBase = {
-                  geometry: {
-                    sourceModelFileId: item.sourceModelFile.id,
-                    sourceContentSha256: item.sourceModelFile.contentHash,
-                    modelGeometryId: item.modelGeometry.id,
-                    canonicalObjectKey: item.modelGeometry.canonicalObjectKey,
-                    geometrySha256: item.modelGeometry.geometryHash,
-                    bodyIds: source.bodyIds,
-                    selectionSha256: source.selectionSha256,
-                  },
-                  machineId: machine.id,
-                  machineProfile: {
-                    revisionId: profile.id,
-                    contentSha256: slicerSettingsSnapshot(profile.settings)
-                      .contentSha256,
-                    slicerEngine: profile.slicerEngine,
-                    slicerVersion: profile.slicerVersion,
-                    productionArtifactFormat,
-                  },
-                  machineCalibration: {
-                    revisionId: calibration.id,
-                    contentSha256: slicerSettingsSnapshot(calibration.settings)
-                      .contentSha256,
-                  },
-                  printConfig: {
-                    revisionId: item.printConfigRevision.id,
-                    contentSha256: slicerSettingsSnapshot(
-                      item.printConfigRevision.settings,
-                    ).contentSha256,
-                  },
-                  partsPerPlate,
-                  quantity,
-                  shipmentPlanId: shipmentPlan.id,
-                  arrangementRevision: {
-                    revisionId: arrangementRevisionId,
-                    contentSha256: arrangementContentSha256,
-                  },
-                };
-                const occupancySliceTargets = referenceOccupancies(
-                  quantity,
-                  partsPerPlate,
-                ).map((occupancy) => {
-                  const cacheIdentitySha256 =
-                    contracts.machineOccupancyCacheIdentitySha256(
-                      inputBase,
-                      occupancy,
-                    );
-                  return {
-                    partsPerPlate: occupancy,
-                    cacheIdentitySha256,
-                    analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
-                  };
-                });
-                const candidateInput = { ...inputBase, occupancySliceTargets };
-                const initialJobId = deterministicUuid(
-                  `${order.individualOrigin ? "individual" : "automatic"}-candidate:${bindingId}:${item.id}:${shipmentPlan.id}:${machine.id}:${profile.id}:${calibration.id}:${inventory.id}:${partsPerPlate}:${machine.availabilitySelection.revisionId}:${machine.availabilitySelection.selectionVersion}`,
-                );
-                const dispatchIdentity =
-                  await this.nextAutomaticCandidateDispatch(
-                    initialJobId,
-                    observedAt,
-                  );
-                if (!dispatchIdentity) continue;
-                const inputFingerprintSha256 =
-                  contracts.slicingInputFingerprint(
-                    "candidate_estimate",
-                    candidateInput,
-                  );
-                const idempotencyKey = `slicer:v2:candidate_estimate:${dispatchIdentity.jobId}:${inputFingerprintSha256}`;
-                const job = contracts.CandidateEstimateJobSchema.parse({
-                  contractVersion: 2,
-                  kind: "candidate_estimate",
-                  jobId: dispatchIdentity.jobId,
-                  correlationId: orderId,
-                  inputFingerprintSha256,
-                  idempotencyKey,
-                  attempt: dispatchIdentity.attempt,
-                  input: candidateInput,
-                });
-                await this.candidateEstimates.dispatch({
-                  nodeId: machine.nodeId,
-                  inventoryId: inventory.id,
-                  job,
-                  ...(dispatchIdentity.availableAt
-                    ? { availableAt: dispatchIdentity.availableAt }
-                    : {}),
-                });
-              }
-            }
-          }
+          if (!dispatchIdentity) continue;
+          const inputFingerprintSha256 = contracts.slicingInputFingerprint(
+            "candidate_estimate",
+            option.input,
+          );
+          const idempotencyKey = `slicer:v2:candidate_estimate:${dispatchIdentity.jobId}:${inputFingerprintSha256}`;
+          const job = contracts.CandidateEstimateJobSchema.parse({
+            contractVersion: 2,
+            kind: "candidate_estimate",
+            jobId: dispatchIdentity.jobId,
+            correlationId: orderId,
+            inputFingerprintSha256,
+            idempotencyKey,
+            attempt: dispatchIdentity.attempt,
+            input: option.input,
+          });
+          await this.candidateEstimates.dispatch({
+            nodeId: option.nodeId,
+            inventoryId: option.inventoryId,
+            job,
+            ...(dispatchIdentity.availableAt
+              ? { availableAt: dispatchIdentity.availableAt }
+              : {}),
+          });
         }
       }
     }

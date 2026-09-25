@@ -1314,6 +1314,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint-preparations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List bounded LOST-claim preparation history */
+        get: operations["RecoveryCandidateController_claimPreparations"];
+        put?: never;
+        /** Prepare fresh candidates for a whole LOST parcel reprint */
+        post: operations["RecoveryCandidateController_prepareReprint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint-preparations/{preparationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read LOST-claim preparation progress */
+        get: operations["RecoveryCandidateController_claimPreparation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reprint-preparations/{preparationId}/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read typed candidates for every source Job in a LOST parcel */
+        get: operations["RecoveryCandidateController_claimCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/orders/{orderId}/fulfilment/claims/{claimId}/reshipment-handoff": {
         parameters: {
             query?: never;
@@ -1512,6 +1564,58 @@ export interface paths {
         put?: never;
         /** Close an expired replacement request into refund recovery */
         post: operations["OrdersController_expireReplacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-preparations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List bounded failed-Job preparation history */
+        get: operations["RecoveryCandidateController_jobPreparations"];
+        put?: never;
+        /** Prepare fresh candidates for one failed Job replacement */
+        post: operations["RecoveryCandidateController_prepareReplacement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-preparations/{preparationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read failed-Job preparation progress */
+        get: operations["RecoveryCandidateController_jobPreparation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/orders/{orderId}/fulfilment/jobs/{jobId}/replacement-preparations/{preparationId}/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read typed candidates for one failed Job */
+        get: operations["RecoveryCandidateController_jobCandidates"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5481,7 +5585,17 @@ export interface components {
             unknown: number;
             warning: number;
         };
+        PrepareClaimReprintDto: {
+            /** Format: uuid */
+            expectedPredecessorShipmentId: string;
+            reason: string;
+        };
         PrepareIndividualOrderResourcesDto: {
+            reason: string;
+        };
+        PrepareJobReplacementDto: {
+            /** Format: uuid */
+            expectedReplacementRequestId: string;
             reason: string;
         };
         PrepareQuoteRequestReferenceDto: {
@@ -5931,6 +6045,105 @@ export interface components {
             reason: string;
             /** Format: date-time */
             startedAt: string;
+        };
+        RecoveryCandidateChoiceDto: {
+            blockingCodes: string[];
+            /** Format: date-time */
+            calculatedAt: string;
+            /** Format: uuid */
+            candidateResourceEstimateId: string;
+            color?: string | null;
+            /** Format: date-time */
+            expiresAt: string;
+            intervals: components["schemas"]["RecoveryCandidateIntervalDto"][];
+            /** Format: uuid */
+            inventoryId: string;
+            /** Format: uuid */
+            machineCalibrationId: string;
+            /** Format: uuid */
+            machineId: string;
+            /** Format: uuid */
+            machineProfileId: string;
+            material: string;
+            partsPerPlate: number;
+            /** Format: uuid */
+            printConfigRevisionId: string;
+            quantity: number;
+            requiredMachineSeconds: string;
+            requiredMaterialMilligrams: string;
+            selectable: boolean;
+            /** Format: uuid */
+            sourceJobId: string;
+        };
+        RecoveryCandidateChoicePageDto: {
+            items: components["schemas"]["RecoveryCandidateChoiceDto"][];
+            nextCursor?: string;
+        };
+        RecoveryCandidateIntervalDto: {
+            /** Format: date-time */
+            endsAt: string;
+            /** Format: date-time */
+            startsAt: string;
+        };
+        RecoveryCandidatePreparationAcceptedDto: {
+            generation: number;
+            /** @enum {string} */
+            kind: "JOB_REPLACEMENT" | "LOST_CLAIM_REPRINT";
+            /** Format: uuid */
+            orderId: string;
+            /** Format: uuid */
+            preparationId: string;
+            /** Format: date-time */
+            requestedAt: string;
+            statusPath: string;
+            /** Format: uuid */
+            targetId: string;
+        };
+        RecoveryCandidatePreparationDetailDto: {
+            blockingCodes: string[];
+            /** Format: uuid */
+            claimId?: string | null;
+            dispatchCount: number;
+            failedCount: number;
+            generation: number;
+            /** Format: uuid */
+            incidentEvidenceId?: string | null;
+            /** @enum {string} */
+            kind: "JOB_REPLACEMENT" | "LOST_CLAIM_REPRINT";
+            /** Format: date-time */
+            nextRefreshAt?: string | null;
+            /** Format: uuid */
+            orderId: string;
+            pendingCount: number;
+            /** Format: uuid */
+            predecessorShipmentId?: string | null;
+            /** Format: uuid */
+            preparationId: string;
+            /** Format: uuid */
+            replacementRequestId?: string | null;
+            /** Format: date-time */
+            requestedAt: string;
+            sourceJobIds: string[];
+            sources: components["schemas"]["RecoveryCandidateSourceProgressDto"][];
+            /** @enum {string} */
+            status: "PREPARING" | "CANDIDATES_AVAILABLE" | "BLOCKED" | "EXPIRED" | "SUPERSEDED";
+            statusPath: string;
+            /** Format: uuid */
+            targetId: string;
+        };
+        RecoveryCandidatePreparationPageDto: {
+            items: components["schemas"]["RecoveryCandidatePreparationDetailDto"][];
+            nextCursor?: string;
+        };
+        RecoveryCandidateSourceProgressDto: {
+            blockingCodes: string[];
+            failedCount: number;
+            fulfilmentSlotIds: string[];
+            pendingCount: number;
+            quantity: number;
+            selectableCount: number;
+            /** Format: uuid */
+            sourceJobId: string;
         };
         ReferenceProfileActivationNoticeDto: {
             /** @enum {string} */
@@ -9122,6 +9335,121 @@ export interface operations {
             };
         };
     };
+    RecoveryCandidateController_claimPreparations: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCandidatePreparationPageDto"];
+                };
+            };
+        };
+    };
+    RecoveryCandidateController_prepareReprint: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareClaimReprintDto"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCandidatePreparationAcceptedDto"];
+                };
+            };
+        };
+    };
+    RecoveryCandidateController_claimPreparation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                preparationId: string;
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCandidatePreparationDetailDto"];
+                };
+            };
+        };
+    };
+    RecoveryCandidateController_claimCandidates: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+                sourceJobId?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                preparationId: string;
+                claimId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCandidateChoicePageDto"];
+                };
+            };
+        };
+    };
     OrdersController_handoffReshipment: {
         parameters: {
             query?: never;
@@ -9509,6 +9837,121 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    RecoveryCandidateController_jobPreparations: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCandidatePreparationPageDto"];
+                };
+            };
+        };
+    };
+    RecoveryCandidateController_prepareReplacement: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token": string;
+                /** @description Stable command key; replaying altered input returns 409 */
+                "Idempotency-Key": string;
+            };
+            path: {
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareJobReplacementDto"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCandidatePreparationAcceptedDto"];
+                };
+            };
+        };
+    };
+    RecoveryCandidateController_jobPreparation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                preparationId: string;
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCandidatePreparationDetailDto"];
+                };
+            };
+        };
+    };
+    RecoveryCandidateController_jobCandidates: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+                sourceJobId?: string;
+            };
+            header?: {
+                /** @description Required for unsafe operator requests. Obtain the session-bound value from GET /admin/auth/session. */
+                "x-csrf-token"?: string;
+            };
+            path: {
+                preparationId: string;
+                jobId: string;
+                orderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCandidateChoicePageDto"];
+                };
             };
         };
     };

@@ -178,34 +178,168 @@ export class SlicerProfileSnapshotService implements OnApplicationBootstrap {
 
   async ensureJobSnapshots(job: SlicingJob): Promise<void> {
     const expectations = await this.expectationsFor(job);
-    const snapshots = expectations.map((expectation) => ({
-      expectation,
-      snapshot: this.snapshot(expectation.settings, expectation.revision),
-    }));
-    for (const { expectation, snapshot } of snapshots) {
-      if (expectation.pointer.contentSha256 !== snapshot.contentSha256) {
+    await this.ensureExpectations([expectations]);
+  }
+
+  /** Load shared candidate revisions once and provision each immutable digest once. */
+  async ensureCandidateJobSnapshotsBatch(
+    jobs: readonly SlicingJob[],
+  ): Promise<void> {
+    if (jobs.length === 0) return;
+    for (const job of jobs) {
+      if (job.kind !== "candidate_estimate") {
         throw new SlicerProfileSnapshotMismatchError(
-          `${expectation.label} content hash does not match persisted settings`,
+          "batch snapshot preflight requires candidate estimate jobs",
         );
       }
     }
-    if (expectations.length > 0) {
-      try {
-        const uniqueSettings = new Map(
-          snapshots.map(({ snapshot, expectation }) => [
-            snapshot.contentSha256,
-            expectation.settings,
-          ]),
+    const candidates = jobs as Extract<
+      SlicingJob,
+      { kind: "candidate_estimate" }
+    >[];
+    const [profiles, calibrations, configs] = await Promise.all([
+      this.prisma.machineProfile.findMany({
+        where: {
+          id: {
+            in: [
+              ...new Set(
+                candidates.map((job) => job.input.machineProfile.revisionId),
+              ),
+            ],
+          },
+        },
+        select: {
+          id: true,
+          settings: true,
+          slicerEngine: true,
+          slicerVersion: true,
+          productionArtifactFormat: true,
+        },
+      }),
+      this.prisma.machineCalibration.findMany({
+        where: {
+          id: {
+            in: [
+              ...new Set(
+                candidates.map(
+                  (job) => job.input.machineCalibration.revisionId,
+                ),
+              ),
+            ],
+          },
+        },
+        select: { id: true, settings: true },
+      }),
+      this.prisma.printConfigRevision.findMany({
+        where: {
+          id: {
+            in: [
+              ...new Set(
+                candidates.map((job) => job.input.printConfig.revisionId),
+              ),
+            ],
+          },
+        },
+        select: { id: true, settings: true },
+      }),
+    ]);
+    const profileById = new Map(profiles.map((row) => [row.id, row]));
+    const calibrationById = new Map(calibrations.map((row) => [row.id, row]));
+    const configById = new Map(configs.map((row) => [row.id, row]));
+    const expectations = candidates.map((job): SnapshotExpectation[] => {
+      const { machineProfile, machineCalibration, printConfig } = job.input;
+      const profile = profileById.get(machineProfile.revisionId);
+      const calibration = calibrationById.get(machineCalibration.revisionId);
+      const config = configById.get(printConfig.revisionId);
+      if (!profile || !calibration || !config) {
+        throw new SlicerProfileSnapshotMismatchError(
+          "slicer job references a missing profile revision",
         );
-        assertPresetBundleAggregateLimits([...uniqueSettings.values()]);
+      }
+      if (
+        profile.slicerEngine !== machineProfile.slicerEngine ||
+        profile.slicerVersion !== machineProfile.slicerVersion ||
+        toSlicerProductionArtifactFormat(profile.productionArtifactFormat) !==
+          machineProfile.productionArtifactFormat
+      ) {
+        throw new SlicerProfileSnapshotMismatchError(
+          "machine profile slicer identity does not match persisted state",
+        );
+      }
+      return [
+        {
+          label: "machine profile",
+          revision: "machine",
+          pointer: machineProfile,
+          settings: profile.settings,
+        },
+        {
+          label: "machine calibration",
+          revision: "calibration",
+          pointer: machineCalibration,
+          settings: calibration.settings,
+        },
+        {
+          label: "print configuration",
+          revision: "print",
+          pointer: printConfig,
+          settings: config.settings,
+        },
+      ];
+    });
+    await this.ensureExpectations(expectations);
+  }
+
+  private async ensureExpectations(
+    groups: readonly SnapshotExpectation[][],
+  ): Promise<void> {
+    const all = new Map<string, SlicerSettingsSnapshot>();
+    for (const expectations of groups) {
+      const snapshots = expectations.map((expectation) => ({
+        expectation,
+        snapshot: this.snapshot(expectation.settings, expectation.revision),
+      }));
+      for (const { expectation, snapshot } of snapshots) {
+        if (expectation.pointer.contentSha256 !== snapshot.contentSha256) {
+          throw new SlicerProfileSnapshotMismatchError(
+            `${expectation.label} content hash does not match persisted settings`,
+          );
+        }
+      }
+      if (expectations.length > 0) {
+        try {
+          const uniqueSettings = new Map(
+            snapshots.map(({ snapshot, expectation }) => [
+              snapshot.contentSha256,
+              expectation.settings,
+            ]),
+          );
+          assertPresetBundleAggregateLimits([...uniqueSettings.values()]);
+        } catch (error) {
+          if (error instanceof PresetBundleValidationError) {
+            throw new SlicerProfileSnapshotIntegrityError(error.message);
+          }
+          throw error;
+        }
+      }
+      for (const { snapshot } of snapshots)
+        all.set(snapshot.contentSha256, snapshot);
+    }
+    for (const snapshot of all.values()) {
+      try {
+        await this.objects.putImmutableObject({
+          objectKey: snapshot.objectKey,
+          bytes: snapshot.bytes,
+          contentHash: snapshot.contentSha256,
+          contentType: "application/json",
+        });
       } catch (error) {
-        if (error instanceof PresetBundleValidationError) {
+        if (error instanceof ImmutableObjectConflictError) {
           throw new SlicerProfileSnapshotIntegrityError(error.message);
         }
-        throw error;
+        throw new SlicerProfileSnapshotUnavailableError();
       }
     }
-    await this.provision(expectations);
   }
 
   private snapshot(

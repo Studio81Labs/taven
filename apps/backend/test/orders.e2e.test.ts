@@ -1,10 +1,20 @@
-import { randomUUID } from "node:crypto";
-import { BadRequestException, ConflictException } from "@nestjs/common";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  BadRequestException,
+  ConflictException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import { OrdersService } from "../src/modules/orders/orders.service";
+import { RecoveryCandidatePreparationService } from "../src/modules/orders/recovery-candidate-preparation.service";
+import { CandidateEstimateService } from "../src/modules/resources/candidate-estimate.service";
+import { FrozenOrderCandidateInputService } from "../src/modules/resources/frozen-order-candidate-input.service";
+import { SlicerProfileSnapshotService } from "../src/modules/slicing/slicer-profile-snapshot.service";
+import type { ObjectStorage } from "../src/modules/storage/object-storage.port";
 import { OperatorReadsService } from "../src/modules/operator-reads/operator-reads.service";
+import { OperatorAuthService } from "../src/modules/admin-access/operator-auth.service";
 import type { OperatorContext } from "../src/modules/admin-access/operator-context";
 import { OPERATOR_PERMISSIONS } from "../src/modules/admin-access/operator-permissions";
 import { AuditService } from "../src/modules/audit/audit.service";
@@ -42,6 +52,18 @@ let balanceProviderIntentCalls = 0;
 let pauseBalanceIntentBeforeReturn: (() => Promise<void>) | undefined;
 let previousCheckoutEnvironment: Record<string, string | undefined>;
 
+function recoveryPreparationService(): RecoveryCandidatePreparationService {
+  const snapshots = new SlicerProfileSnapshotService(prisma, {
+    putImmutableObject: async () => undefined,
+  } as unknown as ObjectStorage);
+  return new RecoveryCandidatePreparationService(
+    prisma,
+    new CandidateEstimateService(prisma, snapshots),
+    new FrozenOrderCandidateInputService(prisma),
+    new AuditService(prisma),
+  );
+}
+
 type LegacyOrdersClient = {
   [Method in keyof OrdersService]: OrdersService[Method] extends (
     operator: OperatorContext,
@@ -75,6 +97,69 @@ function operatorForTest(operatorId: string, nodeId: string): OperatorContext {
     authenticationMethod: "DEVELOPMENT_PASSWORD",
     sessionId: randomUUID(),
   };
+}
+
+async function operatorForRecoveryTest(
+  operatorId: string,
+  nodeId: string,
+): Promise<OperatorContext> {
+  const operator = operatorForTest(operatorId, nodeId);
+  await prisma.operatorSession.create({
+    data: {
+      id: operator.sessionId,
+      operatorId,
+      tokenHash: createHash("sha256").update(randomUUID()).digest("hex"),
+      csrfHash: createHash("sha256").update(randomUUID()).digest("hex"),
+      authenticationMethod: "DEVELOPMENT_PASSWORD",
+      credentialVersion: 1,
+      absoluteExpiresAt: new Date(Date.now() + 60 * 60_000),
+    },
+  });
+  return operator;
+}
+
+function recoveryReplayData(
+  preparation: {
+    kind: string;
+    orderId: string;
+    targetId: string;
+    replacementRequestId: string | null;
+    predecessorShipmentId: string | null;
+    reason: string;
+  },
+  idempotencyKey: string = randomUUID(),
+) {
+  const { kind, orderId, targetId, reason } = preparation;
+  return {
+    namespace: `recovery:${orderId}:${createHash("sha256")
+      .update(JSON.stringify({ kind, targetId }))
+      .digest("hex")
+      .slice(0, 24)}`,
+    idempotencyKey,
+    requestFingerprint: createHash("sha256")
+      .update(
+        JSON.stringify({
+          kind,
+          orderId,
+          targetId,
+          expectedId:
+            kind === "JOB_REPLACEMENT"
+              ? preparation.replacementRequestId
+              : preparation.predecessorShipmentId,
+          reason,
+        }),
+      )
+      .digest("hex"),
+    expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+  };
+}
+
+function withoutRecoverySessionSnapshot<
+  Row extends { operatorSessionSnapshot: unknown },
+>(row: Row): Omit<Row, "operatorSessionSnapshot"> {
+  const { operatorSessionSnapshot, ...rest } = row;
+  void operatorSessionSnapshot;
+  return rest;
 }
 
 function legacyOrdersClient(
@@ -209,6 +294,7 @@ async function preparePaidOrder(
     );
     const productions: ProductionReservationFixture[] = [];
     for (const [index] of foundation.fulfilmentSlotIds.entries()) {
+      const dispatchJobId = randomUUID();
       productions.push(
         await fixtures.planProduction(
           foundation,
@@ -225,6 +311,7 @@ async function preparePaidOrder(
           60,
           1,
           index,
+          { dispatchJobId },
         ),
       );
     }
@@ -343,9 +430,234 @@ async function makeGcodeReady(jobId: string): Promise<void> {
   );
 }
 
+async function seedCandidateReceipt(
+  candidateId: string,
+  sourceJobId: string,
+  correlationId: string,
+): Promise<string> {
+  const existing = await prisma.candidateEstimateTerminalResult.findUnique({
+    where: { candidateResourceEstimateId: candidateId },
+  });
+  if (existing) return existing.outboxMessageId;
+  const contracts = await import("@taven/slicer-contracts");
+  const candidate = await prisma.candidateResourceEstimate.findUniqueOrThrow({
+    where: { id: candidateId },
+    include: {
+      modelGeometry: { include: { sourceModelFile: true } },
+      machineProfile: true,
+      machineCalibration: true,
+      printConfigRevision: true,
+      arrangementRevision: true,
+    },
+  });
+  const sourceJob = await prisma.job.findUniqueOrThrow({
+    where: { id: sourceJobId },
+    include: {
+      phaseResourcePlanJob: {
+        include: {
+          slots: {
+            include: {
+              fulfilmentSlot: {
+                include: {
+                  orderItem: {
+                    include: {
+                      individualSource: {
+                        include: {
+                          quoteItem: { include: { modelSelection: true } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  const item =
+    sourceJob.phaseResourcePlanJob.slots[0]?.fulfilmentSlot.orderItem;
+  if (!item) throw new Error("recovery fixture has no accepted item");
+  const bodyIds = item.individualSource?.quoteItem.modelSelection?.bodyIds ?? [
+    `body-${String(item.ordinal + 1).padStart(4, "0")}`,
+  ];
+  const dispatchJobId = (
+    candidate.resourceSnapshot as { dispatchJobId?: string }
+  ).dispatchJobId;
+  if (!dispatchJobId)
+    throw new Error("fixture candidate has no dispatch identity");
+  const inputBase = {
+    geometry: {
+      sourceModelFileId: item.sourceModelFileId,
+      sourceContentSha256: candidate.modelGeometry.sourceModelFile.contentHash,
+      modelGeometryId: candidate.modelGeometryId,
+      canonicalObjectKey: candidate.modelGeometry.canonicalObjectKey,
+      geometrySha256: candidate.modelGeometry.geometryHash,
+      bodyIds,
+      selectionSha256: contracts.geometrySelectionSha256(bodyIds),
+    },
+    machineId: candidate.machineId,
+    machineProfile: {
+      revisionId: candidate.machineProfileId,
+      contentSha256: "a".repeat(64),
+      slicerEngine: candidate.machineProfile.slicerEngine,
+      slicerVersion: candidate.machineProfile.slicerVersion,
+      productionArtifactFormat: "gcode_3mf" as const,
+    },
+    machineCalibration: {
+      revisionId: candidate.machineCalibrationId,
+      contentSha256: "b".repeat(64),
+    },
+    printConfig: {
+      revisionId: candidate.printConfigRevisionId,
+      contentSha256: "c".repeat(64),
+    },
+    partsPerPlate: candidate.partsPerPlate,
+    quantity: candidate.quantity,
+    shipmentPlanId: candidate.shipmentPlanId,
+    arrangementRevision: {
+      revisionId: candidate.arrangementRevisionId,
+      contentSha256: candidate.arrangementRevision.contentSha256,
+    },
+  };
+  const remainder = candidate.quantity % candidate.partsPerPlate;
+  const occupancies = [
+    ...(candidate.quantity >= candidate.partsPerPlate
+      ? [candidate.partsPerPlate]
+      : []),
+    ...(remainder ? [remainder] : []),
+  ];
+  const input = {
+    ...inputBase,
+    occupancySliceTargets: occupancies.map((partsPerPlate) => {
+      const cacheIdentitySha256 = contracts.machineOccupancyCacheIdentitySha256(
+        inputBase,
+        partsPerPlate,
+      );
+      return {
+        partsPerPlate,
+        cacheIdentitySha256,
+        analysisObjectKey: `slice-metrics/${cacheIdentitySha256}/result.json`,
+      };
+    }),
+  };
+  const inputFingerprintSha256 = contracts.slicingInputFingerprint(
+    "candidate_estimate",
+    input,
+  );
+  const job = contracts.CandidateEstimateJobSchema.parse({
+    contractVersion: 2,
+    kind: "candidate_estimate",
+    jobId: dispatchJobId,
+    correlationId,
+    inputFingerprintSha256,
+    idempotencyKey: `slicer:v2:candidate_estimate:${dispatchJobId}:${inputFingerprintSha256}`,
+    attempt: 1,
+    input,
+  });
+  const message = await prisma.outboxMessage.create({
+    data: {
+      deduplicationKey: contracts.slicingDispatchAttemptKey(
+        job.idempotencyKey,
+        1,
+      ),
+      aggregateType: "CandidateEstimateDispatch",
+      aggregateId: job.jobId,
+      messageType: "slicing.candidate-estimate.requested",
+      schemaVersion: 2,
+      payload: {
+        nodeId: candidate.nodeId,
+        inventoryId: candidate.inventoryId,
+        job,
+      } as unknown as Prisma.InputJsonObject,
+    },
+  });
+  await prisma.candidateEstimateTerminalResult.create({
+    data: {
+      outboxMessageId: message.id,
+      resultFingerprintSha256: createHash("sha256")
+        .update(`${message.id}:fixture-success`)
+        .digest("hex"),
+      outcome: "SUCCEEDED",
+      candidateResourceEstimateId: candidateId,
+    },
+  });
+  return message.id;
+}
+
+async function ingestPreparedCandidates(
+  candidates: CandidateEstimateService,
+  preparationId: string,
+  expiresAt?: Date,
+): Promise<void> {
+  const contracts = await import("@taven/slicer-contracts");
+  const mappings = await prisma.recoveryCandidateDispatch.findMany({
+    where: { preparationId },
+  });
+  expect(mappings.length).toBeGreaterThan(0);
+  for (const mapping of mappings) {
+    const message = await prisma.outboxMessage.findUniqueOrThrow({
+      where: { id: mapping.outboxMessageId },
+    });
+    const job = contracts.CandidateEstimateJobSchema.parse(
+      (message.payload as Record<string, unknown>).job,
+    );
+    const result = contracts.CandidateEstimateResultSchema.parse({
+      ...job,
+      engine: { name: "orca", version: "test", imageSha256: "b".repeat(64) },
+      outcome: {
+        status: "succeeded",
+        metrics: {
+          boundingBox: {
+            xMicrometers: "1",
+            yMicrometers: "1",
+            zMicrometers: "1",
+          },
+          objectCount: 1,
+          bodyCount: 1,
+          topology: {
+            watertight: true,
+            manifold: true,
+            normals: "consistent",
+          },
+          thinWallFeatureCount: 0,
+          supportVolumeRatioPpm: 0,
+          hasPaintAssignments: false,
+          materialAssignmentCount: 0,
+          estimatedPrintSeconds: "60",
+          estimatedMaterialMilligrams: "60",
+          plateCount: 1,
+        },
+        plates: [
+          {
+            plateOrdinal: 1,
+            partsOnPlate: 1,
+            estimatedPrintSeconds: "60",
+            estimatedMaterialMilligrams: "60",
+          },
+        ],
+        occupancySlices: job.input.occupancySliceTargets.map((target) => ({
+          partsPerPlate: target.partsPerPlate,
+          cacheIdentitySha256: target.cacheIdentitySha256,
+          estimatedPrintSeconds: "60",
+          estimatedMaterialMilligrams: "60",
+          artifact: {
+            objectKey: target.analysisObjectKey,
+            sha256: "c".repeat(64),
+          },
+        })),
+      },
+    });
+    await candidates.ingest({ result, ...(expiresAt ? { expiresAt } : {}) });
+  }
+}
+
 async function createFreshReplacementCandidate(
   fixture: FulfilmentFixture,
   index: number,
+  scopeFingerprintOverride?: string,
+  predatePreparation = false,
 ): Promise<string> {
   const source = await prisma.candidateResourceEstimate.findUniqueOrThrow({
     where: { id: fixture.productions[index]!.candidateResourceEstimateId },
@@ -357,6 +669,7 @@ async function createFreshReplacementCandidate(
   const calculatedAt = observed.rows[0]?.observed_at;
   if (!calculatedAt) throw new Error("database clock is unavailable");
   const candidateId = randomUUID();
+  const dispatchJobId = randomUUID();
   const startsAt = new Date(calculatedAt.getTime() + 60 * 60 * 1_000);
   const intervals = source.capacityIntervals.map((interval, intervalIndex) => {
     const duration = interval.endsAt.getTime() - interval.startsAt.getTime();
@@ -370,6 +683,130 @@ async function createFreshReplacementCandidate(
       endsAt: new Date(intervalStartsAt.getTime() + duration),
     };
   });
+  let sourceJobId = fixture.productions[index]!.jobId;
+  for (;;) {
+    const successor = await prisma.job.findFirst({
+      where: { replacesJobId: sourceJobId },
+      select: { id: true },
+    });
+    if (!successor) break;
+    sourceJobId = successor.id;
+  }
+  const sourceJob = await prisma.job.findUniqueOrThrow({
+    where: { id: sourceJobId },
+    include: { phaseResourcePlanJob: true },
+  });
+  await seedCandidateReceipt(
+    sourceJob.phaseResourcePlanJob.candidateResourceEstimateId,
+    sourceJobId,
+    randomUUID(),
+  );
+  const claim = await prisma.claim.findFirst({
+    where: {
+      orderId: fixture.foundation.orderId,
+      status: { in: ["OPEN", "ACTIVE"] },
+      origin: "SHIPMENT_INCIDENT",
+    },
+    include: { resolutions: true },
+    orderBy: { openedAt: "desc" },
+  });
+  const request = claim
+    ? null
+    : await prisma.replacementRequest.findUniqueOrThrow({
+        where: { sourceJobId },
+      });
+  const predecessorShipmentId = claim
+    ? claim.status === "ACTIVE"
+      ? claim.resolutions[0]?.replacementShipmentId
+      : claim.incidentShipmentId
+    : null;
+  const incidentEvidence = predecessorShipmentId
+    ? await prisma.shipmentProviderEvent.findFirstOrThrow({
+        where: { shipmentId: predecessorShipmentId, kind: "LOST" },
+        orderBy: { occurredAt: "desc" },
+      })
+    : null;
+  const kind = claim ? "LOST_CLAIM_REPRINT" : "JOB_REPLACEMENT";
+  const targetId = claim?.id ?? sourceJobId;
+  const sourceFingerprints = await prisma.$queryRaw<
+    Array<{ fingerprint: string | null }>
+  >`
+    SELECT taven_recovery_source_fingerprint(${sourceJobId}::uuid) AS fingerprint
+  `;
+  const sourceFingerprint = sourceFingerprints[0]?.fingerprint;
+  if (!sourceFingerprint)
+    throw new Error("recovery source fingerprint is unavailable");
+  const scopeFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        kind,
+        targetId,
+        replacementRequestId: request?.id ?? null,
+        predecessorShipmentId: predecessorShipmentId ?? null,
+        incidentEvidenceId: incidentEvidence?.id ?? null,
+        sources: [{ jobId: sourceJobId, fingerprint: sourceFingerprint }],
+      }),
+    )
+    .digest("hex");
+  const latest = await prisma.recoveryCandidatePreparation.findFirst({
+    where: { kind, targetId },
+    orderBy: { generation: "desc" },
+  });
+  const idempotencyRecord = await prisma.idempotencyRecord.create({
+    data: {
+      namespace: `recovery:${sourceJob.orderId}:${createHash("sha256")
+        .update(JSON.stringify({ kind, targetId }))
+        .digest("hex")
+        .slice(0, 24)}`,
+      idempotencyKey: `fixture:${candidateId}`,
+      requestFingerprint: createHash("sha256")
+        .update(
+          JSON.stringify({
+            kind,
+            orderId: sourceJob.orderId,
+            targetId,
+            expectedId: request?.id ?? predecessorShipmentId,
+            reason: "fixture recovery candidate",
+          }),
+        )
+        .digest("hex"),
+      expiresAt: new Date("9999-12-31T00:00:00.000Z"),
+    },
+  });
+  const recoveryOperator = await operatorForRecoveryTest(
+    testOperatorId,
+    sourceJob.nodeId,
+  );
+  const preparation = await prisma.recoveryCandidatePreparation.create({
+    data: {
+      nodeId: sourceJob.nodeId,
+      orderId: sourceJob.orderId,
+      orderPhaseId: sourceJob.orderPhaseId,
+      shipmentPlanId: sourceJob.shipmentPlanId,
+      kind,
+      targetId,
+      sourceJobId: claim ? null : sourceJobId,
+      replacementRequestId: request?.id ?? null,
+      claimId: claim?.id ?? null,
+      predecessorShipmentId: predecessorShipmentId ?? null,
+      incidentEvidenceId: incidentEvidence?.id ?? null,
+      generation: (latest?.generation ?? 0) + 1,
+      sourceJobIds: [sourceJobId],
+      sourceScopeFingerprint: scopeFingerprintOverride ?? scopeFingerprint,
+      requestedAt: new Date(calculatedAt.getTime() - 1_000),
+      operatorId: testOperatorId,
+      operatorSessionId: recoveryOperator.sessionId,
+      idempotencyRecordId: idempotencyRecord.id,
+      reason: "fixture recovery candidate",
+    },
+  });
+  const candidateClock = await pool.query<{ observed_at: Date }>(
+    "SELECT clock_timestamp() AS observed_at",
+  );
+  const candidateCalculatedAt = predatePreparation
+    ? new Date(preparation.requestedAt.getTime() - 1_000)
+    : candidateClock.rows[0]?.observed_at;
+  if (!candidateCalculatedAt) throw new Error("database clock is unavailable");
   await prisma.candidateResourceEstimate.create({
     data: {
       id: candidateId,
@@ -392,10 +829,33 @@ async function createFreshReplacementCandidate(
       partsPerPlate: source.partsPerPlate,
       requiredMaterialMilligrams: source.requiredMaterialMilligrams,
       requiredMachineSeconds: source.requiredMachineSeconds,
-      resourceSnapshot: source.resourceSnapshot as Prisma.InputJsonObject,
-      calculatedAt,
-      expiresAt: new Date(calculatedAt.getTime() + 4 * 60 * 60 * 1_000),
+      resourceSnapshot: { dispatchJobId },
+      calculatedAt: candidateCalculatedAt,
+      expiresAt: new Date(
+        candidateCalculatedAt.getTime() + 4 * 60 * 60 * 1_000,
+      ),
       capacityIntervals: { create: intervals },
+    },
+  });
+  const outboxMessageId = await seedCandidateReceipt(
+    candidateId,
+    sourceJobId,
+    preparation.id,
+  );
+  const fingerprints = await prisma.$queryRaw<Array<{ fingerprint: string }>>`
+    SELECT taven_recovery_source_fingerprint(${sourceJobId}::uuid) AS fingerprint
+  `;
+  await prisma.recoveryCandidateDispatch.create({
+    data: {
+      preparationId: preparation.id,
+      nodeId: sourceJob.nodeId,
+      orderId: sourceJob.orderId,
+      orderPhaseId: sourceJob.orderPhaseId,
+      shipmentPlanId: sourceJob.shipmentPlanId,
+      sourceJobId,
+      sourceFingerprint: fingerprints[0]!.fingerprint,
+      dispatchJobId,
+      outboxMessageId,
     },
   });
   return candidateId;
@@ -832,6 +1292,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma,
       new AuditService(prisma),
       provider,
+      recoveryPreparationService(),
     );
     orders = legacyOrdersClient(scopedOrders, operator.id);
     payments = legacyPaymentsClient(
@@ -1604,10 +2065,53 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       1,
     ]);
 
-    const candidateResourceEstimateId = await createFreshReplacementCandidate(
-      fixture,
-      0,
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
     );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const candidates = new CandidateEstimateService(prisma, snapshots);
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      candidates,
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(
+      testOperatorId,
+      fixture.foundation.nodeId,
+    );
+    const accepted = await preparation.prepareReplacement(
+      operator,
+      fixture.foundation.orderId,
+      sourceJobId,
+      {
+        expectedReplacementRequestId: request.id,
+        reason: "prepare accepted individual source for replacement",
+      },
+      `individual-recovery:${randomUUID()}`,
+    );
+    await ingestPreparedCandidates(candidates, accepted.preparationId);
+    const choices = await preparation.choices(
+      operator,
+      fixture.foundation.orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      accepted.preparationId,
+      {},
+    );
+    const candidateResourceEstimateId = choices.items.find(
+      ({ selectable }) => selectable,
+    )?.candidateResourceEstimateId;
+    if (!candidateResourceEstimateId)
+      throw new Error("individual replacement candidate was unavailable");
     await orders.createReplacement(
       fixture.foundation.orderId,
       fixture.productions[0]!.jobId,
@@ -2156,6 +2660,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         prisma,
         new AuditService(prisma),
         manualProvider,
+        recoveryPreparationService(),
       );
       const operator = operatorForTest(
         testOperatorId,
@@ -2374,6 +2879,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma,
       new AuditService(prisma),
       manualProvider,
+      recoveryPreparationService(),
     );
     const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
     const failed = await manualOrders.recordRefundProviderResult(
@@ -2519,6 +3025,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma,
       new AuditService(prisma),
       provider,
+      recoveryPreparationService(),
     );
     const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
     const result = await manualOrders.recordRefundProviderResult(
@@ -2588,9 +3095,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         },
         "replacement-stale-candidate",
       ),
-    ).rejects.toThrow(
-      "Replacement requires a freshly calculated compatible candidate",
-    );
+    ).rejects.toThrow("Recovery needs a current scoped candidate preparation");
     const candidateResourceEstimateId = await createFreshReplacementCandidate(
       fixture,
       0,
@@ -2691,6 +3196,2102 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma.order.findUniqueOrThrow({ where: { id: orderId } }),
     ).resolves.toMatchObject({ status: "COMPLETED" });
   }, 10_000);
+
+  it("rejects final replacement with a forged preparation scope fingerprint", async () => {
+    const fixture = await preparePaidOrder("forged-preparation-scope");
+    const { orderId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "forged-scope-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "forged-scope-failure",
+    );
+    const candidateResourceEstimateId = await createFreshReplacementCandidate(
+      fixture,
+      0,
+      "f".repeat(64),
+    );
+    const forged = await prisma.$queryRaw<
+      Array<{ stored: string; calculated: string | null }>
+    >`
+      SELECT preparation.source_scope_fingerprint AS stored,
+             taven_recovery_scope_fingerprint(preparation) AS calculated
+      FROM recovery_candidate_preparations preparation
+      WHERE preparation.kind = 'JOB_REPLACEMENT'
+        AND preparation.target_id = ${sourceJobId}::uuid
+      ORDER BY preparation.generation DESC LIMIT 1
+    `;
+    expect(forged[0]?.calculated).toBeTruthy();
+    expect(forged[0]?.stored).not.toBe(forged[0]?.calculated);
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        { candidateResourceEstimateId },
+        "forged-scope-create",
+      ),
+    ).rejects.toThrow("Recovery preparation context changed");
+    expect(
+      await prisma.job.count({ where: { replacesJobId: sourceJobId } }),
+    ).toBe(0);
+  }, 15_000);
+
+  it("does not advertise a candidate calculated before its recovery preparation", async () => {
+    const fixture = await preparePaidOrder("recovery-predated-candidate");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "predated-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "predated-failure",
+    );
+    const candidateResourceEstimateId = await createFreshReplacementCandidate(
+      fixture,
+      0,
+      undefined,
+      true,
+    );
+    const preparation =
+      await prisma.recoveryCandidatePreparation.findFirstOrThrow({
+        where: { kind: "JOB_REPLACEMENT", targetId: sourceJobId },
+        orderBy: { generation: "desc" },
+      });
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const reads = recoveryPreparationService();
+    const detail = await reads.detail(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      preparation.id,
+    );
+    expect(detail.status).toBe("BLOCKED");
+    expect(detail.sources[0]?.selectableCount).toBe(0);
+    const choices = await reads.choices(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      preparation.id,
+      { sourceJobId },
+    );
+    expect(choices.items).toContainEqual(
+      expect.objectContaining({
+        candidateResourceEstimateId,
+        selectable: false,
+        blockingCodes: expect.arrayContaining([
+          "CANDIDATE_PREDATES_PREPARATION",
+        ]),
+      }),
+    );
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        { candidateResourceEstimateId },
+        "predated-create",
+      ),
+    ).rejects.toThrow("Selected recovery candidate predates its preparation");
+  }, 15_000);
+
+  it("rejects preparation when the operator session is revoked during preflight", async () => {
+    const fixture = await preparePaidOrder("recovery-revoked-during-preflight");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "recovery-revoked-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "recovery-revoked-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const candidates = new CandidateEstimateService(
+      prisma,
+      new SlicerProfileSnapshotService(prisma, {
+        putImmutableObject: async () => undefined,
+      } as unknown as ObjectStorage),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const prepareBatch = candidates.prepareDispatchBatch.bind(candidates);
+    vi.spyOn(candidates, "prepareDispatchBatch").mockImplementation(
+      async (inputs) => {
+        const prepared = await prepareBatch(inputs);
+        await prisma.operatorSession.update({
+          where: { id: operator.sessionId },
+          data: { revokedAt: new Date() },
+        });
+        return prepared;
+      },
+    );
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      candidates,
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    await expect(
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: "test a session revoked during preparation",
+        },
+        `recovery-revoked:${randomUUID()}`,
+      ),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(
+      await prisma.recoveryCandidatePreparation.count({
+        where: { kind: "JOB_REPLACEMENT", targetId: sourceJobId },
+      }),
+    ).toBe(0);
+  });
+
+  it("checks session expiry after waiting for the identity lock", async () => {
+    const fixture = await preparePaidOrder("recovery-session-lock-expiry");
+    const { orderId, nodeId } = fixture.foundation;
+    const job = fixture.productions[0]!;
+    await orders.acceptJob(orderId, job.jobId, "lock-expiry-accept");
+    await orders.failJob(
+      orderId,
+      job.jobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "lock-expiry-fail",
+    );
+    await seedCandidateReceipt(
+      job.candidateResourceEstimateId,
+      job.jobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId: job.jobId },
+    });
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const key = `lock-expiry-${randomUUID()}`;
+    const blocker = await pool.connect();
+    await blocker.query("BEGIN");
+    try {
+      await blocker.query(
+        "SELECT id FROM operator_identities WHERE id = $1 FOR UPDATE",
+        [testOperatorId],
+      );
+      await blocker.query(
+        "UPDATE operator_sessions SET absolute_expires_at = clock_timestamp() + interval '500 milliseconds' WHERE id = $1",
+        [operator.sessionId],
+      );
+      let settled = false;
+      const pending = recoveryPreparationService()
+        .prepareReplacement(
+          operator,
+          orderId,
+          job.jobId,
+          {
+            expectedReplacementRequestId: request.id,
+            reason: "expiry during an authentication lock wait",
+          },
+          key,
+        )
+        .then(
+          (value) => {
+            settled = true;
+            return value;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(settled).toBe(false);
+      await blocker.query("COMMIT");
+      expect(await pending).toBeInstanceOf(UnauthorizedException);
+      const revokedOperator = await operatorForRecoveryTest(
+        testOperatorId,
+        nodeId,
+      );
+      await blocker.query("BEGIN");
+      await blocker.query(
+        "SELECT id FROM operator_identities WHERE id = $1 FOR UPDATE",
+        [testOperatorId],
+      );
+      await blocker.query(
+        "UPDATE operator_sessions SET revoked_at = clock_timestamp() WHERE id = $1",
+        [revokedOperator.sessionId],
+      );
+      const revokedPending = recoveryPreparationService()
+        .prepareReplacement(
+          revokedOperator,
+          orderId,
+          job.jobId,
+          {
+            expectedReplacementRequestId: request.id,
+            reason: "revocation wins while authentication is locked",
+          },
+          `lock-revoke-${randomUUID()}`,
+        )
+        .then(
+          (value) => value,
+          (error: unknown) => error,
+        );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await blocker.query("COMMIT");
+      expect(await revokedPending).toBeInstanceOf(UnauthorizedException);
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+    expect(
+      await prisma.recoveryCandidatePreparation.count({ where: { orderId } }),
+    ).toBe(0);
+    expect(
+      await prisma.auditEvent.count({
+        where: {
+          orderId,
+          eventType: "recovery.candidate_preparation_requested",
+        },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.idempotencyRecord.count({ where: { idempotencyKey: key } }),
+    ).toBe(0);
+  }, 120_000);
+
+  it("lets a committed snapshot precede a waiting session revocation", async () => {
+    const fixture = await preparePaidOrder("recovery-session-revoke-after");
+    const { orderId, nodeId } = fixture.foundation;
+    const job = fixture.productions[0]!;
+    await orders.acceptJob(orderId, job.jobId, "revoke-after-accept");
+    await orders.failJob(
+      orderId,
+      job.jobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "revoke-after-fail",
+    );
+    await seedCandidateReceipt(
+      job.candidateResourceEstimateId,
+      job.jobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId: job.jobId },
+    });
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    let enteredAudit: () => void = () => undefined;
+    const auditEntered = new Promise<void>((resolve) => {
+      enteredAudit = resolve;
+    });
+    let releaseAudit: () => void = () => undefined;
+    const auditHeld = new Promise<void>((resolve) => {
+      releaseAudit = resolve;
+    });
+    const audit = new AuditService(prisma);
+    const recordOperator = audit.recordOperator.bind(audit);
+    vi.spyOn(audit, "recordOperator").mockImplementation(async (...args) => {
+      enteredAudit();
+      await auditHeld;
+      return recordOperator(...args);
+    });
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      new CandidateEstimateService(
+        prisma,
+        new SlicerProfileSnapshotService(prisma, {
+          putImmutableObject: async () => undefined,
+        } as unknown as ObjectStorage),
+      ),
+      new FrozenOrderCandidateInputService(prisma),
+      audit,
+    );
+    const pending = preparation.prepareReplacement(
+      operator,
+      orderId,
+      job.jobId,
+      {
+        expectedReplacementRequestId: request.id,
+        reason: "keep authenticated evidence when revocation waits",
+      },
+      `revoke-after-${randomUUID()}`,
+    );
+    await auditEntered;
+    let revoked = false;
+    const revoke = prisma.operatorSession
+      .update({
+        where: { id: operator.sessionId },
+        data: { revokedAt: new Date() },
+      })
+      .then((value) => {
+        revoked = true;
+        return value;
+      });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(revoked).toBe(false);
+    } finally {
+      releaseAudit();
+    }
+    const accepted = await pending;
+    await revoke;
+    const row = await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+      where: { id: accepted.preparationId },
+    });
+    expect(row.operatorSessionId).toBe(operator.sessionId);
+    expect(row.operatorSessionSnapshot).toMatchObject({
+      schemaVersion: 1,
+      validatedAt: row.requestedAt.toISOString(),
+    });
+    expect(
+      await prisma.auditEvent.count({
+        where: {
+          orderId,
+          eventType: "recovery.candidate_preparation_requested",
+        },
+      }),
+    ).toBe(1);
+  }, 120_000);
+
+  it("orders credential reset against preparation in both directions", async () => {
+    const fixture = await preparePaidOrder("recovery-session-reset-race");
+    const { orderId, nodeId } = fixture.foundation;
+    const job = fixture.productions[0]!;
+    await orders.acceptJob(orderId, job.jobId, "reset-race-accept");
+    await orders.failJob(
+      orderId,
+      job.jobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "reset-race-fail",
+    );
+    await seedCandidateReceipt(
+      job.candidateResourceEstimateId,
+      job.jobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId: job.jobId },
+    });
+    const identity = await prisma.operatorIdentity.create({
+      data: {
+        email: `reset-recovery-${randomUUID()}@example.test`,
+        role: "ADMIN",
+      },
+    });
+    const oldOperator = await operatorForRecoveryTest(identity.id, nodeId);
+    const blocker = await pool.connect();
+    await blocker.query("BEGIN");
+    try {
+      await blocker.query(
+        "UPDATE operator_identities SET credential_version = 2 WHERE id = $1",
+        [identity.id],
+      );
+      await blocker.query(
+        "UPDATE operator_sessions SET revoked_at = clock_timestamp() WHERE id = $1",
+        [oldOperator.sessionId],
+      );
+      const denied = recoveryPreparationService()
+        .prepareReplacement(
+          oldOperator,
+          orderId,
+          job.jobId,
+          {
+            expectedReplacementRequestId: request.id,
+            reason: "reset takes the identity lock first",
+          },
+          `reset-first-${randomUUID()}`,
+        )
+        .then(
+          (value) => value,
+          (error: unknown) => error,
+        );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await blocker.query("COMMIT");
+      expect(await denied).toBeInstanceOf(UnauthorizedException);
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+    }
+    expect(
+      await prisma.recoveryCandidatePreparation.count({ where: { orderId } }),
+    ).toBe(0);
+    const currentOperator = await operatorForRecoveryTest(identity.id, nodeId);
+    await prisma.operatorSession.update({
+      where: { id: currentOperator.sessionId },
+      data: { credentialVersion: 2 },
+    });
+    let enteredAudit: () => void = () => undefined;
+    const auditEntered = new Promise<void>((resolve) => {
+      enteredAudit = resolve;
+    });
+    let releaseAudit: () => void = () => undefined;
+    const auditHeld = new Promise<void>((resolve) => {
+      releaseAudit = resolve;
+    });
+    const audit = new AuditService(prisma);
+    const recordOperator = audit.recordOperator.bind(audit);
+    vi.spyOn(audit, "recordOperator").mockImplementation(async (...args) => {
+      enteredAudit();
+      await auditHeld;
+      return recordOperator(...args);
+    });
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      new CandidateEstimateService(
+        prisma,
+        new SlicerProfileSnapshotService(prisma, {
+          putImmutableObject: async () => undefined,
+        } as unknown as ObjectStorage),
+      ),
+      new FrozenOrderCandidateInputService(prisma),
+      audit,
+    );
+    const pending = preparation.prepareReplacement(
+      currentOperator,
+      orderId,
+      job.jobId,
+      {
+        expectedReplacementRequestId: request.id,
+        reason: "prepare before the next credential reset",
+      },
+      `reset-second-${randomUUID()}`,
+    );
+    await auditEntered;
+    let resetFinished = false;
+    const reset = prisma
+      .$transaction(async (tx) => {
+        await tx.operatorIdentity.update({
+          where: { id: identity.id },
+          data: { credentialVersion: 3 },
+        });
+        await tx.operatorSession.updateMany({
+          where: { operatorId: identity.id },
+          data: { revokedAt: new Date() },
+        });
+      })
+      .then(() => {
+        resetFinished = true;
+      });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(resetFinished).toBe(false);
+    } finally {
+      releaseAudit();
+    }
+    const accepted = await pending;
+    await reset;
+    const row = await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+      where: { id: accepted.preparationId },
+    });
+    expect(row.operatorSessionSnapshot).toMatchObject({
+      schemaVersion: 1,
+      credentialVersion: 2,
+      validatedAt: row.requestedAt.toISOString(),
+    });
+    expect(
+      await prisma.auditEvent.count({
+        where: {
+          orderId,
+          eventType: "recovery.candidate_preparation_requested",
+        },
+      }),
+    ).toBe(1);
+  }, 120_000);
+
+  it("prepares, ingests, reads and consumes a scoped replacement candidate", async () => {
+    const fixture = await preparePaidOrder("prepared-replacement");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PACKING",
+        reason: "fixture failed final dimensional inspection",
+        recovery: "REPLACE",
+      },
+      "prepared-replacement-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const candidates = new CandidateEstimateService(prisma, snapshots);
+    let fullyReservedInputInjected = false;
+    const frozenInputPrisma = {
+      machineProfile: {
+        findMany: async (
+          args: Parameters<typeof prisma.machineProfile.findMany>[0],
+        ) => {
+          const profiles = (await prisma.machineProfile.findMany(
+            args,
+          )) as unknown as Array<{
+            machineCapability: {
+              machines: Array<{
+                inventories: Array<{
+                  id: string;
+                  remainingMilligrams: bigint;
+                  reservedMilligrams: bigint;
+                }>;
+              }>;
+            };
+          }>;
+          for (const profile of profiles) {
+            for (const machine of profile.machineCapability.machines) {
+              const inventory = machine.inventories[0];
+              if (!inventory) continue;
+              machine.inventories.unshift({
+                ...inventory,
+                id: randomUUID(),
+                remainingMilligrams: 100n,
+                reservedMilligrams: 100n,
+              });
+              fullyReservedInputInjected = true;
+            }
+          }
+          return profiles;
+        },
+      },
+      arrangementRevision: prisma.arrangementRevision,
+    } as unknown as PrismaService;
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      candidates,
+      new FrozenOrderCandidateInputService(frozenInputPrisma),
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const key = `prepared-replacement:${randomUUID()}`;
+    expect(() =>
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: 123 as unknown as string,
+        },
+        `invalid-reason:${randomUUID()}`,
+      ),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        undefined as never,
+        `missing-body:${randomUUID()}`,
+      ),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: [request.id] as unknown as string,
+          reason: "reject a repeated identifier field",
+        },
+        `invalid-request-id:${randomUUID()}`,
+      ),
+    ).toThrow(BadRequestException);
+    const [accepted, concurrentReplay] = await Promise.all([
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: "prepare a fresh physical replacement option",
+        },
+        key,
+      ),
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: "prepare a fresh physical replacement option",
+        },
+        key,
+      ),
+    ]);
+    expect(concurrentReplay).toEqual(accepted);
+    await expect(
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: "prepare a fresh physical replacement option",
+        },
+        key,
+      ),
+    ).resolves.toEqual(accepted);
+    const mappings = await prisma.recoveryCandidateDispatch.findMany({
+      where: { preparationId: accepted.preparationId },
+    });
+    expect(fullyReservedInputInjected).toBe(true);
+    expect(mappings.length).toBeGreaterThan(0);
+    const persistedPreparation =
+      await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: accepted.preparationId },
+      });
+    expect(accepted.requestedAt).toBe(
+      persistedPreparation.requestedAt.toISOString(),
+    );
+    const originalSession = await prisma.operatorSession.findUniqueOrThrow({
+      where: { id: operator.sessionId },
+    });
+    expect(persistedPreparation.operatorSessionSnapshot).toEqual({
+      schemaVersion: 1,
+      authenticationMethod: originalSession.authenticationMethod,
+      credentialVersion: originalSession.credentialVersion,
+      sessionCreatedAt: originalSession.createdAt.toISOString(),
+      validatedAt: persistedPreparation.requestedAt.toISOString(),
+    });
+    await expect(
+      prisma.recoveryCandidatePreparation.update({
+        where: { id: persistedPreparation.id },
+        data: { operatorSessionSnapshot: Prisma.JsonNull },
+      }),
+    ).rejects.toThrow(/recovery preparation history is immutable/);
+    const cloneInput = withoutRecoverySessionSnapshot(persistedPreparation);
+    for (const suppliedSnapshot of [
+      {
+        ...(persistedPreparation.operatorSessionSnapshot as object),
+        credentialVersion: 999,
+      },
+      Prisma.JsonNull,
+    ]) {
+      await expect(
+        prisma.$transaction(async (tx) => {
+          const record = await tx.idempotencyRecord.create({
+            data: recoveryReplayData(persistedPreparation),
+          });
+          await tx.recoveryCandidatePreparation.create({
+            data: {
+              ...cloneInput,
+              id: randomUUID(),
+              generation: persistedPreparation.generation + 1,
+              idempotencyRecordId: record.id,
+              operatorSessionSnapshot: suppliedSnapshot,
+            },
+          });
+        }),
+      ).rejects.toThrow(/operator session snapshot conflicts/);
+    }
+    const wrongReplay = await prisma.idempotencyRecord.create({
+      data: {
+        ...recoveryReplayData(persistedPreparation),
+        namespace: `unrelated:${randomUUID()}`,
+      },
+    });
+    await expect(
+      prisma.recoveryCandidatePreparation.create({
+        data: {
+          ...cloneInput,
+          id: randomUUID(),
+          generation: persistedPreparation.generation + 1,
+          idempotencyRecordId: wrongReplay.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery preparation idempotency record is invalid/);
+    const wrongFingerprint = await prisma.idempotencyRecord.create({
+      data: {
+        ...recoveryReplayData(persistedPreparation),
+        requestFingerprint: "a".repeat(64),
+      },
+    });
+    await expect(
+      prisma.recoveryCandidatePreparation.create({
+        data: {
+          ...cloneInput,
+          id: randomUUID(),
+          generation: persistedPreparation.generation + 1,
+          idempotencyRecordId: wrongFingerprint.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery preparation idempotency record is invalid/);
+    const revokedOperator = await operatorForRecoveryTest(
+      testOperatorId,
+      nodeId,
+    );
+    await prisma.operatorSession.update({
+      where: { id: revokedOperator.sessionId },
+      data: { revokedAt: new Date() },
+    });
+    const replayForRevoked = await prisma.idempotencyRecord.create({
+      data: recoveryReplayData(persistedPreparation),
+    });
+    await expect(
+      prisma.recoveryCandidatePreparation.create({
+        data: {
+          ...cloneInput,
+          id: randomUUID(),
+          generation: persistedPreparation.generation + 1,
+          operatorSessionId: revokedOperator.sessionId,
+          idempotencyRecordId: replayForRevoked.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery preparation operator session is invalid/);
+    const foreignIdentity = await prisma.operatorIdentity.create({
+      data: {
+        email: `foreign-recovery-${randomUUID()}@example.test`,
+        role: "ADMIN",
+      },
+    });
+    const foreignSession = await operatorForRecoveryTest(
+      foreignIdentity.id,
+      nodeId,
+    );
+    const staleVersion = await operatorForRecoveryTest(testOperatorId, nodeId);
+    await prisma.operatorSession.update({
+      where: { id: staleVersion.sessionId },
+      data: { credentialVersion: 2 },
+    });
+    const idleExpired = await operatorForRecoveryTest(testOperatorId, nodeId);
+    await prisma.operatorSession.update({
+      where: { id: idleExpired.sessionId },
+      data: { lastSeenAt: new Date(Date.now() - 31 * 60_000) },
+    });
+    const absoluteExpired = await operatorForRecoveryTest(
+      testOperatorId,
+      nodeId,
+    );
+    await prisma.operatorSession.update({
+      where: { id: absoluteExpired.sessionId },
+      data: {
+        createdAt: new Date(Date.now() - 2 * 60 * 60_000),
+        lastSeenAt: new Date(Date.now() - 60 * 60_000),
+        absoluteExpiresAt: new Date(Date.now() - 1),
+      },
+    });
+    for (const invalidSessionId of [
+      randomUUID(),
+      foreignSession.sessionId,
+      staleVersion.sessionId,
+      idleExpired.sessionId,
+      absoluteExpired.sessionId,
+    ]) {
+      const probeKey = `invalid-recovery-session-${randomUUID()}`;
+      await expect(
+        prisma.$transaction(async (tx) => {
+          const record = await tx.idempotencyRecord.create({
+            data: recoveryReplayData(persistedPreparation, probeKey),
+          });
+          await tx.recoveryCandidatePreparation.create({
+            data: {
+              ...cloneInput,
+              id: randomUUID(),
+              generation: persistedPreparation.generation + 1,
+              operatorSessionId: invalidSessionId,
+              idempotencyRecordId: record.id,
+            },
+          });
+        }),
+      ).rejects.toThrow(/recovery preparation operator session is invalid/);
+      expect(
+        await prisma.idempotencyRecord.count({
+          where: { idempotencyKey: probeKey },
+        }),
+      ).toBe(0);
+    }
+    await expect(
+      prisma.$transaction(async (tx) => {
+        const replay = await tx.idempotencyRecord.create({
+          data: {
+            ...recoveryReplayData(persistedPreparation),
+          },
+        });
+        const direct = await tx.recoveryCandidatePreparation.create({
+          data: {
+            ...cloneInput,
+            id: randomUUID(),
+            generation: persistedPreparation.generation + 1,
+            idempotencyRecordId: replay.id,
+            requestedAt: new Date("2000-01-01T00:00:00.000Z"),
+          },
+        });
+        expect(direct.requestedAt.getTime()).toBeGreaterThan(
+          Date.now() - 60_000,
+        );
+        expect(direct.operatorSessionSnapshot).toEqual({
+          ...(persistedPreparation.operatorSessionSnapshot as object),
+          validatedAt: direct.requestedAt.toISOString(),
+        });
+        throw new Error("rollback backdate probe");
+      }),
+    ).rejects.toThrow("rollback backdate probe");
+    expect(
+      (
+        await preparation.detail(
+          operator,
+          orderId,
+          "JOB_REPLACEMENT",
+          sourceJobId,
+          accepted.preparationId,
+        )
+      ).status,
+    ).toBe("PREPARING");
+    await expect(
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: "a competing fresh preparation",
+        },
+        `prepared-replacement-conflict:${randomUUID()}`,
+      ),
+    ).rejects.toThrow("PREPARATION_IN_PROGRESS");
+    const originalMessage = await prisma.outboxMessage.findUniqueOrThrow({
+      where: { id: mappings[0]!.outboxMessageId },
+    });
+    const capProbePrefix = `recovery-dispatch-cap:${randomUUID()}:`;
+    await expect(
+      prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRaw`
+            WITH generated AS (
+              SELECT gen_random_uuid() AS message_id, gen_random_uuid() AS job_id
+              FROM generate_series(1, ${256 - mappings.length})
+            )
+            INSERT INTO outbox_messages
+              (id, deduplication_key, aggregate_type, aggregate_id,
+               message_type, schema_version, payload, updated_at)
+            SELECT generated.message_id,
+                   ${capProbePrefix} || generated.job_id::text,
+                   'CandidateEstimateDispatch', generated.job_id,
+                   'slicing.candidate-estimate.requested', 2,
+                   jsonb_set(${JSON.stringify(originalMessage.payload)}::jsonb,
+                     '{job,jobId}', to_jsonb(generated.job_id::text)),
+                   clock_timestamp()
+            FROM generated
+          `;
+          await tx.$executeRaw`
+            INSERT INTO recovery_candidate_dispatches
+              (id, preparation_id, node_id, order_id, order_phase_id,
+               shipment_plan_id, source_job_id, source_fingerprint,
+               dispatch_job_id, outbox_message_id)
+            SELECT gen_random_uuid(), ${accepted.preparationId}::uuid,
+                   ${nodeId}::uuid, ${orderId}::uuid,
+                   ${mappings[0]!.orderPhaseId}::uuid,
+                   ${mappings[0]!.shipmentPlanId}::uuid,
+                   ${sourceJobId}::uuid, ${mappings[0]!.sourceFingerprint},
+                   aggregate_id, id
+            FROM outbox_messages
+            WHERE deduplication_key LIKE ${`${capProbePrefix}%`}
+          `;
+          expect(
+            await tx.recoveryCandidateDispatch.count({
+              where: { preparationId: accepted.preparationId },
+            }),
+          ).toBe(256);
+          const overflowJobId = randomUUID();
+          const overflowPayload = structuredClone(
+            originalMessage.payload,
+          ) as Record<string, unknown>;
+          (overflowPayload.job as Record<string, unknown>).jobId =
+            overflowJobId;
+          const overflowMessage = await tx.outboxMessage.create({
+            data: {
+              deduplicationKey: `${capProbePrefix}${overflowJobId}`,
+              aggregateType: "CandidateEstimateDispatch",
+              aggregateId: overflowJobId,
+              messageType: "slicing.candidate-estimate.requested",
+              schemaVersion: 2,
+              payload: overflowPayload as Prisma.InputJsonObject,
+            },
+          });
+          await tx.recoveryCandidateDispatch.create({
+            data: {
+              preparationId: accepted.preparationId,
+              nodeId,
+              orderId,
+              orderPhaseId: mappings[0]!.orderPhaseId,
+              shipmentPlanId: mappings[0]!.shipmentPlanId,
+              sourceJobId,
+              sourceFingerprint: mappings[0]!.sourceFingerprint,
+              dispatchJobId: overflowJobId,
+              outboxMessageId: overflowMessage.id,
+            },
+          });
+        },
+        { timeout: 60_000 },
+      ),
+    ).rejects.toThrow(/recovery dispatch limit exceeded/);
+    expect(
+      await prisma.recoveryCandidateDispatch.count({
+        where: { preparationId: accepted.preparationId },
+      }),
+    ).toBe(mappings.length);
+    const forgedJobId = randomUUID();
+    const forgedPayload = structuredClone(originalMessage.payload) as Record<
+      string,
+      unknown
+    >;
+    const forgedJob = forgedPayload.job as Record<string, unknown>;
+    forgedJob.jobId = forgedJobId;
+    const forgedInput = forgedJob.input as Record<string, unknown>;
+    const forgedGeometry = forgedInput.geometry as Record<string, unknown>;
+    forgedGeometry.bodyIds = ["forged-body"];
+    const forgedMessage = await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `forged-recovery:${forgedJobId}`,
+        aggregateType: "CandidateEstimateDispatch",
+        aggregateId: forgedJobId,
+        messageType: "slicing.candidate-estimate.requested",
+        schemaVersion: 2,
+        payload: forgedPayload as Prisma.InputJsonObject,
+      },
+    });
+    await expect(
+      prisma.recoveryCandidateDispatch.create({
+        data: {
+          preparationId: accepted.preparationId,
+          nodeId,
+          orderId,
+          orderPhaseId: mappings[0]!.orderPhaseId,
+          shipmentPlanId: mappings[0]!.shipmentPlanId,
+          sourceJobId,
+          sourceFingerprint: mappings[0]!.sourceFingerprint,
+          dispatchJobId: forgedJobId,
+          outboxMessageId: forgedMessage.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery dispatch provenance is invalid/);
+    const sourceProfile =
+      await prisma.candidateResourceEstimate.findUniqueOrThrow({
+        where: { id: fixture.productions[0]!.candidateResourceEstimateId },
+        select: {
+          machineProfileId: true,
+          machineProfile: { select: { referenceProfileId: true } },
+        },
+      });
+    const foreignReferenceId = randomUUID();
+    const foreignProfileId = randomUUID();
+    await prisma.$executeRaw`
+      INSERT INTO revision_identities (id, kind, digest)
+      VALUES (${foreignReferenceId}::uuid, 'REFERENCE_PROFILE', ${createHash("sha256").update(foreignReferenceId).digest("hex")})
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO reference_profiles
+        (id, material, quality, slicer_engine, slicer_version, settings, state, activated_at)
+      SELECT ${foreignReferenceId}::uuid, material, quality, slicer_engine,
+        slicer_version, settings, 'DRAFT', NULL
+      FROM reference_profiles WHERE id = ${sourceProfile.machineProfile.referenceProfileId}::uuid
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO revision_identities (id, kind, digest)
+      VALUES (${foreignProfileId}::uuid, 'MACHINE_PROFILE', ${createHash("sha256").update(foreignProfileId).digest("hex")})
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO machine_profiles
+        (id, machine_capability_id, reference_profile_id, material, quality,
+         nozzle_diameter_micrometers, slicer_engine, slicer_version,
+         production_artifact_format, settings, state, activated_at)
+      SELECT ${foreignProfileId}::uuid, machine_capability_id, ${foreignReferenceId}::uuid,
+        material, quality, nozzle_diameter_micrometers, slicer_engine, slicer_version,
+        production_artifact_format, settings, 'DRAFT', NULL
+      FROM machine_profiles WHERE id = ${sourceProfile.machineProfileId}::uuid
+    `;
+    const foreignProfileJobId = randomUUID();
+    const foreignProfilePayload = structuredClone(
+      originalMessage.payload,
+    ) as Record<string, unknown>;
+    const foreignProfileJob = foreignProfilePayload.job as Record<
+      string,
+      unknown
+    >;
+    foreignProfileJob.jobId = foreignProfileJobId;
+    const foreignProfileInput = foreignProfileJob.input as Record<
+      string,
+      unknown
+    >;
+    (foreignProfileInput.machineProfile as Record<string, unknown>).revisionId =
+      foreignProfileId;
+    const foreignProfileMessage = await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `foreign-recovery-profile:${foreignProfileJobId}`,
+        aggregateType: "CandidateEstimateDispatch",
+        aggregateId: foreignProfileJobId,
+        messageType: "slicing.candidate-estimate.requested",
+        schemaVersion: 2,
+        payload: foreignProfilePayload as Prisma.InputJsonObject,
+      },
+    });
+    await expect(
+      prisma.recoveryCandidateDispatch.create({
+        data: {
+          preparationId: accepted.preparationId,
+          nodeId,
+          orderId,
+          orderPhaseId: mappings[0]!.orderPhaseId,
+          shipmentPlanId: mappings[0]!.shipmentPlanId,
+          sourceJobId,
+          sourceFingerprint: mappings[0]!.sourceFingerprint,
+          dispatchJobId: foreignProfileJobId,
+          outboxMessageId: foreignProfileMessage.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery dispatch provenance is invalid/);
+    await ingestPreparedCandidates(candidates, accepted.preparationId);
+    const detail = await preparation.detail(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      accepted.preparationId,
+    );
+    expect(detail.status).toBe("CANDIDATES_AVAILABLE");
+    await prisma.machine.update({
+      where: { id: fixture.foundation.machineId },
+      data: { status: "MAINTENANCE" },
+    });
+    const blockedChoices = await preparation.choices(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      accepted.preparationId,
+      {},
+    );
+    expect(blockedChoices.items.every(({ selectable }) => !selectable)).toBe(
+      true,
+    );
+    expect(blockedChoices.items[0]?.blockingCodes).toContain(
+      "RESOURCE_CHANGED",
+    );
+    await prisma.machine.update({
+      where: { id: fixture.foundation.machineId },
+      data: { status: "ACTIVE" },
+    });
+    const originalInventory = await prisma.inventory.findUniqueOrThrow({
+      where: { id: fixture.foundation.inventoryId },
+      select: { color: true },
+    });
+    await prisma.inventory.update({
+      where: { id: fixture.foundation.inventoryId },
+      data: { color: "changed-after-ingestion" },
+    });
+    const recolored = await preparation.choices(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      accepted.preparationId,
+      {},
+    );
+    expect(recolored.items.every(({ selectable }) => !selectable)).toBe(true);
+    expect(recolored.items[0]?.blockingCodes).toContain("RESOURCE_CHANGED");
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        {
+          candidateResourceEstimateId:
+            recolored.items[0]!.candidateResourceEstimateId,
+        },
+        `recolored-replacement:${randomUUID()}`,
+      ),
+    ).rejects.toThrow(/inventory no longer matches source material and color/);
+    await prisma.inventory.update({
+      where: { id: fixture.foundation.inventoryId },
+      data: { color: originalInventory.color },
+    });
+    const choices = await preparation.choices(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      accepted.preparationId,
+      {},
+    );
+    const selected = choices.items.find(({ selectable }) => selectable);
+    expect(selected).toBeDefined();
+    const uppercaseFiltered = await preparation.choices(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      accepted.preparationId,
+      { sourceJobId: sourceJobId.toUpperCase() },
+    );
+    expect(uppercaseFiltered.items).toEqual(choices.items);
+    expect(
+      new Date(selected!.expiresAt).getTime() -
+        new Date(selected!.calculatedAt).getTime(),
+    ).toBe(30 * 60_000);
+    expect(new Date(selected!.intervals[0]!.endsAt).getTime()).toBeGreaterThan(
+      new Date(selected!.expiresAt).getTime(),
+    );
+    const replacement = await orders.createReplacement(
+      orderId,
+      sourceJobId,
+      { candidateResourceEstimateId: selected!.candidateResourceEstimateId },
+      "prepared-replacement-consume",
+    );
+    expect(replacement.status).toBe("REPLACEMENT_CREATED");
+    const immutablePreparation =
+      await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: accepted.preparationId },
+      });
+    const immutableReplay = await prisma.idempotencyRecord.findUniqueOrThrow({
+      where: { id: immutablePreparation.idempotencyRecordId },
+    });
+    expect(immutableReplay.expiresAt.getUTCFullYear()).toBe(9999);
+    await expect(
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: "prepare a fresh physical replacement option",
+        },
+        key,
+      ),
+    ).resolves.toEqual(accepted);
+  }, 90_000);
+
+  it("retains two preparation snapshots, audit and replay after real session purge", async () => {
+    const fixture = await preparePaidOrder("recovery-session-purge", 2);
+    const { orderId, nodeId } = fixture.foundation;
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const preparation = recoveryPreparationService();
+    const prepared = [];
+    for (const [index, production] of fixture.productions.entries()) {
+      await orders.acceptJob(
+        orderId,
+        production.jobId,
+        `purge-accept-${index}`,
+      );
+      await orders.failJob(
+        orderId,
+        production.jobId,
+        {
+          stage: "PREPARATION",
+          reason: "fixture failed before production",
+          recovery: "REPLACE",
+        },
+        `purge-fail-${index}`,
+      );
+      await seedCandidateReceipt(
+        production.candidateResourceEstimateId,
+        production.jobId,
+        randomUUID(),
+      );
+      const request = await prisma.replacementRequest.findUniqueOrThrow({
+        where: { sourceJobId: production.jobId },
+      });
+      const body = {
+        expectedReplacementRequestId: request.id,
+        reason: `retain preparation ${index}`,
+      };
+      const key = `purge-preparation-${randomUUID()}`;
+      const accepted = await preparation.prepareReplacement(
+        operator,
+        orderId,
+        production.jobId,
+        body,
+        key,
+      );
+      prepared.push({ accepted, production, body, key });
+    }
+    const original = await prisma.operatorSession.findUniqueOrThrow({
+      where: { id: operator.sessionId },
+    });
+    const rows = await prisma.recoveryCandidatePreparation.findMany({
+      where: {
+        id: { in: prepared.map(({ accepted }) => accepted.preparationId) },
+      },
+    });
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.operatorId).toBe(testOperatorId);
+      expect(row.operatorSessionId).toBe(operator.sessionId);
+      expect(row.operatorSessionSnapshot).toEqual({
+        schemaVersion: 1,
+        authenticationMethod: original.authenticationMethod,
+        credentialVersion: original.credentialVersion,
+        sessionCreatedAt: original.createdAt.toISOString(),
+        validatedAt: row.requestedAt.toISOString(),
+      });
+      expect(
+        await prisma.auditEvent.count({
+          where: {
+            eventType: "recovery.candidate_preparation_requested",
+            orderId,
+            operatorIdentityId: testOperatorId,
+            payload: { path: ["preparationId"], equals: row.id },
+          },
+        }),
+      ).toBe(1);
+    }
+    const auth = new OperatorAuthService(prisma, {
+      exchangeCode: async () => {
+        throw new Error("GitHub is not used for this purge test");
+      },
+    });
+    const purgeNow = new Date(Date.now() + 60_000);
+    const nowSpy = vi
+      .spyOn(
+        auth as unknown as { databaseNow: () => Promise<Date> },
+        "databaseNow",
+      )
+      .mockResolvedValue(purgeNow);
+    try {
+      const boundary = new Date(purgeNow.getTime() - 30 * 24 * 60 * 60_000);
+      await prisma.operatorSession.update({
+        where: { id: operator.sessionId },
+        data: {
+          createdAt: new Date(boundary.getTime() - 8 * 60 * 60_000),
+          lastSeenAt: new Date(boundary.getTime() - 60 * 60_000),
+          absoluteExpiresAt: boundary,
+        },
+      });
+      await auth.purgeExpired();
+      expect(
+        await prisma.operatorSession.count({
+          where: { id: operator.sessionId },
+        }),
+      ).toBe(1);
+      await prisma.operatorSession.update({
+        where: { id: operator.sessionId },
+        data: { absoluteExpiresAt: new Date(boundary.getTime() - 1) },
+      });
+      const dependent = await prisma.securityEvent.create({
+        data: {
+          eventType: "LOGOUT",
+          operatorId: testOperatorId,
+          operatorSessionId: operator.sessionId,
+          outcome: "retained dependency",
+          expiresAt: new Date(purgeNow.getTime() + 60_000),
+        },
+      });
+      const loginAttempt = await prisma.operatorLoginAttempt.create({
+        data: {
+          stateHash: createHash("sha256").update(randomUUID()).digest("hex"),
+          browserBindingHash: createHash("sha256")
+            .update(randomUUID())
+            .digest("hex"),
+          environment: "staging",
+          githubClientId: "test-client",
+          callbackUrl: "https://example.test/callback",
+          expiresAt: new Date(purgeNow.getTime() + 60_000),
+          sessionId: operator.sessionId,
+        },
+      });
+      await auth.purgeExpired();
+      expect(
+        await prisma.operatorSession.count({
+          where: { id: operator.sessionId },
+        }),
+      ).toBe(1);
+      await prisma.securityEvent.update({
+        where: { id: dependent.id },
+        data: { expiresAt: new Date(purgeNow.getTime() - 1) },
+      });
+      await auth.purgeExpired();
+      expect(
+        await prisma.operatorSession.count({
+          where: { id: operator.sessionId },
+        }),
+      ).toBe(1);
+      await prisma.operatorLoginAttempt.update({
+        where: { id: loginAttempt.id },
+        data: { expiresAt: new Date(purgeNow.getTime() - 1) },
+      });
+      await auth.purgeExpired();
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(
+      await prisma.operatorSession.count({ where: { id: operator.sessionId } }),
+    ).toBe(0);
+    const newOperator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    for (const { accepted, production, body, key } of prepared) {
+      const row = await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: accepted.preparationId },
+      });
+      expect(row.operatorSessionId).toBe(operator.sessionId);
+      expect(row.operatorSessionSnapshot).toEqual(
+        rows.find(({ id }) => id === row.id)?.operatorSessionSnapshot,
+      );
+      const protectedDetail = await preparation.detail(
+        newOperator,
+        orderId,
+        "JOB_REPLACEMENT",
+        production.jobId,
+        accepted.preparationId,
+      );
+      expect(JSON.stringify(protectedDetail)).not.toContain(
+        "operatorSessionSnapshot",
+      );
+      await expect(
+        preparation.prepareReplacement(
+          newOperator,
+          orderId,
+          production.jobId,
+          body,
+          key,
+        ),
+      ).resolves.toEqual(accepted);
+      expect(
+        (
+          await preparation.list(
+            newOperator,
+            orderId,
+            "JOB_REPLACEMENT",
+            production.jobId,
+            {},
+          )
+        ).items.map(({ preparationId }) => preparationId),
+      ).toContain(accepted.preparationId);
+    }
+    expect(
+      await prisma.recoveryCandidatePreparation.count({ where: { orderId } }),
+    ).toBe(2);
+    expect(
+      await prisma.auditEvent.count({
+        where: {
+          eventType: "recovery.candidate_preparation_requested",
+          orderId,
+        },
+      }),
+    ).toBe(2);
+    const later = await preparePaidOrder("recovery-after-session-purge");
+    const laterJob = later.productions[0]!;
+    await orders.acceptJob(
+      later.foundation.orderId,
+      laterJob.jobId,
+      "later-accept",
+    );
+    await orders.failJob(
+      later.foundation.orderId,
+      laterJob.jobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "later-fail",
+    );
+    await seedCandidateReceipt(
+      laterJob.candidateResourceEstimateId,
+      laterJob.jobId,
+      randomUUID(),
+    );
+    const laterRequest = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId: laterJob.jobId },
+    });
+    const laterOperator = await operatorForRecoveryTest(
+      testOperatorId,
+      later.foundation.nodeId,
+    );
+    const laterAccepted = await preparation.prepareReplacement(
+      laterOperator,
+      later.foundation.orderId,
+      laterJob.jobId,
+      {
+        expectedReplacementRequestId: laterRequest.id,
+        reason: "prepare with the current session after purge",
+      },
+      `later-preparation-${randomUUID()}`,
+    );
+    const laterRow =
+      await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: laterAccepted.preparationId },
+      });
+    expect(laterRow.operatorSessionId).toBe(laterOperator.sessionId);
+    expect(laterRow.operatorSessionSnapshot).toMatchObject({
+      schemaVersion: 1,
+    });
+  }, 120_000);
+
+  it("stages and replays the full 256-dispatch recovery preparation atomically", async () => {
+    const fixture = await preparePaidOrder("recovery-dispatch-batch");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "batch-source-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "batch-source-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const frozenInputs = new FrozenOrderCandidateInputService(prisma);
+    const enumerate = frozenInputs.enumerate.bind(frozenInputs);
+    let dispatchCount = 256;
+    let enumeratedArrangementId: string | undefined;
+    vi.spyOn(frozenInputs, "enumerate").mockImplementation(async (input) => {
+      const options = await enumerate(input);
+      expect(options.length).toBeGreaterThan(0);
+      enumeratedArrangementId =
+        options[0]!.input.arrangementRevision.revisionId;
+      return Array.from({ length: dispatchCount }, () => options[0]!);
+    });
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      new CandidateEstimateService(prisma, snapshots),
+      frozenInputs,
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const body = {
+      expectedReplacementRequestId: request.id,
+      reason: "prepare the supported maximum of scoped recovery dispatches",
+    };
+    const key = `batch-preparation:${randomUUID()}`;
+    const accepted = await preparation.prepareReplacement(
+      operator,
+      orderId,
+      sourceJobId,
+      body,
+      key,
+    );
+    const mappings = await prisma.recoveryCandidateDispatch.findMany({
+      where: { preparationId: accepted.preparationId },
+    });
+    expect(mappings).toHaveLength(256);
+    expect(
+      await prisma.arrangementRevision.findUnique({
+        where: { id: enumeratedArrangementId! },
+      }),
+    ).not.toBeNull();
+    const outbox = await prisma.outboxMessage.findMany({
+      where: {
+        id: { in: mappings.map(({ outboxMessageId }) => outboxMessageId) },
+      },
+      select: { id: true, aggregateId: true, payload: true },
+    });
+    expect(outbox).toHaveLength(256);
+    const outboxById = new Map(outbox.map((message) => [message.id, message]));
+    for (const mapping of mappings) {
+      const message = outboxById.get(mapping.outboxMessageId)!;
+      expect(message.aggregateId).toBe(mapping.dispatchJobId);
+      expect((message.payload as { job: { jobId: string } }).job.jobId).toBe(
+        mapping.dispatchJobId,
+      );
+    }
+    await expect(
+      preparation.prepareReplacement(operator, orderId, sourceJobId, body, key),
+    ).resolves.toEqual(accepted);
+    dispatchCount = 257;
+    await expect(
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        body,
+        `batch-overflow:${randomUUID()}`,
+      ),
+    ).rejects.toThrow("RECOVERY_PREPARATION_LIMIT");
+    expect(
+      await prisma.arrangementRevision.findUnique({
+        where: { id: enumeratedArrangementId! },
+      }),
+    ).toBeNull();
+    expect(
+      await prisma.recoveryCandidateDispatch.count({
+        where: { preparationId: accepted.preparationId },
+      }),
+    ).toBe(256);
+  }, 120_000);
+
+  it("resolves shared recovery context once for a history page", async () => {
+    const fixture = await preparePaidOrder("preparation-history-context");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "history-context-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "history-context-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      new CandidateEstimateService(prisma, snapshots),
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const accepted = await preparation.prepareReplacement(
+      operator,
+      orderId,
+      sourceJobId,
+      {
+        expectedReplacementRequestId: request.id,
+        reason: "prepare initial recovery generation",
+      },
+      `history-context:${randomUUID()}`,
+    );
+    const first = await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+      where: { id: accepted.preparationId },
+    });
+    await expect(
+      prisma.$transaction(async (tx) => {
+        const replay = await tx.idempotencyRecord.create({
+          data: {
+            ...recoveryReplayData(first),
+          },
+        });
+        await tx.recoveryCandidatePreparation.create({
+          data: {
+            ...withoutRecoverySessionSnapshot(first),
+            id: randomUUID(),
+            generation: 2_147_483_647,
+            idempotencyRecordId: replay.id,
+          },
+        });
+      }),
+    ).rejects.toThrow(/recovery preparation generation is not sequential/);
+    for (const generation of [2, 3]) {
+      const replay = await prisma.idempotencyRecord.create({
+        data: {
+          ...recoveryReplayData(first),
+        },
+      });
+      await prisma.recoveryCandidatePreparation.create({
+        data: {
+          ...withoutRecoverySessionSnapshot(first),
+          id: randomUUID(),
+          generation,
+          idempotencyRecordId: replay.id,
+        },
+      });
+    }
+    const contextSpy = vi.spyOn(
+      preparation as unknown as {
+        currentScopeFingerprint: (...args: unknown[]) => Promise<string | null>;
+      },
+      "currentScopeFingerprint",
+    );
+    const history = await preparation.list(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      { limit: "10" },
+    );
+    expect(history.items).toHaveLength(3);
+    expect(history.items.map(({ status }) => status)).toEqual([
+      "BLOCKED",
+      "SUPERSEDED",
+      "SUPERSEDED",
+    ]);
+    expect(contextSpy).toHaveBeenCalledTimes(1);
+  }, 30_000);
+
+  it("returns a conflict when replacement eligibility expires during preparation", async () => {
+    const fixture = await preparePaidOrder("preparation-deadline-race");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "deadline-race-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed before production",
+        recovery: "REPLACE",
+      },
+      "deadline-race-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const preparation = recoveryPreparationService();
+    const resourceCheck = preparation as unknown as {
+      lockAndCheckResources: (
+        tx: Prisma.TransactionClient,
+        ...args: unknown[]
+      ) => Promise<void>;
+    };
+    const checkSpy = vi
+      .spyOn(resourceCheck, "lockAndCheckResources")
+      .mockImplementation(async (tx) => {
+        await tx.replacementRequest.update({
+          where: { id: request.id },
+          data: { deadlineAt: new Date(Date.now() - 1_000) },
+        });
+      });
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    await expect(
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
+        {
+          expectedReplacementRequestId: request.id,
+          reason: "prepare before replacement deadline closes",
+        },
+        `deadline-race:${randomUUID()}`,
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(checkSpy).toHaveBeenCalledOnce();
+    checkSpy.mockRestore();
+    expect(
+      await prisma.recoveryCandidatePreparation.count({
+        where: { kind: "JOB_REPLACEMENT", targetId: sourceJobId },
+      }),
+    ).toBe(0);
+  }, 30_000);
+
+  it("rejects a prepared candidate at the fifteen-minute admission boundary", async () => {
+    const fixture = await preparePaidOrder("prepared-replacement-boundary");
+    const { orderId, nodeId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await orders.acceptJob(orderId, sourceJobId, "boundary-accept");
+    await orders.failJob(
+      orderId,
+      sourceJobId,
+      {
+        stage: "PREPARATION",
+        reason: "fixture failed during preparation",
+        recovery: "REPLACE",
+      },
+      "boundary-failure",
+    );
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const request = await prisma.replacementRequest.findUniqueOrThrow({
+      where: { sourceJobId },
+    });
+    const candidates = new CandidateEstimateService(
+      prisma,
+      new SlicerProfileSnapshotService(prisma, {
+        putImmutableObject: async () => undefined,
+      } as unknown as ObjectStorage),
+    );
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      candidates,
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const accepted = await preparation.prepareReplacement(
+      operator,
+      orderId,
+      sourceJobId,
+      {
+        expectedReplacementRequestId: request.id,
+        reason: "check admission at the exact minimum horizon",
+      },
+      `boundary-prepare:${randomUUID()}`,
+    );
+    await ingestPreparedCandidates(
+      candidates,
+      accepted.preparationId,
+      new Date(Date.now() + 15 * 60_000),
+    );
+    const choices = await preparation.choices(
+      operator,
+      orderId,
+      "JOB_REPLACEMENT",
+      sourceJobId,
+      accepted.preparationId,
+      {},
+    );
+    expect(choices.items).toHaveLength(1);
+    expect(choices.items[0]!.selectable).toBe(false);
+    expect(choices.items[0]!.blockingCodes).toContain("CANDIDATE_EXPIRED");
+    await expect(
+      orders.createReplacement(
+        orderId,
+        sourceJobId,
+        {
+          candidateResourceEstimateId:
+            choices.items[0]!.candidateResourceEstimateId,
+        },
+        "boundary-consume",
+      ),
+    ).rejects.toThrow();
+    expect(
+      await prisma.job.count({ where: { replacesJobId: sourceJobId } }),
+    ).toBe(0);
+  }, 30_000);
+
+  it("prepares and consumes a scoped LOST parcel reprint candidate", async () => {
+    const fixture = await preparePaidOrder("prepared-lost-reprint");
+    const { orderId, nodeId, shipmentId } = fixture.foundation;
+    const sourceJobId = fixture.productions[0]!.jobId;
+    await advanceThroughQc(fixture, 0);
+    await labelAndPack(fixture, 0);
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN", "prepared-lost-transit");
+    await carrierEvent(fixture, 0, "LOST", "prepared-lost-event");
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      sourceJobId,
+      randomUUID(),
+    );
+    const claim = await prisma.claim.findUniqueOrThrow({
+      where: { incidentShipmentId: shipmentId },
+    });
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const candidates = new CandidateEstimateService(prisma, snapshots);
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      candidates,
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    expect(() =>
+      preparation.prepareReprint(
+        operator,
+        orderId,
+        claim.id,
+        undefined as never,
+        `missing-reprint-body:${randomUUID()}`,
+      ),
+    ).toThrow(BadRequestException);
+    const accepted = await preparation.prepareReprint(
+      operator,
+      orderId,
+      claim.id,
+      {
+        expectedPredecessorShipmentId: shipmentId,
+        reason: "prepare the whole LOST parcel for reprint",
+      },
+      `prepared-lost-reprint:${randomUUID()}`,
+    );
+    await ingestPreparedCandidates(candidates, accepted.preparationId);
+    const detail = await preparation.detail(
+      operator,
+      orderId,
+      "LOST_CLAIM_REPRINT",
+      claim.id,
+      accepted.preparationId,
+    );
+    expect(detail.status).toBe("CANDIDATES_AVAILABLE");
+    expect(detail.sourceJobIds).toEqual([sourceJobId]);
+    const persistedClaimPreparation =
+      await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: accepted.preparationId },
+      });
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await tx.fulfilmentSlot.update({
+          where: { id: detail.sources[0]!.fulfilmentSlotIds[0]! },
+          data: {
+            outcome: "DELIVERED",
+            deliveredAt: new Date(),
+            claimUntil: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+          },
+        });
+        const replay = await tx.idempotencyRecord.create({
+          data: {
+            ...recoveryReplayData(persistedClaimPreparation),
+          },
+        });
+        await tx.recoveryCandidatePreparation.create({
+          data: {
+            ...withoutRecoverySessionSnapshot(persistedClaimPreparation),
+            id: randomUUID(),
+            generation: persistedClaimPreparation.generation + 1,
+            idempotencyRecordId: replay.id,
+          },
+        });
+      }),
+    ).rejects.toThrow(/claim preparation scope is invalid/);
+    const choices = await preparation.choices(
+      operator,
+      orderId,
+      "LOST_CLAIM_REPRINT",
+      claim.id,
+      accepted.preparationId,
+      { sourceJobId },
+    );
+    const selected = choices.items.find(({ selectable }) => selectable);
+    expect(selected).toBeDefined();
+    const originalColor = (
+      await prisma.inventory.findUniqueOrThrow({
+        where: { id: selected!.inventoryId },
+        select: { color: true },
+      })
+    ).color;
+    await prisma.inventory.update({
+      where: { id: selected!.inventoryId },
+      data: { color: "changed-before-reprint" },
+    });
+    await expect(
+      orders.createClaimReprint(
+        orderId,
+        claim.id,
+        {
+          replacements: [
+            {
+              sourceJobId,
+              candidateResourceEstimateId:
+                selected!.candidateResourceEstimateId,
+            },
+          ],
+        },
+        `recolored-reprint:${randomUUID()}`,
+      ),
+    ).rejects.toThrow(/inventory no longer matches source material and color/);
+    await prisma.inventory.update({
+      where: { id: selected!.inventoryId },
+      data: { color: originalColor },
+    });
+    const reprint = await orders.createClaimReprint(
+      orderId,
+      claim.id,
+      {
+        replacements: [
+          {
+            sourceJobId,
+            candidateResourceEstimateId: selected!.candidateResourceEstimateId,
+          },
+        ],
+      },
+      "prepared-lost-reprint-consume",
+    );
+    expect(reprint.status).toBe("CLAIM_REPRINT_CREATED");
+  }, 30_000);
+
+  it("keeps a two-Job LOST parcel preparation and reprint atomic", async () => {
+    const fixture = await preparePaidOrder(
+      "prepared-two-job-lost-reprint",
+      1,
+      "FULL",
+      [2],
+    );
+    const { orderId, nodeId, shipmentId, inventoryId } = fixture.foundation;
+    const sourceJobIds = fixture.productions.map(({ jobId }) => jobId).sort();
+    for (const index of [0, 1]) await advanceThroughQc(fixture, index);
+    await orders.labelShipment(
+      orderId,
+      shipmentId,
+      {
+        carrier: "test-carrier",
+        providerShipmentId: `provider-shipment-${shipmentId}`,
+        carrierLabelId: `label-${shipmentId}`,
+        trackingCode: `tracking-${shipmentId}`,
+      },
+      "prepared-two-job-label",
+    );
+    for (const [index, production] of fixture.productions.entries()) {
+      await orders.packJob(
+        orderId,
+        production.jobId,
+        { shipmentId },
+        `prepared-two-job-pack-${index}`,
+      );
+      await seedCandidateReceipt(
+        production.candidateResourceEstimateId,
+        production.jobId,
+        randomUUID(),
+      );
+    }
+    await handoff(fixture, 0);
+    await carrierEvent(fixture, 0, "TRANSIT_SCAN", "two-job-lost-transit");
+    await carrierEvent(fixture, 0, "LOST", "two-job-lost-event");
+    const claim = await prisma.claim.findUniqueOrThrow({
+      where: { incidentShipmentId: shipmentId },
+    });
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const candidates = new CandidateEstimateService(prisma, snapshots);
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      candidates,
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    const accepted = await preparation.prepareReprint(
+      operator,
+      orderId,
+      claim.id,
+      {
+        expectedPredecessorShipmentId: shipmentId,
+        reason: "prepare both original parcel Jobs",
+      },
+      `prepared-two-job:${randomUUID()}`,
+    );
+    const currentHash = await prisma.$queryRaw<
+      Array<{ stored: string; calculated: string | null }>
+    >`
+      SELECT preparation.source_scope_fingerprint AS stored,
+             taven_recovery_scope_fingerprint(preparation) AS calculated
+      FROM recovery_candidate_preparations preparation
+      WHERE preparation.id = ${accepted.preparationId}::uuid
+    `;
+    expect(currentHash[0]?.calculated).toBe(currentHash[0]?.stored);
+    await ingestPreparedCandidates(candidates, accepted.preparationId);
+    const detail = await preparation.detail(
+      operator,
+      orderId,
+      "LOST_CLAIM_REPRINT",
+      claim.id,
+      accepted.preparationId,
+    );
+    expect([...detail.sourceJobIds].sort()).toEqual(sourceJobIds);
+    expect(detail.status).toBe("CANDIDATES_AVAILABLE");
+    const selected = await Promise.all(
+      sourceJobIds.map(async (sourceJobId) => {
+        const choices = await preparation.choices(
+          operator,
+          orderId,
+          "LOST_CLAIM_REPRINT",
+          claim.id,
+          accepted.preparationId,
+          { sourceJobId },
+        );
+        const choice = choices.items.find(({ selectable }) => selectable);
+        if (!choice)
+          throw new Error("two-Job source has no selectable candidate");
+        return {
+          sourceJobId,
+          candidateResourceEstimateId: choice.candidateResourceEstimateId,
+          choice,
+        };
+      }),
+    );
+    expect(selected[0]!.choice.machineId).toBe(selected[1]!.choice.machineId);
+    const firstInterval = selected[0]!.choice.intervals[0]!;
+    const secondInterval = selected[1]!.choice.intervals[0]!;
+    expect(
+      new Date(firstInterval.endsAt) <= new Date(secondInterval.startsAt) ||
+        new Date(secondInterval.endsAt) <= new Date(firstInterval.startsAt),
+    ).toBe(true);
+    await prisma.inventory.update({
+      where: { id: inventoryId },
+      data: { remainingMilligrams: 100n },
+    });
+    const replacements = selected.map(
+      ({ sourceJobId, candidateResourceEstimateId }) => ({
+        sourceJobId,
+        candidateResourceEstimateId,
+      }),
+    );
+    await expect(
+      orders.createClaimReprint(
+        orderId,
+        claim.id,
+        { replacements },
+        "prepared-two-job-insufficient-stock",
+      ),
+    ).rejects.toThrow();
+    expect(
+      await prisma.job.count({
+        where: { replacesJobId: { in: sourceJobIds } },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.shipment.count({
+        where: { replacesShipmentId: shipmentId },
+      }),
+    ).toBe(0);
+    await prisma.inventory.update({
+      where: { id: inventoryId },
+      data: { remainingMilligrams: 1000n },
+    });
+    const reprint = await orders.createClaimReprint(
+      orderId,
+      claim.id,
+      { replacements },
+      "prepared-two-job-commit",
+    );
+    expect(reprint.status).toBe("CLAIM_REPRINT_CREATED");
+    expect(
+      await prisma.job.count({
+        where: { replacesJobId: { in: sourceJobIds } },
+      }),
+    ).toBe(2);
+  }, 30_000);
 
   it("closes an expired replacement request into refund recovery", async () => {
     const fixture = await preparePaidOrder("replacement-expired");
@@ -4007,7 +6608,48 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
     const claim = await prisma.claim.findUniqueOrThrow({
       where: { incidentShipmentId: fixture.foundation.shipmentId },
     });
-    const firstCandidate = await createFreshReplacementCandidate(fixture, 0);
+    await seedCandidateReceipt(
+      fixture.productions[0]!.candidateResourceEstimateId,
+      fixture.productions[0]!.jobId,
+      randomUUID(),
+    );
+    const snapshots = new SlicerProfileSnapshotService(prisma, {
+      putImmutableObject: async () => undefined,
+    } as unknown as ObjectStorage);
+    const candidates = new CandidateEstimateService(prisma, snapshots);
+    const preparation = new RecoveryCandidatePreparationService(
+      prisma,
+      candidates,
+      new FrozenOrderCandidateInputService(prisma),
+      new AuditService(prisma),
+    );
+    const operator = await operatorForRecoveryTest(
+      testOperatorId,
+      fixture.foundation.nodeId,
+    );
+    const firstPreparation = await preparation.prepareReprint(
+      operator,
+      orderId,
+      claim.id,
+      {
+        expectedPredecessorShipmentId: fixture.foundation.shipmentId,
+        reason: "prepare original LOST parcel",
+      },
+      `repeat-first-prepare:${randomUUID()}`,
+    );
+    await ingestPreparedCandidates(candidates, firstPreparation.preparationId);
+    const firstChoices = await preparation.choices(
+      operator,
+      orderId,
+      "LOST_CLAIM_REPRINT",
+      claim.id,
+      firstPreparation.preparationId,
+      { sourceJobId: fixture.productions[0]!.jobId },
+    );
+    const firstCandidate = firstChoices.items.find(
+      ({ selectable }) => selectable,
+    )?.candidateResourceEstimateId;
+    expect(firstCandidate).toBeDefined();
     const first = await orders.createClaimReprint(
       orderId,
       claim.id,
@@ -4015,7 +6657,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         replacements: [
           {
             sourceJobId: fixture.productions[0]!.jobId,
-            candidateResourceEstimateId: firstCandidate,
+            candidateResourceEstimateId: firstCandidate!,
           },
         ],
       },
@@ -4043,7 +6685,90 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       "repeat-first-loss",
     );
 
-    const secondCandidate = await createFreshReplacementCandidate(fixture, 0);
+    const firstStoredPreparation =
+      await prisma.recoveryCandidatePreparation.findUniqueOrThrow({
+        where: { id: firstPreparation.preparationId },
+      });
+    const leafLoss = await prisma.shipmentProviderEvent.findFirstOrThrow({
+      where: { shipmentId: firstShipmentId, kind: "LOST" },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    });
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await tx.claimSlotResolution.updateMany({
+          where: { claimId: claim.id },
+          data: { replacementRequestId: null },
+        });
+        const replay = await tx.idempotencyRecord.create({
+          data: {
+            ...recoveryReplayData({
+              ...firstStoredPreparation,
+              predecessorShipmentId: firstShipmentId,
+            }),
+          },
+        });
+        await tx.recoveryCandidatePreparation.create({
+          data: {
+            ...withoutRecoverySessionSnapshot(firstStoredPreparation),
+            id: randomUUID(),
+            generation: firstStoredPreparation.generation + 1,
+            predecessorShipmentId: firstShipmentId,
+            incidentEvidenceId: leafLoss.id,
+            sourceJobIds: [firstJobId],
+            idempotencyRecordId: replay.id,
+          },
+        });
+      }),
+    ).rejects.toThrow(/claim preparation scope is invalid/);
+
+    const stale = await preparation.choices(
+      operator,
+      orderId,
+      "LOST_CLAIM_REPRINT",
+      claim.id,
+      firstPreparation.preparationId,
+      {},
+    );
+    expect(stale.items.every(({ selectable }) => !selectable)).toBe(true);
+    const secondPreparation = await preparation.prepareReprint(
+      operator,
+      orderId,
+      claim.id,
+      {
+        expectedPredecessorShipmentId: firstShipmentId,
+        reason: "prepare LOST remedy leaf",
+      },
+      `repeat-second-prepare:${randomUUID()}`,
+    );
+    expect(secondPreparation.generation).toBe(firstPreparation.generation + 1);
+    await ingestPreparedCandidates(candidates, secondPreparation.preparationId);
+    const preparations = await preparation.list(
+      operator,
+      orderId,
+      "LOST_CLAIM_REPRINT",
+      claim.id,
+      {},
+    );
+    expect(preparations.items.map(({ status }) => status)).toEqual([
+      "CANDIDATES_AVAILABLE",
+      "SUPERSEDED",
+    ]);
+    expect(preparations.items[0]?.sources[0]?.selectableCount).toBeGreaterThan(
+      0,
+    );
+    expect(preparations.items[1]?.sources[0]?.selectableCount).toBe(0);
+    const secondChoices = await preparation.choices(
+      operator,
+      orderId,
+      "LOST_CLAIM_REPRINT",
+      claim.id,
+      secondPreparation.preparationId,
+      { sourceJobId: firstJobId },
+    );
+    const secondCandidate = secondChoices.items.find(
+      ({ selectable }) => selectable,
+    )?.candidateResourceEstimateId;
+    expect(secondCandidate).toBeDefined();
     const second = await orders.createClaimReprint(
       orderId,
       claim.id,
@@ -4051,7 +6776,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         replacements: [
           {
             sourceJobId: firstJobId,
-            candidateResourceEstimateId: secondCandidate,
+            candidateResourceEstimateId: secondCandidate!,
           },
         ],
       },
@@ -4074,7 +6799,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         replacementShipmentId: secondShipmentId,
       }),
     ]);
-  }, 20_000);
+  }, 40_000);
 
   it("reships a returned reprint leaf under the same Claim", async () => {
     const fixture = await preparePaidOrder("returned-reprint-reship");
@@ -5463,6 +8188,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
           prisma,
           new AuditService(prisma),
           manualProvider,
+          recoveryPreparationService(),
         );
         operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
         const failure = await manualOrders.recordRefundProviderResult(
@@ -6383,6 +9109,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         prisma,
         new AuditService(prisma),
         manualProvider,
+        recoveryPreparationService(),
       );
       const operator = operatorForTest(
         testOperatorId,
@@ -6714,6 +9441,7 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       prisma,
       new AuditService(prisma),
       provider,
+      recoveryPreparationService(),
     );
     const operator = operatorForTest(testOperatorId, fixture.foundation.nodeId);
     const failureBody = {

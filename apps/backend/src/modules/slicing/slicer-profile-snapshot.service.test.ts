@@ -150,6 +150,70 @@ describe("SlicerProfileSnapshotService", () => {
     ).rejects.toBeInstanceOf(SlicerProfileSnapshotMismatchError);
   });
 
+  it("batches shared candidate revisions and snapshot writes while rejecting one bad pointer", async () => {
+    const machine = machineBundle();
+    const calibration = bundle({ flow_ratio: "1" });
+    const config = bundle({ layer_height: "0.2" });
+    const putImmutableObject = vi.fn().mockResolvedValue(undefined);
+    const findMachineProfiles = vi.fn().mockResolvedValue([
+      {
+        id: "machine",
+        settings: machine,
+        slicerEngine: "orcaslicer",
+        slicerVersion: "2.4.2",
+        productionArtifactFormat: ProductionArtifactFormat.GCODE_3MF,
+      },
+    ]);
+    const findCalibrations = vi
+      .fn()
+      .mockResolvedValue([{ id: "calibration", settings: calibration }]);
+    const findConfigs = vi
+      .fn()
+      .mockResolvedValue([{ id: "config", settings: config }]);
+    const service = new SlicerProfileSnapshotService(
+      {
+        machineProfile: { findMany: findMachineProfiles },
+        machineCalibration: { findMany: findCalibrations },
+        printConfigRevision: { findMany: findConfigs },
+      } as unknown as PrismaService,
+      { putImmutableObject } as unknown as ObjectStorage,
+    );
+    const hashes = {
+      machine: slicerSettingsSnapshot(machine).contentSha256,
+      calibration: slicerSettingsSnapshot(calibration).contentSha256,
+      config: slicerSettingsSnapshot(config).contentSha256,
+    };
+    await service.ensureCandidateJobSnapshotsBatch(
+      Array.from({ length: 256 }, () => candidateJob(hashes)),
+    );
+    expect(findMachineProfiles).toHaveBeenCalledTimes(1);
+    expect(findCalibrations).toHaveBeenCalledTimes(1);
+    expect(findConfigs).toHaveBeenCalledTimes(1);
+    expect(putImmutableObject).toHaveBeenCalledTimes(3);
+
+    putImmutableObject.mockClear();
+    await expect(
+      service.ensureCandidateJobSnapshotsBatch([
+        candidateJob(hashes),
+        candidateJob({ ...hashes, config: "a".repeat(64) }),
+      ]),
+    ).rejects.toBeInstanceOf(SlicerProfileSnapshotMismatchError);
+    expect(putImmutableObject).not.toHaveBeenCalled();
+
+    putImmutableObject.mockRejectedValueOnce(
+      new Error("snapshot store timed out"),
+    );
+    await expect(
+      service.ensureCandidateJobSnapshotsBatch([candidateJob(hashes)]),
+    ).rejects.toBeInstanceOf(SlicerProfileSnapshotUnavailableError);
+    putImmutableObject.mockRejectedValueOnce(
+      new ImmutableObjectConflictError("snapshot bytes differ"),
+    );
+    await expect(
+      service.ensureCandidateJobSnapshotsBatch([candidateJob(hashes)]),
+    ).rejects.toBeInstanceOf(SlicerProfileSnapshotIntegrityError);
+  });
+
   it("rejects aggregate preset counts the worker cannot materialize", async () => {
     const machine = machineBundle(10);
     const calibration = bundle({ flow_ratio: "1" });
