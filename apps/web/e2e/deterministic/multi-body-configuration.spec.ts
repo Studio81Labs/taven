@@ -32,9 +32,7 @@ test("assigns inspected bodies to distinct configuration items", async ({
   const secondItem = page.locator("section.item-configuration").filter({
     has: page.getByText("POLOŽKA 2", { exact: true }),
   });
-  await secondItem
-    .getByRole("combobox", { name: "Kvalita" })
-    .selectOption("FINE");
+  await secondItem.getByRole("radio", { name: "Jemná" }).check();
   await secondItem.getByRole("spinbutton", { name: "Jiné" }).fill("2");
 
   const configurationResponse = page.waitForResponse(

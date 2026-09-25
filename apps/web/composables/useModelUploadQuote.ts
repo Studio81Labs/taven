@@ -11,6 +11,7 @@ import {
   parseModelGeometry,
   type ModelGeometry,
 } from "../utils/model-geometry";
+import { takeModelGeometryForRoute } from "../utils/model-geometry-handoff";
 import {
   clearQuoteSession,
   getSessionStorage,
@@ -1033,6 +1034,7 @@ export function useModelUploadQuote(options: UseModelUploadQuoteOptions = {}) {
 
     sessionPersisted.value = true;
     restoredFilename.value = stored.filename;
+    geometry.value = takeModelGeometryForRoute(stored.sessionId);
     sessionToken.value = stored.sessionToken;
     quote.value = {
       bindingQuote: null,

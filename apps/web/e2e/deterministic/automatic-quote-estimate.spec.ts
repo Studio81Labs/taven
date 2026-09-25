@@ -159,7 +159,12 @@ test.describe("Automatic estimate concurrency", () => {
       await expect(page).toHaveURL(/\/objednavka/);
 
       const price = page.locator(".price-summary .total-price");
-      const qualitySelect = page.getByRole("combobox", { name: "Kvalita" });
+      const qualityChoices = page.getByRole("group", { name: /Kvalita/ });
+      const qualityNames = {
+        DRAFT: "Rychlá",
+        STANDARD: "Standardní",
+        FINE: "Jemná",
+      } as const;
       for (const [
         quality,
         revisionId,
@@ -189,7 +194,10 @@ test.describe("Automatic estimate concurrency", () => {
           "597,20",
         ],
       ] as const) {
-        await qualitySelect.selectOption(quality);
+        const qualityRadio = qualityChoices.getByRole("radio", {
+          name: qualityNames[quality],
+        });
+        await qualityRadio.check();
         const responsePromise = page.waitForResponse(
           (response) =>
             response.url().includes("/configuration") &&
@@ -218,7 +226,7 @@ test.describe("Automatic estimate concurrency", () => {
           bindingMinor,
         );
         await expect(price).toContainText(visiblePrice);
-        await expect(qualitySelect).toHaveValue(quality);
+        await expect(qualityRadio).toBeChecked();
       }
 
       releaseBaseline();

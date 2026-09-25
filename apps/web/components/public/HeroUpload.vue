@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { formatFileSize } from "../../utils/model-file";
+import { holdModelGeometryForRoute } from "../../utils/model-geometry-handoff";
 
 const {
   canUpload,
@@ -50,6 +51,7 @@ watch(
     }
 
     leaving = true;
+    holdModelGeometryForRoute(currentQuote.sessionId, geometry.value);
     void navigateTo("/objednavka");
   },
 );
