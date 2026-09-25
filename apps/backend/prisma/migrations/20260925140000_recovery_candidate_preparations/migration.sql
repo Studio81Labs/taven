@@ -324,6 +324,13 @@ BEGIN
      OR source_payload #>> '{inventoryId}' IS DISTINCT FROM source_inventory::text
      OR source_payload #>> '{job,input,machineId}' IS DISTINCT FROM source_machine::text
      OR source_payload #>> '{job,input,machineProfile,revisionId}' IS DISTINCT FROM source_profile::text
+     OR NOT EXISTS (
+       SELECT 1 FROM machine_profiles frozen_profile
+       JOIN machine_profiles prepared_profile
+         ON prepared_profile.reference_profile_id = frozen_profile.reference_profile_id
+       WHERE frozen_profile.id = source_profile
+         AND prepared_profile.id::text = message.payload #>> '{job,input,machineProfile,revisionId}'
+     )
      OR source_payload #>> '{job,input,machineCalibration,revisionId}' IS DISTINCT FROM source_calibration::text
      OR source_payload #>> '{job,input,arrangementRevision,revisionId}' IS DISTINCT FROM source_arrangement::text
      OR (source_payload #>> '{job,input,partsPerPlate}')::integer IS DISTINCT FROM source_parts_per_plate

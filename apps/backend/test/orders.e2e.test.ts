@@ -3182,6 +3182,15 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
         operator,
         orderId,
         sourceJobId,
+        undefined as never,
+        `missing-body:${randomUUID()}`,
+      ),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      preparation.prepareReplacement(
+        operator,
+        orderId,
+        sourceJobId,
         {
           expectedReplacementRequestId: [request.id] as unknown as string,
           reason: "reject a repeated identifier field",
@@ -3287,6 +3296,81 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
           sourceFingerprint: mappings[0]!.sourceFingerprint,
           dispatchJobId: forgedJobId,
           outboxMessageId: forgedMessage.id,
+        },
+      }),
+    ).rejects.toThrow(/recovery dispatch provenance is invalid/);
+    const sourceProfile =
+      await prisma.candidateResourceEstimate.findUniqueOrThrow({
+        where: { id: fixture.productions[0]!.candidateResourceEstimateId },
+        select: {
+          machineProfileId: true,
+          machineProfile: { select: { referenceProfileId: true } },
+        },
+      });
+    const foreignReferenceId = randomUUID();
+    const foreignProfileId = randomUUID();
+    await prisma.$executeRaw`
+      INSERT INTO revision_identities (id, kind, digest)
+      VALUES (${foreignReferenceId}::uuid, 'REFERENCE_PROFILE', ${createHash("sha256").update(foreignReferenceId).digest("hex")})
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO reference_profiles
+        (id, material, quality, slicer_engine, slicer_version, settings, state, activated_at)
+      SELECT ${foreignReferenceId}::uuid, material, quality, slicer_engine,
+        slicer_version, settings, 'DRAFT', NULL
+      FROM reference_profiles WHERE id = ${sourceProfile.machineProfile.referenceProfileId}::uuid
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO revision_identities (id, kind, digest)
+      VALUES (${foreignProfileId}::uuid, 'MACHINE_PROFILE', ${createHash("sha256").update(foreignProfileId).digest("hex")})
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO machine_profiles
+        (id, machine_capability_id, reference_profile_id, material, quality,
+         nozzle_diameter_micrometers, slicer_engine, slicer_version,
+         production_artifact_format, settings, state, activated_at)
+      SELECT ${foreignProfileId}::uuid, machine_capability_id, ${foreignReferenceId}::uuid,
+        material, quality, nozzle_diameter_micrometers, slicer_engine, slicer_version,
+        production_artifact_format, settings, 'DRAFT', NULL
+      FROM machine_profiles WHERE id = ${sourceProfile.machineProfileId}::uuid
+    `;
+    const foreignProfileJobId = randomUUID();
+    const foreignProfilePayload = structuredClone(
+      originalMessage.payload,
+    ) as Record<string, unknown>;
+    const foreignProfileJob = foreignProfilePayload.job as Record<
+      string,
+      unknown
+    >;
+    foreignProfileJob.jobId = foreignProfileJobId;
+    const foreignProfileInput = foreignProfileJob.input as Record<
+      string,
+      unknown
+    >;
+    (foreignProfileInput.machineProfile as Record<string, unknown>).revisionId =
+      foreignProfileId;
+    const foreignProfileMessage = await prisma.outboxMessage.create({
+      data: {
+        deduplicationKey: `foreign-recovery-profile:${foreignProfileJobId}`,
+        aggregateType: "CandidateEstimateDispatch",
+        aggregateId: foreignProfileJobId,
+        messageType: "slicing.candidate-estimate.requested",
+        schemaVersion: 2,
+        payload: foreignProfilePayload as Prisma.InputJsonObject,
+      },
+    });
+    await expect(
+      prisma.recoveryCandidateDispatch.create({
+        data: {
+          preparationId: accepted.preparationId,
+          nodeId,
+          orderId,
+          orderPhaseId: mappings[0]!.orderPhaseId,
+          shipmentPlanId: mappings[0]!.shipmentPlanId,
+          sourceJobId,
+          sourceFingerprint: mappings[0]!.sourceFingerprint,
+          dispatchJobId: foreignProfileJobId,
+          outboxMessageId: foreignProfileMessage.id,
         },
       }),
     ).rejects.toThrow(/recovery dispatch provenance is invalid/);
@@ -3495,6 +3579,15 @@ describe.skipIf(!databaseUrl)("v0 fulfilment operator commands", () => {
       new AuditService(prisma),
     );
     const operator = await operatorForRecoveryTest(testOperatorId, nodeId);
+    expect(() =>
+      preparation.prepareReprint(
+        operator,
+        orderId,
+        claim.id,
+        undefined as never,
+        `missing-reprint-body:${randomUUID()}`,
+      ),
+    ).toThrow(BadRequestException);
     const accepted = await preparation.prepareReprint(
       operator,
       orderId,

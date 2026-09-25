@@ -99,6 +99,12 @@ function validUuid(value: unknown, name: string): string {
   return value.toLowerCase();
 }
 
+function requiredBody(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new BadRequestException("request body is invalid");
+  return value as Record<string, unknown>;
+}
+
 function requiredReason(value: unknown): string {
   const reason = typeof value === "string" ? value.trim() : "";
   if (!reason || reason.length > 1000)
@@ -169,16 +175,17 @@ export class RecoveryCandidatePreparationService {
     key?: string,
   ): Promise<RecoveryCandidatePreparationAcceptedDto> {
     requireOperatorPermission(operator, OPERATOR_PERMISSIONS.OPERATIONS_WRITE);
+    const requestBody = requiredBody(body);
     return this.prepare(
       operator,
       validUuid(orderId, "orderId"),
       RecoveryCandidatePreparationKind.JOB_REPLACEMENT,
       validUuid(jobId, "jobId"),
       validUuid(
-        body.expectedReplacementRequestId,
+        requestBody.expectedReplacementRequestId,
         "expectedReplacementRequestId",
       ),
-      requiredReason(body.reason),
+      requiredReason(requestBody.reason),
       requiredKey(key),
     );
   }
@@ -194,16 +201,17 @@ export class RecoveryCandidatePreparationService {
       operator,
       OPERATOR_PERMISSIONS.FINANCIAL_EXCEPTION,
     );
+    const requestBody = requiredBody(body);
     return this.prepare(
       operator,
       validUuid(orderId, "orderId"),
       RecoveryCandidatePreparationKind.LOST_CLAIM_REPRINT,
       validUuid(claimId, "claimId"),
       validUuid(
-        body.expectedPredecessorShipmentId,
+        requestBody.expectedPredecessorShipmentId,
         "expectedPredecessorShipmentId",
       ),
-      requiredReason(body.reason),
+      requiredReason(requestBody.reason),
       requiredKey(key),
     );
   }
