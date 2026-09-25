@@ -49,11 +49,13 @@ export const router = createRouter({
       component:
         item.path === "/zdroje"
           ? () => import("./views/ResourcesView.vue")
-          : item.path === "/katalog"
-            ? () => import("./views/CatalogView.vue")
-            : item.path === "/metriky"
-              ? () => import("./views/MetricsView.vue")
-              : () => import("./views/ShellSectionView.vue"),
+          : item.path === "/objednavky"
+            ? () => import("./views/OrdersView.vue")
+            : item.path === "/katalog"
+              ? () => import("./views/CatalogView.vue")
+              : item.path === "/metriky"
+                ? () => import("./views/MetricsView.vue")
+                : () => import("./views/ShellSectionView.vue"),
       meta: { label: item.label, permission: item.permission },
     })),
     {

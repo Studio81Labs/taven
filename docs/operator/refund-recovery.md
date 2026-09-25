@@ -6,6 +6,14 @@ commands. Review [ADR 0028](../decisions/0028-gate-operator-refund-recovery-on-p
 before acting. The original refund, dispatch claim, provider receipt and audit
 record remain immutable.
 
+The admin [order console](order-console.md) presents the scoped refund history
+and separate provider-result and retry forms. It fills the persisted attempt
+identity, amount and expected receipt from the current read; the operator must
+verify those values against the provider's exact final evidence before
+submitting. If the UI reports an uncertain response, retry only its preserved
+same-key, same-body intent. A conflict requires a fresh read and deliberate
+review.
+
 1. Open the order's financial detail and refund history. Confirm the payment
    provider/account/environment, capture intent, amount, currency, exact refund
    request reference, dispatch claim and any replacement. An outbox `FAILED`
