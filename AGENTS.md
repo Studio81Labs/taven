@@ -306,6 +306,42 @@ Do not move components here merely because they might be reused later.
   or other secrets into the repository.
 - Preserve existing user changes that are unrelated to the task.
 
+## UI implementation and design refactoring
+
+The accepted UI foundation for `apps/web` and `apps/admin` is Nuxt UI for
+standard elements such as buttons, cards, headers and form controls, themed to
+Taven. Product-specific components and page composition remain custom. See
+[ADR 0030](docs/decisions/0030-use-nuxt-ui-for-presentation.md) for the approved
+boundary and amendment to the original website design plan.
+
+For tasks implementing an approved target design:
+
+- The target design defines presentation; existing mock-era markup, component
+  structure and CSS are not compatibility contracts. Replacing them, separating
+  view logic from presentation, and removing superseded UI are in scope when
+  necessary to complete the assigned screen or flow.
+- Preserve functional behavior, domain rules, API contracts, authorization,
+  persistence, legal/payment boundaries and working integrations. This approval
+  does not authorize changing those contracts or adding unimplemented features.
+- Use Nuxt UI through a consistent Taven theme. Keep application-specific layout
+  and composition custom; library defaults do not override the target design.
+  Avoid a parallel generic UI library or wrappers with no concrete purpose.
+- Complete coherent screens or flows, including responsive and applicable
+  loading, empty, error, disabled and success states. Remove replaced styles and
+  components once unused; do not retain a hybrid presentation just to minimize
+  the diff. Unassigned screens may migrate in later, explicitly scoped work.
+- Keep shared assets/components in `packages/ui-web` only with two real
+  consumers. Nuxt-specific configuration stays in `apps/web`; the admin remains
+  Vue/Vite. A web-only task must not accidentally restyle the admin.
+- Validate against the approved visual reference at matching viewports and
+  relevant states, alongside functional and accessibility checks. Update tests
+  coupled to replaced markup while preserving their behavioral assertions;
+  existing implementation screenshots alone are not the target-design oracle.
+
+Nuxt UI adoption and the presentation refactoring above are approved decisions,
+not new architectural escalations. Changes outside these boundaries still use
+the normal planning and escalation workflow.
+
 ## Product boundaries
 
 Taven is currently a local 3D-printing service, not a distributed maker
@@ -514,6 +550,21 @@ Review the complete PR diff against:
 
 Prefer a small number of high-confidence, actionable findings over exhaustive
 commentary.
+
+### UI design review
+
+Apply the UI implementation rules and ADR 0030 when reviewing design work.
+Do not request restoration of the old mock layout or reject necessary template,
+component or CSS replacement as unrelated refactoring solely because the old UI
+worked, the diff is larger than a restyle, or the original plan prohibited a new
+UI framework. Those constraints are superseded within the assigned UI scope.
+
+Review against the target design and preserved behavior. Concrete functional,
+accessibility, responsive, security or package-boundary regressions remain
+actionable, as do material target-design mismatches and incomplete replacement
+within a screen claimed as finished. Require visual evidence for that scope;
+do not require redesign of unrelated screens or approval of library adoption
+again. Necessary removal of superseded presentation is not unrelated cleanup.
 
 ### Actionable findings
 

@@ -4,6 +4,14 @@ Vue 3 + Vite internal administration application. It consumes only the
 generated API client and shared visual foundation. Maker-facing functions stay
 inside this app until observed demand justifies extraction.
 
+[ADR 0030](../../docs/decisions/0030-use-nuxt-ui-for-presentation.md) approves
+Nuxt UI for standard elements with a Taven theme, retaining custom operator
+composition and workflows. The admin remains Vue/Vite; adoption is pending
+implementation. Assigned UI work may replace mock-era templates/components/CSS
+while preserving operator permissions, sessions and command behavior. Share
+brand values with the web where actually consumed, with deliberate admin density
+and layout. The website design epic does not automatically include admin screens.
+
 The shell uses the backend's operator cookie session and generated HTTP client.
 Configure `VITE_API_BASE_URL` as the exact API origin and `VITE_APP_ENV` as
 `local`, `staging`, or `production`. Staging and production require HTTPS. The

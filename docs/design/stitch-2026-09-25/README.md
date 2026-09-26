@@ -53,6 +53,14 @@ Each directory above contains `screen.png` and `code.html`. System references ar
 
 ## Interpretation
 
+[ADR 0030](../../decisions/0030-use-nuxt-ui-for-presentation.md) amends the
+implementation approach: use Nuxt UI for standard elements with a Taven theme,
+and custom product components/layouts. Existing mock-era markup and CSS may be
+replaced to achieve the target; neither the archive's generated HTML nor library
+defaults prescribe production component structure. Visual references and the
+product/contract corrections below remain authoritative. Adoption is pending
+implementation, not evidence that the design is finished.
+
 The implementation plan reconciles this package with the current product brief,
 identity, decisions and actual API. The numbered screenshots are the hard visual
 reference, not alternate mock variants or permission to change domain rules.

@@ -7,6 +7,15 @@ source of truth; [orchestration #271](https://github.com/Studio81Labs/taven/issu
 coordinates execution. This document mirrors the initial technical plan.
 Subsequent approved issue amendments take precedence.
 
+**Owner amendment, 2026-09-26:**
+[ADR 0030](../decisions/0030-use-nuxt-ui-for-presentation.md) approves Nuxt UI for
+standard elements and custom Taven composition in web and admin. It supersedes
+the original prohibition on a new UI framework, including older issue text, and
+explicitly permits replacing mock-era presentation within assigned UI work.
+Other scope, contract and launch constraints remain unchanged. The execution
+baseline below is historical; this amendment does not claim adoption is complete
+or add admin implementation to the website epic.
+
 Implementation children: UI1 #265, UI2 #266 (two PRs), UI3 #267, UI4 #268,
 UI5 #269 and UI6 #270. #271 is the orchestration child, not another feature.
 
@@ -54,9 +63,12 @@ production pages. Public launch and final legal approval remain #38/#39/#40.
 ### 2. Target architecture
 
 Keep Nuxt SSR, existing composables, generated client, endpoints, storage keys and
-payment/legal boundaries. Build presentation components in `apps/web/components`
-and one web-local token/style source imported after shared tokens. Reuse existing
-BrandMark/header/footer rather than creating a second brand system. Add an
+payment/legal boundaries. Use Nuxt UI for standard elements such as buttons,
+cards, headers and form controls, with a consistent Taven theme. Build custom
+product presentation in `apps/web/components`, retaining a web-local token/style
+source over shared brand values. Reuse the established brand identity; existing
+BrandMark/header/footer implementations may be replaced or recomposed to match
+the target rather than preserving mock markup. Add an
 application shell with persistent workspace/context slots and a derived process
 header. Components receive existing typed view data and emit existing commands;
 they do not fetch or persist business state independently.
@@ -65,8 +77,18 @@ Use web-local components for technical headings/metadata, parameter selection,
 price breakdown, notices, dialogs and the mobile action bar where actual usage
 justifies extraction. Keep component names compatible with Nuxt auto-import
 conventions. Do not move the whole export catalogue to `packages/ui-web`: a
-component needs two real consumers before promotion. No new UI framework, remote
+component needs two real consumers before promotion. Nuxt UI is the approved
+component foundation; do not introduce another generic UI toolkit, remote
 Tailwind runtime, CMS, backend adapter, account store or event bus.
+
+Implement coherent target screens/flows rather than layering new styles over
+the old mock structure. Necessary template replacement, component recomposition,
+presentation/logic separation and removal of superseded UI are in scope. Preserve
+working functional contracts, not obsolete markup or CSS. Complete responsive
+and applicable loading/empty/error/disabled/success states in the same visual
+system. Pending screens may migrate separately, but a completed screen must not
+retain the hybrid presentation. Account for remaining consumers before deleting
+old shared code; a web increment must not implicitly restyle the admin.
 
 ### 3. Source precedence and technical decisions
 
@@ -369,6 +391,11 @@ wrapping, accessible focus details, fixture construction and faithful Czech copy
 locally. Record screenshot corrections and unverified content as omissions or
 honest states. No further owner input is required to begin UI1–UI4.
 
+Nuxt UI integration and the bounded presentation refactoring in ADR 0030 are
+already approved. Review must not classify them as unrelated cleanup or require
+restoring mock-era structure. Verify the target design and preserved behavior;
+all concrete regression, accessibility and package-boundary findings still apply.
+
 Escalate before changing architecture, domain invariants, persistence, public API,
 security, concurrency/lifecycle, backward compatibility or core behavior. In
 particular: new customer authentication/tracking authorization; publishing
@@ -384,6 +411,10 @@ budget change also requires explicit resolution, not disabled assertions.
       threads and required CI passing; final-head Codex approval recorded.
 - [ ] Every current-scope route/state mapped to screenshots and behavior evidence;
       all reference variants reconciled using the explicit decisions above.
+- [ ] Screens claimed as complete match the target composition and Taven theme,
+      including responsive and applicable non-happy-path states. Superseded mock
+      presentation and unused styles/components are removed within that scope;
+      visual evidence compares against the target, not only previous output.
 - [ ] Core upload, multi-item, Packeta, legal, payment and assisted flows remain
       real and pass relevant regression/integration checks; #35 offer design is
       validated after its producer handoff.

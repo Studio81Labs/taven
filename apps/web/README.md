@@ -6,8 +6,14 @@ rendered without an API dependency.
 
 ## Public content and launch boundaries
 
-The public landing and static pages use basic Tailwind utilities. The final
-visual design is intentionally deferred. Approved identity, seller details,
+The target visual design is defined by the
+[final website design plan](../../docs/plans/2026-09-25-final-web-design.md) and its
+numbered references. [ADR 0030](../../docs/decisions/0030-use-nuxt-ui-for-presentation.md)
+approves Nuxt UI for standard elements with a Taven theme and custom product
+components/layouts. Adoption is pending implementation; existing Tailwind/CSS
+and mock-era structure are not the target-design contract. Necessary replacement
+of presentation is in scope for assigned design work, while functional contracts
+remain intact. Approved identity, seller details,
 navigation, legal placeholders, and unset launch values live in
 `content/public-site.ts`; the typed draft/approved legal manifest lives in
 `content/launch-manifest.ts`; owner-supplied non-effective legal draft text lives
